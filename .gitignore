@@ -1,0 +1,10 @@
+.env
+node_modules/
+npm-debug.log*
+.DS_Store
+.build/
+data/*.json
+!data/longtu-approvals.json
+!data/longtu-exclusions.json
+data/longtu-review*.png
+data/longtu-approval-review*/

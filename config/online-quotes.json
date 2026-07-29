@@ -1,0 +1,73 @@
+[
+  {
+    "id": "hard-to-say-unworthy",
+    "text": "难说，毕竟你不配",
+    "matchTexts": ["难说,毕竟你不配"],
+    "categories": ["attack"],
+    "source": {
+      "provider": "百度公开搜索结果（抖音摘要）",
+      "query": "\"龙图表情包\" \"难说\"",
+      "verifiedAt": "2026-07-29"
+    }
+  },
+  {
+    "id": "break-the-silence",
+    "text": "你舍得打破这份宁静吗",
+    "categories": ["attack"],
+    "source": {
+      "provider": "百度公开搜索结果（百度知道摘要）",
+      "query": "龙玉涛 龙图 你妈 表情包 梗",
+      "verifiedAt": "2026-07-29"
+    }
+  },
+  {
+    "id": "sha-ma",
+    "text": "杀妈",
+    "categories": ["attack"],
+    "source": {
+      "provider": "百度公开搜索结果（百度知道摘要）",
+      "query": "龙玉涛 龙图 你妈 表情包 梗",
+      "verifiedAt": "2026-07-29"
+    }
+  },
+  {
+    "id": "mother-dead-caption",
+    "text": "你妈死了",
+    "categories": ["attack"],
+    "source": {
+      "provider": "百度公开搜索结果（抖音摘要）",
+      "query": "龙玉涛表情包 杀妈精英 你妈死了",
+      "verifiedAt": "2026-07-29"
+    }
+  },
+  {
+    "id": "let-me-long",
+    "text": "让我龙一下",
+    "categories": ["attack", "general"],
+    "source": {
+      "provider": "百度公开搜索结果（百度知道摘要）",
+      "query": "龙玉涛 龙图 你妈 表情包 梗",
+      "verifiedAt": "2026-07-29"
+    }
+  },
+  {
+    "id": "dragon-cat-walks-by",
+    "text": "此时，一只龙猫轻轻走过",
+    "categories": ["general"],
+    "source": {
+      "provider": "百度公开搜索结果（百度知道摘要）",
+      "query": "龙玉涛 龙图 你妈 表情包 梗",
+      "verifiedAt": "2026-07-29"
+    }
+  },
+  {
+    "id": "all-my-friends",
+    "text": "你们都是我的好朋友",
+    "categories": ["general"],
+    "source": {
+      "provider": "百度公开搜索结果（抖音摘要）",
+      "query": "\"龙图表情包\" \"不是哥们\"",
+      "verifiedAt": "2026-07-29"
+    }
+  }
+]
