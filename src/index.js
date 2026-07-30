@@ -92,6 +92,8 @@ const promptFile = process.env.LLM_SYSTEM_PROMPT_FILE?.trim() || 'config/system-
 const promptPath = path.resolve(projectRoot, promptFile);
 const knowledgeFile = process.env.LLM_LONGTU_KNOWLEDGE_FILE?.trim() || 'config/longtu-knowledge.md';
 const knowledgePath = path.resolve(projectRoot, knowledgeFile);
+const memberAliasesFile = process.env.WECOM_MEMBER_ALIASES_FILE?.trim() || 'data/member-aliases.json';
+const memberAliasesPath = path.resolve(projectRoot, memberAliasesFile);
 
 async function readOptionalConfig(filePath, label) {
   try {
@@ -102,9 +104,29 @@ async function readOptionalConfig(filePath, label) {
   }
 }
 
-const [rolePrompt, longtuKnowledge] = await Promise.all([
+async function readMemberAliases(filePath) {
+  try {
+    const parsed = JSON.parse(await readFile(filePath, 'utf8'));
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      throw new Error('根节点必须是对象');
+    }
+    return Object.fromEntries(Object.entries(parsed).filter(([speakerId, alias]) => (
+      /^[a-f0-9]{6}$/.test(speakerId)
+      && typeof alias === 'string'
+      && alias.trim()
+    )));
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn(`无法读取群成员标注 ${filePath}：${error.message}`);
+    }
+    return {};
+  }
+}
+
+const [rolePrompt, longtuKnowledge, memberAliases] = await Promise.all([
   readOptionalConfig(promptPath, '角色设定'),
   readOptionalConfig(knowledgePath, '龙图知识'),
+  readMemberAliases(memberAliasesPath),
 ]);
 const systemPrompt = rolePrompt;
 
@@ -144,6 +166,7 @@ client.on('authenticated', async () => {
     console.error('扫描表情目录失败：', error);
   }
   console.log('图片能力：仅允许发送校准后的本地龙图');
+  console.log(`群成员标注：已加载 ${Object.keys(memberAliases).length} 人`);
   console.log(chatClient.isConfigured
     ? `普通对话已启用：${chatClient.model}`
     : '普通对话未启用：缺少大模型配置');
@@ -188,7 +211,7 @@ async function replyLongtu(frame, source = '文字请求') {
 
 async function replyConversation(frame, content) {
   const conversationId = getConversationId(frame.body);
-  const modelInput = buildModelInput(frame.body, content);
+  const modelInput = buildModelInput(frame.body, content, memberAliases);
 
   await conversationStore.runExclusive(conversationId, async () => {
     const streamId = generateReqId('stream');

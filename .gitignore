@@ -6,5 +6,6 @@ npm-debug.log*
 data/*.json
 !data/longtu-approvals.json
 !data/longtu-exclusions.json
+!data/member-aliases.json
 data/longtu-review*.png
 data/longtu-approval-review*/

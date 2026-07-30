@@ -34,15 +34,24 @@ export function hasImageContent(message) {
     && (message.mixed?.msg_item ?? []).some((item) => item.msgtype === 'image');
 }
 
-function getAnonymousSpeakerLabel(message) {
-  const digest = createHash('sha256')
+export function getAnonymousSpeakerId(message) {
+  return createHash('sha256')
     .update(String(message?.from?.userid ?? 'anonymous'))
     .digest('hex')
     .slice(0, 6);
-  return '群成员-' + digest;
 }
 
-export function buildModelInput(message, content) {
+function getSpeakerLabel(message, memberAliases) {
+  const speakerId = getAnonymousSpeakerId(message);
+  const configuredAlias = memberAliases?.[speakerId];
+  const normalizedAlias = String(configuredAlias ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+    .slice(0, 40);
+  return normalizedAlias || '群成员-' + speakerId;
+}
+
+export function buildModelInput(message, content, memberAliases = {}) {
   const quotedContent = extractMessageText(message?.quote);
   if (message?.chattype !== 'group') {
     return quotedContent
@@ -50,7 +59,7 @@ export function buildModelInput(message, content) {
       : content;
   }
 
-  const lines = ['发言人：' + getAnonymousSpeakerLabel(message)];
+  const lines = ['发言人：' + getSpeakerLabel(message, memberAliases)];
   if (quotedContent) lines.push('引用消息：' + quotedContent);
   lines.push('当前消息：' + content);
   return lines.join('\n');
