@@ -43,6 +43,19 @@ WECOM_EMOTION_DIR=/Users/你的用户名/Library/Containers/com.tencent.WeWorkMa
 
 服务器运行时直接读取仓库中的 `memes/longtu/`，不再依赖 Mac 的企微缓存绝对路径。
 
+### 群成员标注
+
+企微长连接消息只提供发送者 `userid`，项目默认将它哈希成稳定的 `群成员-xxxxxx` 标签。可以在 `data/member-aliases.json` 中按匿名标识人工填写昵称：
+
+```json
+{
+  "a01da3": "玉涛龙大王",
+  "20bf62": "爆豹"
+}
+```
+
+已标注成员会以昵称进入大模型上下文；未标注成员仍使用匿名标签。可通过 `WECOM_MEMBER_ALIASES_FILE` 指定其他映射文件。
+
 ## 4. 启动
 
 要求 Node.js 20 或更高版本：

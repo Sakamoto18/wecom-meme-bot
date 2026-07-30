@@ -4,6 +4,7 @@ import {
   buildModelInput,
   extractMessageText,
   getConversationId,
+  getAnonymousSpeakerId,
   getMessageTarget,
   hasImageContent,
 } from '../src/message-utils.js';
@@ -76,6 +77,22 @@ test('群聊模型输入包含匿名且稳定的发言人标签', () => {
   assert.match(first, /^发言人：群成员-[a-f0-9]{6}\n当前消息：当前内容$/);
   assert.equal(firstLabel, secondLabel);
   assert.doesNotMatch(first, /sensitive-user-id/);
+});
+
+test('人工标注的群成员使用昵称，未标注成员继续匿名', () => {
+  const message = {
+    chattype: 'group',
+    from: { userid: 'known-user-id' },
+  };
+  const speakerId = getAnonymousSpeakerId(message);
+  assert.equal(
+    buildModelInput(message, '当前内容', { [speakerId]: '玉涛龙大王' }),
+    '发言人：玉涛龙大王\n当前消息：当前内容',
+  );
+  assert.match(
+    buildModelInput({ chattype: 'group', from: { userid: 'unknown-user-id' } }, '你好'),
+    /^发言人：群成员-[a-f0-9]{6}\n当前消息：你好$/,
+  );
 });
 
 test('主动附图为单聊和群聊选择正确目标', () => {
