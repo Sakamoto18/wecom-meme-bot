@@ -1,0 +1,74 @@
+services:
+  qq-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: longtu-qq-bot
+    command: ["npm", "run", "start:qq"]
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.qq
+    environment:
+      QQ_API_HOST: 0.0.0.0
+      QQ_API_PORT: 8787
+    volumes:
+      - ./memes:/app/memes:ro
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - longtu-qq
+
+  astrbot:
+    image: soulter/astrbot:latest
+    container_name: longtu-astrbot
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: Asia/Shanghai
+      LONGTU_QQ_API_URL: http://qq-bot:8787/v1/qq/message
+      LONGTU_QQ_API_TOKEN: ${QQ_API_TOKEN:?请在 .env.qq 中设置 QQ_API_TOKEN}
+      LONGTU_QQ_ALLOWED_GROUPS: ${LONGTU_QQ_ALLOWED_GROUPS:-}
+    ports:
+      - "6185:6185"
+      # NapCat 与 AstrBot 在同一 Docker 网络时无需把 6199 暴露给宿主机。
+      # - "6199:6199"
+    volumes:
+      - ./deploy/qq/astrbot-data:/AstrBot/data
+      - ./astrbot_plugin_longtu_bridge:/AstrBot/data/plugins/astrbot_plugin_longtu_bridge
+    depends_on:
+      qq-bot:
+        condition: service_healthy
+    networks:
+      - longtu-qq
+
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    # NapCat/QQ Linux 镜像以 amd64 为主；Apple Silicon Docker Desktop 会自动模拟。
+    platform: linux/amd64
+    container_name: longtu-napcat
+    restart: unless-stopped
+    environment:
+      NAPCAT_UID: ${NAPCAT_UID:-1000}
+      NAPCAT_GID: ${NAPCAT_GID:-1000}
+      MODE: astrbot
+    ports:
+      - "6099:6099"
+    volumes:
+      - ./deploy/qq/astrbot-data:/AstrBot/data
+      - ./deploy/qq/napcat/config:/app/napcat/config
+      - ./deploy/qq/napcat/ntqq:/app/.config/QQ
+    networks:
+      - longtu-qq
+
+networks:
+  longtu-qq:
+    driver: bridge
+

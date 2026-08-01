@@ -1,0 +1,33 @@
+services:
+  qq-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: longtu-qq-bot
+    command: ["npm", "run", "start:qq"]
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.qq
+    environment:
+      QQ_API_HOST: 0.0.0.0
+      QQ_API_PORT: 8787
+    volumes:
+      - ./memes:/app/memes:ro
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      astrbot-network:
+        aliases:
+          - qq-bot
+
+networks:
+  astrbot-network:
+    external: true
+    name: ${ASTRBOT_DOCKER_NETWORK:-qqbot_astrbot_network}

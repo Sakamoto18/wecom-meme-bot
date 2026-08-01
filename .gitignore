@@ -1,4 +1,5 @@
 .env
+.env.qq
 node_modules/
 npm-debug.log*
 .DS_Store
@@ -9,3 +10,5 @@ data/*.json
 !data/member-aliases.json
 data/longtu-review*.png
 data/longtu-approval-review*/
+deploy/qq/astrbot-data/
+deploy/qq/napcat/

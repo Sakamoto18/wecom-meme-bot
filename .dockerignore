@@ -1,5 +1,8 @@
 .env
+.env.qq
 .git
 node_modules
 npm-debug.log*
 .DS_Store
+deploy/qq/astrbot-data
+deploy/qq/napcat
