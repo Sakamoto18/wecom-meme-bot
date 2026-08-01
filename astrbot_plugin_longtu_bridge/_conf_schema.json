@@ -1,0 +1,41 @@
+{
+  "api_url": {
+    "description": "QQ Bot HTTP 接口",
+    "type": "string",
+    "default": "http://qq-bot:8787/v1/qq/message",
+    "hint": "使用本仓库 Compose 部署时无需修改"
+  },
+  "api_token": {
+    "description": "QQ Bot API 令牌",
+    "type": "string",
+    "default": "",
+    "hint": "Compose 部署会通过 LONGTU_QQ_API_TOKEN 自动注入",
+    "obvious_hint": true
+  },
+  "allowed_groups": {
+    "description": "允许使用机器人的 QQ 群",
+    "type": "string",
+    "default": "",
+    "hint": "英文逗号分隔；留空允许所有群。也可设置 LONGTU_QQ_ALLOWED_GROUPS"
+  },
+  "reply_only_when_waked": {
+    "description": "群聊仅在被 @ 或命中 AstrBot 唤醒词时回复",
+    "type": "bool",
+    "default": true
+  },
+  "send_processing_hint": {
+    "description": "生成回答前发送处理提示",
+    "type": "bool",
+    "default": false
+  },
+  "request_timeout_seconds": {
+    "description": "等待 QQ Bot 服务的最长秒数",
+    "type": "int",
+    "default": 190
+  },
+  "error_message": {
+    "description": "后端不可用时回复的提示",
+    "type": "string",
+    "default": "龙图服务暂时不可用，请稍后再试。"
+  }
+}

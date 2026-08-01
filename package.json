@@ -6,12 +6,14 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
+    "start:qq": "node src/qq-api.js",
     "dev": "node --watch src/index.js",
+    "dev:qq": "node --watch src/qq-api.js",
     "export:longtu": "node scripts/export-longtu-assets.js",
     "index:longtu": "node scripts/build-longtu-index.js",
     "review:longtu": "node scripts/build-longtu-review.js",
     "review:longtu:approval": "node scripts/build-longtu-approval-review.js",
-    "check": "node --check src/index.js && node --check src/chat-client.js && node --check src/conversation-store.js && node --check src/message-utils.js && node --check src/message-routing.js && node --check src/meme-store.js && node --check src/triggers.js && node --check src/response-style.js && node --check src/web-search.js && node --check src/verified-quotes.js && node --check src/reply-engine.js && node --check src/png.js",
+    "check": "node --check src/index.js && node --check src/qq-api.js && node --check src/qq-service.js && node --check src/chat-client.js && node --check src/conversation-store.js && node --check src/message-utils.js && node --check src/message-routing.js && node --check src/meme-store.js && node --check src/triggers.js && node --check src/response-style.js && node --check src/web-search.js && node --check src/verified-quotes.js && node --check src/reply-engine.js && node --check src/png.js",
     "test": "node --test"
   },
   "engines": {
