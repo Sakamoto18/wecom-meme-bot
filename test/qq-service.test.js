@@ -393,6 +393,38 @@ test('引用图片说“把这个添加到图库”会真正执行入库而不�
   assert.equal(calls.length, 0);
 });
 
+test('图片自动入库失败时提示管理员改用强制添加', async () => {
+  const longtuLibrary = {
+    async resolveShaByBuffer() { return ''; },
+    async reviewAndAdd() {
+      throw new Error('特征复核未通过');
+    },
+    listAliases: () => [],
+  };
+  const memeStore = {
+    async getLongtuCandidates() { return [{ sha256: 'a'.repeat(64) }]; },
+    async pick() { return createMeme(); },
+  };
+  const { service, calls } = createService({
+    longtuLibrary,
+    memeStore,
+    adminUsers: new Set(['1079175957']),
+  });
+  const result = await service.handleMessage({
+    message_id: 'manage-auto-add-failed-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    text: '把这张图加进图库',
+    image_base64: Buffer.from('candidate-image').toString('base64'),
+  });
+
+  assert.equal(result.mode, 'management-error');
+  assert.match(result.messages[0].text, /自动加入图库失败/);
+  assert.match(result.messages[0].text, /强制添加这张龙图/);
+  assert.equal(calls.length, 0);
+});
+
 test('QQ 超级管理员可把附图绑定为别名，后续精确调用同一张图', async () => {
   const sha256 = 'a'.repeat(64);
   const bindings = [];
@@ -518,6 +550,39 @@ test('普通对话提到管理员手动别名时保留模型文字并改用绑�
   assert.equal(result.messages[1].filename, 'se-er-hao-context.png');
   assert.deepEqual(exactPicks, [sha256]);
   assert.equal(calls.length, 1);
+});
+
+test('普通语聊会按用户原话和模型文案命中 OCR 图库标签，而不是一律随机', async () => {
+  const sha256 = 'e'.repeat(64);
+  const exactPicks = [];
+  const longtuLibrary = {
+    listAliases: () => [{ alias: '赛尔号', sha256, source: 'ocr' }],
+  };
+  const chatClient = {
+    isConfigured: true,
+    async complete() { return '这段赛尔号场景很适合配图'; },
+  };
+  const memeStore = {
+    async pickBySha(boundSha) {
+      exactPicks.push(boundSha);
+      return createMeme('scene-se-er-hao.png');
+    },
+    async pick() {
+      throw new Error('命中场景标签时不应选择随机图');
+    },
+  };
+  const { service } = createService({ chatClient, longtuLibrary, memeStore });
+  const result = await service.handleMessage({
+    message_id: 'scene-alias-context-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'someone-else',
+    text: '说说赛尔号',
+  });
+
+  assert.equal(result.mode, 'model');
+  assert.equal(result.messages[1].filename, 'scene-se-er-hao.png');
+  assert.deepEqual(exactPicks, [sha256]);
 });
 
 test('纯文字提到唯一历史昵称时也会识别第三方目标，无需真实艾特', async () => {

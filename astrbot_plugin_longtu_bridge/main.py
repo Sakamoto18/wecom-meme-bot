@@ -22,7 +22,7 @@ FORWARD_CACHE_MAX_ENTRIES = 128
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.3.1",
+    "1.4.0",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -89,19 +89,46 @@ class LongtuQqBridge(Star):
             for component in event.get_messages()
         )
 
+    @staticmethod
+    def _raw_text(event: AstrMessageEvent) -> str:
+        """读取 WakingCheck 修改前的原始文字，避免斜杠唤醒词被剥掉。"""
+        raw_message = getattr(getattr(event, "message_obj", None), "raw_message", None)
+        if isinstance(raw_message, dict):
+            raw_text = raw_message.get("raw_message")
+            if isinstance(raw_text, str) and raw_text.strip():
+                return raw_text.strip()
+            segments = raw_message.get("message")
+            if isinstance(segments, list):
+                text_parts = []
+                for segment in segments:
+                    if not isinstance(segment, dict) or segment.get("type") != "text":
+                        continue
+                    data = segment.get("data")
+                    if isinstance(data, dict):
+                        text_parts.append(str(data.get("text") or ""))
+                return "".join(text_parts).strip()
+        return ""
+
+    @classmethod
+    def _is_slash_command(cls, event: AstrMessageEvent) -> bool:
+        raw_text = cls._raw_text(event)
+        return (raw_text or event.message_str or "").lstrip().startswith("/")
+
+    def _ignore_slash_commands(self) -> bool:
+        configured = (
+            os.getenv("LONGTU_QQ_IGNORE_SLASH_COMMANDS")
+            if os.getenv("LONGTU_QQ_IGNORE_SLASH_COMMANDS") is not None
+            else self.config.get("ignore_slash_commands", True)
+        )
+        return self._enabled(configured, True)
+
     def _should_reply(self, event: AstrMessageEvent) -> bool:
         if event.is_private_chat():
             return True
         if not self._group_is_allowed(event):
             return False
-        ignore_slash_commands = self._enabled(
-            os.getenv("LONGTU_QQ_IGNORE_SLASH_COMMANDS")
-            if os.getenv("LONGTU_QQ_IGNORE_SLASH_COMMANDS") is not None
-            else self.config.get("ignore_slash_commands", True),
-            True,
-        )
         normalized_text = event.message_str.strip().lower()
-        if ignore_slash_commands and normalized_text.startswith("/"):
+        if self._ignore_slash_commands() and self._is_slash_command(event):
             return False
         ignored_commands = (
             os.getenv("LONGTU_QQ_IGNORED_WAKE_COMMANDS")
@@ -131,13 +158,7 @@ class LongtuQqBridge(Star):
     def _should_observe(self, event: AstrMessageEvent) -> bool:
         if event.is_private_chat() or not self._group_is_allowed(event):
             return False
-        ignore_slash_commands = self._enabled(
-            os.getenv("LONGTU_QQ_IGNORE_SLASH_COMMANDS")
-            if os.getenv("LONGTU_QQ_IGNORE_SLASH_COMMANDS") is not None
-            else self.config.get("ignore_slash_commands", True),
-            True,
-        )
-        if ignore_slash_commands and event.message_str.strip().startswith("/"):
+        if self._ignore_slash_commands() and self._is_slash_command(event):
             return False
         configured = os.getenv("LONGTU_QQ_OBSERVE_GROUP_MESSAGES")
         if configured is None:
@@ -475,9 +496,14 @@ class LongtuQqBridge(Star):
             return body
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
-    @filter.event_message_type(filter.EventMessageType.ALL)
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def on_qq_message(self, event: AstrMessageEvent):
         """回复唤醒消息，并静默观察允许群中的普通消息。"""
+        if self._ignore_slash_commands() and self._is_slash_command(event):
+            # AstrBot 的 WakingCheck 会先剥掉 / 唤醒前缀；这里用原始 OneBot
+            # 消息识别并停止事件，避免 /w、/help 等内置命令继续被其他插件执行。
+            event.stop_event()
+            return
         should_reply = self._should_reply(event)
         observe_only = not should_reply and self._should_observe(event)
         if not should_reply and not observe_only:

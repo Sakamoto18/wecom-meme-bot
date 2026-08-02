@@ -318,12 +318,14 @@ export class LongtuLibrary {
 
     const perceptualHashes = await extractPerceptualHashes(buffer);
     let minimumHashDistance = Number.POSITIVE_INFINITY;
-    for (const candidate of references) {
-      const metadata = await this.ensureCandidateMetadata(candidate);
-      minimumHashDistance = Math.min(
-        minimumHashDistance,
-        minimumPerceptualHashDistance(perceptualHashes, metadata.perceptualHashes),
-      );
+    if (!options.force) {
+      for (const candidate of references) {
+        const metadata = await this.ensureCandidateMetadata(candidate);
+        minimumHashDistance = Math.min(
+          minimumHashDistance,
+          minimumPerceptualHashDistance(perceptualHashes, metadata.perceptualHashes),
+        );
+      }
     }
     if (minimumHashDistance <= NEAR_DUPLICATE_HASH_DISTANCE && !options.force) {
       throw new Error('这张图与图库现有图片几乎相同；如确认要保留，请使用“强制添加这张龙图”');
@@ -331,8 +333,10 @@ export class LongtuLibrary {
 
     const candidateFeatures = await extractImageFeatures(buffer);
     const referenceFeatureSets = [];
-    for (const candidate of references) {
-      referenceFeatureSets.push(await this.getReferenceFeatures(candidate));
+    if (!options.force) {
+      for (const candidate of references) {
+        referenceFeatureSets.push(await this.getReferenceFeatures(candidate));
+      }
     }
     const featureDistance = referenceFeatureSets.length > 0
       ? minimumFeatureDistance(candidateFeatures, referenceFeatureSets)
