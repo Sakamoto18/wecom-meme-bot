@@ -10,6 +10,8 @@ import { LongtuLibrary } from './longtu-library.js';
 import {
   isLongtuAdministrator,
   matchLongtuAliasRequest,
+  matchLongtuContextAlias,
+  matchLongtuSceneAlias,
   parseAdminUsers,
   parseLongtuManagementCommand,
 } from './longtu-management.js';
@@ -68,6 +70,9 @@ const memeStore = new MemeStore([bundledLongtuDirectory], {
 });
 const wecomAdminUsers = parseAdminUsers(process.env.LONGTU_WECOM_ADMIN_USERS);
 const processedMessageIds = new Set();
+const managementTargets = new Map();
+const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
+const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
 const configuredMemoryMessages = Number.parseInt(process.env.CONVERSATION_MEMORY_MESSAGES ?? '', 10);
 const configuredMemoryCharacters = Number.parseInt(process.env.CONVERSATION_MEMORY_CHARACTERS ?? '', 10);
 const configuredMemoryHours = Number.parseFloat(process.env.CONVERSATION_MEMORY_HOURS ?? '');
@@ -214,6 +219,34 @@ function wecomSelectionScope(message) {
   return `wecom:${getConversationId(message)}`;
 }
 
+function managementTargetKey(message) {
+  const userId = String(message?.from?.userid ?? '').trim();
+  return `${wecomSelectionScope(message)}:${userId}`;
+}
+
+function rememberManagementTarget(message, sha256) {
+  const key = managementTargetKey(message);
+  if (!key || !sha256) return;
+  managementTargets.set(key, {
+    sha256,
+    expiresAt: Date.now() + MANAGEMENT_TARGET_TTL_MS,
+  });
+  while (managementTargets.size > MANAGEMENT_TARGET_MAX_ENTRIES) {
+    managementTargets.delete(managementTargets.keys().next().value);
+  }
+}
+
+function getManagementTarget(message) {
+  const key = managementTargetKey(message);
+  const target = managementTargets.get(key);
+  if (!target) return '';
+  if (target.expiresAt <= Date.now()) {
+    managementTargets.delete(key);
+    return '';
+  }
+  return target.sha256;
+}
+
 function imageDescriptorFromMessage(message) {
   if (message?.msgtype === 'image' && message.image?.url) {
     return message.image;
@@ -253,19 +286,25 @@ async function handleLongtuManagement(frame, command) {
       const stats = longtuLibrary.getStats();
       await replyManagementText(
         frame,
-        `图库可用 ${candidates.length} 张；动态加入 ${stats.dynamicActive} 张；已删除/屏蔽 ${stats.blocked} 张；文字别名 ${stats.aliases ?? 0} 个。`,
+        `图库可用 ${candidates.length} 张；动态加入 ${stats.dynamicActive} 张；已删除/屏蔽 ${stats.blocked} 张；管理员手动别名 ${stats.manualAliases ?? 0} 个；OCR 场景文字标签 ${stats.ocrAliases ?? 0} 条。`,
       );
       return;
     }
 
     if (command.action === 'alias-status') {
-      const aliases = longtuLibrary.listAliases({ limit: 12 });
+      const manualAliases = longtuLibrary.listAliases({ source: 'manual', limit: 100 });
       const stats = longtuLibrary.getStats();
       await replyManagementText(
         frame,
-        aliases.length > 0
-          ? `现有文字别名 ${stats.aliases ?? aliases.length} 个；示例：${aliases.map((entry) => entry.alias).join('、')}`
-          : '目前还没有可用的文字别名。',
+        [
+          `管理员手动别名 ${stats.manualAliases ?? manualAliases.length} 个`,
+          manualAliases.length > 0
+            ? `可精确调用：${manualAliases.map((entry) => entry.alias).join('、')}`
+            : '目前还没有管理员手动别名',
+          stats.ocrAliases > 0
+            ? `OCR 场景文字标签 ${stats.ocrAliases} 条（只用于语境关键词匹配，不是需要完整输入的别名）`
+            : '当前没有 OCR 场景关键词',
+        ].join('；'),
       );
       return;
     }
@@ -278,11 +317,12 @@ async function handleLongtuManagement(frame, command) {
 
     if (command.action === 'bind-alias') {
       const buffer = await downloadManagementImage(frame.body);
-      if (!buffer) throw new Error('请发送图文混排消息，或引用图片后发送绑定指令');
       let candidates = await memeStore.getLongtuCandidates();
-      let sha256 = await longtuLibrary.resolveShaByBuffer(buffer, candidates);
+      let sha256 = buffer
+        ? await longtuLibrary.resolveShaByBuffer(buffer, candidates)
+        : getManagementTarget(frame.body);
       let added = null;
-      if (!sha256) {
+      if (buffer && !sha256) {
         added = await longtuLibrary.reviewAndAdd(buffer, {
           force: command.force,
           actor,
@@ -292,16 +332,20 @@ async function handleLongtuManagement(frame, command) {
         memeStore.invalidateLongtuCandidates();
         candidates = await memeStore.getLongtuCandidates();
       }
+      if (!sha256) {
+        throw new Error('请把图片和标记放在同一条消息、引用图片，或先把图片加入图库');
+      }
       if (!candidates.some((candidate) => candidate.sha256 === sha256)) {
         throw new Error('图片已识别，但当前图库中不可用');
       }
+      rememberManagementTarget(frame.body, sha256);
       const bound = longtuLibrary.bindAlias(command.alias, sha256, { actor });
       await replyManagementText(
         frame,
         [
           `${bound.replaced ? '已覆盖' : '已建立'}别名“${bound.alias}”`,
           added ? (added.forced ? '图片已由管理员强制加入图库' : '图片已通过特征复核并加入图库') : '',
-          `以后发送“发${bound.alias}”即可调用这张图。`,
+          `发送“发${bound.alias}”可精确调用；普通对话提到“${bound.alias}”也会优先附这张图。`,
         ].filter(Boolean).join('；'),
       );
       return;
@@ -311,12 +355,19 @@ async function handleLongtuManagement(frame, command) {
       const buffer = await downloadManagementImage(frame.body);
       if (!buffer) throw new Error('请发送图文混排消息，或引用图片后发送添加指令');
       const referenceCandidates = await memeStore.getLongtuCandidates();
+      const existingSha = await longtuLibrary.resolveShaByBuffer(buffer, referenceCandidates);
+      if (existingSha) {
+        rememberManagementTarget(frame.body, existingSha);
+        await replyManagementText(frame, '这张图已经在图库中，已设为当前标记目标；15 分钟内发送“这个是XX”即可绑定关键词。');
+        return;
+      }
       const added = await longtuLibrary.reviewAndAdd(buffer, {
         force: command.force,
         actor,
         referenceCandidates,
       });
       memeStore.invalidateLongtuCandidates();
+      rememberManagementTarget(frame.body, added.sha256);
       await replyManagementText(
         frame,
         `${added.forced ? '已强制加入' : '特征复核通过，已加入'}图库：${added.shortId}（匹配距离 ${added.featureDistance.toFixed(3)}）`,
@@ -353,7 +404,15 @@ async function handleLongtuManagement(frame, command) {
       `已从图库移除：${deleted.shortId}。发送“撤销删除”可以恢复。`,
     );
   } catch (error) {
-    await replyManagementText(frame, `图库操作未完成：${error.message}`);
+    const imageManagement = command.action === 'add'
+      || (command.action === 'bind-alias' && Boolean(imageDescriptorFromMessage(frame.body)));
+    const detail = error instanceof Error ? error.message : String(error);
+    await replyManagementText(
+      frame,
+      imageManagement && !command.force
+        ? `自动加入图库失败：${detail}；请引用这张图片后发送“强制添加这张龙图”手动添加。`
+        : `图库操作未完成：${detail}`,
+    );
   }
 }
 
@@ -432,13 +491,28 @@ async function replyConversation(frame, content) {
         if (!target) {
           throw new Error('当前消息缺少 userid 或群聊 chatid');
         }
-        const attachedMeme = await memeStore.pick('longtu', {
+        const aliases = longtuLibrary.listAliases();
+        const manualContextMatch = matchLongtuContextAlias(content, aliases);
+        const sceneMatch = manualContextMatch
+          ?? matchLongtuSceneAlias(content, answer, aliases);
+        let attachedMeme;
+        if (sceneMatch) {
+          try {
+            attachedMeme = await memeStore.pickBySha(sceneMatch.sha256, {
+              allowedExtensions: ['.png', '.jpg'],
+              selectionScope: wecomSelectionScope(frame.body),
+            });
+          } catch (error) {
+            console.warn(`场景关键词对应龙图不可用，回退随机：${error.message}`);
+          }
+        }
+        attachedMeme ??= await memeStore.pick('longtu', {
           allowedExtensions: ['.png', '.jpg'],
           selectionScope: wecomSelectionScope(frame.body),
         });
         const mediaId = await memeStore.getMediaId(client, attachedMeme);
         await client.sendMediaMessage(target, 'image', mediaId);
-        console.log(`普通对话已主动附图：${attachedMeme.filename}`);
+        console.log(`普通对话已主动附图：${attachedMeme.filename}${sceneMatch ? `（场景关键词：${sceneMatch.alias}）` : ''}`);
       } catch (imageError) {
         console.warn(`普通回复主动附图失败，文本不受影响：${imageError.message}`);
       }

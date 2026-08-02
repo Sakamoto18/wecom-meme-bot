@@ -472,6 +472,16 @@ export class LongtuLibrary {
     const limit = Number.isInteger(requestedLimit)
       ? Math.max(1, Math.min(requestedLimit, 5000))
       : 1000;
+    const source = String(options.source ?? '').trim();
+    if (source === 'manual' || source === 'ocr') {
+      return this.ensureOpen().prepare(`
+        SELECT alias, sha256, source, updated_at AS updatedAt
+        FROM longtu_aliases
+        WHERE deleted_at IS NULL AND source = ?
+        ORDER BY LENGTH(alias) DESC, alias ASC
+        LIMIT ?
+      `).all(source, limit);
+    }
     return this.ensureOpen().prepare(`
       SELECT alias, sha256, source, updated_at AS updatedAt
       FROM longtu_aliases
@@ -708,6 +718,11 @@ export class LongtuLibrary {
         SELECT COUNT(*) AS count
         FROM longtu_aliases
         WHERE deleted_at IS NULL AND source = 'manual'
+      `).get().count),
+      ocrAliases: Number(database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM longtu_aliases
+        WHERE deleted_at IS NULL AND source = 'ocr'
       `).get().count),
     };
   }

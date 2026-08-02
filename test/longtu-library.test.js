@@ -129,8 +129,15 @@ test('解析图库聊天管理指令', () => {
     action: 'bind-alias', force: true, shortId: '', alias: '赛尔号',
   });
   assert.equal(parseLongtuManagementCommand('图片标记赛尔号').alias, '赛尔号');
+  assert.deepEqual(parseLongtuManagementCommand('这个是耄耋'), {
+    action: 'bind-alias', force: false, shortId: '', alias: '耄耋',
+  });
+  assert.deepEqual(parseLongtuManagementCommand('这张图叫“耄耋”'), {
+    action: 'bind-alias', force: false, shortId: '', alias: '耄耋',
+  });
   assert.equal(parseLongtuManagementCommand('取消赛尔号绑定').action, 'unbind-alias');
   assert.equal(parseLongtuManagementCommand('别名列表').action, 'alias-status');
+  assert.equal(parseLongtuManagementCommand('标记列表').action, 'alias-status');
   assert.equal(
     matchLongtuAliasRequest('发赛尔号', [{ alias: '赛尔号', sha256: 'a'.repeat(64) }]).alias,
     '赛尔号',
@@ -149,6 +156,38 @@ test('解析图库聊天管理指令', () => {
       '好的，收到',
       [{ alias: '好的', sha256: 'c'.repeat(64), source: 'ocr' }],
     ),
+    null,
+  );
+  assert.equal(
+    matchLongtuSceneAlias(
+      '玩原神玩的',
+      '确实有点像玩原神玩的',
+      [{
+        alias: '大伙还能认为你是玩原神玩的',
+        sha256: 'd'.repeat(64),
+        source: 'ocr',
+      }],
+    ).sha256,
+    'd'.repeat(64),
+  );
+  assert.equal(
+    matchLongtuSceneAlias(
+      '原神',
+      '要不先休息一下',
+      [{
+        alias: '在登录原神的那一刻起我才感受到生命的意义',
+        sha256: 'e'.repeat(64),
+        source: 'ocr',
+      }],
+    ).sha256,
+    'e'.repeat(64),
+  );
+  assert.equal(
+    matchLongtuAliasRequest('发在登录原神的那一刻起我才感受到生命的意义', [{
+      alias: '在登录原神的那一刻起我才感受到生命的意义',
+      sha256: 'f'.repeat(64),
+      source: 'ocr',
+    }]),
     null,
   );
   assert.equal(

@@ -557,7 +557,7 @@ export class QqBotService {
               `图库可用 ${candidates.length} 张`,
               `动态加入 ${stats.dynamicActive} 张`,
               `已删除/屏蔽 ${stats.blocked} 张`,
-              `文字别名 ${stats.aliases ?? 0} 个（管理员手动绑定 ${stats.manualAliases ?? 0} 个）`,
+              `管理员手动别名 ${stats.manualAliases ?? 0} 个；OCR 场景文字标签 ${stats.ocrAliases ?? 0} 条`,
               '随机策略：会话独立洗牌，抽完整池前不重复，最近 12 次避开相似场景。',
             ].join('；'),
           }],
@@ -565,15 +565,21 @@ export class QqBotService {
       }
 
       if (command.action === 'alias-status') {
-        const aliases = this.longtuLibrary.listAliases({ limit: 12 });
+        const manualAliases = this.longtuLibrary.listAliases({ source: 'manual', limit: 100 });
         const stats = this.longtuLibrary.getStats();
         return {
           mode: 'management-alias-status',
           messages: [{
             type: 'text',
-            text: aliases.length > 0
-              ? `现有文字别名 ${stats.aliases ?? aliases.length} 个；示例：${aliases.map((entry) => entry.alias).join('、')}`
-              : '目前还没有可用的文字别名。',
+            text: [
+              `管理员手动别名 ${stats.manualAliases ?? manualAliases.length} 个`,
+              manualAliases.length > 0
+                ? `可精确调用：${manualAliases.map((entry) => entry.alias).join('、')}`
+                : '目前还没有管理员手动别名',
+              stats.ocrAliases > 0
+                ? `OCR 场景文字标签 ${stats.ocrAliases} 条（只用于语境关键词匹配，不是需要完整输入的别名）`
+                : '当前没有 OCR 场景关键词',
+            ].join('；'),
           }],
         };
       }
@@ -620,7 +626,7 @@ export class QqBotService {
             text: [
               `${bound.replaced ? '已覆盖' : '已建立'}别名“${bound.alias}”`,
               added ? (added.forced ? '图片已由超级管理员强制加入图库' : '图片已通过特征复核并加入图库') : '',
-              `以后发送“发${bound.alias}”即可调用这张图。`,
+              `发送“发${bound.alias}”可精确调用；普通对话提到“${bound.alias}”也会优先附这张图。`,
             ].filter(Boolean).join('；'),
           }],
         };
