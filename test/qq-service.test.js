@@ -585,6 +585,43 @@ test('普通语聊会按用户原话和模型文案命中 OCR 图库标签，而
   assert.deepEqual(exactPicks, [sha256]);
 });
 
+test('OCR 整句只作为场景文字，输入其中关键词也能命中对应龙图', async () => {
+  const sha256 = 'f'.repeat(64);
+  const exactPicks = [];
+  const longtuLibrary = {
+    listAliases: () => [{
+      alias: '大伙还能认为你是玩原神玩的',
+      sha256,
+      source: 'ocr',
+    }],
+  };
+  const chatClient = {
+    isConfigured: true,
+    async complete() { return '这确实很像玩原神玩的场景'; },
+  };
+  const memeStore = {
+    async pickBySha(boundSha) {
+      exactPicks.push(boundSha);
+      return createMeme('yuan-shen-scene.png');
+    },
+    async pick() {
+      throw new Error('命中 OCR 场景关键词时不应选择随机图');
+    },
+  };
+  const { service } = createService({ chatClient, longtuLibrary, memeStore });
+  const result = await service.handleMessage({
+    message_id: 'ocr-keyword-context-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'someone-else',
+    text: '玩原神玩的',
+  });
+
+  assert.equal(result.mode, 'model');
+  assert.equal(result.messages[1].filename, 'yuan-shen-scene.png');
+  assert.deepEqual(exactPicks, [sha256]);
+});
+
 test('纯文字提到唯一历史昵称时也会识别第三方目标，无需真实艾特', async () => {
   const conversationStore = new ConversationStore();
   conversationStore.recordGroupMember = () => true;
