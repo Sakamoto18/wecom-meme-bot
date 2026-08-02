@@ -1,5 +1,5 @@
-const FORCE_ADD_PATTERN = /(?:强制添加|强制加入|强制存入)(?:(?:这张|这个)?(?:龙图|图片|图)(?:(?:进|到)?图库)?|(?:进|到)图库)|(?:把|将)?(?:(?:这张|这个)(?:龙图|图片|图)?|龙图)(?:强制添加|强制加入)(?:(?:进|到)?图库)?/;
-const ADD_PATTERN = /(?:把|将)?(?:(?:这张|这个)(?:龙图|图片|图)?|龙图)(?:添加|加入|存入|保存)(?:(?:进|到)?图库)?|(?:添加|加入|存入|保存)(?:(?:这张|这个)?(?:龙图|图片|图)(?:(?:进|到)?图库)?|(?:进|到)图库)/;
+const FORCE_ADD_PATTERN = /(?:强制添加|强制加入|强制存入|强制加)(?:(?:这张|这个)?(?:龙图|图片|图)(?:(?:进|到)?图库)?|(?:进|到)图库)|(?:把|将)?(?:(?:这张|这个)(?:龙图|图片|图)?|龙图)(?:强制添加|强制加入|强制加)(?:(?:进|到)?图库)?/;
+const ADD_PATTERN = /(?:把|将)?(?:(?:这张|这个)(?:龙图|图片|图)?|龙图)(?:添加|加入|存入|保存|收录|加)(?:(?:进|到)?图库)?|(?:添加|加入|存入|保存|收录|加)(?:(?:这张|这个)?(?:龙图|图片|图)(?:(?:进|到)?图库)?|(?:进|到)图库)/;
 const DELETE_PREVIOUS_PATTERN = /(?:删除|删掉|移除)(?:刚才|刚刚|上一张|上张)(?:发的)?龙图/;
 const DELETE_THIS_PATTERN = /(?:删除|删掉|移除)(?:这张|这个)龙图|(?:这张|这个)龙图(?:删除|删掉|移除)/;
 const UNDO_DELETE_PATTERN = /(?:撤销|取消)(?:刚才|刚刚|上次)?删除|恢复(?:刚才|刚刚|上次)?删除(?:的龙图)?/;
@@ -7,6 +7,8 @@ const STATUS_PATTERN = /(?:龙图|图库)(?:状态|统计|数量)|(?:状态|统�
 const SHORT_ID_PATTERN = /\bLT-[A-F0-9]{8}\b/i;
 const ALIAS_STATUS_PATTERN = /^(?:(?:龙图|图库)(?:文字)?别名|(?:文字)?别名)(?:状态|统计|数量|列表|绑定)?$/;
 const BIND_ALIAS_PATTERNS = [
+  /(?:把|将)?(?:这张|这个)?(?:龙图|图片|图)(?:标记|打标|加标签)(?:为|成)?[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:吧)?$/,
+  /^(?:图片|龙图)?(?:标记|打标|加标签)(?:为|成)?[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:吧)?$/,
   /(?:以后|之后)?(?:再)?(?:发|说|输入|提到|喊)[“"'「『]?(.{1,48}?)[”"'」』]?(?:的时候|时)?(?:就)?(?:调用|使用|用|发|回复)(?:这张|这个)(?:龙图|图片|图)/,
   /(?:把|将)?(?:这张|这个)(?:龙图|图片|图)(?:绑定|关联|设为|设置为|指定为|固定为)(?:别名|关键词|口令)?[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:吧)?$/,
   /(?:绑定|关联|设定|设置)(?:别名|关键词|口令)?[“"'「『]?(.{1,48}?)[”"'」』]?(?:到|为)(?:这张|这个)(?:龙图|图片|图)/,
@@ -98,6 +100,22 @@ export function matchLongtuAliasRequest(content, bindings = []) {
     if (requestPattern.test(text)) return binding;
   }
   return null;
+}
+
+export function matchLongtuContextAlias(content, bindings = []) {
+  const text = compactAliasRequest(content);
+  if (!text) return null;
+  const sorted = [...bindings]
+    .filter((binding) => (
+      binding?.source === 'manual'
+      && binding?.alias
+      && binding?.sha256
+    ))
+    .sort((left, right) => right.alias.length - left.alias.length);
+  return sorted.find((binding) => {
+    const alias = compactAliasRequest(binding.alias);
+    return alias.length >= 2 && text.includes(alias);
+  }) ?? null;
 }
 
 export function parseAdminUsers(value) {
