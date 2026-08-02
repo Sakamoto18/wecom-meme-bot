@@ -360,6 +360,7 @@ test('引用图片说“把这个添加到图库”会真正执行入库而不�
         shortId: 'LT-BBBBBBBB',
         featureDistance: 0.12,
         forced: false,
+        autoOcr: { status: 'tagged', aliases: ['玩原神玩的'] },
       };
     },
     listAliases: () => [],
@@ -389,6 +390,7 @@ test('引用图片说“把这个添加到图库”会真正执行入库而不�
   assert.equal(reviewCall.options.force, false);
   assert.equal(invalidated, true);
   assert.match(result.messages[0].text, /当前可用 2 张/);
+  assert.match(result.messages[0].text, /自动识别图片文字.*玩原神玩的/);
   assert.doesNotMatch(result.messages[0].text, /LT-|匹配距离/);
   assert.equal(calls.length, 0);
 });

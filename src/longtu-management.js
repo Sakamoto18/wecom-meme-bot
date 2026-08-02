@@ -51,6 +51,19 @@ export function normalizeLongtuAlias(value) {
   return normalized;
 }
 
+export function formatLongtuAutoOcr(result) {
+  if (result?.status === 'tagged' && result.aliases?.length > 0) {
+    return `已自动识别图片文字并写入场景标记：${result.aliases.join('、')}`;
+  }
+  if (result?.status === 'no-text') {
+    return '未识别到可靠文字，已按普通图片保存';
+  }
+  if (result?.status === 'failed') {
+    return '图片已保存，但自动文字识别失败，已按普通图片保存';
+  }
+  return '';
+}
+
 function extractAlias(text, patterns) {
   for (const pattern of patterns) {
     const alias = normalizeLongtuAlias(text.match(pattern)?.[1]);
