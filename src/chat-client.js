@@ -35,7 +35,9 @@ export class OpenAICompatibleChatClient {
         body: JSON.stringify({
           model: this.model,
           messages: [
-            ...(this.systemPrompt ? [{ role: 'system', content: this.systemPrompt }] : []),
+            ...((options.systemPrompt ?? this.systemPrompt)
+              ? [{ role: 'system', content: options.systemPrompt ?? this.systemPrompt }]
+              : []),
             ...(options.additionalSystemPrompt
               ? [{ role: 'system', content: options.additionalSystemPrompt }]
               : []),

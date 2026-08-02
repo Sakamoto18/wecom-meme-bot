@@ -4,8 +4,8 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OpenAICompatibleChatClient } from './chat-client.js';
-import { ConversationStore } from './conversation-store.js';
 import { MemeStore } from './meme-store.js';
+import { QqMemoryStore } from './qq-memory-store.js';
 import { QqBotService } from './qq-service.js';
 import { LongtuWebSearch } from './web-search.js';
 
@@ -170,16 +170,27 @@ export async function createQqRuntime() {
 
   const conversationFile = process.env.QQ_CONVERSATION_MEMORY_FILE?.trim()
     || 'data/qq-conversation-memory.json';
-  const conversationStore = new ConversationStore({
+  const memoryDatabaseFile = process.env.QQ_MEMORY_DATABASE_FILE?.trim()
+    || 'data/qq-memory.sqlite';
+  const conversationStore = new QqMemoryStore({
     maxMessages: parsePositiveInteger(process.env.CONVERSATION_MEMORY_MESSAGES),
     maxCharacters: parsePositiveInteger(process.env.CONVERSATION_MEMORY_CHARACTERS),
     maxConversations: parsePositiveInteger(process.env.CONVERSATION_MEMORY_CONVERSATIONS),
+    maxStoredMessages: parsePositiveInteger(process.env.QQ_MEMORY_MAX_STORED_MESSAGES),
+    summaryTriggerMessages: parsePositiveInteger(
+      process.env.QQ_MEMORY_SUMMARY_TRIGGER_MESSAGES,
+    ),
+    summaryKeepMessages: parsePositiveInteger(process.env.QQ_MEMORY_SUMMARY_KEEP_MESSAGES),
+    maxSummaryCharacters: parsePositiveInteger(
+      process.env.QQ_MEMORY_SUMMARY_MAX_CHARACTERS,
+    ),
     ttlMs: parsePositiveNumber(process.env.CONVERSATION_MEMORY_HOURS)
       ? parsePositiveNumber(process.env.CONVERSATION_MEMORY_HOURS) * 60 * 60 * 1000
       : undefined,
-    filePath: path.resolve(projectRoot, conversationFile),
+    databaseFilePath: path.resolve(projectRoot, memoryDatabaseFile),
+    legacyFilePath: path.resolve(projectRoot, conversationFile),
     onPersistError: (error) => {
-      console.warn('保存 QQ 会话记忆失败：' + error.message);
+      console.warn(error.message);
     },
   });
 
@@ -265,7 +276,7 @@ export async function startQqApi() {
       platform: 'qq',
       model_configured: runtime.chatClient.isConfigured,
       image_count: stats.longtuImageCount,
-      conversations: runtime.conversationStore.size,
+      ...runtime.conversationStore.getStats(),
     }),
   });
 
@@ -288,6 +299,7 @@ export async function startQqApi() {
     server.closeIdleConnections?.();
     await new Promise((resolve) => server.close(resolve));
     await runtime.conversationStore.flush();
+    runtime.conversationStore.close();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
