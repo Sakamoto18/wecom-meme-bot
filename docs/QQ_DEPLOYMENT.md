@@ -8,7 +8,7 @@ QQ → NapCat（OneBot v11）→ AstrBot → 龙图 Bridge 插件 → QQ Bot HTT
                                          现有回复引擎 / 龙图库 / 大模型
 ```
 
-原企业微信入口仍然是 `npm start`（`src/index.js`）；QQ 入口是 `npm run start:qq`（`src/qq-api.js`）。两边使用不同的连接方式和会话记忆文件，可以同时运行。
+原企业微信入口仍然是 `npm start`（`src/index.js`）；QQ 入口是 `npm run start:qq`（`src/qq-api.js`）。两边使用不同的连接方式和会话记忆，可以同时运行。QQ 后端要求 Node.js 22.5 或更新版本，并使用 SQLite 保存最多 30 天的近期原文和滚动摘要。
 
 > NapCat 使用个人 QQ 的非官方协议，可能触发平台风控。请使用机器人小号，不要把 NapCat、OneBot 或 AstrBot 管理端口暴露到公网。
 
@@ -108,7 +108,7 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml up -d --build
 docker compose --env-file .env.qq -f docker-compose.qq.yml down
 ```
 
-NapCat 登录数据在 `deploy/qq/napcat/`，AstrBot 数据在 `deploy/qq/astrbot-data/`，QQ 会话记忆在 `data/qq-conversation-memory.json`。这些运行数据都已加入 `.gitignore`。
+NapCat 登录数据在 `deploy/qq/napcat/`，AstrBot 数据在 `deploy/qq/astrbot-data/`，QQ 长期记忆在 `data/qq-memory.sqlite`。第一次更新会自动迁移旧的 `data/qq-conversation-memory.json`，运行数据均已加入 `.gitignore`。
 
 ## 排查
 

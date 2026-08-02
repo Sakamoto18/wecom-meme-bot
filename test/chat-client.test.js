@@ -56,6 +56,29 @@ test('OpenAI 兼容客户端将上游错误转成可诊断信息', async () => {
   );
 });
 
+test('OpenAI 兼容客户端允许单次请求覆盖角色提示词', async () => {
+  let capturedBody;
+  const client = new OpenAICompatibleChatClient({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.example.com',
+    model: 'test-model',
+    systemPrompt: '默认角色',
+    fetchImpl: async (url, options) => {
+      capturedBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '整理后的摘要' } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  await client.complete([], '需要整理的对话', {
+    systemPrompt: '长期记忆整理器',
+  });
+
+  assert.equal(capturedBody.messages[0].content, '长期记忆整理器');
+  assert.doesNotMatch(capturedBody.messages[0].content, /默认角色/);
+});
+
 test('OpenAI 兼容客户端允许单次请求覆盖超时时间', async () => {
   const client = new OpenAICompatibleChatClient({
     apiKey: 'test-key',

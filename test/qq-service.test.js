@@ -34,7 +34,7 @@ function createService(options = {}) {
   const service = new QqBotService({
     chatClient,
     memeStore,
-    conversationStore: new ConversationStore(),
+    conversationStore: options.conversationStore ?? new ConversationStore(),
     webSearchEnabled: false,
     logger: { log() {}, warn() {} },
   });
@@ -146,6 +146,51 @@ test('QQ 重复消息 ID 不会重复调用模型或发图', async () => {
   assert.equal(first.mode, 'model');
   assert.deepEqual(duplicate, { mode: 'duplicate', messages: [] });
   assert.equal(calls.length, 1);
+});
+
+test('QQ 普通回复会读取长期摘要并在回答后调度新的滚动摘要', async () => {
+  const modelCalls = [];
+  let scheduled;
+  const conversationStore = {
+    runExclusive: (conversationId, task) => task(),
+    get: () => [],
+    getSummary: () => '用户喜欢蓝色。',
+    appendExchange() {},
+    scheduleSummary(conversationId, summarizer) {
+      scheduled = { conversationId, summarizer };
+      return Promise.resolve(false);
+    },
+  };
+  const chatClient = {
+    isConfigured: true,
+    async complete(history, modelInput, options) {
+      modelCalls.push({ history, modelInput, options });
+      return options?.systemPrompt ? '更新后的长期摘要' : '我记得你喜欢蓝色。';
+    },
+  };
+  const { service } = createService({ chatClient, conversationStore });
+
+  await service.handleMessage({
+    message_id: 'memory-1',
+    message_type: 'private',
+    user_id: 'u-memory',
+    text: '你记得我吗',
+    has_image: false,
+  });
+
+  assert.match(modelCalls[0].options.additionalSystemPrompt, /用户喜欢蓝色/);
+  assert.equal(scheduled.conversationId, 'single:u-memory');
+  const summary = await scheduled.summarizer({
+    previousSummary: '用户喜欢蓝色。',
+    messages: [
+      { role: 'user', content: '我还喜欢绿色。' },
+      { role: 'assistant', content: '记住了。' },
+    ],
+  });
+  assert.equal(summary, '更新后的长期摘要');
+  assert.match(modelCalls[1].options.systemPrompt, /QQ 对话长期记忆整理器/);
+  assert.match(modelCalls[1].modelInput, /<previous_summary>/);
+  assert.match(modelCalls[1].modelInput, /我还喜欢绿色/);
 });
 
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
