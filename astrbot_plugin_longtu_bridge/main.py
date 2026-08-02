@@ -22,7 +22,7 @@ FORWARD_CACHE_MAX_ENTRIES = 128
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.3.0",
+    "1.3.1",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -437,13 +437,17 @@ class LongtuQqBridge(Star):
         library_management = (
             ("龙图" in normalized or "图库" in normalized)
             and any(keyword in normalized for keyword in (
-                "添加", "加入", "存入", "保存", "删除", "删掉", "移除", "强制",
+                "添加", "加入", "加进", "加到", "收录", "存入", "保存",
+                "删除", "删掉", "移除", "强制",
             ))
         )
         alias_binding = (
-            ("这张图" in normalized or "这个图" in normalized or "这张图片" in normalized)
+            any(reference in normalized for reference in (
+                "这张图", "这个图", "这张图片", "图片",
+            ))
             and any(keyword in normalized for keyword in (
-                "绑定", "关联", "设为", "设置", "指定", "固定", "调用", "使用",
+                "绑定", "关联", "标记", "打标", "标签", "设为", "设置",
+                "指定", "固定", "调用", "使用",
             ))
         )
         return library_management or alias_binding

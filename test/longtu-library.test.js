@@ -8,6 +8,7 @@ import { Jimp } from 'jimp';
 import { LongtuLibrary } from '../src/longtu-library.js';
 import {
   matchLongtuAliasRequest,
+  matchLongtuContextAlias,
   parseLongtuManagementCommand,
 } from '../src/longtu-management.js';
 
@@ -101,6 +102,9 @@ test('解析图库聊天管理指令', () => {
   assert.deepEqual(parseLongtuManagementCommand('把这张图加入图库'), {
     action: 'add', force: false, shortId: '',
   });
+  assert.deepEqual(parseLongtuManagementCommand('把这张图加进图库'), {
+    action: 'add', force: false, shortId: '',
+  });
   assert.deepEqual(parseLongtuManagementCommand('强制添加这张龙图'), {
     action: 'add', force: true, shortId: '',
   });
@@ -114,6 +118,7 @@ test('解析图库聊天管理指令', () => {
   assert.deepEqual(parseLongtuManagementCommand('强制绑定赛尔号到这张图'), {
     action: 'bind-alias', force: true, shortId: '', alias: '赛尔号',
   });
+  assert.equal(parseLongtuManagementCommand('图片标记赛尔号').alias, '赛尔号');
   assert.equal(parseLongtuManagementCommand('取消赛尔号绑定').action, 'unbind-alias');
   assert.equal(parseLongtuManagementCommand('别名列表').action, 'alias-status');
   assert.equal(
@@ -122,6 +127,18 @@ test('解析图库聊天管理指令', () => {
   );
   assert.equal(
     matchLongtuAliasRequest('讨论一下赛尔号', [{ alias: '赛尔号', sha256: 'a'.repeat(64) }]),
+    null,
+  );
+  assert.equal(
+    matchLongtuContextAlias('辱骂一下赛尔号', [{
+      alias: '赛尔号', sha256: 'a'.repeat(64), source: 'manual',
+    }]).alias,
+    '赛尔号',
+  );
+  assert.equal(
+    matchLongtuContextAlias('辱骂一下赛尔号', [{
+      alias: '赛尔号', sha256: 'a'.repeat(64), source: 'ocr',
+    }]),
     null,
   );
 });

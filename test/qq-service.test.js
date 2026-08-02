@@ -351,6 +351,7 @@ test('引用图片说“把这个添加到图库”会真正执行入库而不�
   let invalidated = false;
   let candidates = [{ sha256: 'a'.repeat(64) }];
   const longtuLibrary = {
+    async resolveShaByBuffer() { return ''; },
     async reviewAndAdd(buffer, options) {
       reviewCall = { buffer, options };
       candidates = [...candidates, { sha256: 'b'.repeat(64) }];
@@ -440,6 +441,83 @@ test('QQ 超级管理员可把附图绑定为别名，后续精确调用同一�
   assert.equal(invoked.mode, 'longtu');
   assert.deepEqual(exactPicks, [sha256]);
   assert.equal(invoked.messages[0].filename, 'se-er-hao.png');
+});
+
+test('管理员可先把现有图设为目标，再用“图片标记赛尔号”连续绑定', async () => {
+  const sha256 = 'c'.repeat(64);
+  let bound;
+  const longtuLibrary = {
+    async resolveShaByBuffer() { return sha256; },
+    bindAlias(alias, boundSha) {
+      bound = { alias, sha256: boundSha, source: 'manual', replaced: false };
+      return bound;
+    },
+    listAliases() { return bound ? [bound] : []; },
+  };
+  const memeStore = {
+    async getLongtuCandidates() { return [{ sha256 }]; },
+    async pick() { return createMeme(); },
+  };
+  const { service, calls } = createService({
+    longtuLibrary,
+    memeStore,
+    adminUsers: new Set(['1079175957']),
+  });
+  const existing = await service.handleMessage({
+    message_id: 'natural-add-existing-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    text: '把这张图加进图库',
+    image_base64: Buffer.from('existing-image').toString('base64'),
+  });
+  const marked = await service.handleMessage({
+    message_id: 'natural-mark-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    text: '图片标记赛尔号',
+  });
+
+  assert.equal(existing.mode, 'management-existing');
+  assert.match(existing.messages[0].text, /已经在图库中/);
+  assert.equal(marked.mode, 'management-alias-bound');
+  assert.deepEqual(bound, {
+    alias: '赛尔号', sha256, source: 'manual', replaced: false,
+  });
+  assert.equal(calls.length, 0);
+});
+
+test('普通对话提到管理员手动别名时保留模型文字并改用绑定附图', async () => {
+  const sha256 = 'd'.repeat(64);
+  const exactPicks = [];
+  const longtuLibrary = {
+    listAliases: () => [{ alias: '赛尔号', sha256, source: 'manual' }],
+  };
+  const memeStore = {
+    async pickBySha(boundSha) {
+      exactPicks.push(boundSha);
+      return createMeme('se-er-hao-context.png');
+    },
+    async pick() {
+      throw new Error('命中手动别名时不应选择随机图');
+    },
+  };
+  const { service, calls } = createService({ longtuLibrary, memeStore });
+  const result = await service.handleMessage({
+    message_id: 'alias-context-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    sender_name: '龙王',
+    text: '辱骂一下赛尔号',
+  });
+
+  assert.equal(result.mode, 'model');
+  assert.equal(result.messages[0].type, 'text');
+  assert.equal(result.messages[1].filename, 'se-er-hao-context.png');
+  assert.deepEqual(exactPicks, [sha256]);
+  assert.equal(calls.length, 1);
 });
 
 test('纯文字提到唯一历史昵称时也会识别第三方目标，无需真实艾特', async () => {
