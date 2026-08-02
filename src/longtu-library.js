@@ -9,6 +9,7 @@ import {
   minimumFeatureDistance,
   minimumPerceptualHashDistance,
 } from './image-features.js';
+import { normalizeLongtuAlias } from './longtu-management.js';
 import { detectImageExtension } from './meme-store.js';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -73,6 +74,7 @@ export class LongtuLibrary {
   constructor(options = {}) {
     this.databaseFilePath = options.databaseFilePath?.trim() || '';
     this.assetsDirectory = options.assetsDirectory?.trim() || '';
+    this.seedAliasesFilePath = options.seedAliasesFilePath?.trim() || '';
     this.now = options.now ?? Date.now;
     this.database = null;
     this.referenceFeatures = new Map();
@@ -135,17 +137,67 @@ export class LongtuLibrary {
         selected_at INTEGER NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS longtu_aliases (
+        alias TEXT PRIMARY KEY,
+        sha256 TEXT NOT NULL,
+        source TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        deleted_at INTEGER,
+        deleted_by TEXT
+      );
+
       CREATE INDEX IF NOT EXISTS longtu_selections_scope_pool_cycle
         ON longtu_selections(scope, pool_key, cycle);
       CREATE INDEX IF NOT EXISTS longtu_selections_scope_id
         ON longtu_selections(scope, id DESC);
+      CREATE INDEX IF NOT EXISTS longtu_aliases_sha256
+        ON longtu_aliases(sha256);
     `);
     return this.database;
   }
 
   async load() {
     this.ensureOpen();
+    await this.loadSeedAliases();
     return this.getStats();
+  }
+
+  async loadSeedAliases() {
+    if (!this.seedAliasesFilePath) return 0;
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(this.seedAliasesFilePath, 'utf8'));
+    } catch (error) {
+      if (error?.code === 'ENOENT') return 0;
+      throw new Error(`读取龙图文字别名失败：${error.message}`);
+    }
+    const entries = Array.isArray(parsed) ? parsed : parsed.aliases;
+    if (!Array.isArray(entries)) return 0;
+    const database = this.ensureOpen();
+    const insert = database.prepare(`
+      INSERT OR IGNORE INTO longtu_aliases(
+        alias, sha256, source, created_by, created_at, updated_at,
+        deleted_at, deleted_by
+      ) VALUES (?, ?, 'ocr', 'system:ocr', ?, ?, NULL, NULL)
+    `);
+    const currentTime = this.now();
+    let imported = 0;
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      for (const entry of entries) {
+        const alias = normalizeLongtuAlias(entry?.alias);
+        const sha256 = String(entry?.sha256 ?? '').trim().toLowerCase();
+        if (!alias || !/^[a-f0-9]{64}$/.test(sha256)) continue;
+        imported += Number(insert.run(alias, sha256, currentTime, currentTime).changes > 0);
+      }
+      database.exec('COMMIT');
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
+    return imported;
   }
 
   async ensureCandidateMetadata(candidate) {
@@ -366,6 +418,75 @@ export class LongtuLibrary {
     return exactReference ? sha256 : '';
   }
 
+  bindAlias(alias, sha256, options = {}) {
+    const normalizedAlias = normalizeLongtuAlias(alias);
+    const normalizedSha = String(sha256 ?? '').trim().toLowerCase();
+    if (!normalizedAlias) throw new Error('别名需要是 2～32 个有效字符');
+    if (!/^[a-f0-9]{64}$/.test(normalizedSha)) throw new Error('没有找到要绑定的龙图');
+    const actor = normalizeActor(options.actor);
+    const currentTime = this.now();
+    const previous = this.ensureOpen().prepare(`
+      SELECT sha256 FROM longtu_aliases
+      WHERE alias = ? AND deleted_at IS NULL
+    `).get(normalizedAlias);
+    this.ensureOpen().prepare(`
+      INSERT INTO longtu_aliases(
+        alias, sha256, source, created_by, created_at, updated_at,
+        deleted_at, deleted_by
+      ) VALUES (?, ?, 'manual', ?, ?, ?, NULL, NULL)
+      ON CONFLICT(alias) DO UPDATE SET
+        sha256 = excluded.sha256,
+        source = 'manual',
+        created_by = excluded.created_by,
+        updated_at = excluded.updated_at,
+        deleted_at = NULL,
+        deleted_by = NULL
+    `).run(normalizedAlias, normalizedSha, actor, currentTime, currentTime);
+    return {
+      alias: normalizedAlias,
+      sha256: normalizedSha,
+      replaced: Boolean(previous && previous.sha256 !== normalizedSha),
+    };
+  }
+
+  unbindAlias(alias, options = {}) {
+    const normalizedAlias = normalizeLongtuAlias(alias);
+    if (!normalizedAlias) throw new Error('没有找到要取消的别名');
+    const actor = normalizeActor(options.actor);
+    const currentTime = this.now();
+    const result = this.ensureOpen().prepare(`
+      UPDATE longtu_aliases
+      SET deleted_at = ?, deleted_by = ?, updated_at = ?
+      WHERE alias = ? AND deleted_at IS NULL
+    `).run(currentTime, actor, currentTime, normalizedAlias);
+    if (result.changes === 0) throw new Error(`没有找到别名“${normalizedAlias}”`);
+    return { alias: normalizedAlias };
+  }
+
+  listAliases(options = {}) {
+    const requestedLimit = Number.parseInt(options.limit ?? '1000', 10);
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.max(1, Math.min(requestedLimit, 5000))
+      : 1000;
+    return this.ensureOpen().prepare(`
+      SELECT alias, sha256, source, updated_at AS updatedAt
+      FROM longtu_aliases
+      WHERE deleted_at IS NULL
+      ORDER BY LENGTH(alias) DESC, alias ASC
+      LIMIT ?
+    `).all(limit);
+  }
+
+  resolveAlias(alias) {
+    const normalizedAlias = normalizeLongtuAlias(alias);
+    if (!normalizedAlias) return null;
+    return this.ensureOpen().prepare(`
+      SELECT alias, sha256, source
+      FROM longtu_aliases
+      WHERE alias = ? AND deleted_at IS NULL
+    `).get(normalizedAlias) ?? null;
+  }
+
   deleteBySha(sha256, options = {}) {
     const normalized = String(sha256 ?? '').trim().toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(normalized)) {
@@ -529,6 +650,28 @@ export class LongtuLibrary {
     return candidate;
   }
 
+  async recordDirectSelection(inputCandidate, options = {}) {
+    const candidate = await this.ensureCandidateMetadata(inputCandidate);
+    if (this.isBlocked(candidate.sha256)) throw new Error('这张龙图已被删除或屏蔽');
+    const scope = normalizeScope(options.scope);
+    const database = this.ensureOpen();
+    database.prepare(`
+      INSERT INTO longtu_selections(
+        scope, pool_key, cycle, sha256, scene_id, selected_at
+      ) VALUES (?, 'direct-alias', 1, ?, ?, ?)
+    `).run(scope, candidate.sha256, `scene-${candidate.sha256.slice(0, 12)}`, this.now());
+    database.prepare(`
+      DELETE FROM longtu_selections
+      WHERE id IN (
+        SELECT id FROM longtu_selections
+        WHERE scope = ?
+        ORDER BY id DESC
+        LIMIT -1 OFFSET 3000
+      )
+    `).run(scope);
+    return candidate;
+  }
+
   getLastSelection(scope) {
     return this.ensureOpen().prepare(`
       SELECT sha256, scene_id, selected_at
@@ -553,6 +696,14 @@ export class LongtuLibrary {
       `).get().count),
       selections: Number(database.prepare(`
         SELECT COUNT(*) AS count FROM longtu_selections
+      `).get().count),
+      aliases: Number(database.prepare(`
+        SELECT COUNT(*) AS count FROM longtu_aliases WHERE deleted_at IS NULL
+      `).get().count),
+      manualAliases: Number(database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM longtu_aliases
+        WHERE deleted_at IS NULL AND source = 'manual'
       `).get().count),
     };
   }

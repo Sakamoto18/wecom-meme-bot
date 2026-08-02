@@ -6,7 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { Jimp } from 'jimp';
 import { LongtuLibrary } from '../src/longtu-library.js';
-import { parseLongtuManagementCommand } from '../src/longtu-management.js';
+import {
+  matchLongtuAliasRequest,
+  parseLongtuManagementCommand,
+} from '../src/longtu-management.js';
 
 async function imageBuffer(color) {
   const image = new Jimp({ width: 32, height: 32, color });
@@ -99,4 +102,49 @@ test('解析图库聊天管理指令', () => {
   assert.equal(parseLongtuManagementCommand('删除龙图 LT-A1B2C3D4').shortId, 'LT-A1B2C3D4');
   assert.equal(parseLongtuManagementCommand('撤销删除').action, 'undo-delete');
   assert.equal(parseLongtuManagementCommand('图库状态').action, 'status');
+  assert.deepEqual(parseLongtuManagementCommand('以后发赛尔号的时候就调用这张图'), {
+    action: 'bind-alias', force: false, shortId: '', alias: '赛尔号',
+  });
+  assert.deepEqual(parseLongtuManagementCommand('强制绑定赛尔号到这张图'), {
+    action: 'bind-alias', force: true, shortId: '', alias: '赛尔号',
+  });
+  assert.equal(parseLongtuManagementCommand('取消赛尔号绑定').action, 'unbind-alias');
+  assert.equal(parseLongtuManagementCommand('别名列表').action, 'alias-status');
+  assert.equal(
+    matchLongtuAliasRequest('发赛尔号', [{ alias: '赛尔号', sha256: 'a'.repeat(64) }]).alias,
+    '赛尔号',
+  );
+  assert.equal(
+    matchLongtuAliasRequest('讨论一下赛尔号', [{ alias: '赛尔号', sha256: 'a'.repeat(64) }]),
+    null,
+  );
+});
+
+test('OCR 文字别名可持久导入，管理员绑定会覆盖且删除后不会在重启时复活', async (t) => {
+  const fixture = await createFixture();
+  t.after(() => rm(fixture.root, { recursive: true, force: true }));
+  const seedAliasesFilePath = path.join(fixture.root, 'text-aliases.json');
+  await writeFile(seedAliasesFilePath, JSON.stringify({ aliases: [{
+    alias: '逆天原批',
+    sha256: fixture.candidates[0].sha256,
+  }] }));
+  const options = { ...fixture, seedAliasesFilePath };
+  const library = new LongtuLibrary(options);
+  await library.load();
+  assert.equal(library.resolveAlias('逆天原批').source, 'ocr');
+  assert.equal(library.getStats().aliases, 1);
+
+  const bound = library.bindAlias('赛尔号', fixture.candidates[1].sha256, {
+    actor: 'qq:admin-user',
+  });
+  assert.equal(bound.alias, '赛尔号');
+  assert.equal(library.resolveAlias('赛尔号').sha256, fixture.candidates[1].sha256);
+  library.unbindAlias('逆天原批', { actor: 'qq:admin-user' });
+  library.close();
+
+  const reopened = new LongtuLibrary(options);
+  await reopened.load();
+  assert.equal(reopened.resolveAlias('逆天原批'), null);
+  assert.equal(reopened.resolveAlias('赛尔号').source, 'manual');
+  reopened.close();
 });

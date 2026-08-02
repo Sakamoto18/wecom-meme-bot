@@ -6,6 +6,7 @@ import {
 } from './message-utils.js';
 import {
   isLongtuAdministrator,
+  matchLongtuAliasRequest,
   parseLongtuManagementCommand,
 } from './longtu-management.js';
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
@@ -215,6 +216,14 @@ function eventMemberAliases(
   };
 }
 
+function compactParticipantName(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/^@/, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
 export class QqBotService {
   constructor(options) {
     this.chatClient = options.chatClient;
@@ -241,11 +250,12 @@ export class QqBotService {
     return `qq:${getConversationId(message)}`;
   }
 
-  async replyLongtu(source, message) {
+  async replyLongtu(source, message, options = {}) {
     this.logger.log(`收到 QQ 龙图请求（来源：${source}）`);
-    const meme = await this.memeStore.pick('longtu', {
-      selectionScope: this.selectionScope(message),
-    });
+    const selectionOptions = { selectionScope: this.selectionScope(message) };
+    const meme = options.sha256
+      ? await this.memeStore.pickBySha(options.sha256, selectionOptions)
+      : await this.memeStore.pick('longtu', selectionOptions);
     this.logger.log(`QQ 已选择龙图：${meme.filename}`);
     return {
       mode: 'longtu',
@@ -345,7 +355,7 @@ export class QqBotService {
         payload.groupId,
         participant.userId,
         participant.name,
-        { countMessage: false },
+        { countMessage: false, confirmIdentity: false },
       );
     }
     if (payload.quotedAuthor) {
@@ -353,9 +363,52 @@ export class QqBotService {
         payload.groupId,
         payload.quotedAuthor.userId,
         payload.quotedAuthor.name,
-        { countMessage: false },
+        { countMessage: false, confirmIdentity: true },
       );
     }
+  }
+
+  inferPlainTextTargets(payload, message) {
+    if (payload.messageType !== 'group' || !payload.text) return [];
+    const members = this.conversationStore.getGroupMembers?.(payload.groupId, 100) ?? [];
+    if (members.length === 0) return [];
+    const compactText = compactParticipantName(payload.text);
+    const explicitIds = new Set(message.mentions.map((participant) => participant.user_id));
+    const ownersByName = new Map();
+    for (const member of members) {
+      if (!member.userId
+        || member.userId === payload.userId
+        || member.userId === payload.botUserId
+        || explicitIds.has(member.userId)) {
+        continue;
+      }
+      if (!member.identityConfirmed && !member.confirmedNames?.length) continue;
+      const names = new Set((member.confirmedNames ?? [])
+        .map(compactParticipantName)
+        .filter((name) => name.length >= 2 && name.length <= 40));
+      for (const name of names) {
+        const owners = ownersByName.get(name) ?? [];
+        owners.push(member);
+        ownersByName.set(name, owners);
+      }
+    }
+
+    const matchedByUser = new Map();
+    for (const [name, owners] of ownersByName) {
+      if (owners.length !== 1 || !compactText.includes(name)) continue;
+      const member = owners[0];
+      const existing = matchedByUser.get(member.userId);
+      if (!existing || name.length > existing.matchedName.length) {
+        matchedByUser.set(member.userId, { member, matchedName: name });
+      }
+    }
+    const inferred = [...matchedByUser.values()].map(({ member, matchedName }) => ({
+      user_id: member.userId,
+      name: member.confirmedNames?.at(-1) || matchedName,
+      inferred_from_text: true,
+    }));
+    message.mentions.push(...inferred);
+    return inferred;
   }
 
   async observeMessage(payload, message) {
@@ -416,8 +469,68 @@ export class QqBotService {
               `图库可用 ${candidates.length} 张`,
               `动态加入 ${stats.dynamicActive} 张`,
               `已删除/屏蔽 ${stats.blocked} 张`,
+              `文字别名 ${stats.aliases ?? 0} 个（管理员手动绑定 ${stats.manualAliases ?? 0} 个）`,
               '随机策略：会话独立洗牌，抽完整池前不重复，最近 12 次避开相似场景。',
             ].join('；'),
+          }],
+        };
+      }
+
+      if (command.action === 'alias-status') {
+        const aliases = this.longtuLibrary.listAliases({ limit: 12 });
+        const stats = this.longtuLibrary.getStats();
+        return {
+          mode: 'management-alias-status',
+          messages: [{
+            type: 'text',
+            text: aliases.length > 0
+              ? `现有文字别名 ${stats.aliases ?? aliases.length} 个；示例：${aliases.map((entry) => entry.alias).join('、')}`
+              : '目前还没有可用的文字别名。',
+          }],
+        };
+      }
+
+      if (command.action === 'unbind-alias') {
+        const removed = this.longtuLibrary.unbindAlias(command.alias, { actor });
+        return {
+          mode: 'management-alias-unbound',
+          messages: [{ type: 'text', text: `已取消别名“${removed.alias}”的图片绑定。` }],
+        };
+      }
+
+      if (command.action === 'bind-alias') {
+        const buffer = await this.resolveManagementImage(payload);
+        if (!buffer) {
+          throw new Error('请把图片和绑定指令放在同一条消息，或引用图片后发送绑定指令');
+        }
+        let candidates = await this.memeStore.getLongtuCandidates();
+        let sha256 = await this.longtuLibrary.resolveShaByBuffer(buffer, candidates);
+        let added = null;
+        if (!sha256) {
+          added = await this.longtuLibrary.reviewAndAdd(buffer, {
+            // QQ alias binding is restricted to configured super administrators.
+            // An explicit image-to-alias binding is itself the manual review decision.
+            force: true,
+            actor,
+            referenceCandidates: candidates,
+          });
+          sha256 = added.sha256;
+          this.memeStore.invalidateLongtuCandidates();
+          candidates = await this.memeStore.getLongtuCandidates();
+        }
+        if (!candidates.some((candidate) => candidate.sha256 === sha256)) {
+          throw new Error('图片已识别，但当前图库中不可用');
+        }
+        const bound = this.longtuLibrary.bindAlias(command.alias, sha256, { actor });
+        return {
+          mode: 'management-alias-bound',
+          messages: [{
+            type: 'text',
+            text: [
+              `${bound.replaced ? '已覆盖' : '已建立'}别名“${bound.alias}”`,
+              added ? (added.forced ? '图片已由超级管理员强制加入图库' : '图片已通过特征复核并加入图库') : '',
+              `以后发送“发${bound.alias}”即可调用这张图。`,
+            ].filter(Boolean).join('；'),
           }],
         };
       }
@@ -513,6 +626,7 @@ export class QqBotService {
 
     const message = buildQqCompatibleMessage(payload);
     this.recordParticipants(payload);
+    this.inferPlainTextTargets(payload, message);
     if (payload.observeOnly) {
       return this.observeMessage(payload, message);
     }
@@ -520,6 +634,18 @@ export class QqBotService {
     const managementCommand = parseLongtuManagementCommand(payload.text);
     if (managementCommand) {
       return this.handleManagementCommand(managementCommand, payload, message);
+    }
+
+    if (this.longtuLibrary && payload.text) {
+      const aliasMatch = matchLongtuAliasRequest(
+        payload.text,
+        this.longtuLibrary.listAliases(),
+      );
+      if (aliasMatch) {
+        return this.replyLongtu(`文字别名：${aliasMatch.alias}`, message, {
+          sha256: aliasMatch.sha256,
+        });
+      }
     }
 
     if (payload.hasImage) {

@@ -157,6 +157,7 @@ export async function createQqRuntime() {
   const longtuIndexPath = path.join(projectRoot, 'data/longtu-index.json');
   const longtuExclusionsPath = path.join(projectRoot, 'data/longtu-exclusions.json');
   const bundledLongtuDirectory = path.join(projectRoot, 'memes', 'longtu');
+  const longtuTextAliasesPath = path.join(projectRoot, 'config/longtu-text-aliases.json');
   const libraryDatabasePath = path.resolve(
     projectRoot,
     process.env.LONGTU_LIBRARY_DATABASE_FILE?.trim()
@@ -170,6 +171,7 @@ export async function createQqRuntime() {
   const longtuLibrary = new LongtuLibrary({
     databaseFilePath: libraryDatabasePath,
     assetsDirectory: libraryAssetsDirectory,
+    seedAliasesFilePath: longtuTextAliasesPath,
   });
   await longtuLibrary.load();
   const configuredLongtuLimit = parsePositiveInteger(process.env.LONGTU_LIMIT);

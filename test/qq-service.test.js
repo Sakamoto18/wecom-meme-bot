@@ -300,6 +300,81 @@ test('图库管理命令只允许配置的 QQ 管理员', async () => {
   assert.match(allowed.messages[0].text, /图库可用 0 张/);
 });
 
+test('QQ 超级管理员可把附图绑定为别名，后续精确调用同一张图', async () => {
+  const sha256 = 'a'.repeat(64);
+  const bindings = [];
+  const exactPicks = [];
+  const longtuLibrary = {
+    async resolveShaByBuffer() { return sha256; },
+    bindAlias(alias, boundSha) {
+      const binding = { alias, sha256: boundSha, source: 'manual', replaced: false };
+      bindings.splice(0, bindings.length, binding);
+      return binding;
+    },
+    listAliases() { return bindings; },
+  };
+  const memeStore = {
+    async getLongtuCandidates() { return [{ sha256 }]; },
+    async pickBySha(boundSha) {
+      exactPicks.push(boundSha);
+      return createMeme('se-er-hao.png');
+    },
+    async pick() { return createMeme(); },
+  };
+  const { service } = createService({
+    longtuLibrary,
+    memeStore,
+    adminUsers: new Set(['1079175957']),
+  });
+  const bound = await service.handleMessage({
+    message_id: 'alias-bind-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    text: '以后发赛尔号的时候就调用这张图',
+    has_image: true,
+    image_base64: Buffer.from('binding-image').toString('base64'),
+  });
+  assert.equal(bound.mode, 'management-alias-bound');
+  assert.match(bound.messages[0].text, /发赛尔号/);
+
+  const invoked = await service.handleMessage({
+    message_id: 'alias-call-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'someone-else',
+    text: '发赛尔号',
+  });
+  assert.equal(invoked.mode, 'longtu');
+  assert.deepEqual(exactPicks, [sha256]);
+  assert.equal(invoked.messages[0].filename, 'se-er-hao.png');
+});
+
+test('纯文字提到唯一历史昵称时也会识别第三方目标，无需真实艾特', async () => {
+  const conversationStore = new ConversationStore();
+  conversationStore.recordGroupMember = () => true;
+  conversationStore.getGroupMemberAliases = () => ({});
+  conversationStore.getGroupMembers = () => [{
+    userId: 'target-user',
+    speakerId: 'abcdef',
+    currentName: '古希腊掌管管的神',
+    knownNames: ['立雪'],
+    confirmedNames: ['立雪', '古希腊掌管管的神'],
+    identityConfirmed: true,
+    messageCount: 5,
+  }];
+  const { service, calls } = createService({ conversationStore });
+  await service.handleMessage({
+    message_id: 'plain-target-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'speaker-user',
+    sender_name: '发令者',
+    text: '立雪这煞笔居然冒犯龙王，你说怎么办',
+  });
+  assert.match(calls[0].modelInput, /本条消息指向或提到的群成员：古希腊掌管管的神/);
+});
+
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
   const received = [];
   const server = createQqApiServer({
