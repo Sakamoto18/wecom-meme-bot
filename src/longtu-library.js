@@ -138,14 +138,15 @@ export class LongtuLibrary {
       );
 
       CREATE TABLE IF NOT EXISTS longtu_aliases (
-        alias TEXT PRIMARY KEY,
+        alias TEXT NOT NULL,
         sha256 TEXT NOT NULL,
         source TEXT NOT NULL,
         created_by TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         deleted_at INTEGER,
-        deleted_by TEXT
+        deleted_by TEXT,
+        PRIMARY KEY(alias, sha256)
       );
 
       CREATE INDEX IF NOT EXISTS longtu_selections_scope_pool_cycle
@@ -155,7 +156,49 @@ export class LongtuLibrary {
       CREATE INDEX IF NOT EXISTS longtu_aliases_sha256
         ON longtu_aliases(sha256);
     `);
+    this.migrateAliasBindingsSchema();
     return this.database;
+  }
+
+  migrateAliasBindingsSchema() {
+    const database = this.database;
+    const columns = database.prepare('PRAGMA table_info(longtu_aliases)').all();
+    const aliasPrimaryKey = Number(columns.find((column) => column.name === 'alias')?.pk ?? 0);
+    const shaPrimaryKey = Number(columns.find((column) => column.name === 'sha256')?.pk ?? 0);
+    if (aliasPrimaryKey === 1 && shaPrimaryKey === 2) return;
+
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      database.exec(`
+        DROP INDEX IF EXISTS longtu_aliases_sha256;
+        ALTER TABLE longtu_aliases RENAME TO longtu_aliases_legacy;
+        CREATE TABLE longtu_aliases (
+          alias TEXT NOT NULL,
+          sha256 TEXT NOT NULL,
+          source TEXT NOT NULL,
+          created_by TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          deleted_at INTEGER,
+          deleted_by TEXT,
+          PRIMARY KEY(alias, sha256)
+        );
+        INSERT OR IGNORE INTO longtu_aliases(
+          alias, sha256, source, created_by, created_at, updated_at,
+          deleted_at, deleted_by
+        )
+        SELECT
+          alias, sha256, source, created_by, created_at, updated_at,
+          deleted_at, deleted_by
+        FROM longtu_aliases_legacy;
+        DROP TABLE longtu_aliases_legacy;
+        CREATE INDEX longtu_aliases_sha256 ON longtu_aliases(sha256);
+      `);
+      database.exec('COMMIT');
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   async load() {
@@ -429,27 +472,33 @@ export class LongtuLibrary {
     if (!/^[a-f0-9]{64}$/.test(normalizedSha)) throw new Error('没有找到要绑定的龙图');
     const actor = normalizeActor(options.actor);
     const currentTime = this.now();
-    const previous = this.ensureOpen().prepare(`
-      SELECT sha256 FROM longtu_aliases
-      WHERE alias = ? AND deleted_at IS NULL
-    `).get(normalizedAlias);
-    this.ensureOpen().prepare(`
+    const database = this.ensureOpen();
+    const previous = database.prepare(`
+      SELECT source, deleted_at FROM longtu_aliases
+      WHERE alias = ? AND sha256 = ?
+    `).get(normalizedAlias, normalizedSha);
+    database.prepare(`
       INSERT INTO longtu_aliases(
         alias, sha256, source, created_by, created_at, updated_at,
         deleted_at, deleted_by
       ) VALUES (?, ?, 'manual', ?, ?, ?, NULL, NULL)
-      ON CONFLICT(alias) DO UPDATE SET
-        sha256 = excluded.sha256,
+      ON CONFLICT(alias, sha256) DO UPDATE SET
         source = 'manual',
         created_by = excluded.created_by,
         updated_at = excluded.updated_at,
         deleted_at = NULL,
         deleted_by = NULL
     `).run(normalizedAlias, normalizedSha, actor, currentTime, currentTime);
+    const poolSize = Number(database.prepare(`
+      SELECT COUNT(DISTINCT sha256) AS count
+      FROM longtu_aliases
+      WHERE alias = ? AND source = 'manual' AND deleted_at IS NULL
+    `).get(normalizedAlias).count);
     return {
       alias: normalizedAlias,
       sha256: normalizedSha,
-      replaced: Boolean(previous && previous.sha256 !== normalizedSha),
+      added: !previous || previous.source !== 'manual' || previous.deleted_at !== null,
+      poolSize,
     };
   }
 
@@ -458,13 +507,30 @@ export class LongtuLibrary {
     if (!normalizedAlias) throw new Error('没有找到要取消的别名');
     const actor = normalizeActor(options.actor);
     const currentTime = this.now();
+    const normalizedSha = String(options.sha256 ?? '').trim().toLowerCase();
+    if (normalizedSha && !/^[a-f0-9]{64}$/.test(normalizedSha)) {
+      throw new Error('没有找到要取消标记的图片');
+    }
     const result = this.ensureOpen().prepare(`
       UPDATE longtu_aliases
       SET deleted_at = ?, deleted_by = ?, updated_at = ?
-      WHERE alias = ? AND deleted_at IS NULL
-    `).run(currentTime, actor, currentTime, normalizedAlias);
-    if (result.changes === 0) throw new Error(`没有找到别名“${normalizedAlias}”`);
-    return { alias: normalizedAlias };
+      WHERE alias = ?
+        AND source = 'manual'
+        AND deleted_at IS NULL
+        AND (? = '' OR sha256 = ?)
+    `).run(currentTime, actor, currentTime, normalizedAlias, normalizedSha, normalizedSha);
+    if (result.changes === 0) {
+      throw new Error(normalizedSha
+        ? `这张图没有“${normalizedAlias}”标记`
+        : `没有找到手动关键词“${normalizedAlias}”`);
+    }
+    const poolSize = this.resolveAliases(normalizedAlias, { source: 'manual' }).length;
+    return {
+      alias: normalizedAlias,
+      sha256: normalizedSha,
+      removed: Number(result.changes),
+      poolSize,
+    };
   }
 
   listAliases(options = {}) {
@@ -492,13 +558,88 @@ export class LongtuLibrary {
   }
 
   resolveAlias(alias) {
+    return this.resolveAliases(alias)[0] ?? null;
+  }
+
+  resolveAliases(alias, options = {}) {
     const normalizedAlias = normalizeLongtuAlias(alias);
-    if (!normalizedAlias) return null;
+    if (!normalizedAlias) return [];
+    const source = String(options.source ?? '').trim();
+    if (source === 'manual' || source === 'ocr') {
+      return this.ensureOpen().prepare(`
+        SELECT alias, sha256, source, updated_at AS updatedAt
+        FROM longtu_aliases
+        WHERE alias = ? AND source = ? AND deleted_at IS NULL
+        ORDER BY updated_at ASC, sha256 ASC
+      `).all(normalizedAlias, source);
+    }
     return this.ensureOpen().prepare(`
-      SELECT alias, sha256, source
+      SELECT alias, sha256, source, updated_at AS updatedAt
       FROM longtu_aliases
       WHERE alias = ? AND deleted_at IS NULL
-    `).get(normalizedAlias) ?? null;
+      ORDER BY CASE source WHEN 'manual' THEN 0 ELSE 1 END,
+        updated_at ASC, sha256 ASC
+    `).all(normalizedAlias);
+  }
+
+  listAliasPools(options = {}) {
+    const source = String(options.source ?? '').trim();
+    const requestedLimit = Number.parseInt(options.limit ?? '100', 10);
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.max(1, Math.min(requestedLimit, 1000))
+      : 100;
+    if (source === 'manual' || source === 'ocr') {
+      return this.ensureOpen().prepare(`
+        SELECT alias, source, COUNT(DISTINCT sha256) AS imageCount,
+          MAX(updated_at) AS updatedAt
+        FROM longtu_aliases
+        WHERE deleted_at IS NULL AND source = ?
+        GROUP BY alias, source
+        ORDER BY updatedAt DESC, alias ASC
+        LIMIT ?
+      `).all(source, limit).map((entry) => ({
+        ...entry,
+        imageCount: Number(entry.imageCount),
+      }));
+    }
+    return this.ensureOpen().prepare(`
+      SELECT alias, source, COUNT(DISTINCT sha256) AS imageCount,
+        MAX(updated_at) AS updatedAt
+      FROM longtu_aliases
+      WHERE deleted_at IS NULL
+      GROUP BY alias, source
+      ORDER BY updatedAt DESC, alias ASC
+      LIMIT ?
+    `).all(limit).map((entry) => ({
+      ...entry,
+      imageCount: Number(entry.imageCount),
+    }));
+  }
+
+  listAliasesBySha(sha256, options = {}) {
+    const normalizedSha = String(sha256 ?? '').trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(normalizedSha)) return [];
+    const source = String(options.source ?? '').trim();
+    const requestedLimit = Number.parseInt(options.limit ?? '100', 10);
+    const limit = Number.isInteger(requestedLimit)
+      ? Math.max(1, Math.min(requestedLimit, 500))
+      : 100;
+    if (source === 'manual' || source === 'ocr') {
+      return this.ensureOpen().prepare(`
+        SELECT alias, sha256, source, updated_at AS updatedAt
+        FROM longtu_aliases
+        WHERE sha256 = ? AND deleted_at IS NULL AND source = ?
+        ORDER BY LENGTH(alias) ASC, alias ASC
+        LIMIT ?
+      `).all(normalizedSha, source, limit);
+    }
+    return this.ensureOpen().prepare(`
+      SELECT alias, sha256, source, updated_at AS updatedAt
+      FROM longtu_aliases
+      WHERE sha256 = ? AND deleted_at IS NULL
+      ORDER BY source DESC, LENGTH(alias) ASC, alias ASC
+      LIMIT ?
+    `).all(normalizedSha, limit);
   }
 
   deleteBySha(sha256, options = {}) {
@@ -715,11 +856,21 @@ export class LongtuLibrary {
         SELECT COUNT(*) AS count FROM longtu_aliases WHERE deleted_at IS NULL
       `).get().count),
       manualAliases: Number(database.prepare(`
+        SELECT COUNT(DISTINCT alias) AS count
+        FROM longtu_aliases
+        WHERE deleted_at IS NULL AND source = 'manual'
+      `).get().count),
+      manualAliasBindings: Number(database.prepare(`
         SELECT COUNT(*) AS count
         FROM longtu_aliases
         WHERE deleted_at IS NULL AND source = 'manual'
       `).get().count),
       ocrAliases: Number(database.prepare(`
+        SELECT COUNT(DISTINCT alias) AS count
+        FROM longtu_aliases
+        WHERE deleted_at IS NULL AND source = 'ocr'
+      `).get().count),
+      ocrAliasBindings: Number(database.prepare(`
         SELECT COUNT(*) AS count
         FROM longtu_aliases
         WHERE deleted_at IS NULL AND source = 'ocr'

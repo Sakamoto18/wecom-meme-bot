@@ -444,6 +444,40 @@ export class MemeStore {
     }
   }
 
+  async pickByShas(sha256s, options = {}) {
+    const normalizedShas = new Set(
+      (Array.isArray(sha256s) ? sha256s : [])
+        .map((sha256) => String(sha256 ?? '').trim().toLowerCase())
+        .filter((sha256) => /^[a-f0-9]{64}$/.test(sha256)),
+    );
+    if (normalizedShas.size === 0) {
+      throw new Error('场景关键词没有对应的有效龙图');
+    }
+    const allowedExtensions = options.allowedExtensions
+      ? new Set(options.allowedExtensions)
+      : null;
+    const candidates = (await this.loadLongtuCandidates()).filter((candidate) => {
+      if (!normalizedShas.has(candidate.sha256)) return false;
+      const extension = candidate.extension ?? path.extname(candidate.path).toLowerCase();
+      return !allowedExtensions
+        || allowedExtensions.has(extension === '.jpeg' ? '.jpg' : extension);
+    });
+    if (candidates.length === 0) {
+      throw new Error('场景关键词对应的龙图已不存在或被删除');
+    }
+    const candidate = this.longtuLibrary
+      ? await this.longtuLibrary.pickCandidate(candidates, {
+        scope: options.selectionScope,
+      })
+      : this.chooseCandidate(candidates, 'longtu');
+    try {
+      return await this.readCandidate(candidate, 'longtu');
+    } catch (error) {
+      this.invalidateLongtuCandidates();
+      throw error;
+    }
+  }
+
   async getMediaId(client, meme) {
     const cached = this.mediaCache.get(meme.key);
     if (cached && cached.expiresAt > Date.now()) {

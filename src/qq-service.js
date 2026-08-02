@@ -8,7 +8,7 @@ import {
   isLongtuAdministrator,
   matchLongtuAliasRequest,
   matchLongtuContextAlias,
-  matchLongtuSceneAlias,
+  matchLongtuSceneAliases,
   parseLongtuManagementCommand,
 } from './longtu-management.js';
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
@@ -316,9 +316,14 @@ export class QqBotService {
   async replyLongtu(source, message, options = {}) {
     this.logger.log(`收到 QQ 龙图请求（来源：${source}）`);
     const selectionOptions = { selectionScope: this.selectionScope(message) };
-    const meme = options.sha256
-      ? await this.memeStore.pickBySha(options.sha256, selectionOptions)
-      : await this.memeStore.pick('longtu', selectionOptions);
+    const sha256s = Array.isArray(options.sha256s)
+      ? [...new Set(options.sha256s.filter(Boolean))]
+      : [];
+    const meme = sha256s.length > 1
+      ? await this.memeStore.pickByShas(sha256s, selectionOptions)
+      : (sha256s.length === 1 || options.sha256
+        ? await this.memeStore.pickBySha(sha256s[0] ?? options.sha256, selectionOptions)
+        : await this.memeStore.pick('longtu', selectionOptions));
     this.logger.log(`QQ 已选择龙图：${meme.filename}`);
     return {
       mode: 'longtu',
@@ -368,26 +373,40 @@ export class QqBotService {
           selectionScope: this.selectionScope(message),
         };
         let attachedMeme;
-        const sceneAliasMatch = options.attachmentSha256
-          ? null
-          : matchLongtuSceneAlias(
+        const attachmentSha256s = Array.isArray(options.attachmentSha256s)
+          ? [...new Set(options.attachmentSha256s.filter(Boolean))]
+          : (options.attachmentSha256 ? [options.attachmentSha256] : []);
+        const sceneAliasMatches = attachmentSha256s.length > 0
+          ? []
+          : matchLongtuSceneAliases(
             content,
             answer,
             options.longtuAliases ?? [],
           );
-        const attachmentSha256 = options.attachmentSha256
-          ?? sceneAliasMatch?.sha256;
-        if (attachmentSha256) {
+        if (attachmentSha256s.length > 0) {
           try {
-            attachedMeme = await this.memeStore.pickBySha(
-              attachmentSha256,
-              selectionOptions,
-            );
-            if (sceneAliasMatch) {
-              this.logger.log(`QQ 普通对话按场景匹配图库标签：${sceneAliasMatch.alias}`);
-            }
+            attachedMeme = attachmentSha256s.length === 1
+              ? await this.memeStore.pickBySha(attachmentSha256s[0], selectionOptions)
+              : await this.memeStore.pickByShas(attachmentSha256s, selectionOptions);
           } catch (error) {
             this.logger.warn(`QQ 绑定附图不可用，回退随机龙图：${error.message}`);
+          }
+        } else if (sceneAliasMatches.length > 0) {
+          try {
+            attachedMeme = sceneAliasMatches.length === 1
+              ? await this.memeStore.pickBySha(
+                sceneAliasMatches[0].sha256,
+                selectionOptions,
+              )
+              : await this.memeStore.pickByShas(
+                sceneAliasMatches.map((entry) => entry.sha256),
+                selectionOptions,
+              );
+            this.logger.log(
+              `QQ 普通对话按场景关键词匹配 ${sceneAliasMatches.length} 张图库候选：${sceneAliasMatches[0].matchedKeyword ?? sceneAliasMatches[0].alias}`,
+            );
+          } catch (error) {
+            this.logger.warn(`QQ 场景关键词附图不可用，回退随机龙图：${error.message}`);
           }
         }
         attachedMeme ??= await this.memeStore.pick('longtu', selectionOptions);
@@ -557,7 +576,7 @@ export class QqBotService {
               `图库可用 ${candidates.length} 张`,
               `动态加入 ${stats.dynamicActive} 张`,
               `已删除/屏蔽 ${stats.blocked} 张`,
-              `管理员手动别名 ${stats.manualAliases ?? 0} 个；OCR 场景文字标签 ${stats.ocrAliases ?? 0} 条`,
+              `管理员关键词池 ${stats.manualAliases ?? 0} 个、绑定 ${stats.manualAliasBindings ?? 0} 条；OCR 场景文字 ${stats.ocrAliases ?? 0} 个、绑定 ${stats.ocrAliasBindings ?? 0} 条`,
               '随机策略：会话独立洗牌，抽完整池前不重复，最近 12 次避开相似场景。',
             ].join('；'),
           }],
@@ -565,17 +584,17 @@ export class QqBotService {
       }
 
       if (command.action === 'alias-status') {
-        const manualAliases = this.longtuLibrary.listAliases({ source: 'manual', limit: 100 });
+        const manualPools = this.longtuLibrary.listAliasPools({ source: 'manual', limit: 100 });
         const stats = this.longtuLibrary.getStats();
         return {
           mode: 'management-alias-status',
           messages: [{
             type: 'text',
             text: [
-              `管理员手动别名 ${stats.manualAliases ?? manualAliases.length} 个`,
-              manualAliases.length > 0
-                ? `可精确调用：${manualAliases.map((entry) => entry.alias).join('、')}`
-                : '目前还没有管理员手动别名',
+              `管理员关键词池 ${stats.manualAliases ?? manualPools.length} 个，共 ${stats.manualAliasBindings ?? 0} 条图片绑定`,
+              manualPools.length > 0
+                ? `关键词池：${manualPools.map((entry) => `${entry.alias}(${entry.imageCount}张)`).join('、')}`
+                : '目前还没有管理员关键词池',
               stats.ocrAliases > 0
                 ? `OCR 场景文字标签 ${stats.ocrAliases} 条（只用于语境关键词匹配，不是需要完整输入的别名）`
                 : '当前没有 OCR 场景关键词',
@@ -584,11 +603,134 @@ export class QqBotService {
         };
       }
 
+      if (command.action === 'inspect-image') {
+        const buffer = await this.resolveManagementImage(payload);
+        if (!buffer) {
+          return {
+            mode: 'management-inspect-image-missing',
+            messages: [{
+              type: 'text',
+              text: '请引用要检查的图片，再发送“检查这张图”。',
+            }],
+          };
+        }
+        const candidates = await this.memeStore.getLongtuCandidates();
+        const sha256 = await this.longtuLibrary.resolveShaByBuffer(buffer, candidates);
+        if (!sha256) {
+          return {
+            mode: 'management-inspect-image-absent',
+            messages: [{
+              type: 'text',
+              text: '数据库核验结果：这张图不在当前龙图库中。需要收录时请引用图片发送“把这张图加入图库”。',
+            }],
+          };
+        }
+        this.rememberManagementTarget(payload, message, sha256);
+        const manualAliases = this.longtuLibrary.listAliasesBySha(sha256, {
+          source: 'manual',
+        });
+        const ocrAliases = this.longtuLibrary.listAliasesBySha(sha256, {
+          source: 'ocr',
+        });
+        return {
+          mode: 'management-inspect-image',
+          messages: [{
+            type: 'text',
+            text: [
+              '数据库核验结果：这张图已在图库中',
+              manualAliases.length > 0
+                ? `手动标记：${manualAliases.map((entry) => entry.alias).join('、')}`
+                : '尚未设置手动标记',
+              `OCR 场景文字 ${ocrAliases.length} 条`,
+              manualAliases.length === 0
+                ? '已设为当前标记目标，15 分钟内发送“图片标记XX”即可绑定'
+                : '',
+            ].filter(Boolean).join('；') + '。',
+          }],
+        };
+      }
+
+      if (command.action === 'inspect-alias') {
+        const manualBindings = this.longtuLibrary.resolveAliases(command.alias, {
+          source: 'manual',
+        });
+        if (manualBindings.length === 0) {
+          const sceneMatches = matchLongtuSceneAliases(
+            command.alias,
+            '',
+            this.longtuLibrary.listAliases(),
+          );
+          if (sceneMatches.length > 0) {
+            const meme = sceneMatches.length === 1
+              ? await this.memeStore.pickBySha(sceneMatches[0].sha256, {
+                selectionScope,
+              })
+              : await this.memeStore.pickByShas(
+                sceneMatches.map((entry) => entry.sha256),
+                { selectionScope },
+              );
+            return {
+              mode: 'management-inspect-scene-keyword',
+              messages: [
+                {
+                  type: 'text',
+                  text: `数据库核验结果：没有手动关键词池“${command.alias}”，但 OCR 场景当前匹配 ${sceneMatches.length} 张图；下面按候选池轮换返回其中一张。`,
+                },
+                imageMessage(meme),
+              ],
+            };
+          }
+          return {
+            mode: 'management-inspect-alias-absent',
+            messages: [{
+              type: 'text',
+              text: `数据库中没有管理员手动标记“${command.alias}”。`,
+            }],
+          };
+        }
+        const meme = manualBindings.length === 1
+          ? await this.memeStore.pickBySha(manualBindings[0].sha256, { selectionScope })
+          : await this.memeStore.pickByShas(
+            manualBindings.map((entry) => entry.sha256),
+            { selectionScope },
+          );
+        return {
+          mode: 'management-inspect-alias',
+          messages: [
+            {
+              type: 'text',
+              text: `数据库核验结果：手动关键词池“${command.alias}”已生效，当前包含 ${manualBindings.length} 张图；下面按池内去重轮换返回一张。`,
+            },
+            imageMessage(meme),
+          ],
+        };
+      }
+
       if (command.action === 'unbind-alias') {
         const removed = this.longtuLibrary.unbindAlias(command.alias, { actor });
         return {
           mode: 'management-alias-unbound',
-          messages: [{ type: 'text', text: `已取消别名“${removed.alias}”的图片绑定。` }],
+          messages: [{
+            type: 'text',
+            text: `已清空手动关键词池“${removed.alias}”，共移除 ${removed.removed} 张图的绑定。`,
+          }],
+        };
+      }
+
+      if (command.action === 'unbind-image-alias') {
+        const buffer = await this.resolveManagementImage(payload);
+        const candidates = await this.memeStore.getLongtuCandidates();
+        const sha256 = buffer
+          ? await this.longtuLibrary.resolveShaByBuffer(buffer, candidates)
+          : this.getManagementTarget(payload, message);
+        if (!sha256) throw new Error('请引用要取消标记的图片，或先发送“检查这张图”');
+        const removed = this.longtuLibrary.unbindAlias(command.alias, { actor, sha256 });
+        return {
+          mode: 'management-image-alias-unbound',
+          messages: [{
+            type: 'text',
+            text: `数据库已回查：已从关键词池“${removed.alias}”移除这张图，池内还剩 ${removed.poolSize} 张。`,
+          }],
         };
       }
 
@@ -619,14 +761,24 @@ export class QqBotService {
         }
         this.rememberManagementTarget(payload, message, sha256);
         const bound = this.longtuLibrary.bindAlias(command.alias, sha256, { actor });
+        const verifiedPool = this.longtuLibrary.resolveAliases(bound.alias, {
+          source: 'manual',
+        });
+        if (!verifiedPool.some((entry) => entry.sha256 === sha256)) {
+          throw new Error('数据库回查未找到刚写入的手动标记');
+        }
+        const verifiedAliases = this.longtuLibrary.listAliasesBySha(sha256, {
+          source: 'manual',
+        });
         return {
           mode: 'management-alias-bound',
           messages: [{
             type: 'text',
             text: [
-              `${bound.replaced ? '已覆盖' : '已建立'}别名“${bound.alias}”`,
+              `${bound.added ? '已加入' : '图片原本就在'}关键词池“${bound.alias}”`,
               added ? (added.forced ? '图片已由超级管理员强制加入图库' : '图片已通过特征复核并加入图库') : '',
-              `发送“发${bound.alias}”可精确调用；普通对话提到“${bound.alias}”也会优先附这张图。`,
+              `数据库已回查：池内当前共 ${verifiedPool.length} 张图；当前图片的全部手动标记为 ${verifiedAliases.map((entry) => entry.alias).join('、')}`,
+              `发送“发${bound.alias}”或在普通对话提到“${bound.alias}”，会从该池随机轮换一张。`,
             ].filter(Boolean).join('；'),
           }],
         };
@@ -765,7 +917,7 @@ export class QqBotService {
       const aliasMatch = matchLongtuAliasRequest(payload.text, longtuAliases);
       if (aliasMatch) {
         return this.replyLongtu(`文字别名：${aliasMatch.alias}`, message, {
-          sha256: aliasMatch.sha256,
+          sha256s: aliasMatch.sha256s,
         });
       }
       contextualAliasMatch = matchLongtuContextAlias(payload.text, longtuAliases);
@@ -786,7 +938,7 @@ export class QqBotService {
       conversationContent,
       payload.senderName,
       {
-        attachmentSha256: contextualAliasMatch?.sha256,
+        attachmentSha256s: contextualAliasMatch?.sha256s,
         longtuAliases,
       },
     );
