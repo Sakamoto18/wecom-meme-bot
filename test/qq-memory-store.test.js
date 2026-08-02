@@ -140,6 +140,7 @@ test('滚动摘要后模型只读取近期原文且 SQLite 仍保留被摘要原
       conversations: 1,
       messages: 8,
       summaries: 1,
+      groupMembers: 0,
     });
     store.close();
 
@@ -150,5 +151,37 @@ test('滚动摘要后模型只读取近期原文且 SQLite 仍保留被摘要原
       '问题 3', '回答 3', '问题 4', '回答 4',
     ]);
     reopened.close();
+  });
+});
+
+test('普通群消息可连续观察，并持久记录成员昵称变化', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = new QqMemoryStore({
+      databaseFilePath: path.join(directory, 'qq-memory.sqlite'),
+      summaryTriggerMessages: 3,
+      summaryKeepMessages: 1,
+    });
+    await store.load();
+    store.recordGroupMember('g1', 'u1', '旧昵称');
+    store.appendObservation('group:g1', '当前发言人：旧昵称（成员-a）\n当前消息：第一句');
+    store.recordGroupMember('g1', 'u1', '新昵称');
+    store.appendObservation('group:g1', '当前发言人：新昵称（成员-a）\n当前消息：第二句');
+    store.recordGroupMember('g1', 'u2', '另一人');
+    store.appendObservation('group:g1', '当前发言人：另一人（成员-b）\n当前消息：第三句');
+
+    assert.deepEqual(store.get('group:g1').map((message) => message.role), [
+      'user', 'user', 'user',
+    ]);
+    const members = store.getGroupMembers('g1');
+    assert.equal(members.length, 2);
+    assert.equal(members.find((member) => member.currentName === '新昵称').messageCount, 2);
+    assert.deepEqual(
+      members.find((member) => member.currentName === '新昵称').knownNames,
+      ['旧昵称', '新昵称'],
+    );
+
+    const snapshot = store.getSummarySnapshot('group:g1');
+    assert.equal(snapshot.messages.length, 2);
+    store.close();
   });
 });

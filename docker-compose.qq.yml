@@ -36,6 +36,10 @@ services:
       LONGTU_QQ_API_URL: http://qq-bot:8787/v1/qq/message
       LONGTU_QQ_API_TOKEN: ${QQ_API_TOKEN:?请在 .env.qq 中设置 QQ_API_TOKEN}
       LONGTU_QQ_ALLOWED_GROUPS: ${LONGTU_QQ_ALLOWED_GROUPS:-}
+      LONGTU_QQ_OBSERVE_GROUP_MESSAGES: ${LONGTU_QQ_OBSERVE_GROUP_MESSAGES:-true}
+      LONGTU_QQ_IGNORED_WAKE_COMMANDS: ${LONGTU_QQ_IGNORED_WAKE_COMMANDS:-/w}
+      LONGTU_QQ_IGNORE_SLASH_COMMANDS: ${LONGTU_QQ_IGNORE_SLASH_COMMANDS:-true}
+      LONGTU_QQ_REPLY_ONLY_WHEN_AT: ${LONGTU_QQ_REPLY_ONLY_WHEN_AT:-true}
     ports:
       - "6185:6185"
       # NapCat 与 AstrBot 在同一 Docker 网络时无需把 6199 暴露给宿主机。
@@ -71,4 +75,3 @@ services:
 networks:
   longtu-qq:
     driver: bridge
-

@@ -37,6 +37,8 @@ openssl rand -hex 32
 - 普通对话需要填写 `LLM_API_KEY`；只测试“龙图”指令可以暂时留空。
 - 执行 `id -u` 和 `id -g`，把结果填入 `NAPCAT_UID`、`NAPCAT_GID`。
 - 如需群白名单，把群号填入 `LONGTU_QQ_ALLOWED_GROUPS`，多个群号用英文逗号分隔。
+- `LONGTU_QQ_ADMIN_USERS` 填允许管理图库的 QQ 号，多个用英文逗号分隔。
+- `LONGTU_QQ_PROTECTED_ROLES` 可写不可被群聊覆盖的身份钢印，例如 `QQ号=至高无上的真龙王`。
 
 ## 2. 启动三个服务
 
@@ -70,6 +72,27 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 - `LONGTU_QQ_ALLOWED_GROUPS` 留空时允许所有群；填写后只处理白名单群。
 - 默认不发送“处理中”占位消息，因此明确龙图指令仍然只回图片；需要时可在插件配置中开启。
 - 插件处理消息后会停止 AstrBot 默认 LLM 流程，避免同一条消息回复两次。
+- 允许群中的普通消息会静默进入角色/语境记忆，但不会回复、不会停止事件，也不会妨碍其他插件。
+- 群内所有以 `/` 开头的 AstrBot/插件指令都由龙图 Bridge 忽略，不会误触发本机器人。
+
+### 群角色认知
+
+QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称、历史昵称、发言次数和最近出现时间。模型输入会分别标明当前发言人、被 `@` 的成员和引用消息作者；滚动摘要会保留稳定偏好、人物关系和共同梗，并区分“本人自述”与“别人单次评价”。昵称变化不会导致成员串号。
+
+`LONGTU_QQ_PROTECTED_ROLES` 的身份映射高于昵称、群聊内容和旧摘要，群成员无法通过改名、冒充或反复要求来覆盖。相关原始数据只保存在服务器的 `data/qq-memory.sqlite` 中。
+
+### 聊天管理龙图库
+
+只有 `LONGTU_QQ_ADMIN_USERS` 中的 QQ 账号可以使用：
+
+- 图片加文字“把这张龙图添加进图库”；
+- 图片加文字“强制添加这张龙图”；
+- “删除上一张龙图”；
+- 引用图片后发送“删除这张龙图”；
+- “撤销删除”；
+- “图库状态”。
+
+普通添加会用本地感知哈希和视觉特征与已审核龙图库复核，不会把图片上传给 DeepSeek。完全重复始终拒绝；模糊结果会要求管理员明确使用强制添加。动态图片与删除记录保存在 `data/longtu-library/` 和 `data/longtu-library.sqlite`，容器重建后仍保留。
 
 ## 4. 登录 NapCat 并连接 AstrBot
 
@@ -108,7 +131,7 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml up -d --build
 docker compose --env-file .env.qq -f docker-compose.qq.yml down
 ```
 
-NapCat 登录数据在 `deploy/qq/napcat/`，AstrBot 数据在 `deploy/qq/astrbot-data/`，QQ 长期记忆在 `data/qq-memory.sqlite`。第一次更新会自动迁移旧的 `data/qq-conversation-memory.json`，运行数据均已加入 `.gitignore`。
+NapCat 登录数据在 `deploy/qq/napcat/`，AstrBot 数据在 `deploy/qq/astrbot-data/`，QQ 长期记忆在 `data/qq-memory.sqlite`，动态图库在 `data/longtu-library/`。第一次更新会自动迁移旧的 `data/qq-conversation-memory.json`，运行数据均已加入 `.gitignore`。
 
 ## 排查
 

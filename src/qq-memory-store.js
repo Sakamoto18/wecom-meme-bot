@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -36,8 +37,8 @@ function fitMessages(messages, maxMessages, maxCharacters) {
     0,
   );
 
-  while (fitted.length > 2 && countCharacters() > maxCharacters) {
-    fitted = fitted.slice(Math.min(2, fitted.length));
+  while (fitted.length > 1 && countCharacters() > maxCharacters) {
+    fitted = fitted.slice(1);
   }
 
   if (countCharacters() > maxCharacters && fitted.length > 0) {
@@ -50,10 +51,25 @@ function fitMessages(messages, maxMessages, maxCharacters) {
   return fitted;
 }
 
-function normalizedEvenInteger(value, fallback, minimum = 2) {
+function normalizedPositiveInteger(value, fallback, minimum = 1) {
   const parsed = Number.parseInt(value, 10);
-  const normalized = Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
-  return normalized % 2 === 0 ? normalized : normalized - 1;
+  return Number.isInteger(parsed) && parsed >= minimum ? parsed : fallback;
+}
+
+function stableParticipantId(userId) {
+  return createHash('sha256')
+    .update(String(userId ?? 'anonymous'))
+    .digest('hex')
+    .slice(0, 6);
+}
+
+function safeNames(value) {
+  try {
+    const parsed = JSON.parse(value ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter(Boolean).slice(-8) : [];
+  } catch {
+    return [];
+  }
 }
 
 export class QqMemoryStore {
@@ -65,18 +81,18 @@ export class QqMemoryStore {
     this.maxConversations = options.maxConversations ?? DEFAULT_MAX_CONVERSATIONS;
     this.maxStoredMessages = options.maxStoredMessages ?? DEFAULT_MAX_STORED_MESSAGES;
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-    this.summaryTriggerMessages = normalizedEvenInteger(
+    this.summaryTriggerMessages = normalizedPositiveInteger(
       options.summaryTriggerMessages,
       DEFAULT_SUMMARY_TRIGGER_MESSAGES,
-      4,
+      2,
     );
     this.summaryKeepMessages = Math.min(
-      normalizedEvenInteger(
+      normalizedPositiveInteger(
         options.summaryKeepMessages,
         DEFAULT_SUMMARY_KEEP_MESSAGES,
-        2,
+        1,
       ),
-      this.summaryTriggerMessages - 2,
+      this.summaryTriggerMessages - 1,
     );
     this.maxSummaryCharacters = options.maxSummaryCharacters
       ?? DEFAULT_MAX_SUMMARY_CHARACTERS;
@@ -126,12 +142,26 @@ export class QqMemoryStore {
         FOREIGN KEY(conversation_id) REFERENCES qq_conversations(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS qq_group_members (
+        group_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        speaker_id TEXT NOT NULL,
+        current_name TEXT NOT NULL DEFAULT '',
+        known_names TEXT NOT NULL DEFAULT '[]',
+        message_count INTEGER NOT NULL DEFAULT 0,
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        PRIMARY KEY(group_id, user_id)
+      );
+
       CREATE INDEX IF NOT EXISTS qq_messages_conversation_id_id
         ON qq_messages(conversation_id, id);
       CREATE INDEX IF NOT EXISTS qq_conversations_expires_at
         ON qq_conversations(expires_at);
       CREATE INDEX IF NOT EXISTS qq_conversations_updated_at
         ON qq_conversations(updated_at);
+      CREATE INDEX IF NOT EXISTS qq_group_members_group_activity
+        ON qq_group_members(group_id, last_seen_at DESC);
     `);
     return this.database;
   }
@@ -299,9 +329,17 @@ export class QqMemoryStore {
     return String(row?.summary ?? '').trim();
   }
 
-  appendExchange(conversationId, userContent, assistantContent) {
+  appendMessages(conversationId, messages) {
     const database = this.ensureOpen();
     const currentTime = this.now();
+    const normalizedMessages = messages
+      .filter((message) => message?.role === 'user' || message?.role === 'assistant')
+      .map((message) => ({
+        role: message.role,
+        content: String(message.content ?? '').trim(),
+      }))
+      .filter((message) => message.content);
+    if (normalizedMessages.length === 0) return false;
     database.exec('BEGIN IMMEDIATE');
     try {
       database.prepare(
@@ -324,8 +362,14 @@ export class QqMemoryStore {
         INSERT INTO qq_messages(conversation_id, role, content, created_at)
         VALUES (?, ?, ?, ?)
       `);
-      insertMessage.run(conversationId, 'user', String(userContent ?? ''), currentTime);
-      insertMessage.run(conversationId, 'assistant', String(assistantContent ?? ''), currentTime);
+      normalizedMessages.forEach((message, index) => {
+        insertMessage.run(
+          conversationId,
+          message.role,
+          message.content,
+          currentTime + index,
+        );
+      });
       database.prepare(`
         DELETE FROM qq_messages
         WHERE conversation_id = ?
@@ -342,6 +386,94 @@ export class QqMemoryStore {
       throw error;
     }
     this.enforceConversationLimit();
+    return true;
+  }
+
+  appendMessage(conversationId, role, content) {
+    return this.appendMessages(conversationId, [{ role, content }]);
+  }
+
+  appendObservation(conversationId, content) {
+    return this.appendMessage(conversationId, 'user', content);
+  }
+
+  appendExchange(conversationId, userContent, assistantContent) {
+    return this.appendMessages(conversationId, [
+      { role: 'user', content: userContent },
+      { role: 'assistant', content: assistantContent },
+    ]);
+  }
+
+  recordGroupMember(groupId, userId, displayName = '', options = {}) {
+    const normalizedGroupId = String(groupId ?? '').trim();
+    const normalizedUserId = String(userId ?? '').trim();
+    if (!normalizedGroupId || !normalizedUserId) return false;
+    const database = this.ensureOpen();
+    const currentTime = this.now();
+    const normalizedName = String(displayName ?? '')
+      .replace(/[\r\n]+/g, ' ')
+      .trim()
+      .slice(0, 80);
+    const existing = database.prepare(`
+      SELECT current_name, known_names
+      FROM qq_group_members
+      WHERE group_id = ? AND user_id = ?
+    `).get(normalizedGroupId, normalizedUserId);
+    const names = safeNames(existing?.known_names);
+    if (normalizedName && !names.includes(normalizedName)) names.push(normalizedName);
+    database.prepare(`
+      INSERT INTO qq_group_members(
+        group_id, user_id, speaker_id, current_name, known_names,
+        message_count, first_seen_at, last_seen_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(group_id, user_id) DO UPDATE SET
+        current_name = CASE
+          WHEN excluded.current_name <> '' THEN excluded.current_name
+          ELSE qq_group_members.current_name
+        END,
+        known_names = excluded.known_names,
+        message_count = qq_group_members.message_count + excluded.message_count,
+        last_seen_at = excluded.last_seen_at
+    `).run(
+      normalizedGroupId,
+      normalizedUserId,
+      stableParticipantId(normalizedUserId),
+      normalizedName,
+      JSON.stringify(names.slice(-8)),
+      options.countMessage === false ? 0 : 1,
+      currentTime,
+      currentTime,
+    );
+    return true;
+  }
+
+  getGroupMemberAliases(groupId, limit = 40) {
+    const rows = this.ensureOpen().prepare(`
+      SELECT speaker_id, current_name
+      FROM qq_group_members
+      WHERE group_id = ? AND current_name <> ''
+      ORDER BY last_seen_at DESC
+      LIMIT ?
+    `).all(String(groupId ?? '').trim(), limit);
+    return Object.fromEntries(rows.map((row) => [row.speaker_id, row.current_name]));
+  }
+
+  getGroupMembers(groupId, limit = 40) {
+    return this.ensureOpen().prepare(`
+      SELECT speaker_id, current_name, known_names, message_count,
+             first_seen_at, last_seen_at
+      FROM qq_group_members
+      WHERE group_id = ?
+      ORDER BY last_seen_at DESC
+      LIMIT ?
+    `).all(String(groupId ?? '').trim(), limit).map((row) => ({
+      speakerId: row.speaker_id,
+      currentName: row.current_name,
+      knownNames: safeNames(row.known_names),
+      messageCount: Number(row.message_count),
+      firstSeenAt: Number(row.first_seen_at),
+      lastSeenAt: Number(row.last_seen_at),
+    }));
   }
 
   clear(conversationId) {
@@ -371,8 +503,7 @@ export class QqMemoryStore {
       unsummarizedCount - this.summaryKeepMessages,
       this.summaryTriggerMessages - this.summaryKeepMessages,
     );
-    if (summarizeCount % 2 !== 0) summarizeCount -= 1;
-    if (summarizeCount < 2) return null;
+    if (summarizeCount < 1) return null;
     const rows = database.prepare(`
       SELECT id, role, content
       FROM qq_messages
@@ -452,6 +583,9 @@ export class QqMemoryStore {
         SELECT COUNT(*) AS count
         FROM qq_conversations
         WHERE summary <> ''
+      `).get().count),
+      groupMembers: Number(database.prepare(`
+        SELECT COUNT(*) AS count FROM qq_group_members
       `).get().count),
     };
   }

@@ -44,6 +44,8 @@ export async function generateConversationReply(options) {
     webSearchEnabled = true,
     knowledgeContext = '',
     memorySummary = '',
+    interactionContext = {},
+    protectedIdentityContext = '',
   } = options;
 
   const memoryContext = buildMemoryContext(memorySummary);
@@ -52,14 +54,16 @@ export async function generateConversationReply(options) {
     throw new Error('普通对话服务还没配好');
   }
 
-  if (shouldUseAttackStyle(content, history)) {
+  if (shouldUseAttackStyle(content, history, interactionContext)) {
     const firstScene = selectAttackScene(history);
     const firstDraft = await chatClient.complete(history, modelInput, {
       additionalSystemPrompt: [
+        protectedIdentityContext,
         memoryContext,
         buildAttackPrompt(content, {
           history,
           attackScene: firstScene,
+          interactionContext,
         }),
       ].filter(Boolean).join('\n\n'),
       maxTokens: 220,
@@ -76,12 +80,13 @@ export async function generateConversationReply(options) {
       });
       const secondDraft = await chatClient.complete(history, modelInput, {
         additionalSystemPrompt: [
+          protectedIdentityContext,
           memoryContext,
           buildAttackRetryPrompt(
             content,
             firstDraft,
             firstReview.issues,
-            { history, attackScene: retryScene },
+            { history, attackScene: retryScene, interactionContext },
           ),
         ].filter(Boolean).join('\n\n'),
         maxTokens: 220,
@@ -131,6 +136,7 @@ export async function generateConversationReply(options) {
   const useLongtuKnowledge = shouldSearchLongtuKnowledge(content);
   const thinkingEnabled = shouldUseThinking(content);
   const additionalSystemPrompt = [
+    protectedIdentityContext,
     memoryContext,
     buildNormalReplyPrompt({ thinkingEnabled }),
     useLongtuKnowledge ? knowledgeContext : '',

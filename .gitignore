@@ -6,6 +6,7 @@ npm-debug.log*
 .build/
 data/*.json
 data/*.sqlite*
+data/longtu-library/
 !data/longtu-approvals.json
 !data/longtu-exclusions.json
 !data/member-aliases.json

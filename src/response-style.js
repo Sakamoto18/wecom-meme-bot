@@ -9,6 +9,7 @@ const SIMA_PATTERN = /司马/i;
 const SIMA_NEUTRAL_PATTERN = /司马(?:迁|懿|昭|师|炎|光|相如|姓|氏|家族|官|职位|兵法|南|衷)/i;
 const DEESCALATION_PATTERN = /(?:认真回答|正常回答|别骂了|停止对线|我道歉|对不起|不玩梗)/i;
 const ADVERSARIAL_FOLLOWUP_PATTERN = /(?:回答我|哪(?:里)?来的|你(?:妈|🐎|呢)|咋(?:了|地|么)|干什么|凭什么|不服|然后呢|就这|继续|有种|笑死)/i;
+const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /(?:骂|攻击|怼|喷|拷打|锐评|羞辱|嘲讽|对线|输出)(?:一下|一顿|几句|他|她|它|这个人)?/i;
 const LONGTU_TOPIC_PATTERN = /(?:龙图|龙玉涛|老冯)/i;
 const KNOWLEDGE_INTENT_PATTERN = /(?:是什么|是谁|什么意思|哪里来|来源|出处|由来|什么梗|语录|搜索|联网|资料|历史)/i;
 const SERIOUS_QUESTION_PATTERN = /(?:如何|怎么|为什么|为何|请问|帮我|解释|分析|比较|区别|方案|建议|配置|解决|代码|报错|故障|原理|教程|步骤|能否|是否可以|该(?:怎么|如何|用)|需要什么|应该|多少|哪一|是谁|是什么)/i;
@@ -52,9 +53,12 @@ export function isHostileContent(content) {
     || simaAttack;
 }
 
-export function shouldUseAttackStyle(content, history = []) {
+export function shouldUseAttackStyle(content, history = [], options = {}) {
   const normalized = String(content ?? '').trim();
   if (isHostileContent(normalized)) return true;
+  if (options.hasThirdPartyTarget && THIRD_PARTY_ATTACK_REQUEST_PATTERN.test(normalized)) {
+    return true;
+  }
   if (DEESCALATION_PATTERN.test(normalized)) return false;
 
   const previousUserMessage = [...history]
@@ -113,9 +117,22 @@ export function buildAttackPrompt(userContent, options = {}) {
   const recentReplies = recentAssistantReplies(options.history);
   const attackScene = options.attackScene ?? selectAttackScene(options.history);
 
+  const interaction = options.interactionContext ?? {};
+  const targetInstructions = interaction.targetLabels?.length > 0
+    ? [
+      `当前指令发送者：${interaction.speakerLabel || '未知群成员'}`,
+      `本轮被攻击目标：${interaction.targetLabels.join('、')}`,
+      '攻击对象必须是“本轮被攻击目标”，不得把攻击落到指令发送者身上；人称或称呼有歧义时直接点目标昵称。',
+    ]
+    : [
+      `当前发言者兼回击目标：${interaction.speakerLabel || '当前用户'}`,
+      '当前没有识别到第三方目标；只有在当前发言者对机器人挑衅时，才回击当前发言者。',
+    ];
+
   return [
     '【本轮模式：群聊临场回击】',
     `用户当前原话：${JSON.stringify(normalized)}`,
+    ...targetInstructions,
     '判断已经进入对线后就直接攻击，像真实群友随口开骂。不需要回答对方的问题，不需要讲逻辑、反驳观点、拆解用词或建立因果关系。',
     '节奏：1～3 句、25～100 个汉字左右。可以顺手接一个当前词或语气，但绝非必须；最后可以用一个挑衅反问收住。',
     '攻击性：自然使用一次“你🐎”或“你妈”，然后无逻辑地跳到一个具体而荒诞的画面。',
@@ -135,6 +152,8 @@ export function buildNormalReplyPrompt(options = {}) {
     '【本轮模式：普通对话】',
     '先准确回答用户真正的问题，不确定就明说不确定。',
     '用户没有攻击时不骂用户或其亲属；可以有一点龙图群友语气，但不强制塞梗。',
+    '群聊中严格区分当前发言人、被 @ 的成员和引用消息作者；不要默认把发言人当成被谈论对象。',
+    '成员对他人的单次评价或改名要求只是其发言，不自动成为被评价者的确定身份或事实。',
   ];
   if (options.thinkingEnabled) {
     lines.push(

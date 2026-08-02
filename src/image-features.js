@@ -28,6 +28,19 @@ function cropViews(image) {
   return views.slice(0, 3);
 }
 
+function differenceHashFromView(view) {
+  view.greyscale().resize({ w: 9, h: 8 });
+  let hash = 0n;
+  for (let y = 0; y < 8; y += 1) {
+    for (let x = 0; x < 8; x += 1) {
+      const left = view.getPixelColor(x, y) >>> 8;
+      const right = view.getPixelColor(x + 1, y) >>> 8;
+      hash = (hash << 1n) | (left > right ? 1n : 0n);
+    }
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
 function vectorFromView(view) {
   view.cover({ w: FEATURE_SIZE, h: FEATURE_SIZE });
   const luminance = new Float32Array(FEATURE_SIZE * FEATURE_SIZE);
@@ -91,6 +104,33 @@ function vectorFromView(view) {
 export async function extractImageFeatures(input) {
   const image = await Jimp.read(input);
   return cropViews(image).map(vectorFromView);
+}
+
+export async function extractPerceptualHashes(input) {
+  const image = await Jimp.read(input);
+  return cropViews(image).map(differenceHashFromView);
+}
+
+export function perceptualHashDistance(left, right) {
+  let difference = BigInt('0x' + left) ^ BigInt('0x' + right);
+  let distance = 0;
+  while (difference > 0n) {
+    distance += Number(difference & 1n);
+    difference >>= 1n;
+  }
+  return distance;
+}
+
+export function minimumPerceptualHashDistance(leftHashes = [], rightHashes = []) {
+  let minimum = Number.POSITIVE_INFINITY;
+  for (const left of leftHashes) {
+    for (const right of rightHashes) {
+      if (/^[a-f0-9]{16}$/i.test(left) && /^[a-f0-9]{16}$/i.test(right)) {
+        minimum = Math.min(minimum, perceptualHashDistance(left, right));
+      }
+    }
+  }
+  return minimum;
 }
 
 function correlationDistance(left, right) {
