@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { QqMemoryStore } from '../src/qq-memory-store.js';
 
 async function withTemporaryDirectory(task) {
@@ -179,9 +180,81 @@ test('普通群消息可连续观察，并持久记录成员昵称变化', async
       members.find((member) => member.currentName === '新昵称').knownNames,
       ['旧昵称', '新昵称'],
     );
+    assert.deepEqual(
+      members.find((member) => member.currentName === '新昵称').confirmedNames,
+      ['旧昵称', '新昵称'],
+    );
 
     const snapshot = store.getSummarySnapshot('group:g1');
     assert.equal(snapshot.messages.length, 2);
+    store.close();
+  });
+});
+
+test('别人艾特只登记待确认身份，成员本人发言后才确认昵称别名', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = new QqMemoryStore({
+      databaseFilePath: path.join(directory, 'qq-memory.sqlite'),
+    });
+    await store.load();
+    store.recordGroupMember('g1', 'target', '别人填写的昵称', {
+      countMessage: false,
+      confirmIdentity: false,
+    });
+    let member = store.getGroupMembers('g1')[0];
+    assert.equal(member.identityConfirmed, false);
+    assert.deepEqual(member.confirmedNames, []);
+    assert.deepEqual(store.getGroupMemberAliases('g1'), {});
+
+    store.recordGroupMember('g1', 'target', '', {
+      countMessage: true,
+      confirmIdentity: true,
+    });
+    member = store.getGroupMembers('g1')[0];
+    assert.equal(member.identityConfirmed, true);
+    assert.deepEqual(member.confirmedNames, []);
+
+    store.recordGroupMember('g1', 'target', '本人昵称', {
+      countMessage: true,
+      confirmIdentity: true,
+    });
+    member = store.getGroupMembers('g1')[0];
+    assert.deepEqual(member.confirmedNames, ['本人昵称']);
+    assert.deepEqual(Object.values(store.getGroupMemberAliases('g1')), ['本人昵称']);
+    store.close();
+  });
+});
+
+test('旧版群成员表升级后按历史发言次数恢复已确认身份', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const databaseFilePath = path.join(directory, 'qq-memory.sqlite');
+    const legacy = new DatabaseSync(databaseFilePath);
+    legacy.exec(`
+      CREATE TABLE qq_group_members (
+        group_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        speaker_id TEXT NOT NULL,
+        current_name TEXT NOT NULL DEFAULT '',
+        known_names TEXT NOT NULL DEFAULT '[]',
+        message_count INTEGER NOT NULL DEFAULT 0,
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        PRIMARY KEY(group_id, user_id)
+      );
+    `);
+    legacy.prepare(`
+      INSERT INTO qq_group_members(
+        group_id, user_id, speaker_id, current_name, known_names,
+        message_count, first_seen_at, last_seen_at
+      ) VALUES ('g1', 'u1', 'abcdef', '本人昵称', '["本人昵称"]', 3, 1, 2)
+    `).run();
+    legacy.close();
+
+    const store = new QqMemoryStore({ databaseFilePath });
+    await store.load();
+    const member = store.getGroupMembers('g1')[0];
+    assert.equal(member.identityConfirmed, true);
+    assert.deepEqual(member.confirmedNames, ['本人昵称']);
     store.close();
   });
 });

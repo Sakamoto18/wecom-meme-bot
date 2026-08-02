@@ -413,6 +413,37 @@ export class MemeStore {
     throw new Error('龙图候选集中没有可用图片');
   }
 
+  async pickBySha(sha256, options = {}) {
+    const normalizedSha = String(sha256 ?? '').trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(normalizedSha)) {
+      throw new Error('指定龙图的资源标识无效');
+    }
+    const allowedExtensions = options.allowedExtensions
+      ? new Set(options.allowedExtensions)
+      : null;
+    const candidates = await this.loadLongtuCandidates();
+    const candidate = candidates.find((entry) => {
+      if (entry.sha256 !== normalizedSha) return false;
+      const extension = entry.extension ?? path.extname(entry.path).toLowerCase();
+      return !allowedExtensions
+        || allowedExtensions.has(extension === '.jpeg' ? '.jpg' : extension);
+    });
+    if (!candidate || this.longtuLibrary?.isBlocked?.(normalizedSha)) {
+      throw new Error('别名对应的龙图已不存在或被删除');
+    }
+    if (this.longtuLibrary) {
+      await this.longtuLibrary.recordDirectSelection(candidate, {
+        scope: options.selectionScope,
+      });
+    }
+    try {
+      return await this.readCandidate(candidate, 'longtu');
+    } catch (error) {
+      this.invalidateLongtuCandidates();
+      throw error;
+    }
+  }
+
   async getMediaId(client, meme) {
     const cached = this.mediaCache.get(meme.key);
     if (cached && cached.expiresAt > Date.now()) {

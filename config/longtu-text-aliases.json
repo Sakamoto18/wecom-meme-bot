@@ -1,0 +1,1480 @@
+{
+  "version": 1,
+  "generatedAt": "2026-08-02T03:05:50.627Z",
+  "imageCount": 240,
+  "aliasCount": 368,
+  "aliases": [
+    {
+      "alias": "0科音号:opirad",
+      "sha256": "4a7c34cddd8fa0be24faaafd585b77d6bfe97961e76bf8b3e06075095cb4756c"
+    },
+    {
+      "alias": "1秒内没回我",
+      "sha256": "60ccb39bc4a1cdf7e80269891c4289621f260cc2056bddfc4f3946b759c958a1"
+    },
+    {
+      "alias": "1秒内没回我我就是你爹",
+      "sha256": "60ccb39bc4a1cdf7e80269891c4289621f260cc2056bddfc4f3946b759c958a1"
+    },
+    {
+      "alias": "哎哎少来这套啊",
+      "sha256": "9a547a0b808566733a232bc1fe8195f2be7e256245dc0b07efc77ad2a98e8b60"
+    },
+    {
+      "alias": "安抚咬人的网友",
+      "sha256": "4dbafe9d603398a1681184d566bea7b2eae2c256ca2cf68df7775e6be73566a4"
+    },
+    {
+      "alias": "把妈",
+      "sha256": "7abb825f7c7ae6bf21a9891dcfa909c7a50ea8c595ed91d1ea07846c1a4cacc2"
+    },
+    {
+      "alias": "把妈给我",
+      "sha256": "7abb825f7c7ae6bf21a9891dcfa909c7a50ea8c595ed91d1ea07846c1a4cacc2"
+    },
+    {
+      "alias": "把钱",
+      "sha256": "dc3a255c8d1793980df7b0180632f455a1609a9775803f9e1b3e8a4361bbac78"
+    },
+    {
+      "alias": "把钱给我",
+      "sha256": "dc3a255c8d1793980df7b0180632f455a1609a9775803f9e1b3e8a4361bbac78"
+    },
+    {
+      "alias": "半夜删你原神",
+      "sha256": "f0d27ddb7cc8ed5d53611345ac02b0a6b0a94f2a50e7b00027cb4e2680af49c8"
+    },
+    {
+      "alias": "半知半解龙",
+      "sha256": "d291585ec4dcb7a88380441b8397fe0f18556f83cb49a48f2d3a8dd97aba40f4"
+    },
+    {
+      "alias": "抱款我没耳朵听不见",
+      "sha256": "71c9f9a38953c58ea5d7f28ed0857814c48097719845ec7f3bb139ec3873c9a5"
+    },
+    {
+      "alias": "被山洞瘴气炸死了",
+      "sha256": "41d8c5d81265de9e2d7d0adf90d554e2a2f635eba4de297a1061698534bd3db7"
+    },
+    {
+      "alias": "别带着小命跟我出言不逊",
+      "sha256": "cec0dd0ec33a89b29cbdfd4a47f820f093ac15a5cdb2809d7c45c0114a229cf2"
+    },
+    {
+      "alias": "不爱吃",
+      "sha256": "f9b2a38f5e66e067a4f227952cf2bbae76c6c6e38b1a355a90355bc20dbb09cc"
+    },
+    {
+      "alias": "不发恶毒图,不说恶毒话",
+      "sha256": "cf690be8ea5988f34e1096c9726647ff9ea2ac852a0a1e1cfaa1f62f6b7c1ecf"
+    },
+    {
+      "alias": "不敢吱声",
+      "sha256": "1ba8f58278618b043d122feddc196045e1bcd2f5c1f777578426343980f1257b"
+    },
+    {
+      "alias": "不可能是这样",
+      "sha256": "dc14da32cd038155987d86ffa1705f1e9291c46626125f4455d12cff64dad6bc"
+    },
+    {
+      "alias": "不可能是这样否定龙",
+      "sha256": "dc14da32cd038155987d86ffa1705f1e9291c46626125f4455d12cff64dad6bc"
+    },
+    {
+      "alias": "不如直接开骂",
+      "sha256": "5c42299f622b69b1e8688262766f47a1f26e368d40752c782bc940eee4eeb4e3"
+    },
+    {
+      "alias": "不是兄弟你谁啊",
+      "sha256": "d834787d8798edf0597c8b78bcb5769da9f1f7a469fd3d9495c17959e0d58121"
+    },
+    {
+      "alias": "不喜欢原神的",
+      "sha256": "5b0d7db20c1575986333199a53bcd10b4f9a46e6a88790145e77add18990b39d"
+    },
+    {
+      "alias": "不喜欢原神的请退群",
+      "sha256": "5b0d7db20c1575986333199a53bcd10b4f9a46e6a88790145e77add18990b39d"
+    },
+    {
+      "alias": "不笑",
+      "sha256": "25a075224d0326f146c881407b645005ecff245475a00d32c16b15c997afc3bb"
+    },
+    {
+      "alias": "不做评价",
+      "sha256": "b92dcc0a9ece37edf8e5edb8e04daaa63560e911fe6bc67d85de68b810ecaf06"
+    },
+    {
+      "alias": "撤回不然弄死你妈",
+      "sha256": "7b61514f99e1cd7be86c12b660681d192c53eb708563d3273ba0de09b9b263db"
+    },
+    {
+      "alias": "成龙",
+      "sha256": "74d76097a57ccca0675e7d75e12a63084fdb07e79fed0bda9b60c2ca9aed54aa"
+    },
+    {
+      "alias": "惩罚终身不许发龙图",
+      "sha256": "fc395540c74571993860e743344286025cd8a3f495cfb9b53c5b728a72768638"
+    },
+    {
+      "alias": "出的开放世界类手游就妄下",
+      "sha256": "e002d205da873f0b910cb6fbb462417ccd989efea20b0d127321c4ac798c45d4"
+    },
+    {
+      "alias": "出来你们就不聊了,他妈个逼的有这么巧吗",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "创文明,树新风",
+      "sha256": "cf690be8ea5988f34e1096c9726647ff9ea2ac852a0a1e1cfaa1f62f6b7c1ecf"
+    },
+    {
+      "alias": "创文明,树新风不发恶毒图,不说恶毒话争做文明你我他",
+      "sha256": "cf690be8ea5988f34e1096c9726647ff9ea2ac852a0a1e1cfaa1f62f6b7c1ecf"
+    },
+    {
+      "alias": "从柏拉图聊到达芬奇,从王者聊到吃鸡,从",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "打胶打的",
+      "sha256": "c6686c259e254dcea17edf67d5873f550375ea6dbdb2aaf9cdf67297a54b421e"
+    },
+    {
+      "alias": "大伙还能认为你是玩原神玩的",
+      "sha256": "d762f1f7e3a6852a588cdd26d4b56192d6fef90c7506f47a5d12e72a515bca1f"
+    },
+    {
+      "alias": "带上你所有龙图",
+      "sha256": "d167f019fe0d5525ab353a3ecaf6454d79c3e7ac4051954137ae6224a9abb926"
+    },
+    {
+      "alias": "带上你所有龙图滚出去",
+      "sha256": "d167f019fe0d5525ab353a3ecaf6454d79c3e7ac4051954137ae6224a9abb926"
+    },
+    {
+      "alias": "但不知道態么接",
+      "sha256": "b454bc2ad939ed21583c7c8fa00b9a3df5beddab749117afe24fc68ce7096489"
+    },
+    {
+      "alias": "但我很乐意跟你玩",
+      "sha256": "748f80d878be32166242e02b5d070dd6639adf33b0ab89b70dd9734a37a138df"
+    },
+    {
+      "alias": "但又怕你吃",
+      "sha256": "fd851a10505a90bd9b37b04ea00bc8cf4e71822a9f5a9ac7bfdc5be43811e3b4"
+    },
+    {
+      "alias": "当我打出这个“草”的时",
+      "sha256": "30ed69189c1383c2fe326ae881992832e0fed404665bba87e128aca687add30d"
+    },
+    {
+      "alias": "到洛伦兹力,从有机化学聊到核聚变,我一",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "道,一日不见兮我心悄悄",
+      "sha256": "03d9085476162ea7ee98b88ca4f8a4adc18c5402539d5ff11c685717292121e5"
+    },
+    {
+      "alias": "定论",
+      "sha256": "e002d205da873f0b910cb6fbb462417ccd989efea20b0d127321c4ac798c45d4"
+    },
+    {
+      "alias": "都给我龙起来",
+      "sha256": "ff11f461cddf3367eaeb92470d0161a13b1e7a637c1e81c8693cefa1fa82f930"
+    },
+    {
+      "alias": "都怪你",
+      "sha256": "9071b847b7592b8533d206ccd5bca95ab0b2777e676e6dbd519b7aaac8cdb2db"
+    },
+    {
+      "alias": "都怪你责怪龙",
+      "sha256": "9071b847b7592b8533d206ccd5bca95ab0b2777e676e6dbd519b7aaac8cdb2db"
+    },
+    {
+      "alias": "堵住你的臭嘴",
+      "sha256": "7883e56b4b1468b1f5b6628725c8d3bcb383f38ce9e608c8e2695e4eed7a5fb5"
+    },
+    {
+      "alias": "对不起是我的错",
+      "sha256": "854ea1e1ac0284ba7e880d9ec059a766537d64ad7790abeeeeea2020116161d1"
+    },
+    {
+      "alias": "对不起是我的错怕事龙",
+      "sha256": "854ea1e1ac0284ba7e880d9ec059a766537d64ad7790abeeeeea2020116161d1"
+    },
+    {
+      "alias": "对不起兄弟,太几把搞笑了",
+      "sha256": "b54b71dceb93c46f792708640ed6733a145dd3a849151ecffc42c9e49d1653ed"
+    },
+    {
+      "alias": "而不是你先天性小脑萎缩",
+      "sha256": "d762f1f7e3a6852a588cdd26d4b56192d6fef90c7506f47a5d12e72a515bca1f"
+    },
+    {
+      "alias": "而是因为没妈的孩子像",
+      "sha256": "30ed69189c1383c2fe326ae881992832e0fed404665bba87e128aca687add30d"
+    },
+    {
+      "alias": "尔这逼养真有节自",
+      "sha256": "b88001decab073e41e3cc5c16a3a645451ce2146140db9940e8ab514c6f4a7f4"
+    },
+    {
+      "alias": "耳龙",
+      "sha256": "f97a2ac1be1b44f959148691cb71c69f8e8f6812fec9f5f6bdc2e431bc84cdee"
+    },
+    {
+      "alias": "二次元门将本人",
+      "sha256": "1681b6d02c86a005dc954f81f313e0c02443af4abd1b0cc4b4b51f4cec0b61df"
+    },
+    {
+      "alias": "二刺螈",
+      "sha256": "0260675893f8f8dc999a729b5308d478d54f89a63e246a12d098277279985a61"
+    },
+    {
+      "alias": "二刺螈你最好哪远滚哪去",
+      "sha256": "0260675893f8f8dc999a729b5308d478d54f89a63e246a12d098277279985a61"
+    },
+    {
+      "alias": "发够了没有乡巴佬",
+      "sha256": "9c7c7061028eb6c2ac45b6c33fb7e83a97dfb946cf53c2759b151bc9a2d16fec"
+    },
+    {
+      "alias": "发诺即时消息",
+      "sha256": "1dfa2a88f340024f5d87dbfdecd8e4486484a66212911b2dfd0ba0d575f79711"
+    },
+    {
+      "alias": "发诺即时消息分享fA的名片",
+      "sha256": "1dfa2a88f340024f5d87dbfdecd8e4486484a66212911b2dfd0ba0d575f79711"
+    },
+    {
+      "alias": "发什么b骚",
+      "sha256": "552f8c0d311baf6de6bba43964d064a18b78ea57db630c348c36a61b035f1ecf"
+    },
+    {
+      "alias": "发这图的多少沾点nt除了爷",
+      "sha256": "b54de459cc1bc621da0bc02f07e0264926e54701de94be1bdd3602490e9078ed"
+    },
+    {
+      "alias": "飞机龙",
+      "sha256": "209e1b3cb1ea8348201a965a7371fc3109eb0638e541aebe71292e6cd583d2a2"
+    },
+    {
+      "alias": "分分钟999+,怎么我一出来就不聊了?搞",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "分享fA的名片",
+      "sha256": "1dfa2a88f340024f5d87dbfdecd8e4486484a66212911b2dfd0ba0d575f79711"
+    },
+    {
+      "alias": "否定龙",
+      "sha256": "dc14da32cd038155987d86ffa1705f1e9291c46626125f4455d12cff64dad6bc"
+    },
+    {
+      "alias": "敷衍",
+      "sha256": "a034ecb42a7d57cc17e42b06372bbc4a417529b6b7d5c942ac02c35639a5b07d"
+    },
+    {
+      "alias": "敷衍哦好嗯嗯嗯腮行好好好噁嗯知道了嗯暱嗯噁OK噁就这样",
+      "sha256": "a034ecb42a7d57cc17e42b06372bbc4a417529b6b7d5c942ac02c35639a5b07d"
+    },
+    {
+      "alias": "敢这样和我说话",
+      "sha256": "d246ff93c29bc14c33ea007b8c139d2cab79747e62e44e56c8bddd572f472d07"
+    },
+    {
+      "alias": "高僧都超度不了你的妈",
+      "sha256": "1ee611bfd08bb5c36584ef420cb7178f79ccfd7af5461fe844d0fec6b59cde26"
+    },
+    {
+      "alias": "给你两巴掌要不要",
+      "sha256": "3ed041bf9be81c955d28465d72d541f5e0faebedcf49d56d113e718fff70fe2a"
+    },
+    {
+      "alias": "给杀了而你这个植物人却无能为力一样",
+      "sha256": "056eba985b597b9e2bc93e96e78eaa49ac2cff081adeafc9bffe58f657b23506"
+    },
+    {
+      "alias": "根草",
+      "sha256": "30ed69189c1383c2fe326ae881992832e0fed404665bba87e128aca687add30d"
+    },
+    {
+      "alias": "跟我玩有排面",
+      "sha256": "0bee5b510922a213a95cf0d5f4ed4481b8f2c81c84722340263cba3aeb6524e8"
+    },
+    {
+      "alias": "共有一百六十足",
+      "sha256": "8ddfcbef0df214c14fdf2a9c1ed7c3b48f80321d174507999480eefc0b0462b4"
+    },
+    {
+      "alias": "哈哈哈l",
+      "sha256": "5f25bf526b8f47980c78b95f42287266e6e15e30c2b8bb200ab8841ee5ce12b4"
+    },
+    {
+      "alias": "好好看看龙图应该怎么用",
+      "sha256": "9abeb197405f084f00c709d14599bfa277dd06a77f55d05ecdb3264a40c76daa"
+    },
+    {
+      "alias": "好骗",
+      "sha256": "5dfa8ae08f0d8664d888a1c073efc3236a32b5c946149c6cd2f52be320772e53"
+    },
+    {
+      "alias": "好他妈厉害",
+      "sha256": "4a7c34cddd8fa0be24faaafd585b77d6bfe97961e76bf8b3e06075095cb4756c"
+    },
+    {
+      "alias": "好他妈厉害0科音号:opirad",
+      "sha256": "4a7c34cddd8fa0be24faaafd585b77d6bfe97961e76bf8b3e06075095cb4756c"
+    },
+    {
+      "alias": "好想拉屎",
+      "sha256": "fd851a10505a90bd9b37b04ea00bc8cf4e71822a9f5a9ac7bfdc5be43811e3b4"
+    },
+    {
+      "alias": "好想拉屎但又怕你吃",
+      "sha256": "fd851a10505a90bd9b37b04ea00bc8cf4e71822a9f5a9ac7bfdc5be43811e3b4"
+    },
+    {
+      "alias": "好样的",
+      "sha256": "fd7864b0284ad3b0929e4dd617e1620b3decd6717642cafaa04a41918c0b635a"
+    },
+    {
+      "alias": "好样的夸赞龙",
+      "sha256": "fd7864b0284ad3b0929e4dd617e1620b3decd6717642cafaa04a41918c0b635a"
+    },
+    {
+      "alias": "何皎皎!我有所思在远",
+      "sha256": "03d9085476162ea7ee98b88ca4f8a4adc18c5402539d5ff11c685717292121e5"
+    },
+    {
+      "alias": "和玩横、撇、撇、竖",
+      "sha256": "9c1153c1ec654ed083ab1746dfbc986738f44c17ee2650108419b48f005c414b"
+    },
+    {
+      "alias": "很怪很好笑的东西",
+      "sha256": "30ed69189c1383c2fe326ae881992832e0fed404665bba87e128aca687add30d"
+    },
+    {
+      "alias": "横折、横、横、竖钩",
+      "sha256": "9c1153c1ec654ed083ab1746dfbc986738f44c17ee2650108419b48f005c414b"
+    },
+    {
+      "alias": "候不是因为你发了什么",
+      "sha256": "30ed69189c1383c2fe326ae881992832e0fed404665bba87e128aca687add30d"
+    },
+    {
+      "alias": "穔、盛的保持距离",
+      "sha256": "9c1153c1ec654ed083ab1746dfbc986738f44c17ee2650108419b48f005c414b"
+    },
+    {
+      "alias": "既然你不想好好聊天",
+      "sha256": "9abeb197405f084f00c709d14599bfa277dd06a77f55d05ecdb3264a40c76daa"
+    },
+    {
+      "alias": "简直是社会毒瘤",
+      "sha256": "d39216f2baf621ccce7684487f1988328aa82509cda8a6c0dc0d52e9e0fbe58f"
+    },
+    {
+      "alias": "键盘别对向我",
+      "sha256": "72d40476e0435ba2756e5155095e03846a1d9fea62f2b1903deb32fca2a42b06"
+    },
+    {
+      "alias": "讲不通的",
+      "sha256": "5c42299f622b69b1e8688262766f47a1f26e368d40752c782bc940eee4eeb4e3"
+    },
+    {
+      "alias": "讲不通的不如直接开骂",
+      "sha256": "5c42299f622b69b1e8688262766f47a1f26e368d40752c782bc940eee4eeb4e3"
+    },
+    {
+      "alias": "奖励你玩两小时原神",
+      "sha256": "97678949402caa96ba26b061ef26df53157e88ba0de94a4e7ba1ece17f878b99"
+    },
+    {
+      "alias": "今晚我要打50次飞机",
+      "sha256": "209e1b3cb1ea8348201a965a7371fc3109eb0638e541aebe71292e6cd583d2a2"
+    },
+    {
+      "alias": "今晚我要打50次飞机飞机龙",
+      "sha256": "209e1b3cb1ea8348201a965a7371fc3109eb0638e541aebe71292e6cd583d2a2"
+    },
+    {
+      "alias": "精神状况",
+      "sha256": "4e80efff509245be24ac4b3beb2903a8393887f72d03f9b4f221aade405ab7f9"
+    },
+    {
+      "alias": "竟然还要皮",
+      "sha256": "f739227584a5be7811729c1441b4d465756ad2d0d27deb8d8a92908fd4c65e4a"
+    },
+    {
+      "alias": "靖康之耻聊到靖难之役,从牛顿第二定律聊",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "就别发二刺猿傻卵表情包OK",
+      "sha256": "a7afef5607da0f66d0716f3e38c89c2a7fbfc8bf6cc3fc8f96b48b5593529b83"
+    },
+    {
+      "alias": "就你那点煞笔龙图全",
+      "sha256": "104bfa0953fa3832e11515647d2da3f61a91048c91477d60ea8d96c1dda29e2c"
+    },
+    {
+      "alias": "就你那点煞笔龙图全是你爹我玩剩下的",
+      "sha256": "104bfa0953fa3832e11515647d2da3f61a91048c91477d60ea8d96c1dda29e2c"
+    },
+    {
+      "alias": "就是这样的",
+      "sha256": "7b0a1d93e40b3fb7d3751b01f48935116398b5110cf5c768236d932b41659692"
+    },
+    {
+      "alias": "就是这样的学问龙",
+      "sha256": "7b0a1d93e40b3fb7d3751b01f48935116398b5110cf5c768236d932b41659692"
+    },
+    {
+      "alias": "就似乎你不是你爹亲生的",
+      "sha256": "81b11714aa2140accddda8873222b5f7ca96678f715ba9ee8d33197c1e2dffca"
+    },
+    {
+      "alias": "就像精神病院一样",
+      "sha256": "fe037bbee17b6161798f4c668f88c12d9bc000d6fae90ffc5ddc911b90a72d53"
+    },
+    {
+      "alias": "口东方的可爱龙族",
+      "sha256": "98f6570572651f225324c4496b26293217696fc99526d19028a738dfd993862e"
+    },
+    {
+      "alias": "快憋不住了",
+      "sha256": "11ea0e679f3456a0a1dc726c88564a9292adfc938cd8649c210a338b4922ebe8"
+    },
+    {
+      "alias": "快滚开",
+      "sha256": "5928a6b1c838d822b2dc1bc4383759036ca21995c06f6be38ce29365e05cda83"
+    },
+    {
+      "alias": "快滚开你不变男娘我都懒得理你",
+      "sha256": "5928a6b1c838d822b2dc1bc4383759036ca21995c06f6be38ce29365e05cda83"
+    },
+    {
+      "alias": "快睡觉吧,你妈很安全",
+      "sha256": "fd653535b7860f2e870ec8a457c5f8a7b13791b17ee907b6812a77d7b837da23"
+    },
+    {
+      "alias": "聊啊,怎么不聊了?操他妈从早上聊到晚上",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "龙!这个龙",
+      "sha256": "dd2e5e3631fece29b72f1a70ca4b0bd1f42ea2499a6f3e69b483e337fe3b6c51"
+    },
+    {
+      "alias": "龙咳",
+      "sha256": "02f7d81dad4dec604b670267138d57afef4df68a82b5a8d3414ff0b3c88ac1d0"
+    },
+    {
+      "alias": "龙他",
+      "sha256": "1341a502a751749fd46711df654bb58f2fe9e4c2ee32bc5e337469729d116e25"
+    },
+    {
+      "alias": "龙哑人",
+      "sha256": "4b566895e35e7a78c00c529dd983a5657970e9f273084f70275c5bf7747d5d49"
+    },
+    {
+      "alias": "龙要考虑的事就多了",
+      "sha256": "ecd137b4efc58db571cc5fd27b00e139776f23f21cf086048081e2cd9f822ed2"
+    },
+    {
+      "alias": "龍拳警告",
+      "sha256": "d19664c97bdf62afbeb4033cf1c56d02e26b24fe35e0c741155ebe667cbfcb76"
+    },
+    {
+      "alias": "满意龙",
+      "sha256": "6dd7c6621179b49181d43173f3bcab65bfec22f4f1c4110f771d6276969846fc"
+    },
+    {
+      "alias": "没有攻击力的龙图就好似别人把你母亲",
+      "sha256": "056eba985b597b9e2bc93e96e78eaa49ac2cff081adeafc9bffe58f657b23506"
+    },
+    {
+      "alias": "没原神谁知道",
+      "sha256": "3e4a2303c81a188ecd90ce1ea88857c87d0cf4bb9b5c2a8813205031c8f26a83"
+    },
+    {
+      "alias": "没原神谁知道你们太阳系",
+      "sha256": "3e4a2303c81a188ecd90ce1ea88857c87d0cf4bb9b5c2a8813205031c8f26a83"
+    },
+    {
+      "alias": "命,两不相欠",
+      "sha256": "b2c9f6ee8a5cff27af61cdd126a9afea35e513b5c4add62d299b237f4964048c"
+    },
+    {
+      "alias": "拿着我的龙图骂我",
+      "sha256": "2b156ee0fbcd292094b62963fc666d9ebe1eba357d0654704f515a8f91e9794d"
+    },
+    {
+      "alias": "拿着我的龙图骂我你既丢人还死妈",
+      "sha256": "2b156ee0fbcd292094b62963fc666d9ebe1eba357d0654704f515a8f91e9794d"
+    },
+    {
+      "alias": "那就没办法了",
+      "sha256": "9abeb197405f084f00c709d14599bfa277dd06a77f55d05ecdb3264a40c76daa"
+    },
+    {
+      "alias": "那我问你",
+      "sha256": "b75f69b9e8b7655bf7a96c0de4c15929eff5702557737c43dff7c8a5abe8fa30"
+    },
+    {
+      "alias": "那我问你群勒龙",
+      "sha256": "b75f69b9e8b7655bf7a96c0de4c15929eff5702557737c43dff7c8a5abe8fa30"
+    },
+    {
+      "alias": "难绷",
+      "sha256": "1590dc563802a2b354c5259d1036f5a7ca2a8af339c4a79e28443840ec44cf4c"
+    },
+    {
+      "alias": "脑瘫医生那边怎么说",
+      "sha256": "f04e3a6743cf0aafdd2b0b44c3c73499ad1400b5b243db05601b4aec9f3e4209"
+    },
+    {
+      "alias": "能不能别逗我笑了",
+      "sha256": "11ea0e679f3456a0a1dc726c88564a9292adfc938cd8649c210a338b4922ebe8"
+    },
+    {
+      "alias": "能不能别逗我笑了快憋不住了",
+      "sha256": "11ea0e679f3456a0a1dc726c88564a9292adfc938cd8649c210a338b4922ebe8"
+    },
+    {
+      "alias": "你啊,没事就往天上看看",
+      "sha256": "fd8d57d109e80ce26d04791798ba36c1ad4c609c927b7e10a1fda8792416d3b9"
+    },
+    {
+      "alias": "你啊,没事就往天上看看说不定你妈也在看你",
+      "sha256": "fd8d57d109e80ce26d04791798ba36c1ad4c609c927b7e10a1fda8792416d3b9"
+    },
+    {
+      "alias": "你不变男娘我都懒得理你",
+      "sha256": "5928a6b1c838d822b2dc1bc4383759036ca21995c06f6be38ce29365e05cda83"
+    },
+    {
+      "alias": "你不礼貌,死妈",
+      "sha256": "6809c3f1d986ad91cb20ae926ea33f10282f5f1fd42e8fbe33a07b6bd799e844"
+    },
+    {
+      "alias": "你不准说话",
+      "sha256": "85a800acd77fc902d3fce9fb0e8f3dfd6d81f5ad3cc5a703dba5ece5a1c4963a"
+    },
+    {
+      "alias": "你除了龙还会做什么",
+      "sha256": "ee3c998e4e76886949be4070115229f3909de4b7f77a9aff8bd0d75a4aa71ffd"
+    },
+    {
+      "alias": "你盗我的图,我盗你妈的",
+      "sha256": "b2c9f6ee8a5cff27af61cdd126a9afea35e513b5c4add62d299b237f4964048c"
+    },
+    {
+      "alias": "你盗我的图,我盗你妈的命,两不相欠",
+      "sha256": "b2c9f6ee8a5cff27af61cdd126a9afea35e513b5c4add62d299b237f4964048c"
+    },
+    {
+      "alias": "你夫寸了吗",
+      "sha256": "ab155222bcb6b11f470eed576d8d738a80e62c63a6d3bf664c90c53fd1b96f4b"
+    },
+    {
+      "alias": "你该不会有了",
+      "sha256": "0745f51c2ad81eb8e91a86869f88c8d00070fec75b34dff6ba417d00f221734e"
+    },
+    {
+      "alias": "你该不会有了生理反应了吧",
+      "sha256": "0745f51c2ad81eb8e91a86869f88c8d00070fec75b34dff6ba417d00f221734e"
+    },
+    {
+      "alias": "你还有理了是心",
+      "sha256": "0aa876059f8da3cc3094d8bfe5173ecef5dba615890ca41fb37527b82a01d290"
+    },
+    {
+      "alias": "你好,初次见面",
+      "sha256": "43420a0a35a9cd0f3765ca369e3802498b8f34477b773a93a986a28ed789b1c1"
+    },
+    {
+      "alias": "你好,初次见面我是原神高手",
+      "sha256": "43420a0a35a9cd0f3765ca369e3802498b8f34477b773a93a986a28ed789b1c1"
+    },
+    {
+      "alias": "你后悔的,因为河里",
+      "sha256": "6741cbc036813f7b9a0dff448bbcaf176b83079ac8b0022717950af92a5c9864"
+    },
+    {
+      "alias": "你既丢人还死妈",
+      "sha256": "2b156ee0fbcd292094b62963fc666d9ebe1eba357d0654704f515a8f91e9794d"
+    },
+    {
+      "alias": "你可能需要这个",
+      "sha256": "7883e56b4b1468b1f5b6628725c8d3bcb383f38ce9e608c8e2695e4eed7a5fb5"
+    },
+    {
+      "alias": "你可能需要这个堵住你的臭嘴",
+      "sha256": "7883e56b4b1468b1f5b6628725c8d3bcb383f38ce9e608c8e2695e4eed7a5fb5"
+    },
+    {
+      "alias": "你妈逼我有点高兴了",
+      "sha256": "5160fe9f9a5b8fb21886637000d91b14c416afc2e8e5c5e9c8139ada75f8e654"
+    },
+    {
+      "alias": "你妈骨灰烧两遍",
+      "sha256": "0717eb0037b6fe1991f2b2fa7bdbeca80beb7056f8e2ca2548d33b6f4c53d312"
+    },
+    {
+      "alias": "你妈离死就苤这么点了",
+      "sha256": "3b07ff538e7fe1ca8f819845e6d339e799c417fded0324b0b31299dde2e801cc"
+    },
+    {
+      "alias": "你妈死掉",
+      "sha256": "6af763eb532f1d49a26f5216f843919f1b502b7dcbe4b86fedbfeb3c92cec5aa"
+    },
+    {
+      "alias": "你妈同笼四十兔",
+      "sha256": "8ddfcbef0df214c14fdf2a9c1ed7c3b48f80321d174507999480eefc0b0462b4"
+    },
+    {
+      "alias": "你妈同笼四十兔共有一百六十足兔子有四足,而你没有妈",
+      "sha256": "8ddfcbef0df214c14fdf2a9c1ed7c3b48f80321d174507999480eefc0b0462b4"
+    },
+    {
+      "alias": "你们都很弱诶",
+      "sha256": "685d90d7e3ff0b0ed10c3a773965f13bbe7bdc904d3f64f427f613867f95cead"
+    },
+    {
+      "alias": "你们都是",
+      "sha256": "29bdc81191d746c993233bc0ebe3fb9d0960604c347f2a775414cf4c716fd369"
+    },
+    {
+      "alias": "你们都是杀人凶毛",
+      "sha256": "29bdc81191d746c993233bc0ebe3fb9d0960604c347f2a775414cf4c716fd369"
+    },
+    {
+      "alias": "你们几个b聊天,看着你们能玩出什么幺蛾",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "你们太阳系",
+      "sha256": "3e4a2303c81a188ecd90ce1ea88857c87d0cf4bb9b5c2a8813205031c8f26a83"
+    },
+    {
+      "alias": "你们这个群真是害人不浅呐",
+      "sha256": "2ab2704098dc31224b2eb84dac63ed0a73257ae118e975222b8bac8c08dd73cd"
+    },
+    {
+      "alias": "你们这是叶公好龙",
+      "sha256": "2c2dda81f4cce2575d03c50a2a9edbea538ba7d652d29492ffa6cf2af3c24a57"
+    },
+    {
+      "alias": "你难道就没有错吗",
+      "sha256": "b2a0d0ff2a07872e1331b8f07838f9697f5428ebc9ca596165634c6da3fbff5f"
+    },
+    {
+      "alias": "你难道就没有错吗?仙女龙",
+      "sha256": "b2a0d0ff2a07872e1331b8f07838f9697f5428ebc9ca596165634c6da3fbff5f"
+    },
+    {
+      "alias": "你暖暖多少件衣服了",
+      "sha256": "d246ff93c29bc14c33ea007b8c139d2cab79747e62e44e56c8bddd572f472d07"
+    },
+    {
+      "alias": "你暖暖多少件衣服了敢这样和我说话",
+      "sha256": "d246ff93c29bc14c33ea007b8c139d2cab79747e62e44e56c8bddd572f472d07"
+    },
+    {
+      "alias": "你是一点b臉不要",
+      "sha256": "9ca5183aa114e5046f459d7e02293335ffb6676b81da77409f9e88675bac9066"
+    },
+    {
+      "alias": "你说什么",
+      "sha256": "f97a2ac1be1b44f959148691cb71c69f8e8f6812fec9f5f6bdc2e431bc84cdee"
+    },
+    {
+      "alias": "你说什么?耳龙",
+      "sha256": "f97a2ac1be1b44f959148691cb71c69f8e8f6812fec9f5f6bdc2e431bc84cdee"
+    },
+    {
+      "alias": "你说什么我听不见",
+      "sha256": "cc3a87e9fc5571e3f7e79684977691feff64eacfaf006dbeb7804cdcbe88e280"
+    },
+    {
+      "alias": "你有点儍逼",
+      "sha256": "748f80d878be32166242e02b5d070dd6639adf33b0ab89b70dd9734a37a138df"
+    },
+    {
+      "alias": "你有点儍逼但我很乐意跟你玩",
+      "sha256": "748f80d878be32166242e02b5d070dd6639adf33b0ab89b70dd9734a37a138df"
+    },
+    {
+      "alias": "你在虚拟的世界",
+      "sha256": "73fbe5191b9d74ed584dc08be0bdd64f3c1d06b4d5066f658cef98df94435ee9"
+    },
+    {
+      "alias": "你在虚拟的世界似乎活出了价值",
+      "sha256": "73fbe5191b9d74ed584dc08be0bdd64f3c1d06b4d5066f658cef98df94435ee9"
+    },
+    {
+      "alias": "你这话什么意思",
+      "sha256": "444d7bb25408d12afa6624d8250dfc5c54aecf044eec870705ec1285d00de3a6"
+    },
+    {
+      "alias": "你最好哪远滚哪去",
+      "sha256": "0260675893f8f8dc999a729b5308d478d54f89a63e246a12d098277279985a61"
+    },
+    {
+      "alias": "逆天原批",
+      "sha256": "6b828d550ddd25e3efd8389b784328e1d93cd6a477175ef99f1a39da383422c4"
+    },
+    {
+      "alias": "年轻",
+      "sha256": "5dfa8ae08f0d8664d888a1c073efc3236a32b5c946149c6cd2f52be320772e53"
+    },
+    {
+      "alias": "年轻好骗牛牛大",
+      "sha256": "5dfa8ae08f0d8664d888a1c073efc3236a32b5c946149c6cd2f52be320772e53"
+    },
+    {
+      "alias": "牛牛大",
+      "sha256": "5dfa8ae08f0d8664d888a1c073efc3236a32b5c946149c6cd2f52be320772e53"
+    },
+    {
+      "alias": "哦好嗯嗯嗯腮行好好好噁嗯",
+      "sha256": "a034ecb42a7d57cc17e42b06372bbc4a417529b6b7d5c942ac02c35639a5b07d"
+    },
+    {
+      "alias": "哦真的牛批,还有这种龙",
+      "sha256": "003a5ad2eaf3d480324a111d9484a9d38baeebe0cd07ac48585125483731c5cf"
+    },
+    {
+      "alias": "哦真的牛批,还有这种龙图的,我马上保存",
+      "sha256": "003a5ad2eaf3d480324a111d9484a9d38baeebe0cd07ac48585125483731c5cf"
+    },
+    {
+      "alias": "怕事龙",
+      "sha256": "854ea1e1ac0284ba7e880d9ec059a766537d64ad7790abeeeeea2020116161d1"
+    },
+    {
+      "alias": "拍下渣男",
+      "sha256": "bed70299747991b71da0837660352a87a0d5b82ed016eb94c70913bde1a94bdd"
+    },
+    {
+      "alias": "跑出來網原神",
+      "sha256": "bb7cb628ceeb47308d93f6c9849209ecd02e54ab60977354c1e35bf2c7add9be"
+    },
+    {
+      "alias": "跑出來網原神摘得大家都不購心",
+      "sha256": "bb7cb628ceeb47308d93f6c9849209ecd02e54ab60977354c1e35bf2c7add9be"
+    },
+    {
+      "alias": "撇、点点、横撇、竖",
+      "sha256": "9c1153c1ec654ed083ab1746dfbc986738f44c17ee2650108419b48f005c414b"
+    },
+    {
+      "alias": "屏蔽此人",
+      "sha256": "cc3a87e9fc5571e3f7e79684977691feff64eacfaf006dbeb7804cdcbe88e280"
+    },
+    {
+      "alias": "屏蔽此人你说什么我听不见",
+      "sha256": "cc3a87e9fc5571e3f7e79684977691feff64eacfaf006dbeb7804cdcbe88e280"
+    },
+    {
+      "alias": "奇怪龙",
+      "sha256": "2142139c8205ff7fcec0a01e857f61023a31823487f22749b591adc80f50d8ee"
+    },
+    {
+      "alias": "请让一让",
+      "sha256": "3958f47da1cbd7a6a0d5543f7f679af5d8f4ad811dd012caac869a3b82dc3e54"
+    },
+    {
+      "alias": "请让一让群里最龙的人来了",
+      "sha256": "3958f47da1cbd7a6a0d5543f7f679af5d8f4ad811dd012caac869a3b82dc3e54"
+    },
+    {
+      "alias": "请退群",
+      "sha256": "5b0d7db20c1575986333199a53bcd10b4f9a46e6a88790145e77add18990b39d"
+    },
+    {
+      "alias": "全是二次元,聊你妈",
+      "sha256": "5cda8b2324ab6a821ae8432ed05c8a6d2697378143ed02c4b43c0ae4486c3f02"
+    },
+    {
+      "alias": "群勒龙",
+      "sha256": "b75f69b9e8b7655bf7a96c0de4c15929eff5702557737c43dff7c8a5abe8fa30"
+    },
+    {
+      "alias": "群里最龙的人来了",
+      "sha256": "3958f47da1cbd7a6a0d5543f7f679af5d8f4ad811dd012caac869a3b82dc3e54"
+    },
+    {
+      "alias": "群聊天",
+      "sha256": "28cf05bb3ffc9b9101a05e7172d3fcdcea8ad32e61049a8007d6b50e871ee6a6"
+    },
+    {
+      "alias": "群聊天我录",
+      "sha256": "28cf05bb3ffc9b9101a05e7172d3fcdcea8ad32e61049a8007d6b50e871ee6a6"
+    },
+    {
+      "alias": "群友们真的是很龙",
+      "sha256": "7e65788130ca07031ae1b50a46498ba775b572d2fa63b8e5a4e15390938fce6e"
+    },
+    {
+      "alias": "任能",
+      "sha256": "e8aeb7eb2dd70f993cb56c0efde79d74eff595beead6d5002008ca4063d68509"
+    },
+    {
+      "alias": "塞翁",
+      "sha256": "f5a02ff94ec9bde76b282d0ee4d887c3540d7215de0b1745a95283a140544c1c"
+    },
+    {
+      "alias": "色图7来",
+      "sha256": "32fe2dff8e8d11c508239e89f55531b4dbfbcc372166356b29b3f39453e5911a"
+    },
+    {
+      "alias": "杀人凶毛",
+      "sha256": "29bdc81191d746c993233bc0ebe3fb9d0960604c347f2a775414cf4c716fd369"
+    },
+    {
+      "alias": "山之高,月出小。月之小",
+      "sha256": "03d9085476162ea7ee98b88ca4f8a4adc18c5402539d5ff11c685717292121e5"
+    },
+    {
+      "alias": "少废话跟着龙",
+      "sha256": "55c15f19bef0cae8291abbdf4e12e2c93c052fe92ba75e96970063292824397a"
+    },
+    {
+      "alias": "谁跟圣诞老人许愿",
+      "sha256": "e088e86355ed4999e4df8ea8446087ee285281f6f6f0fe5297ae524651762f78"
+    },
+    {
+      "alias": "谁跟圣诞老人许愿要极品真龙我他妈差点被装袜子里了",
+      "sha256": "e088e86355ed4999e4df8ea8446087ee285281f6f6f0fe5297ae524651762f78"
+    },
+    {
+      "alias": "谁能给我",
+      "sha256": "a47cf999f78f934dd22ea15b1bdc7c43915ad3fe9cb4ce5a57c611b1195c0c66"
+    },
+    {
+      "alias": "谁能给我钱",
+      "sha256": "a47cf999f78f934dd22ea15b1bdc7c43915ad3fe9cb4ce5a57c611b1195c0c66"
+    },
+    {
+      "alias": "什么斗",
+      "sha256": "6e3e8bc87065406e82e27be0d3a10abed0b489c117a58305072b3988ec1b6c3e"
+    },
+    {
+      "alias": "生理反应了吧",
+      "sha256": "0745f51c2ad81eb8e91a86869f88c8d00070fec75b34dff6ba417d00f221734e"
+    },
+    {
+      "alias": "失望龙",
+      "sha256": "d34b57ccafd82d23ed60d6ee83940526981452568e6d2d0ca7cfd397c153602c"
+    },
+    {
+      "alias": "是你爹我玩剩下的",
+      "sha256": "104bfa0953fa3832e11515647d2da3f61a91048c91477d60ea8d96c1dda29e2c"
+    },
+    {
+      "alias": "是这样的",
+      "sha256": "ecd137b4efc58db571cc5fd27b00e139776f23f21cf086048081e2cd9f822ed2"
+    },
+    {
+      "alias": "是这样的龙要考虑的事就多了乌式龙",
+      "sha256": "ecd137b4efc58db571cc5fd27b00e139776f23f21cf086048081e2cd9f822ed2"
+    },
+    {
+      "alias": "说不定你妈也在看你",
+      "sha256": "fd8d57d109e80ce26d04791798ba36c1ad4c609c927b7e10a1fda8792416d3b9"
+    },
+    {
+      "alias": "说谎大赛冠军",
+      "sha256": "b72aed836510056643177485776d901e1e6b5adf22ad2243e5e045117e0901b1"
+    },
+    {
+      "alias": "似乎活出了价值",
+      "sha256": "73fbe5191b9d74ed584dc08be0bdd64f3c1d06b4d5066f658cef98df94435ee9"
+    },
+    {
+      "alias": "送你一朵彼岸花",
+      "sha256": "b0635b445db39f708af37c6419d2a08b57f9c351a86205aec1db8fc9ae39259e"
+    },
+    {
+      "alias": "送你一朵彼岸花祝你美丽又死妈",
+      "sha256": "b0635b445db39f708af37c6419d2a08b57f9c351a86205aec1db8fc9ae39259e"
+    },
+    {
+      "alias": "他没玩过能进行强大文化输",
+      "sha256": "e002d205da873f0b910cb6fbb462417ccd989efea20b0d127321c4ac798c45d4"
+    },
+    {
+      "alias": "他没玩过能进行强大文化输出的开放世界类手游就妄下定论",
+      "sha256": "e002d205da873f0b910cb6fbb462417ccd989efea20b0d127321c4ac798c45d4"
+    },
+    {
+      "alias": "他昨天撸管炸膛了",
+      "sha256": "5a742a54aca7196f4e4de65fe41a48ea9050fec9243ce27803e3f2a602d6cbe1"
+    },
+    {
+      "alias": "太喜欢这个群了",
+      "sha256": "fe037bbee17b6161798f4c668f88c12d9bc000d6fae90ffc5ddc911b90a72d53"
+    },
+    {
+      "alias": "太喜欢这个群了就像精神病院一样",
+      "sha256": "fe037bbee17b6161798f4c668f88c12d9bc000d6fae90ffc5ddc911b90a72d53"
+    },
+    {
+      "alias": "特征:喜欢说6",
+      "sha256": "e3b6cf2ed687725b4f98dff2e6f05c6384026e5aca4aadbd9ed09395af04ce14"
+    },
+    {
+      "alias": "偷几个龙还真以",
+      "sha256": "9f52e273c2f013509728f3e75bfb972da6bf8d9a990993d3e922ba5d714cd50d"
+    },
+    {
+      "alias": "偷几个龙还真以为自己混网高手",
+      "sha256": "9f52e273c2f013509728f3e75bfb972da6bf8d9a990993d3e922ba5d714cd50d"
+    },
+    {
+      "alias": "图的,我马上保存",
+      "sha256": "003a5ad2eaf3d480324a111d9484a9d38baeebe0cd07ac48585125483731c5cf"
+    },
+    {
+      "alias": "兔子有四足,而你没有妈",
+      "sha256": "8ddfcbef0df214c14fdf2a9c1ed7c3b48f80321d174507999480eefc0b0462b4"
+    },
+    {
+      "alias": "晚上坏",
+      "sha256": "03ba64f4dc3e7f84966415296406d87e2615838827b2efe25e77a00916d063b1"
+    },
+    {
+      "alias": "万一你哪天说出什么逆天话",
+      "sha256": "d762f1f7e3a6852a588cdd26d4b56192d6fef90c7506f47a5d12e72a515bca1f"
+    },
+    {
+      "alias": "网络畜生",
+      "sha256": "e7be23d5f1fbe84312b7e3bace05b89ac9333c62c68c594520c0fa5b75be93b5"
+    },
+    {
+      "alias": "望子成龙",
+      "sha256": "0ec621fc1e5f4ed27356daaefbbfa2b1c800126770080dc9fe40504c47b962be"
+    },
+    {
+      "alias": "微微一笑",
+      "sha256": "6af763eb532f1d49a26f5216f843919f1b502b7dcbe4b86fedbfeb3c92cec5aa"
+    },
+    {
+      "alias": "微微一笑你妈死掉",
+      "sha256": "6af763eb532f1d49a26f5216f843919f1b502b7dcbe4b86fedbfeb3c92cec5aa"
+    },
+    {
+      "alias": "为了你妈不要再说了",
+      "sha256": "a3be1b7fbe87a4c7d6dd97fa4e71e95a3685330bba05b661cf4187b953afb48a"
+    },
+    {
+      "alias": "为什么会这样呢",
+      "sha256": "2142139c8205ff7fcec0a01e857f61023a31823487f22749b591adc80f50d8ee"
+    },
+    {
+      "alias": "为什么会这样呢?奇怪龙",
+      "sha256": "2142139c8205ff7fcec0a01e857f61023a31823487f22749b591adc80f50d8ee"
+    },
+    {
+      "alias": "为什么整个群只有我有妈",
+      "sha256": "ee418010bf9e64943d2bf40cea03886aa76d5c3ecd89e41f50ed42ec740d3fc8"
+    },
+    {
+      "alias": "为主",
+      "sha256": "f1f25113bcde4c3314f9c7ccfa6a4e20d5274c22859f317a00b0aea2e82effc1"
+    },
+    {
+      "alias": "为主你去给我炒俩菜",
+      "sha256": "f1f25113bcde4c3314f9c7ccfa6a4e20d5274c22859f317a00b0aea2e82effc1"
+    },
+    {
+      "alias": "为自己混网高手",
+      "sha256": "9f52e273c2f013509728f3e75bfb972da6bf8d9a990993d3e922ba5d714cd50d"
+    },
+    {
+      "alias": "文化龙",
+      "sha256": "03d9085476162ea7ee98b88ca4f8a4adc18c5402539d5ff11c685717292121e5"
+    },
+    {
+      "alias": "我不想看见第二次",
+      "sha256": "0d7c7c4fe99d969f89738ef7b68075e73d0354c9b62cd3dc0b64f8957f2e33a9"
+    },
+    {
+      "alias": "我不信,除非你",
+      "sha256": "d81b9ebaae5b951ac4812ac50181b7b4f5f9d4344e7f58f2e93045580ef2ab72"
+    },
+    {
+      "alias": "我不信,除非你用開水燙你媽",
+      "sha256": "d81b9ebaae5b951ac4812ac50181b7b4f5f9d4344e7f58f2e93045580ef2ab72"
+    },
+    {
+      "alias": "我才感受到生命的意义",
+      "sha256": "c0175582a291e616c3b62a751c5ad7de3b315a0bdf5b878134c9d600a714ce7c"
+    },
+    {
+      "alias": "我给你跪下啦",
+      "sha256": "03c82965e505ab47636eca182c1cefae7bebf56f953f7ae7284c7eece8a5a70c"
+    },
+    {
+      "alias": "我还是很帅的,你对",
+      "sha256": "99db949ae7be869db96008af581cf0b6f9d56acea13da476f4f1ef237c050f4e"
+    },
+    {
+      "alias": "我还是很帅的,你对我有欲望是人之常情",
+      "sha256": "99db949ae7be869db96008af581cf0b6f9d56acea13da476f4f1ef237c050f4e"
+    },
+    {
+      "alias": "我好怕怕哦能真实我吗",
+      "sha256": "634d3e3df4d881a2938fd7668e5ff18734070be34348331ddcc26c40abf490f1"
+    },
+    {
+      "alias": "我红温了",
+      "sha256": "e14e53ddee786c0b6d73368ec7e325d7938443d5e5eadb852a026e1ce0ffb437"
+    },
+    {
+      "alias": "我就是你爹",
+      "sha256": "60ccb39bc4a1cdf7e80269891c4289621f260cc2056bddfc4f3946b759c958a1"
+    },
+    {
+      "alias": "我就知道会这样",
+      "sha256": "6dd7c6621179b49181d43173f3bcab65bfec22f4f1c4110f771d6276969846fc"
+    },
+    {
+      "alias": "我就知道会这样满意龙",
+      "sha256": "6dd7c6621179b49181d43173f3bcab65bfec22f4f1c4110f771d6276969846fc"
+    },
+    {
+      "alias": "我靠,您太龙了",
+      "sha256": "bf8de7790194a823cf4d1d2052ab8f818306662dd88c2a05b244b47c01b96ffd"
+    },
+    {
+      "alias": "我靠一群废物都在",
+      "sha256": "be3a30d2e9b1a2179defee43c7a51a0353373c67d8e8ba040f6d9da514d89c88"
+    },
+    {
+      "alias": "我骂你爹你也不反驳",
+      "sha256": "81b11714aa2140accddda8873222b5f7ca96678f715ba9ee8d33197c1e2dffca"
+    },
+    {
+      "alias": "我骂你爹你也不反驳就似乎你不是你爹亲生的",
+      "sha256": "81b11714aa2140accddda8873222b5f7ca96678f715ba9ee8d33197c1e2dffca"
+    },
+    {
+      "alias": "我是小孩",
+      "sha256": "125c265d64cba8cc60a08a66d23cb7deea60f17e0a287d9d21ce7f14ccc03849"
+    },
+    {
+      "alias": "我是原神高手",
+      "sha256": "43420a0a35a9cd0f3765ca369e3802498b8f34477b773a93a986a28ed789b1c1"
+    },
+    {
+      "alias": "我是中立立场",
+      "sha256": "72d40476e0435ba2756e5155095e03846a1d9fea62f2b1903deb32fca2a42b06"
+    },
+    {
+      "alias": "我是中立立场键盘别对向我",
+      "sha256": "72d40476e0435ba2756e5155095e03846a1d9fea62f2b1903deb32fca2a42b06"
+    },
+    {
+      "alias": "我说手机怎么这么烫",
+      "sha256": "e802de9ba276fe92135b58520c22eb84f37b5e2d864cb045c1db2c73e5062519"
+    },
+    {
+      "alias": "我说手机怎么这么烫原来有你们这些烧杯",
+      "sha256": "e802de9ba276fe92135b58520c22eb84f37b5e2d864cb045c1db2c73e5062519"
+    },
+    {
+      "alias": "我他妈差点被装袜子里了",
+      "sha256": "e088e86355ed4999e4df8ea8446087ee285281f6f6f0fe5297ae524651762f78"
+    },
+    {
+      "alias": "我他妈直接",
+      "sha256": "9abeb197405f084f00c709d14599bfa277dd06a77f55d05ecdb3264a40c76daa"
+    },
+    {
+      "alias": "我要早睡",
+      "sha256": "58e066f51c3a09aa6450a45997f35b525c6e640a40bd614e03bd2eed6907bb56"
+    },
+    {
+      "alias": "我有妈\"蝉联了",
+      "sha256": "b72aed836510056643177485776d901e1e6b5adf22ad2243e5e045117e0901b1"
+    },
+    {
+      "alias": "我有妈\"蝉联了说谎大赛冠军",
+      "sha256": "b72aed836510056643177485776d901e1e6b5adf22ad2243e5e045117e0901b1"
+    },
+    {
+      "alias": "我有欲望是人之常情",
+      "sha256": "99db949ae7be869db96008af581cf0b6f9d56acea13da476f4f1ef237c050f4e"
+    },
+    {
+      "alias": "乌式龙",
+      "sha256": "ecd137b4efc58db571cc5fd27b00e139776f23f21cf086048081e2cd9f822ed2"
+    },
+    {
+      "alias": "呜鸣鸣你不许骂我",
+      "sha256": "03c82965e505ab47636eca182c1cefae7bebf56f953f7ae7284c7eece8a5a70c"
+    },
+    {
+      "alias": "呜鸣鸣你不许骂我我给你跪下啦",
+      "sha256": "03c82965e505ab47636eca182c1cefae7bebf56f953f7ae7284c7eece8a5a70c"
+    },
+    {
+      "alias": "仙女龙",
+      "sha256": "b2a0d0ff2a07872e1331b8f07838f9697f5428ebc9ca596165634c6da3fbff5f"
+    },
+    {
+      "alias": "现在的我略微有些凶暴哦",
+      "sha256": "39804a08fa0ba0c4302171038221b65612ab5aa292a9cd044f33d904fdfca882"
+    },
+    {
+      "alias": "想好好呆在此群",
+      "sha256": "a7afef5607da0f66d0716f3e38c89c2a7fbfc8bf6cc3fc8f96b48b5593529b83"
+    },
+    {
+      "alias": "想好好呆在此群就别发二刺猿傻卵表情包OK",
+      "sha256": "a7afef5607da0f66d0716f3e38c89c2a7fbfc8bf6cc3fc8f96b48b5593529b83"
+    },
+    {
+      "alias": "小孤儿戏还真多",
+      "sha256": "c77ecb12a3e1851ccc32d540f61490c6a806340bc2dd233be7015aaee2aa16b9"
+    },
+    {
+      "alias": "小骚逼龙图不少啊",
+      "sha256": "74e364d335dc89e4e086e5c7fc6adcfbabd636ad15e21e6d502d3a1cc3dbf8d8"
+    },
+    {
+      "alias": "小玉这是不对的",
+      "sha256": "74d76097a57ccca0675e7d75e12a63084fdb07e79fed0bda9b60c2ca9aed54aa"
+    },
+    {
+      "alias": "小玉这是不对的成龙",
+      "sha256": "74d76097a57ccca0675e7d75e12a63084fdb07e79fed0bda9b60c2ca9aed54aa"
+    },
+    {
+      "alias": "新人交保妈费",
+      "sha256": "261e1c33f1383b4bd52f9f210cb53db9532029d3996ad8f4eeb012d92b40b11d"
+    },
+    {
+      "alias": "虚弱龙",
+      "sha256": "d75feae870ecbd2ca40022cf0ec50c2109ce8da9c43a4565cfbaa062ef955d4d"
+    },
+    {
+      "alias": "学问龙",
+      "sha256": "7b0a1d93e40b3fb7d3751b01f48935116398b5110cf5c768236d932b41659692"
+    },
+    {
+      "alias": "寻找失踪多年的儿子",
+      "sha256": "e3b6cf2ed687725b4f98dff2e6f05c6384026e5aca4aadbd9ed09395af04ce14"
+    },
+    {
+      "alias": "寻找失踪多年的儿子特征:喜欢说6",
+      "sha256": "e3b6cf2ed687725b4f98dff2e6f05c6384026e5aca4aadbd9ed09395af04ce14"
+    },
+    {
+      "alias": "淹死的都是会水的",
+      "sha256": "6741cbc036813f7b9a0dff448bbcaf176b83079ac8b0022717950af92a5c9864"
+    },
+    {
+      "alias": "遥看是君家,松柏冢累累",
+      "sha256": "77bc4dea5b0f5dfa352fabac96324116608f73e10fb6485d8d020103448419bd"
+    },
+    {
+      "alias": "要不你玩原神吧",
+      "sha256": "d762f1f7e3a6852a588cdd26d4b56192d6fef90c7506f47a5d12e72a515bca1f"
+    },
+    {
+      "alias": "要不你再说句别的",
+      "sha256": "b454bc2ad939ed21583c7c8fa00b9a3df5beddab749117afe24fc68ce7096489"
+    },
+    {
+      "alias": "要极品真龙",
+      "sha256": "e088e86355ed4999e4df8ea8446087ee285281f6f6f0fe5297ae524651762f78"
+    },
+    {
+      "alias": "一想到你是原批我的心态都崩了",
+      "sha256": "1088981ea4e3dbdfb70fd2d0697035062eb1f3c02a4178edc30731b47e3a801b"
+    },
+    {
+      "alias": "已读",
+      "sha256": "b454bc2ad939ed21583c7c8fa00b9a3df5beddab749117afe24fc68ce7096489"
+    },
+    {
+      "alias": "已读但不知道態么接要不你再说句别的",
+      "sha256": "b454bc2ad939ed21583c7c8fa00b9a3df5beddab749117afe24fc68ce7096489"
+    },
+    {
+      "alias": "硬核龙图",
+      "sha256": "2f91ddce352d8107b47362e3b6461ca5797571a64b65dfb8428d530111dd6730"
+    },
+    {
+      "alias": "用開水燙你媽",
+      "sha256": "d81b9ebaae5b951ac4812ac50181b7b4f5f9d4344e7f58f2e93045580ef2ab72"
+    },
+    {
+      "alias": "有色图吗不想龙了",
+      "sha256": "b569b55cd26579521a31f2b8ce22e4527a8b590bf1304d2c96c14025ebb70171"
+    },
+    {
+      "alias": "有性格,我要强奸你",
+      "sha256": "dbf41d4b5adff7e1388820fa8f86aaead724c704058bd6ae3701254d4559e3fc"
+    },
+    {
+      "alias": "又不是我的问题",
+      "sha256": "56a73b760b20f0a55364579dd5c3ec96abef7ebc2ca7adf08b2455f5d83e14d8"
+    },
+    {
+      "alias": "又不是我的问题嘴硬龙",
+      "sha256": "56a73b760b20f0a55364579dd5c3ec96abef7ebc2ca7adf08b2455f5d83e14d8"
+    },
+    {
+      "alias": "欲龙又止",
+      "sha256": "bdb723e625bb901e16737fe9add4ca8c8253e0beb72b9b821d09890a65c8c1b5"
+    },
+    {
+      "alias": "原来有你们这些烧杯",
+      "sha256": "e802de9ba276fe92135b58520c22eb84f37b5e2d864cb045c1db2c73e5062519"
+    },
+    {
+      "alias": "原神?玩着呢",
+      "sha256": "b388cefa2c7434e265b6e57a662e4af85f74a4d8ed869825e0e9e344c8cef811"
+    },
+    {
+      "alias": "原神害了他",
+      "sha256": "9daf0a696ff4703e995d8db392068fa6ecff1bd8f13b6812fefc3e5c67a2b20b"
+    },
+    {
+      "alias": "原头,原脑,原肚皮",
+      "sha256": "0c179f93f52be69fe1e6978fd88762fb5352fc5a662d2b38917aedbea149cfdb"
+    },
+    {
+      "alias": "在被窝里玩原神吗",
+      "sha256": "76283d15527de63c1e3f285d8fb3e66dbef1ea6af9375099f5d0c437d9680136"
+    },
+    {
+      "alias": "在登录原神的那一刻起",
+      "sha256": "c0175582a291e616c3b62a751c5ad7de3b315a0bdf5b878134c9d600a714ce7c"
+    },
+    {
+      "alias": "在登录原神的那一刻起我才感受到生命的意义",
+      "sha256": "c0175582a291e616c3b62a751c5ad7de3b315a0bdf5b878134c9d600a714ce7c"
+    },
+    {
+      "alias": "在这钓鱼,操他妈,我就不退,我就在这看",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "早上好",
+      "sha256": "22b031ae6170038a413f99f473f0e1f9c3b622e90cbba3cb7f4cd7af7f2f1bbc"
+    },
+    {
+      "alias": "早上坏",
+      "sha256": "f8ca5b17533cacea88db6d477707dd03ad34dc90654ce1ed419e09b78d82485e"
+    },
+    {
+      "alias": "早他妈就解散了",
+      "sha256": "cdb102bfb63086fe93710117eace22a2285d98d5dcc1c5be34dbda6f5184c0e5"
+    },
+    {
+      "alias": "责怪龙",
+      "sha256": "9071b847b7592b8533d206ccd5bca95ab0b2777e676e6dbd519b7aaac8cdb2db"
+    },
+    {
+      "alias": "怎么不说话了?被山洞瘴气炸死了",
+      "sha256": "41d8c5d81265de9e2d7d0adf90d554e2a2f635eba4de297a1061698534bd3db7"
+    },
+    {
+      "alias": "怎么不说话了?在被窝里玩原神吗",
+      "sha256": "76283d15527de63c1e3f285d8fb3e66dbef1ea6af9375099f5d0c437d9680136"
+    },
+    {
+      "alias": "怎么回事我们这边三个",
+      "sha256": "1ee611bfd08bb5c36584ef420cb7178f79ccfd7af5461fe844d0fec6b59cde26"
+    },
+    {
+      "alias": "怎么回事我们这边三个高僧都超度不了你的妈",
+      "sha256": "1ee611bfd08bb5c36584ef420cb7178f79ccfd7af5461fe844d0fec6b59cde26"
+    },
+    {
+      "alias": "怎么会这样阿",
+      "sha256": "d34b57ccafd82d23ed60d6ee83940526981452568e6d2d0ca7cfd397c153602c"
+    },
+    {
+      "alias": "怎么会这样阿失望龙",
+      "sha256": "d34b57ccafd82d23ed60d6ee83940526981452568e6d2d0ca7cfd397c153602c"
+    },
+    {
+      "alias": "摘得大家都不購心",
+      "sha256": "bb7cb628ceeb47308d93f6c9849209ecd02e54ab60977354c1e35bf2c7add9be"
+    },
+    {
+      "alias": "张嘴就要这要那",
+      "sha256": "3ed041bf9be81c955d28465d72d541f5e0faebedcf49d56d113e718fff70fe2a"
+    },
+    {
+      "alias": "张嘴就要这要那给你两巴掌要不要",
+      "sha256": "3ed041bf9be81c955d28465d72d541f5e0faebedcf49d56d113e718fff70fe2a"
+    },
+    {
+      "alias": "这代表着你妈还两秒钟就完蛋",
+      "sha256": "75ae472b78ae8b6cdf320f10b742a4a93fb8173d2a079c24ef6ad8832e6c85cf"
+    },
+    {
+      "alias": "这个群里都他妈什么龙啊",
+      "sha256": "c04b71bc89187a9363751a18ea9ac36b4e8db715725bd3fce3445b04e1a7c96c"
+    },
+    {
+      "alias": "这可不是两片面包夹芝士的意思",
+      "sha256": "75ae472b78ae8b6cdf320f10b742a4a93fb8173d2a079c24ef6ad8832e6c85cf"
+    },
+    {
+      "alias": "这可不是两片面包夹芝士的意思这代表着你妈还两秒钟就完蛋",
+      "sha256": "75ae472b78ae8b6cdf320f10b742a4a93fb8173d2a079c24ef6ad8832e6c85cf"
+    },
+    {
+      "alias": "这么龙",
+      "sha256": "b995f6ebe8dbb155957d8fa38812df0e6ac7bd9dda69db2ee06291ad2b77d069"
+    },
+    {
+      "alias": "这么强?教我",
+      "sha256": "2fd3434aaa30de0e900e568e7a68a2b92d64dc007fb4cf54e4836f08794c871b"
+    },
+    {
+      "alias": "这么小的丁丁",
+      "sha256": "f739227584a5be7811729c1441b4d465756ad2d0d27deb8d8a92908fd4c65e4a"
+    },
+    {
+      "alias": "这么小的丁丁竟然还要皮",
+      "sha256": "f739227584a5be7811729c1441b4d465756ad2d0d27deb8d8a92908fd4c65e4a"
+    },
+    {
+      "alias": "这群不靠我的颜值撑着",
+      "sha256": "cdb102bfb63086fe93710117eace22a2285d98d5dcc1c5be34dbda6f5184c0e5"
+    },
+    {
+      "alias": "这群不靠我的颜值撑着早他妈就解散了",
+      "sha256": "cdb102bfb63086fe93710117eace22a2285d98d5dcc1c5be34dbda6f5184c0e5"
+    },
+    {
+      "alias": "这什么傻屌龙图",
+      "sha256": "fc6af90ed7f88a94aff9679431e09d4d3b9b194145b1a03dc19d684a4961f2a3"
+    },
+    {
+      "alias": "这图谁给你的",
+      "sha256": "ae379136568ad259ac7beae21c93a90f6cc19613581995981315d56087dd30ad"
+    },
+    {
+      "alias": "这种野狗攻击性很强",
+      "sha256": "f1c207d68944a17d59c06f774027a047c20277bb0bd78e496c70341f21489201"
+    },
+    {
+      "alias": "针对是吧?合着就是几个熟悉的人建个群",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "真给你惯的",
+      "sha256": "b42b6d29683a4747735e53f0d8196fcedd82328a5056d5486424415a91608737"
+    },
+    {
+      "alias": "真龙显现,你拿",
+      "sha256": "6e3e8bc87065406e82e27be0d3a10abed0b489c117a58305072b3988ec1b6c3e"
+    },
+    {
+      "alias": "真龙显现,你拿什么斗",
+      "sha256": "6e3e8bc87065406e82e27be0d3a10abed0b489c117a58305072b3988ec1b6c3e"
+    },
+    {
+      "alias": "真没素质",
+      "sha256": "d39216f2baf621ccce7684487f1988328aa82509cda8a6c0dc0d52e9e0fbe58f"
+    },
+    {
+      "alias": "真没素质简直是社会毒瘤滚出去",
+      "sha256": "d39216f2baf621ccce7684487f1988328aa82509cda8a6c0dc0d52e9e0fbe58f"
+    },
+    {
+      "alias": "争强好胜有一天会让",
+      "sha256": "6741cbc036813f7b9a0dff448bbcaf176b83079ac8b0022717950af92a5c9864"
+    },
+    {
+      "alias": "争强好胜有一天会让你后悔的,因为河里淹死的都是会水的",
+      "sha256": "6741cbc036813f7b9a0dff448bbcaf176b83079ac8b0022717950af92a5c9864"
+    },
+    {
+      "alias": "争做文明你我他",
+      "sha256": "cf690be8ea5988f34e1096c9726647ff9ea2ac852a0a1e1cfaa1f62f6b7c1ecf"
+    },
+    {
+      "alias": "知道了嗯暱嗯噁OK噁就这样",
+      "sha256": "a034ecb42a7d57cc17e42b06372bbc4a417529b6b7d5c942ac02c35639a5b07d"
+    },
+    {
+      "alias": "中午坏",
+      "sha256": "ae615d761898cca41abad4c2caa7f1dec990df55d53dc54ec8f89efdad422b15"
+    },
+    {
+      "alias": "注意你的身份和说话方式",
+      "sha256": "0d7c7c4fe99d969f89738ef7b68075e73d0354c9b62cd3dc0b64f8957f2e33a9"
+    },
+    {
+      "alias": "注意你的身份和说话方式我不想看见第二次",
+      "sha256": "0d7c7c4fe99d969f89738ef7b68075e73d0354c9b62cd3dc0b64f8957f2e33a9"
+    },
+    {
+      "alias": "祝你美丽又死妈",
+      "sha256": "b0635b445db39f708af37c6419d2a08b57f9c351a86205aec1db8fc9ae39259e"
+    },
+    {
+      "alias": "子。我不在时你们从盘古开天聊到三皇五帝",
+      "sha256": "d44d8f6a2da09589ef50b058732a63702d3be0b2c4ff1e83e010d4315d989e7e"
+    },
+    {
+      "alias": "紫电这玄真火焰",
+      "sha256": "0717eb0037b6fe1991f2b2fa7bdbeca80beb7056f8e2ca2548d33b6f4c53d312"
+    },
+    {
+      "alias": "紫电这玄真火焰你妈骨灰烧两遍",
+      "sha256": "0717eb0037b6fe1991f2b2fa7bdbeca80beb7056f8e2ca2548d33b6f4c53d312"
+    },
+    {
+      "alias": "自己玩吧",
+      "sha256": "e8aeb7eb2dd70f993cb56c0efde79d74eff595beead6d5002008ca4063d68509"
+    },
+    {
+      "alias": "自己玩吧任能",
+      "sha256": "e8aeb7eb2dd70f993cb56c0efde79d74eff595beead6d5002008ca4063d68509"
+    },
+    {
+      "alias": "足...建这样吗",
+      "sha256": "d291585ec4dcb7a88380441b8397fe0f18556f83cb49a48f2d3a8dd97aba40f4"
+    },
+    {
+      "alias": "足...建这样吗?半知半解龙",
+      "sha256": "d291585ec4dcb7a88380441b8397fe0f18556f83cb49a48f2d3a8dd97aba40f4"
+    },
+    {
+      "alias": "嘴硬龙",
+      "sha256": "56a73b760b20f0a55364579dd5c3ec96abef7ebc2ca7adf08b2455f5d83e14d8"
+    },
+    {
+      "alias": "E.G.0.展现",
+      "sha256": "9abeb197405f084f00c709d14599bfa277dd06a77f55d05ecdb3264a40c76daa"
+    },
+    {
+      "alias": "J龙怒",
+      "sha256": "7d72580e387355c7b54bb33f8565f32392501978ae789bd0b7e2761399dad1d8"
+    },
+    {
+      "alias": "oi",
+      "sha256": "8ed13f4cbbde8aa474c11a536686ef32100b14d53e69a0b0cf1f29749bf4ed95"
+    },
+    {
+      "alias": "OK必须嘲笑",
+      "sha256": "6c1fda059034a8ad0d444116cd68f888d89ce6394eb3362b1b1cd7bde1f6aa49"
+    }
+  ]
+}

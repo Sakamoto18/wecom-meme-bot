@@ -9,6 +9,7 @@ import { MemeStore } from './meme-store.js';
 import { LongtuLibrary } from './longtu-library.js';
 import {
   isLongtuAdministrator,
+  matchLongtuAliasRequest,
   parseAdminUsers,
   parseLongtuManagementCommand,
 } from './longtu-management.js';
@@ -36,6 +37,7 @@ const projectRoot = path.resolve(currentDirectory, '..');
 const longtuIndexPath = path.join(projectRoot, 'data/longtu-index.json');
 const longtuExclusionsPath = path.join(projectRoot, 'data/longtu-exclusions.json');
 const bundledLongtuDirectory = path.join(projectRoot, 'memes', 'longtu');
+const longtuTextAliasesPath = path.join(projectRoot, 'config/longtu-text-aliases.json');
 const emotionDirectory = process.env.WECOM_EMOTION_DIR?.trim();
 const configuredLongtuLimit = Number.parseInt(process.env.LONGTU_LIMIT ?? '', 10);
 const configuredLongtuMaxScore = Number.parseFloat(process.env.LONGTU_MAX_SCORE ?? '');
@@ -48,6 +50,7 @@ const longtuLibrary = new LongtuLibrary({
     projectRoot,
     process.env.LONGTU_LIBRARY_ASSETS_DIR?.trim() || 'data/longtu-library/assets',
   ),
+  seedAliasesFilePath: longtuTextAliasesPath,
 });
 await longtuLibrary.load();
 const memeStore = new MemeStore([bundledLongtuDirectory], {
@@ -250,7 +253,56 @@ async function handleLongtuManagement(frame, command) {
       const stats = longtuLibrary.getStats();
       await replyManagementText(
         frame,
-        `图库可用 ${candidates.length} 张；动态加入 ${stats.dynamicActive} 张；已删除/屏蔽 ${stats.blocked} 张。`,
+        `图库可用 ${candidates.length} 张；动态加入 ${stats.dynamicActive} 张；已删除/屏蔽 ${stats.blocked} 张；文字别名 ${stats.aliases ?? 0} 个。`,
+      );
+      return;
+    }
+
+    if (command.action === 'alias-status') {
+      const aliases = longtuLibrary.listAliases({ limit: 12 });
+      const stats = longtuLibrary.getStats();
+      await replyManagementText(
+        frame,
+        aliases.length > 0
+          ? `现有文字别名 ${stats.aliases ?? aliases.length} 个；示例：${aliases.map((entry) => entry.alias).join('、')}`
+          : '目前还没有可用的文字别名。',
+      );
+      return;
+    }
+
+    if (command.action === 'unbind-alias') {
+      const removed = longtuLibrary.unbindAlias(command.alias, { actor });
+      await replyManagementText(frame, `已取消别名“${removed.alias}”的图片绑定。`);
+      return;
+    }
+
+    if (command.action === 'bind-alias') {
+      const buffer = await downloadManagementImage(frame.body);
+      if (!buffer) throw new Error('请发送图文混排消息，或引用图片后发送绑定指令');
+      let candidates = await memeStore.getLongtuCandidates();
+      let sha256 = await longtuLibrary.resolveShaByBuffer(buffer, candidates);
+      let added = null;
+      if (!sha256) {
+        added = await longtuLibrary.reviewAndAdd(buffer, {
+          force: command.force,
+          actor,
+          referenceCandidates: candidates,
+        });
+        sha256 = added.sha256;
+        memeStore.invalidateLongtuCandidates();
+        candidates = await memeStore.getLongtuCandidates();
+      }
+      if (!candidates.some((candidate) => candidate.sha256 === sha256)) {
+        throw new Error('图片已识别，但当前图库中不可用');
+      }
+      const bound = longtuLibrary.bindAlias(command.alias, sha256, { actor });
+      await replyManagementText(
+        frame,
+        [
+          `${bound.replaced ? '已覆盖' : '已建立'}别名“${bound.alias}”`,
+          added ? (added.forced ? '图片已由管理员强制加入图库' : '图片已通过特征复核并加入图库') : '',
+          `以后发送“发${bound.alias}”即可调用这张图。`,
+        ].filter(Boolean).join('；'),
       );
       return;
     }
@@ -305,12 +357,13 @@ async function handleLongtuManagement(frame, command) {
   }
 }
 
-async function replyLongtu(frame, source = '文字请求') {
+async function replyLongtu(frame, source = '文字请求', options = {}) {
   try {
     console.log(`收到龙图请求（来源：${source}）`);
-    const meme = await memeStore.pick('longtu', {
-      selectionScope: wecomSelectionScope(frame.body),
-    });
+    const selectionOptions = { selectionScope: wecomSelectionScope(frame.body) };
+    const meme = options.sha256
+      ? await memeStore.pickBySha(options.sha256, selectionOptions)
+      : await memeStore.pick('longtu', selectionOptions);
     const mediaId = await memeStore.getMediaId(client, meme);
     await client.replyMedia(frame, 'image', mediaId);
     const scoreInfo = meme.rank ? `，候选排名 ${meme.rank}，距离 ${meme.score.toFixed(4)}` : '';
@@ -426,6 +479,14 @@ async function handleIncomingMessage(frame) {
   }
 
   if (!content) {
+    return;
+  }
+
+  const aliasMatch = matchLongtuAliasRequest(content, longtuLibrary.listAliases());
+  if (aliasMatch) {
+    await replyLongtu(frame, `文字别名：${aliasMatch.alias}`, {
+      sha256: aliasMatch.sha256,
+    });
     return;
   }
 

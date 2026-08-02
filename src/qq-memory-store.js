@@ -148,6 +148,8 @@ export class QqMemoryStore {
         speaker_id TEXT NOT NULL,
         current_name TEXT NOT NULL DEFAULT '',
         known_names TEXT NOT NULL DEFAULT '[]',
+        confirmed_names TEXT NOT NULL DEFAULT '[]',
+        identity_confirmed INTEGER NOT NULL DEFAULT 0,
         message_count INTEGER NOT NULL DEFAULT 0,
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
@@ -163,6 +165,22 @@ export class QqMemoryStore {
       CREATE INDEX IF NOT EXISTS qq_group_members_group_activity
         ON qq_group_members(group_id, last_seen_at DESC);
     `);
+    const memberColumns = new Set(
+      this.database.prepare('PRAGMA table_info(qq_group_members)').all()
+        .map((column) => column.name),
+    );
+    if (!memberColumns.has('confirmed_names')) {
+      this.database.exec("ALTER TABLE qq_group_members ADD COLUMN confirmed_names TEXT NOT NULL DEFAULT '[]'");
+    }
+    if (!memberColumns.has('identity_confirmed')) {
+      this.database.exec('ALTER TABLE qq_group_members ADD COLUMN identity_confirmed INTEGER NOT NULL DEFAULT 0');
+      this.database.exec(`
+        UPDATE qq_group_members
+        SET identity_confirmed = 1,
+            confirmed_names = known_names
+        WHERE message_count > 0
+      `);
+    }
     return this.database;
   }
 
@@ -415,23 +433,35 @@ export class QqMemoryStore {
       .trim()
       .slice(0, 80);
     const existing = database.prepare(`
-      SELECT current_name, known_names
+      SELECT current_name, known_names, confirmed_names, identity_confirmed
       FROM qq_group_members
       WHERE group_id = ? AND user_id = ?
     `).get(normalizedGroupId, normalizedUserId);
     const names = safeNames(existing?.known_names);
     if (normalizedName && !names.includes(normalizedName)) names.push(normalizedName);
+    const confirmIdentity = options.confirmIdentity === true
+      || (options.confirmIdentity !== false && options.countMessage !== false);
+    const confirmedNames = safeNames(existing?.confirmed_names);
+    if (confirmIdentity && normalizedName && !confirmedNames.includes(normalizedName)) {
+      confirmedNames.push(normalizedName);
+    }
     database.prepare(`
       INSERT INTO qq_group_members(
         group_id, user_id, speaker_id, current_name, known_names,
-        message_count, first_seen_at, last_seen_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        confirmed_names, identity_confirmed, message_count,
+        first_seen_at, last_seen_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(group_id, user_id) DO UPDATE SET
         current_name = CASE
           WHEN excluded.current_name <> '' THEN excluded.current_name
           ELSE qq_group_members.current_name
         END,
         known_names = excluded.known_names,
+        confirmed_names = excluded.confirmed_names,
+        identity_confirmed = MAX(
+          qq_group_members.identity_confirmed,
+          excluded.identity_confirmed
+        ),
         message_count = qq_group_members.message_count + excluded.message_count,
         last_seen_at = excluded.last_seen_at
     `).run(
@@ -440,6 +470,8 @@ export class QqMemoryStore {
       stableParticipantId(normalizedUserId),
       normalizedName,
       JSON.stringify(names.slice(-8)),
+      JSON.stringify(confirmedNames.slice(-8)),
+      confirmIdentity ? 1 : Number(existing?.identity_confirmed ?? 0),
       options.countMessage === false ? 0 : 1,
       currentTime,
       currentTime,
@@ -449,27 +481,34 @@ export class QqMemoryStore {
 
   getGroupMemberAliases(groupId, limit = 40) {
     const rows = this.ensureOpen().prepare(`
-      SELECT speaker_id, current_name
+      SELECT speaker_id, confirmed_names
       FROM qq_group_members
-      WHERE group_id = ? AND current_name <> ''
+      WHERE group_id = ? AND identity_confirmed = 1
       ORDER BY last_seen_at DESC
       LIMIT ?
     `).all(String(groupId ?? '').trim(), limit);
-    return Object.fromEntries(rows.map((row) => [row.speaker_id, row.current_name]));
+    return Object.fromEntries(rows.map((row) => {
+      const confirmedNames = safeNames(row.confirmed_names);
+      return [row.speaker_id, confirmedNames.at(-1) ?? ''];
+    }).filter(([, name]) => name));
   }
 
   getGroupMembers(groupId, limit = 40) {
     return this.ensureOpen().prepare(`
-      SELECT speaker_id, current_name, known_names, message_count,
+      SELECT user_id, speaker_id, current_name, known_names,
+             confirmed_names, identity_confirmed, message_count,
              first_seen_at, last_seen_at
       FROM qq_group_members
       WHERE group_id = ?
       ORDER BY last_seen_at DESC
       LIMIT ?
     `).all(String(groupId ?? '').trim(), limit).map((row) => ({
+      userId: row.user_id,
       speakerId: row.speaker_id,
       currentName: row.current_name,
       knownNames: safeNames(row.known_names),
+      confirmedNames: safeNames(row.confirmed_names),
+      identityConfirmed: Boolean(row.identity_confirmed),
       messageCount: Number(row.message_count),
       firstSeenAt: Number(row.first_seen_at),
       lastSeenAt: Number(row.last_seen_at),

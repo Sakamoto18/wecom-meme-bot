@@ -77,7 +77,7 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 
 ### 群角色认知
 
-QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称、历史昵称、发言次数和最近出现时间。模型输入会分别标明当前发言人、被 `@` 的成员和引用消息作者；滚动摘要会保留稳定偏好、人物关系和共同梗，并区分“本人自述”与“别人单次评价”。昵称变化不会导致成员串号。
+QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称、历史昵称、发言次数和最近出现时间。成员本人发言后才会确认身份与昵称；别人 `@` 某人时只登记目标 QQ 号为待确认成员，不会替目标确认别名。已确认且在当前群唯一的历史昵称可在纯文字里锁定第三方目标，重名、短昵称冲突或未确认昵称不会猜测。模型输入会分别标明当前发言人、被 `@` 的成员、纯文字命中的已确认成员和引用消息作者；滚动摘要会保留稳定偏好、人物关系和共同梗，并区分“本人自述”与“别人单次评价”。昵称变化不会导致成员串号，内部匿名编号也会在发送回复前统一删除。
 
 `LONGTU_QQ_PROTECTED_ROLES` 的身份映射高于昵称、群聊内容和旧摘要，群成员无法通过改名、冒充或反复要求来覆盖。相关原始数据只保存在服务器的 `data/qq-memory.sqlite` 中。
 
@@ -90,9 +90,15 @@ QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称�
 - “删除上一张龙图”；
 - 引用图片后发送“删除这张龙图”；
 - “撤销删除”；
-- “图库状态”。
+- “图库状态”；
+- 附图或引用图片发送“以后发赛尔号的时候就调用这张图”；
+- 附图或引用图片发送“强制绑定赛尔号到这张图”；
+- “取消赛尔号绑定”；
+- “别名列表”。
 
 普通添加会用本地感知哈希和视觉特征与已审核龙图库复核，不会把图片上传给 DeepSeek。完全重复始终拒绝；模糊结果会要求管理员明确使用强制添加。动态图片与删除记录保存在 `data/longtu-library/` 和 `data/longtu-library.sqlite`，容器重建后仍保留。
+
+别名调用不需要 DeepSeek 看图：内置图库的文字来自 macOS Vision 本地 OCR，只有能唯一指向一张图片的文本才会自动成为别名；配置为 `LONGTU_QQ_ADMIN_USERS` 的超级管理员可直接覆盖别名。QQ 用户发送“发赛尔号”时，后端先查 SQLite 中的手动绑定，再按图片资源标识精确发图。绑定信息和资源标识只存在于后台，不会回复到群里。
 
 ## 4. 登录 NapCat 并连接 AstrBot
 
@@ -131,7 +137,7 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml up -d --build
 docker compose --env-file .env.qq -f docker-compose.qq.yml down
 ```
 
-NapCat 登录数据在 `deploy/qq/napcat/`，AstrBot 数据在 `deploy/qq/astrbot-data/`，QQ 长期记忆在 `data/qq-memory.sqlite`，动态图库在 `data/longtu-library/`。第一次更新会自动迁移旧的 `data/qq-conversation-memory.json`，运行数据均已加入 `.gitignore`。
+NapCat 登录数据在 `deploy/qq/napcat/`，AstrBot 数据在 `deploy/qq/astrbot-data/`，QQ 长期记忆在 `data/qq-memory.sqlite`，动态图库和手动文字别名在 `data/longtu-library/` 与 `data/longtu-library.sqlite`。第一次更新会自动迁移旧的 `data/qq-conversation-memory.json`，运行数据均已加入 `.gitignore`。
 
 ## 排查
 
