@@ -95,6 +95,12 @@ test('解析图库聊天管理指令', () => {
   assert.deepEqual(parseLongtuManagementCommand('把这张龙图添加进图库'), {
     action: 'add', force: false, shortId: '',
   });
+  assert.deepEqual(parseLongtuManagementCommand('把这个添加到图库'), {
+    action: 'add', force: false, shortId: '',
+  });
+  assert.deepEqual(parseLongtuManagementCommand('把这张图加入图库'), {
+    action: 'add', force: false, shortId: '',
+  });
   assert.deepEqual(parseLongtuManagementCommand('强制添加这张龙图'), {
     action: 'add', force: true, shortId: '',
   });

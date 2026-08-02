@@ -1,4 +1,6 @@
+import asyncio
 import os
+import time
 
 import aiohttp
 
@@ -8,17 +10,26 @@ import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 
 
+MAX_FORWARD_NODES = 30
+MAX_FORWARD_CHARACTERS = 8000
+MAX_FORWARD_NODE_CHARACTERS = 600
+MAX_FORWARD_DEPTH = 2
+FORWARD_CACHE_TTL_SECONDS = 60 * 60
+FORWARD_CACHE_MAX_ENTRIES = 128
+
+
 @register(
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.2.0",
+    "1.3.0",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         self.session: aiohttp.ClientSession | None = None
+        self.forward_cache: dict[str, tuple[float, str]] = {}
 
     async def initialize(self):
         timeout_seconds = max(
@@ -165,6 +176,221 @@ class LongtuQqBridge(Star):
         return None
 
     @staticmethod
+    def _forward_components(components: list) -> list:
+        return [
+            component
+            for component in components
+            if isinstance(component, Comp.Forward)
+        ]
+
+    @staticmethod
+    def _compact_forward_value(value, limit: int) -> str:
+        return " ".join(str(value or "").split()).strip()[:limit]
+
+    @classmethod
+    def _format_forward_segments(
+        cls,
+        segments,
+        depth: int,
+        budget: dict,
+    ) -> str:
+        if isinstance(segments, str):
+            return cls._compact_forward_value(
+                segments,
+                MAX_FORWARD_NODE_CHARACTERS,
+            )
+        if not isinstance(segments, list):
+            return ""
+
+        parts = []
+        placeholders = {
+            "image": "[图片]",
+            "mface": "[表情]",
+            "face": "[表情]",
+            "record": "[语音]",
+            "video": "[视频]",
+            "file": "[文件]",
+            "json": "[卡片消息]",
+            "xml": "[卡片消息]",
+            "reply": "[引用消息]",
+        }
+        for segment in segments:
+            if isinstance(segment, str):
+                text = cls._compact_forward_value(segment, MAX_FORWARD_NODE_CHARACTERS)
+                if text:
+                    parts.append(text)
+                continue
+            if not isinstance(segment, dict):
+                continue
+            segment_type = str(segment.get("type") or "").lower()
+            data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
+            if segment_type == "text":
+                text = cls._compact_forward_value(
+                    data.get("text"),
+                    MAX_FORWARD_NODE_CHARACTERS,
+                )
+                if text:
+                    parts.append(text)
+            elif segment_type == "at":
+                name = cls._compact_forward_value(data.get("name"), 40)
+                parts.append(f"@{name}" if name else "@某人")
+            elif segment_type == "forward":
+                nested = data.get("content")
+                if depth >= MAX_FORWARD_DEPTH or not isinstance(nested, list):
+                    parts.append("[嵌套合并转发]")
+                    continue
+                nested_text = cls._format_forward_nodes(
+                    nested,
+                    depth + 1,
+                    budget,
+                )
+                parts.append(
+                    f"[嵌套合并转发：{nested_text.replace(chr(10), ' / ')}]"
+                    if nested_text
+                    else "[嵌套合并转发]"
+                )
+            elif segment_type in {"node", "nodes"}:
+                nested = data.get("content") or data.get("message") or data.get("messages")
+                nested_text = cls._format_forward_nodes(
+                    nested if isinstance(nested, list) else [],
+                    depth + 1,
+                    budget,
+                )
+                if nested_text:
+                    parts.append(nested_text.replace("\n", " / "))
+            elif segment_type in placeholders:
+                parts.append(placeholders[segment_type])
+            else:
+                summary = cls._compact_forward_value(
+                    data.get("summary") or data.get("text"),
+                    80,
+                )
+                if summary:
+                    parts.append(summary)
+
+            if sum(len(part) for part in parts) >= MAX_FORWARD_NODE_CHARACTERS:
+                break
+
+        return " ".join(parts).strip()[:MAX_FORWARD_NODE_CHARACTERS]
+
+    @classmethod
+    def _format_forward_nodes(
+        cls,
+        nodes,
+        depth: int = 0,
+        budget: dict | None = None,
+    ) -> str:
+        if not isinstance(nodes, list) or depth > MAX_FORWARD_DEPTH:
+            return ""
+        if budget is None:
+            budget = {"nodes": 0, "truncated": False}
+        lines = []
+        for node in nodes:
+            if budget["nodes"] >= MAX_FORWARD_NODES:
+                budget["truncated"] = True
+                break
+            if not isinstance(node, dict):
+                continue
+
+            budget["nodes"] += 1
+            if str(node.get("type") or "").lower() == "node":
+                node_data = node.get("data") if isinstance(node.get("data"), dict) else {}
+                name = node_data.get("nickname") or node_data.get("name")
+                segments = (
+                    node_data.get("message")
+                    or node_data.get("content")
+                    or []
+                )
+            else:
+                sender = node.get("sender") if isinstance(node.get("sender"), dict) else {}
+                name = (
+                    sender.get("card")
+                    or sender.get("nickname")
+                    or node.get("nickname")
+                    or node.get("name")
+                )
+                segments = node.get("message") or node.get("content") or []
+
+            display_name = cls._compact_forward_value(name, 40) or "未知成员"
+            content = cls._format_forward_segments(segments, depth, budget)
+            lines.append(f"{display_name}：{content or '[非文本消息]'}")
+
+        if depth == 0 and budget.get("truncated"):
+            lines.append(f"（仅展开前 {MAX_FORWARD_NODES} 条消息）")
+        formatted = "\n".join(lines)
+        if len(formatted) > MAX_FORWARD_CHARACTERS:
+            formatted = formatted[:MAX_FORWARD_CHARACTERS].rstrip()
+            formatted += "\n（转发内容过长，已截断）"
+        return formatted
+
+    async def _fetch_forward_text(
+        self,
+        event: AstrMessageEvent,
+        forward_id: str,
+    ) -> str:
+        normalized_id = str(forward_id or "").strip()
+        if not normalized_id:
+            return ""
+        now = time.monotonic()
+        cached = self.forward_cache.get(normalized_id)
+        if cached and now - cached[0] <= FORWARD_CACHE_TTL_SECONDS:
+            return cached[1]
+
+        bot = getattr(event, "bot", None)
+        if not bot or not callable(getattr(bot, "call_action", None)):
+            logger.warning("当前 QQ 事件没有可用的 OneBot API 客户端，无法展开合并转发")
+            return ""
+        routing_params = {}
+        self_id = str(getattr(event.message_obj, "self_id", "") or "").strip()
+        if self_id:
+            routing_params["self_id"] = self_id
+        try:
+            result = await asyncio.wait_for(
+                bot.call_action(
+                    action="get_forward_msg",
+                    message_id=normalized_id,
+                    **routing_params,
+                ),
+                timeout=20,
+            )
+        except Exception as error:
+            logger.warning(f"合并转发内容展开失败：{type(error).__name__}")
+            return ""
+
+        nodes = result.get("messages") if isinstance(result, dict) else None
+        formatted = self._format_forward_nodes(nodes)
+        if not formatted:
+            logger.warning("合并转发 API 未返回可解析的消息节点")
+            return ""
+
+        self.forward_cache[normalized_id] = (now, formatted)
+        if len(self.forward_cache) > FORWARD_CACHE_MAX_ENTRIES:
+            oldest_id = min(
+                self.forward_cache,
+                key=lambda key: self.forward_cache[key][0],
+            )
+            self.forward_cache.pop(oldest_id, None)
+        logger.info(f"已展开合并转发内容，共 {formatted.count(chr(10)) + 1} 行")
+        return formatted
+
+    async def _forwarded_text(
+        self,
+        event: AstrMessageEvent,
+        components: list,
+    ) -> str:
+        texts = []
+        seen = set()
+        for component in self._forward_components(components):
+            forward_id = str(getattr(component, "id", "") or "").strip()
+            if not forward_id or forward_id in seen:
+                continue
+            seen.add(forward_id)
+            text = await self._fetch_forward_text(event, forward_id)
+            if text:
+                texts.append(text)
+        return "\n\n".join(texts)[:MAX_FORWARD_CHARACTERS]
+
+    @staticmethod
     def _quoted_author(reply_component) -> tuple[str, str]:
         if not reply_component:
             return "", ""
@@ -256,7 +482,13 @@ class LongtuQqBridge(Star):
         components = event.get_messages()
         text = event.message_str.strip()
         has_image = any(isinstance(component, Comp.Image) for component in components)
-        if not text and not has_image:
+        reply_component = self._reply_component(components)
+        quoted_chain = getattr(reply_component, "chain", None) or []
+        has_forward = bool(
+            self._forward_components(components)
+            or self._forward_components(quoted_chain)
+        )
+        if not text and not has_image and not has_forward:
             return
 
         if should_reply:
@@ -264,8 +496,9 @@ class LongtuQqBridge(Star):
         if should_reply and bool(self.config.get("send_processing_hint", False)) and text:
             yield event.plain_result("正在翻龙图小本本……")
 
-        reply_component = self._reply_component(components)
         quoted_user_id, quoted_sender_name = self._quoted_author(reply_component)
+        forwarded_text = await self._forwarded_text(event, components)
+        quoted_forwarded_text = await self._forwarded_text(event, quoted_chain)
         image_base64 = ""
         quoted_image_base64 = ""
         if should_reply and self._is_image_management_text(text):
@@ -285,6 +518,8 @@ class LongtuQqBridge(Star):
             "sender_name": event.get_sender_name(),
             "text": text,
             "quoted_text": self._quoted_text(components),
+            "forwarded_text": forwarded_text,
+            "quoted_forwarded_text": quoted_forwarded_text,
             "quoted_user_id": quoted_user_id,
             "quoted_sender_name": quoted_sender_name,
             "mentions": self._mentions(components),

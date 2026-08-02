@@ -295,13 +295,18 @@ export async function startQqApi() {
   const server = createQqApiServer({
     service: runtime.service,
     apiToken,
-    health: () => ({
-      ok: true,
-      platform: 'qq',
-      model_configured: runtime.chatClient.isConfigured,
-      image_count: stats.longtuImageCount,
-      ...runtime.conversationStore.getStats(),
-    }),
+    health: async () => {
+      const currentStats = await runtime.memeStore.getStats();
+      return {
+        ok: true,
+        platform: 'qq',
+        model_configured: runtime.chatClient.isConfigured,
+        image_count: currentStats.longtuImageCount,
+        bundled_image_count: currentStats.longtuImageCount - currentStats.dynamicActive,
+        dynamic_image_count: currentStats.dynamicActive,
+        ...runtime.conversationStore.getStats(),
+      };
+    },
   });
 
   await new Promise((resolve, reject) => {

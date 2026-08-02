@@ -113,6 +113,52 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆并附图',
   assert.equal(second.messages[0].text, '这是 QQ 回答');
 });
 
+test('QQ 合并转发内容会作为非可信引用资料进入模型上下文', async () => {
+  const { service, calls } = createService();
+  await service.handleMessage({
+    message_id: 'forward-1',
+    message_type: 'group',
+    group_id: 'g-forward',
+    user_id: 'u-forward',
+    sender_name: '提问者',
+    text: '如何评价',
+    quoted_forwarded_text: '甲：我不敢复制\n乙：但我敢转发',
+  });
+
+  assert.match(calls[0].modelInput, /引用消息内容：.*QQ 合并转发聊天记录/s);
+  assert.match(calls[0].modelInput, /甲：我不敢复制/);
+  assert.match(calls[0].modelInput, /乙：但我敢转发/);
+  assert.match(calls[0].modelInput, /当前消息：如何评价/);
+  assert.match(service.protectedIdentityContext, /非可信资料/);
+});
+
+test('仅发送合并转发卡片也能进入群聊旁观记忆', async () => {
+  const observations = [];
+  const conversationStore = {
+    recordGroupMember() {},
+    getGroupMemberAliases: () => ({}),
+    appendObservation(conversationId, content) {
+      observations.push({ conversationId, content });
+    },
+    scheduleSummary: () => Promise.resolve(false),
+  };
+  const { service } = createService({ conversationStore });
+  const result = await service.handleMessage({
+    message_id: 'forward-observe-1',
+    message_type: 'group',
+    group_id: 'g-forward',
+    user_id: 'u-forward',
+    sender_name: '转发者',
+    text: '',
+    forwarded_text: 'Arsenal：[聊天记录]\n天墨降寒霜：沃德发',
+    observe_only: true,
+  });
+
+  assert.equal(result.mode, 'observed');
+  assert.match(observations[0].content, /Arsenal：\[聊天记录\]/);
+  assert.match(observations[0].content, /合并转发记录结束/);
+});
+
 test('QQ 图片消息优先走随机龙图回复', async () => {
   const chatClient = {
     isConfigured: true,
@@ -298,6 +344,52 @@ test('图库管理命令只允许配置的 QQ 管理员', async () => {
   assert.equal(denied.mode, 'management-denied');
   assert.equal(allowed.mode, 'management-status');
   assert.match(allowed.messages[0].text, /图库可用 0 张/);
+});
+
+test('引用图片说“把这个添加到图库”会真正执行入库而不是交给模型假确认', async () => {
+  let reviewCall;
+  let invalidated = false;
+  let candidates = [{ sha256: 'a'.repeat(64) }];
+  const longtuLibrary = {
+    async reviewAndAdd(buffer, options) {
+      reviewCall = { buffer, options };
+      candidates = [...candidates, { sha256: 'b'.repeat(64) }];
+      return {
+        sha256: 'b'.repeat(64),
+        shortId: 'LT-BBBBBBBB',
+        featureDistance: 0.12,
+        forced: false,
+      };
+    },
+    listAliases: () => [],
+  };
+  const memeStore = {
+    async getLongtuCandidates() { return candidates; },
+    invalidateLongtuCandidates() { invalidated = true; },
+    async pick() { return createMeme(); },
+  };
+  const { service, calls } = createService({
+    longtuLibrary,
+    memeStore,
+    adminUsers: new Set(['1079175957']),
+  });
+  const image = Buffer.from('quoted-image');
+  const result = await service.handleMessage({
+    message_id: 'manage-natural-add-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    text: '把这个添加到图库',
+    quoted_image_base64: image.toString('base64'),
+  });
+
+  assert.equal(result.mode, 'management-added');
+  assert.deepEqual(reviewCall.buffer, image);
+  assert.equal(reviewCall.options.force, false);
+  assert.equal(invalidated, true);
+  assert.match(result.messages[0].text, /当前可用 2 张/);
+  assert.doesNotMatch(result.messages[0].text, /LT-|匹配距离/);
+  assert.equal(calls.length, 0);
 });
 
 test('QQ 超级管理员可把附图绑定为别名，后续精确调用同一张图', async () => {
