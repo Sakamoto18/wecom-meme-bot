@@ -1,7 +1,7 @@
 name: astrbot_plugin_longtu_bridge
 display_name: 龙图 QQ Bridge
 desc: 将 AstrBot 的 OneBot v11 QQ 消息转发到 wecom-meme-bot 的独立 QQ 服务，复用龙图库、角色回复和会话记忆。
-version: v1.2.0
+version: v1.3.0
 author: Sakamoto18
 repo: https://github.com/Sakamoto18/wecom-meme-bot
 support_platforms:
