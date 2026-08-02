@@ -6,3 +6,9 @@ npm-debug.log*
 .DS_Store
 deploy/qq/astrbot-data
 deploy/qq/napcat
+data/*.sqlite*
+data/longtu-library
+data/longtu-library/**
+data/qq-conversation-memory.json
+data/longtu-review*.png
+data/longtu-approval-review*
