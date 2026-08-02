@@ -9,6 +9,7 @@ import { LongtuLibrary } from '../src/longtu-library.js';
 import {
   matchLongtuAliasRequest,
   matchLongtuContextAlias,
+  matchLongtuSceneAlias,
   parseLongtuManagementCommand,
 } from '../src/longtu-management.js';
 
@@ -108,6 +109,15 @@ test('解析图库聊天管理指令', () => {
   assert.deepEqual(parseLongtuManagementCommand('强制添加这张龙图'), {
     action: 'add', force: true, shortId: '',
   });
+  assert.deepEqual(parseLongtuManagementCommand('强制添加'), {
+    action: 'add', force: true, shortId: '',
+  });
+  assert.deepEqual(parseLongtuManagementCommand('强制添加，并且标记为赛尔号'), {
+    action: 'bind-alias', force: true, shortId: '', alias: '赛尔号',
+  });
+  assert.deepEqual(parseLongtuManagementCommand('添加图库，标记为赛尔号'), {
+    action: 'bind-alias', force: false, shortId: '', alias: '赛尔号',
+  });
   assert.equal(parseLongtuManagementCommand('删除上一张龙图').action, 'delete-previous');
   assert.equal(parseLongtuManagementCommand('删除龙图 LT-A1B2C3D4').shortId, 'LT-A1B2C3D4');
   assert.equal(parseLongtuManagementCommand('撤销删除').action, 'undo-delete');
@@ -124,6 +134,22 @@ test('解析图库聊天管理指令', () => {
   assert.equal(
     matchLongtuAliasRequest('发赛尔号', [{ alias: '赛尔号', sha256: 'a'.repeat(64) }]).alias,
     '赛尔号',
+  );
+  assert.equal(
+    matchLongtuSceneAlias(
+      '帮我骂一下赛尔号',
+      '赛尔号这种场景就该被钉在龙图墙上',
+      [{ alias: '赛尔号', sha256: 'b'.repeat(64), source: 'ocr' }],
+    ).sha256,
+    'b'.repeat(64),
+  );
+  assert.equal(
+    matchLongtuSceneAlias(
+      '随便聊聊',
+      '好的，收到',
+      [{ alias: '好的', sha256: 'c'.repeat(64), source: 'ocr' }],
+    ),
+    null,
   );
   assert.equal(
     matchLongtuAliasRequest('讨论一下赛尔号', [{ alias: '赛尔号', sha256: 'a'.repeat(64) }]),

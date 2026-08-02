@@ -8,6 +8,7 @@ import {
   isLongtuAdministrator,
   matchLongtuAliasRequest,
   matchLongtuContextAlias,
+  matchLongtuSceneAlias,
   parseLongtuManagementCommand,
 } from './longtu-management.js';
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
@@ -367,12 +368,24 @@ export class QqBotService {
           selectionScope: this.selectionScope(message),
         };
         let attachedMeme;
-        if (options.attachmentSha256) {
+        const sceneAliasMatch = options.attachmentSha256
+          ? null
+          : matchLongtuSceneAlias(
+            content,
+            answer,
+            options.longtuAliases ?? [],
+          );
+        const attachmentSha256 = options.attachmentSha256
+          ?? sceneAliasMatch?.sha256;
+        if (attachmentSha256) {
           try {
             attachedMeme = await this.memeStore.pickBySha(
-              options.attachmentSha256,
+              attachmentSha256,
               selectionOptions,
             );
+            if (sceneAliasMatch) {
+              this.logger.log(`QQ 普通对话按场景匹配图库标签：${sceneAliasMatch.alias}`);
+            }
           } catch (error) {
             this.logger.warn(`QQ 绑定附图不可用，回退随机龙图：${error.message}`);
           }
@@ -680,9 +693,17 @@ export class QqBotService {
         }],
       };
     } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const imageManagement = command.action === 'add'
+        || (command.action === 'bind-alias' && payload.hasImage);
+      const failureText = imageManagement
+        ? command.force
+          ? `手动添加失败：${detail}；请确认引用的是 JPG、PNG 或 GIF 图片，且大小不超过 10MB。`
+          : `自动加入图库失败：${detail}；请引用这张图片后发送“强制添加这张龙图”手动添加。`
+        : `图库操作未完成：${detail}`;
       return {
         mode: 'management-error',
-        messages: [{ type: 'text', text: `图库操作未完成：${error.message}` }],
+        messages: [{ type: 'text', text: failureText }],
       };
     }
   }
@@ -732,15 +753,16 @@ export class QqBotService {
     }
 
     let contextualAliasMatch = null;
+    let longtuAliases = [];
     if (this.longtuLibrary && payload.text) {
-      const aliases = this.longtuLibrary.listAliases();
-      const aliasMatch = matchLongtuAliasRequest(payload.text, aliases);
+      longtuAliases = this.longtuLibrary.listAliases();
+      const aliasMatch = matchLongtuAliasRequest(payload.text, longtuAliases);
       if (aliasMatch) {
         return this.replyLongtu(`文字别名：${aliasMatch.alias}`, message, {
           sha256: aliasMatch.sha256,
         });
       }
-      contextualAliasMatch = matchLongtuContextAlias(payload.text, aliases);
+      contextualAliasMatch = matchLongtuContextAlias(payload.text, longtuAliases);
     }
 
     if (payload.hasImage) {
@@ -757,7 +779,10 @@ export class QqBotService {
       message,
       conversationContent,
       payload.senderName,
-      { attachmentSha256: contextualAliasMatch?.sha256 },
+      {
+        attachmentSha256: contextualAliasMatch?.sha256,
+        longtuAliases,
+      },
     );
   }
 }
