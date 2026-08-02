@@ -4,6 +4,7 @@ import {
   buildNormalReplyPrompt,
   buildSeriousReplyRetryPrompt,
   isThinSeriousReply,
+  removeInternalParticipantIds,
   removeLiteralLatinMa,
   reviewAttackReply,
   selectAttackScene,
@@ -101,7 +102,7 @@ export async function generateConversationReply(options) {
       }
     }
 
-    answer = removeLiteralLatinMa(answer);
+    answer = removeInternalParticipantIds(removeLiteralLatinMa(answer));
     review = reviewAttackReply(answer, { history });
 
     return {
@@ -186,7 +187,7 @@ export async function generateConversationReply(options) {
   }
 
   return {
-    answer: String(answer ?? '').trim(),
+    answer: removeInternalParticipantIds(answer),
     mode: useLongtuKnowledge ? 'longtu-knowledge' : 'model',
     references: [],
     review: null,

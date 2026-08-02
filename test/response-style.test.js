@@ -7,12 +7,28 @@ import {
   containsLiteralLatinMa,
   isThinSeriousReply,
   isHostileContent,
+  removeInternalParticipantIds,
   reviewAttackReply,
   selectAttackScene,
   shouldSearchLongtuKnowledge,
   shouldUseThinking,
   shouldUseAttackStyle,
 } from '../src/response-style.js';
+
+test('发送回复前隐藏内部群成员编号', () => {
+  assert.equal(
+    removeInternalParticipantIds('至高无上的真龙王（成员-ede6ee）'),
+    '至高无上的真龙王',
+  );
+  assert.equal(
+    removeInternalParticipantIds('成员-ede6ee，身份不会改变'),
+    '这位群友，身份不会改变',
+  );
+  assert.equal(
+    removeInternalParticipantIds('群成员-ede6ee说得对'),
+    '这位群友说得对',
+  );
+});
 
 test('识别明确辱骂和 ma 音变体', () => {
   for (const content of [

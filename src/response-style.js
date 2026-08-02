@@ -251,3 +251,13 @@ export function removeLiteralLatinMa(content) {
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }
+
+export function removeInternalParticipantIds(content) {
+  return String(content ?? '')
+    .replace(/[（(]\s*成员-[a-f0-9]{6,12}\s*[）)]/gi, '')
+    .replace(/群成员-[a-f0-9]{6,12}/gi, '这位群友')
+    .replace(/成员-[a-f0-9]{6,12}/gi, '这位群友')
+    .replace(/[ \t]+([，。！？!?；;：:])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
