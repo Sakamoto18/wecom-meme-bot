@@ -5,11 +5,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OpenAICompatibleChatClient } from './chat-client.js';
 import { MemeStore } from './meme-store.js';
+import { LongtuLibrary } from './longtu-library.js';
+import { parseAdminUsers, parseProtectedRoles } from './longtu-management.js';
 import { QqMemoryStore } from './qq-memory-store.js';
 import { QqBotService } from './qq-service.js';
 import { LongtuWebSearch } from './web-search.js';
 
-const MAX_REQUEST_BYTES = 128 * 1024;
+const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const currentFile = fileURLToPath(import.meta.url);
 const currentDirectory = path.dirname(currentFile);
 const projectRoot = path.resolve(currentDirectory, '..');
@@ -155,6 +157,21 @@ export async function createQqRuntime() {
   const longtuIndexPath = path.join(projectRoot, 'data/longtu-index.json');
   const longtuExclusionsPath = path.join(projectRoot, 'data/longtu-exclusions.json');
   const bundledLongtuDirectory = path.join(projectRoot, 'memes', 'longtu');
+  const libraryDatabasePath = path.resolve(
+    projectRoot,
+    process.env.LONGTU_LIBRARY_DATABASE_FILE?.trim()
+      || 'data/longtu-library.sqlite',
+  );
+  const libraryAssetsDirectory = path.resolve(
+    projectRoot,
+    process.env.LONGTU_LIBRARY_ASSETS_DIR?.trim()
+      || 'data/longtu-library/assets',
+  );
+  const longtuLibrary = new LongtuLibrary({
+    databaseFilePath: libraryDatabasePath,
+    assetsDirectory: libraryAssetsDirectory,
+  });
+  await longtuLibrary.load();
   const configuredLongtuLimit = parsePositiveInteger(process.env.LONGTU_LIMIT);
   const configuredLongtuMaxScore = Number.parseFloat(process.env.LONGTU_MAX_SCORE ?? '');
   const memeStore = new MemeStore([bundledLongtuDirectory], {
@@ -166,6 +183,7 @@ export async function createQqRuntime() {
       && configuredLongtuMaxScore >= 0
       ? configuredLongtuMaxScore
       : undefined,
+    longtuLibrary,
   });
 
   const conversationFile = process.env.QQ_CONVERSATION_MEMORY_FILE?.trim()
@@ -236,6 +254,9 @@ export async function createQqRuntime() {
     webSearchEnabled,
     knowledgeContext,
     memberAliases,
+    longtuLibrary,
+    adminUsers: parseAdminUsers(process.env.LONGTU_QQ_ADMIN_USERS),
+    protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
   });
 
   return {
@@ -243,6 +264,7 @@ export async function createQqRuntime() {
     chatClient,
     conversationStore,
     memeStore,
+    longtuLibrary,
     memberAliases,
     webSearchEnabled,
   };
@@ -300,6 +322,7 @@ export async function startQqApi() {
     await new Promise((resolve) => server.close(resolve));
     await runtime.conversationStore.flush();
     runtime.conversationStore.close();
+    runtime.longtuLibrary.close();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));

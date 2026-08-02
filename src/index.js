@@ -6,6 +6,12 @@ import AiBot, { generateReqId } from '@wecom/aibot-node-sdk';
 import { OpenAICompatibleChatClient } from './chat-client.js';
 import { ConversationStore } from './conversation-store.js';
 import { MemeStore } from './meme-store.js';
+import { LongtuLibrary } from './longtu-library.js';
+import {
+  isLongtuAdministrator,
+  parseAdminUsers,
+  parseLongtuManagementCommand,
+} from './longtu-management.js';
 import {
   buildModelInput,
   extractMessageText,
@@ -33,6 +39,17 @@ const bundledLongtuDirectory = path.join(projectRoot, 'memes', 'longtu');
 const emotionDirectory = process.env.WECOM_EMOTION_DIR?.trim();
 const configuredLongtuLimit = Number.parseInt(process.env.LONGTU_LIMIT ?? '', 10);
 const configuredLongtuMaxScore = Number.parseFloat(process.env.LONGTU_MAX_SCORE ?? '');
+const longtuLibrary = new LongtuLibrary({
+  databaseFilePath: path.resolve(
+    projectRoot,
+    process.env.LONGTU_LIBRARY_DATABASE_FILE?.trim() || 'data/longtu-library.sqlite',
+  ),
+  assetsDirectory: path.resolve(
+    projectRoot,
+    process.env.LONGTU_LIBRARY_ASSETS_DIR?.trim() || 'data/longtu-library/assets',
+  ),
+});
+await longtuLibrary.load();
 const memeStore = new MemeStore([bundledLongtuDirectory], {
   longtuIndexPath,
   longtuExclusionsPath,
@@ -44,7 +61,9 @@ const memeStore = new MemeStore([bundledLongtuDirectory], {
   longtuMaxScore: Number.isFinite(configuredLongtuMaxScore) && configuredLongtuMaxScore >= 0
     ? configuredLongtuMaxScore
     : undefined,
+  longtuLibrary,
 });
+const wecomAdminUsers = parseAdminUsers(process.env.LONGTU_WECOM_ADMIN_USERS);
 const processedMessageIds = new Set();
 const configuredMemoryMessages = Number.parseInt(process.env.CONVERSATION_MEMORY_MESSAGES ?? '', 10);
 const configuredMemoryCharacters = Number.parseInt(process.env.CONVERSATION_MEMORY_CHARACTERS ?? '', 10);
@@ -188,10 +207,110 @@ function markMessageProcessed(frame) {
   return true;
 }
 
+function wecomSelectionScope(message) {
+  return `wecom:${getConversationId(message)}`;
+}
+
+function imageDescriptorFromMessage(message) {
+  if (message?.msgtype === 'image' && message.image?.url) {
+    return message.image;
+  }
+  if (message?.msgtype === 'mixed') {
+    return (message.mixed?.msg_item ?? [])
+      .find((item) => item.msgtype === 'image' && item.image?.url)?.image ?? null;
+  }
+  return null;
+}
+
+async function downloadManagementImage(message) {
+  const descriptor = imageDescriptorFromMessage(message?.quote)
+    ?? imageDescriptorFromMessage(message);
+  if (!descriptor?.url) return null;
+  const downloaded = await client.downloadFile(descriptor.url, descriptor.aeskey);
+  return downloaded?.buffer ?? null;
+}
+
+async function replyManagementText(frame, text) {
+  await client.reply(frame, {
+    msgtype: 'text',
+    text: { content: text },
+  });
+}
+
+async function handleLongtuManagement(frame, command) {
+  const userId = String(frame.body?.from?.userid ?? '').trim();
+  if (!isLongtuAdministrator(userId, wecomAdminUsers)) {
+    await replyManagementText(frame, '你没有管理龙图库的权限。');
+    return;
+  }
+  const actor = `wecom:${userId}`;
+  try {
+    if (command.action === 'status') {
+      const candidates = await memeStore.getLongtuCandidates();
+      const stats = longtuLibrary.getStats();
+      await replyManagementText(
+        frame,
+        `图库可用 ${candidates.length} 张；动态加入 ${stats.dynamicActive} 张；已删除/屏蔽 ${stats.blocked} 张。`,
+      );
+      return;
+    }
+
+    if (command.action === 'add') {
+      const buffer = await downloadManagementImage(frame.body);
+      if (!buffer) throw new Error('请发送图文混排消息，或引用图片后发送添加指令');
+      const referenceCandidates = await memeStore.getLongtuCandidates();
+      const added = await longtuLibrary.reviewAndAdd(buffer, {
+        force: command.force,
+        actor,
+        referenceCandidates,
+      });
+      memeStore.invalidateLongtuCandidates();
+      await replyManagementText(
+        frame,
+        `${added.forced ? '已强制加入' : '特征复核通过，已加入'}图库：${added.shortId}（匹配距离 ${added.featureDistance.toFixed(3)}）`,
+      );
+      return;
+    }
+
+    if (command.action === 'undo-delete') {
+      const restored = longtuLibrary.undoDelete({ actor });
+      memeStore.invalidateLongtuCandidates();
+      await replyManagementText(frame, `已撤销删除：${restored.shortId}`);
+      return;
+    }
+
+    const candidates = await memeStore.getLongtuCandidates();
+    let sha256 = '';
+    if (command.shortId) {
+      const prefix = command.shortId.slice(3).toLowerCase();
+      sha256 = candidates.find((candidate) => candidate.sha256?.startsWith(prefix))?.sha256
+        ?? longtuLibrary.resolveShaByShortId(command.shortId);
+    } else if (command.action === 'delete-previous') {
+      sha256 = longtuLibrary.getLastSelection(
+        wecomSelectionScope(frame.body),
+      )?.sha256 ?? '';
+    } else {
+      const buffer = await downloadManagementImage(frame.body);
+      if (!buffer) throw new Error('请引用要删除的图片，或使用“删除上一张龙图”');
+      sha256 = await longtuLibrary.resolveShaByBuffer(buffer, candidates);
+    }
+    const deleted = longtuLibrary.deleteBySha(sha256, { actor });
+    memeStore.invalidateLongtuCandidates();
+    await replyManagementText(
+      frame,
+      `已从图库移除：${deleted.shortId}。发送“撤销删除”可以恢复。`,
+    );
+  } catch (error) {
+    await replyManagementText(frame, `图库操作未完成：${error.message}`);
+  }
+}
+
 async function replyLongtu(frame, source = '文字请求') {
   try {
     console.log(`收到龙图请求（来源：${source}）`);
-    const meme = await memeStore.pick('longtu');
+    const meme = await memeStore.pick('longtu', {
+      selectionScope: wecomSelectionScope(frame.body),
+    });
     const mediaId = await memeStore.getMediaId(client, meme);
     await client.replyMedia(frame, 'image', mediaId);
     const scoreInfo = meme.rank ? `，候选排名 ${meme.rank}，距离 ${meme.score.toFixed(4)}` : '';
@@ -262,6 +381,7 @@ async function replyConversation(frame, content) {
         }
         const attachedMeme = await memeStore.pick('longtu', {
           allowedExtensions: ['.png', '.jpg'],
+          selectionScope: wecomSelectionScope(frame.body),
         });
         const mediaId = await memeStore.getMediaId(client, attachedMeme);
         await client.sendMediaMessage(target, 'image', mediaId);
@@ -293,12 +413,18 @@ async function handleIncomingMessage(frame) {
     return;
   }
 
+  const content = extractMessageText(frame.body);
+  const managementCommand = parseLongtuManagementCommand(content);
+  if (managementCommand) {
+    await handleLongtuManagement(frame, managementCommand);
+    return;
+  }
+
   if (hasImageContent(frame.body)) {
     await replyLongtu(frame, '用户图片');
     return;
   }
 
-  const content = extractMessageText(frame.body);
   if (!content) {
     return;
   }
@@ -357,6 +483,7 @@ async function shutdown(signal) {
   shuttingDown = true;
   console.log(`收到 ${signal}，正在断开连接……`);
   await conversationStore.flush();
+  longtuLibrary.close();
   client.disconnect();
   process.exit(0);
 }

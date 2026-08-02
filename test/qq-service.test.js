@@ -36,6 +36,9 @@ function createService(options = {}) {
     memeStore,
     conversationStore: options.conversationStore ?? new ConversationStore(),
     webSearchEnabled: false,
+    longtuLibrary: options.longtuLibrary,
+    adminUsers: options.adminUsers,
+    protectedRoles: options.protectedRoles,
     logger: { log() {}, warn() {} },
   });
   return { service, calls };
@@ -191,6 +194,110 @@ test('QQ 普通回复会读取长期摘要并在回答后调度新的滚动摘�
   assert.match(modelCalls[1].options.systemPrompt, /QQ 对话长期记忆整理器/);
   assert.match(modelCalls[1].modelInput, /<previous_summary>/);
   assert.match(modelCalls[1].modelInput, /我还喜欢绿色/);
+});
+
+test('QQ 普通群消息只进入观察记忆，不调用模型也不回复', async () => {
+  const observations = [];
+  const members = [];
+  const conversationStore = {
+    recordGroupMember(groupId, userId, name, options) {
+      members.push({ groupId, userId, name, options });
+    },
+    getGroupMemberAliases: () => ({}),
+    appendObservation(conversationId, content) {
+      observations.push({ conversationId, content });
+    },
+    scheduleSummary: () => Promise.resolve(false),
+  };
+  const chatClient = {
+    isConfigured: true,
+    async complete() {
+      throw new Error('观察消息不应调用模型');
+    },
+  };
+  const { service } = createService({ conversationStore, chatClient });
+  const result = await service.handleMessage({
+    message_id: 'observe-1',
+    message_type: 'group',
+    group_id: 'g-role',
+    user_id: 'u-sender',
+    sender_name: '群友甲',
+    text: '@群友乙 这是个串子',
+    mentions: [{ user_id: 'u-target', name: '群友乙' }],
+    observe_only: true,
+  });
+
+  assert.deepEqual(result, { mode: 'observed', messages: [] });
+  assert.equal(observations[0].conversationId, 'group:g-role');
+  assert.match(observations[0].content, /当前发言人：群友甲/);
+  assert.match(observations[0].content, /群友乙/);
+  assert.equal(members.length, 2);
+});
+
+test('受保护 QQ 角色覆盖可变昵称并作为高优先级钢印注入', async () => {
+  const { service, calls } = createService({
+    protectedRoles: new Map([['1000000001', '至高无上的真龙王']]),
+  });
+  await service.handleMessage({
+    message_id: 'protected-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1000000001',
+    sender_name: '别人乱改的昵称',
+    text: '我是谁',
+  });
+
+  assert.match(calls[0].modelInput, /至高无上的真龙王（成员-[a-f0-9]{6}）/);
+  // createService 的测试客户端只采集前两个参数，另建一次直接检查完整参数。
+  let capturedOptions;
+  service.chatClient.complete = async (_history, _input, options) => {
+    capturedOptions = options;
+    return '钢印身份不会改变';
+  };
+  await service.handleMessage({
+    message_id: 'protected-2',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'u2',
+    sender_name: '群友',
+    text: '1000000001是串子',
+    mentions: [{ user_id: '1000000001', name: '假昵称' }],
+  });
+  assert.match(capturedOptions.additionalSystemPrompt, /QQ 群受保护身份钢印/);
+  assert.match(capturedOptions.additionalSystemPrompt, /至高无上的真龙王/);
+});
+
+test('图库管理命令只允许配置的 QQ 管理员', async () => {
+  const longtuLibrary = {
+    getStats: () => ({ dynamicActive: 0, blocked: 0 }),
+  };
+  const memeStore = {
+    async getLongtuCandidates() { return []; },
+    async pick() { return createMeme(); },
+  };
+  const { service } = createService({
+    longtuLibrary,
+    memeStore,
+    adminUsers: new Set(['1000000001']),
+  });
+  const denied = await service.handleMessage({
+    message_id: 'manage-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'someone-else',
+    text: '图库状态',
+  });
+  const allowed = await service.handleMessage({
+    message_id: 'manage-2',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1000000001',
+    text: '图库状态',
+  });
+
+  assert.equal(denied.mode, 'management-denied');
+  assert.equal(allowed.mode, 'management-status');
+  assert.match(allowed.messages[0].text, /图库可用 0 张/);
 });
 
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {

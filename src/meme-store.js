@@ -55,6 +55,7 @@ export class MemeStore {
     this.trustedLongtuDirectory = options.trustedLongtuDirectory;
     this.longtuLimit = options.longtuLimit ?? DEFAULT_LONGTU_LIMIT;
     this.longtuMaxScore = options.longtuMaxScore ?? DEFAULT_LONGTU_MAX_SCORE;
+    this.longtuLibrary = options.longtuLibrary ?? null;
     this.mediaCache = new Map();
     this.fileIndex = [];
     this.fileIndexExpiresAt = 0;
@@ -114,6 +115,7 @@ export class MemeStore {
       directories: this.directories,
       imageCount: files.length,
       longtuImageCount: longtuCandidates.length,
+      ...(this.longtuLibrary?.getStats?.() ?? {}),
     };
   }
 
@@ -158,7 +160,9 @@ export class MemeStore {
 
     const trustedCandidates = await this.loadTrustedLongtuCandidates();
     if (trustedCandidates.length > 0 || this.trustedManifestDetected) {
-      this.longtuCandidates = trustedCandidates;
+      const dynamicCandidates = this.longtuLibrary?.getDynamicCandidates?.() ?? [];
+      this.longtuCandidates = [...trustedCandidates, ...dynamicCandidates]
+        .filter((candidate) => !this.longtuLibrary?.isBlocked?.(candidate.sha256));
       return this.longtuCandidates;
     }
 
@@ -202,6 +206,7 @@ export class MemeStore {
             path: entry.path,
             rank: position + 1,
             score,
+            sha256: hash,
           });
         } catch {
           // 企微可能已经清理了这张缓存图，忽略即可。
@@ -249,6 +254,7 @@ export class MemeStore {
             : null,
           sha256: entry?.sha256,
           score: entry?.score,
+          perceptualHashes: entry?.perceptualHashes,
         }))),
       this.loadLongtuExclusions(),
     ]);
@@ -275,6 +281,10 @@ export class MemeStore {
           path: filePath,
           rank: candidates.length + 1,
           score: Number.isFinite(Number(file.score)) ? Number(file.score) : 0,
+          sha256: hash,
+          perceptualHashes: Array.isArray(file.perceptualHashes)
+            ? file.perceptualHashes
+            : [],
         });
       } catch {
         // 仓库素材可能正在同步，暂时读不到时忽略该文件。
@@ -289,6 +299,15 @@ export class MemeStore {
     if (index >= 0) {
       this.fileIndex.splice(index, 1);
     }
+  }
+
+  invalidateLongtuCandidates() {
+    this.longtuCandidates = null;
+    this.fileIndexExpiresAt = 0;
+  }
+
+  async getLongtuCandidates() {
+    return [...await this.loadLongtuCandidates()];
   }
 
   chooseCandidate(candidates, category) {
@@ -328,6 +347,11 @@ export class MemeStore {
       rank: candidate.rank,
       score: candidate.score,
       extension: detectedExtension,
+      sha256: candidate.sha256
+        ?? createHash('sha256').update(buffer).digest('hex'),
+      shortId: candidate.shortId,
+      perceptualHashes: candidate.perceptualHashes ?? [],
+      dynamic: Boolean(candidate.dynamic),
     };
   }
 
@@ -338,10 +362,30 @@ export class MemeStore {
     const allowedExtensions = options.allowedExtensions
       ? new Set(options.allowedExtensions)
       : null;
-    const sourceCandidates = [...await this.loadLongtuCandidates()];
+    let sourceCandidates = [...await this.loadLongtuCandidates()];
 
     if (sourceCandidates.length === 0) {
       throw new Error('本地龙图候选集为空，请重新生成索引');
+    }
+
+    if (allowedExtensions) {
+      sourceCandidates = sourceCandidates.filter((candidate) => {
+        const extension = candidate.extension
+          ?? path.extname(candidate.path).toLowerCase();
+        return allowedExtensions.has(extension === '.jpeg' ? '.jpg' : extension);
+      });
+    }
+
+    if (this.longtuLibrary) {
+      const candidate = await this.longtuLibrary.pickCandidate(sourceCandidates, {
+        scope: options.selectionScope,
+      });
+      try {
+        return await this.readCandidate(candidate, category);
+      } catch (error) {
+        this.invalidateLongtuCandidates();
+        throw error;
+      }
     }
 
     for (let attempt = 0; attempt < 20 && sourceCandidates.length > 0; attempt += 1) {

@@ -120,6 +120,21 @@ test('攻击提示要求直接攻击，不强求逻辑关联或固定语料', ()
   assert.doesNotMatch(prompt, /公开龙图语料参考/);
 });
 
+test('有第三方目标时攻击提示不会默认攻击指令发送者', () => {
+  const prompt = buildAttackPrompt('把他骂一顿', {
+    interactionContext: {
+      speakerLabel: '发令者（成员-aaaaaa）',
+      targetLabels: ['目标成员（成员-bbbbbb）'],
+      hasThirdPartyTarget: true,
+    },
+    attackScene: { id: 'test', hint: '测试画面' },
+  });
+  assert.match(prompt, /当前指令发送者：发令者/);
+  assert.match(prompt, /本轮被攻击目标：目标成员/);
+  assert.match(prompt, /不得把攻击落到指令发送者身上/);
+  assert.equal(shouldUseAttackStyle('把他骂一顿', [], { hasThirdPartyTarget: true }), true);
+});
+
 test('攻击画面会排除近期已经用过的截图意象', () => {
   const selected = selectAttackScene([
     { role: 'assistant', content: '你🐎的骨灰盒上还刻着源码呢。' },

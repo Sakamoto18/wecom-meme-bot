@@ -4,6 +4,7 @@ import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promi
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectImageExtension, MemeStore } from '../src/meme-store.js';
+import { extractPerceptualHashes } from '../src/image-features.js';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, '..');
@@ -85,6 +86,7 @@ for (const candidate of candidates) {
     filename,
     sha256,
     score: candidate.score,
+    perceptualHashes: await extractPerceptualHashes(buffer),
   });
 }
 
@@ -95,7 +97,7 @@ if (missingApprovals.length > 0) {
 }
 
 const manifest = {
-  version: 1,
+  version: 2,
   generatedAt: new Date().toISOString(),
   count: exported.length,
   reviewedTop,
