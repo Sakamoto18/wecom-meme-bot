@@ -432,9 +432,15 @@ test('QQ 超级管理员可把附图绑定为别名，后续精确调用同一�
   const longtuLibrary = {
     async resolveShaByBuffer() { return sha256; },
     bindAlias(alias, boundSha) {
-      const binding = { alias, sha256: boundSha, source: 'manual', replaced: false };
-      bindings.splice(0, bindings.length, binding);
-      return binding;
+      const binding = { alias, sha256: boundSha, source: 'manual' };
+      bindings.push(binding);
+      return { ...binding, added: true, poolSize: bindings.length };
+    },
+    resolveAliases(alias) {
+      return bindings.filter((binding) => binding.alias === alias);
+    },
+    listAliasesBySha(boundSha) {
+      return bindings.filter((binding) => binding.sha256 === boundSha);
     },
     listAliases() { return bindings; },
   };
@@ -475,15 +481,47 @@ test('QQ 超级管理员可把附图绑定为别名，后续精确调用同一�
   assert.equal(invoked.messages[0].filename, 'se-er-hao.png');
 });
 
+test('QQ 精确关键词从同名手动图片池选择而不是固定第一张', async () => {
+  const shas = ['a'.repeat(64), 'b'.repeat(64)];
+  const poolPicks = [];
+  const longtuLibrary = {
+    listAliases: () => shas.map((sha256) => ({
+      alias: '原神', sha256, source: 'manual',
+    })),
+  };
+  const memeStore = {
+    async pickByShas(candidateShas) {
+      poolPicks.push(candidateShas);
+      return createMeme('manual-yuan-shen-pool.png');
+    },
+    async pick() { throw new Error('精确关键词池不应回退全图库'); },
+  };
+  const { service, calls } = createService({ longtuLibrary, memeStore });
+  const result = await service.handleMessage({
+    message_id: 'manual-pool-call-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'someone-else',
+    text: '发原神',
+  });
+
+  assert.equal(result.mode, 'longtu');
+  assert.equal(result.messages[0].filename, 'manual-yuan-shen-pool.png');
+  assert.deepEqual(poolPicks[0], shas);
+  assert.equal(calls.length, 0);
+});
+
 test('管理员可先把现有图设为目标，再用“图片标记赛尔号”连续绑定', async () => {
   const sha256 = 'c'.repeat(64);
   let bound;
   const longtuLibrary = {
     async resolveShaByBuffer() { return sha256; },
     bindAlias(alias, boundSha) {
-      bound = { alias, sha256: boundSha, source: 'manual', replaced: false };
-      return bound;
+      bound = { alias, sha256: boundSha, source: 'manual' };
+      return { ...bound, added: true, poolSize: 1 };
     },
+    resolveAliases(alias) { return bound?.alias === alias ? [bound] : []; },
+    listAliasesBySha(boundSha) { return bound?.sha256 === boundSha ? [bound] : []; },
     listAliases() { return bound ? [bound] : []; },
   };
   const memeStore = {
@@ -515,20 +553,22 @@ test('管理员可先把现有图设为目标，再用“图片标记赛尔号�
   assert.match(existing.messages[0].text, /已经在图库中/);
   assert.equal(marked.mode, 'management-alias-bound');
   assert.deepEqual(bound, {
-    alias: '赛尔号', sha256, source: 'manual', replaced: false,
+    alias: '赛尔号', sha256, source: 'manual',
   });
   assert.equal(calls.length, 0);
 });
 
-test('普通对话提到管理员手动别名时保留模型文字并改用绑定附图', async () => {
-  const sha256 = 'd'.repeat(64);
-  const exactPicks = [];
+test('普通对话提到管理员关键词时保留模型文字并从手动图片池附图', async () => {
+  const shas = ['d'.repeat(64), 'e'.repeat(64)];
+  const poolPicks = [];
   const longtuLibrary = {
-    listAliases: () => [{ alias: '赛尔号', sha256, source: 'manual' }],
+    listAliases: () => shas.map((sha256) => ({
+      alias: '赛尔号', sha256, source: 'manual',
+    })),
   };
   const memeStore = {
-    async pickBySha(boundSha) {
-      exactPicks.push(boundSha);
+    async pickByShas(candidateShas) {
+      poolPicks.push(candidateShas);
       return createMeme('se-er-hao-context.png');
     },
     async pick() {
@@ -548,7 +588,7 @@ test('普通对话提到管理员手动别名时保留模型文字并改用绑�
   assert.equal(result.mode, 'model');
   assert.equal(result.messages[0].type, 'text');
   assert.equal(result.messages[1].filename, 'se-er-hao-context.png');
-  assert.deepEqual(exactPicks, [sha256]);
+  assert.deepEqual(poolPicks, [shas]);
   assert.equal(calls.length, 1);
 });
 
@@ -620,6 +660,71 @@ test('OCR 整句只作为场景文字，输入其中关键词也能命中对应�
   assert.equal(result.mode, 'model');
   assert.equal(result.messages[1].filename, 'yuan-shen-scene.png');
   assert.deepEqual(exactPicks, [sha256]);
+});
+
+test('同一 OCR 场景关键词会形成多图候选池而不是固定一张', async () => {
+  const shas = ['1'.repeat(64), '2'.repeat(64), '3'.repeat(64)];
+  const poolPicks = [];
+  const longtuLibrary = {
+    listAliases: () => [
+      { alias: '玩原神玩的', sha256: shas[0], source: 'ocr' },
+      { alias: '在被窝里玩原神吗', sha256: shas[1], source: 'ocr' },
+      { alias: '原神启动', sha256: shas[2], source: 'ocr' },
+    ],
+  };
+  const chatClient = {
+    isConfigured: true,
+    async complete() { return '确实是原神玩家'; },
+  };
+  const memeStore = {
+    async pickByShas(candidateShas) {
+      poolPicks.push(candidateShas);
+      return createMeme('yuan-shen-pool.png');
+    },
+    async pick() {
+      throw new Error('命中场景候选池时不应选择全图库随机图');
+    },
+  };
+  const { service } = createService({ chatClient, longtuLibrary, memeStore });
+  const result = await service.handleMessage({
+    message_id: 'ocr-keyword-pool-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'someone-else',
+    text: '原神原神原神',
+  });
+
+  assert.equal(result.messages[1].filename, 'yuan-shen-pool.png');
+  assert.deepEqual(poolPicks[0].sort(), shas);
+});
+
+test('引用图片检查时返回真实入库状态和手动标记', async () => {
+  const sha256 = '9'.repeat(64);
+  const longtuLibrary = {
+    async resolveShaByBuffer() { return sha256; },
+    listAliasesBySha(_sha, options) {
+      return options.source === 'manual'
+        ? [{ alias: '耄耋', sha256, source: 'manual' }]
+        : [];
+    },
+  };
+  const memeStore = {
+    async getLongtuCandidates() { return [{ sha256 }]; },
+  };
+  const { service } = createService({ longtuLibrary, memeStore });
+  service.adminUsers = new Set(['1079175957']);
+  const result = await service.handleMessage({
+    message_id: 'inspect-image-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    text: '检查这张图',
+    quoted_image_base64: Buffer.from('existing-image').toString('base64'),
+  });
+
+  assert.equal(result.mode, 'management-inspect-image');
+  assert.match(result.messages[0].text, /已在图库中/);
+  assert.match(result.messages[0].text, /手动标记：耄耋/);
 });
 
 test('纯文字提到唯一历史昵称时也会识别第三方目标，无需真实艾特', async () => {

@@ -5,11 +5,13 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Jimp } from 'jimp';
+import { DatabaseSync } from 'node:sqlite';
 import { LongtuLibrary } from '../src/longtu-library.js';
 import {
   matchLongtuAliasRequest,
   matchLongtuContextAlias,
   matchLongtuSceneAlias,
+  matchLongtuSceneAliases,
   parseLongtuManagementCommand,
 } from '../src/longtu-management.js';
 
@@ -136,8 +138,21 @@ test('解析图库聊天管理指令', () => {
     action: 'bind-alias', force: false, shortId: '', alias: '耄耋',
   });
   assert.equal(parseLongtuManagementCommand('取消赛尔号绑定').action, 'unbind-alias');
+  assert.deepEqual(parseLongtuManagementCommand('取消这张图的原神标记'), {
+    action: 'unbind-image-alias', force: false, shortId: '', alias: '原神',
+  });
   assert.equal(parseLongtuManagementCommand('别名列表').action, 'alias-status');
   assert.equal(parseLongtuManagementCommand('标记列表').action, 'alias-status');
+  assert.equal(parseLongtuManagementCommand('图库标记列表').action, 'alias-status');
+  assert.deepEqual(parseLongtuManagementCommand('检查这张图'), {
+    action: 'inspect-image', force: false, shortId: '', alias: '',
+  });
+  assert.deepEqual(parseLongtuManagementCommand('这张图标记了什么'), {
+    action: 'inspect-image', force: false, shortId: '', alias: '',
+  });
+  assert.deepEqual(parseLongtuManagementCommand('检查标记耄耋'), {
+    action: 'inspect-alias', force: false, shortId: '', alias: '耄耋',
+  });
   assert.equal(
     matchLongtuAliasRequest('发赛尔号', [{ alias: '赛尔号', sha256: 'a'.repeat(64) }]).alias,
     '赛尔号',
@@ -182,6 +197,19 @@ test('解析图库聊天管理指令', () => {
     ).sha256,
     'e'.repeat(64),
   );
+  assert.deepEqual(
+    matchLongtuSceneAliases(
+      '原神原神原神',
+      '确实是原神玩家',
+      [
+        { alias: '玩原神玩的', sha256: '1'.repeat(64), source: 'ocr' },
+        { alias: '在被窝里玩原神吗', sha256: '2'.repeat(64), source: 'ocr' },
+        { alias: '原神启动', sha256: '3'.repeat(64), source: 'ocr' },
+        { alias: '无关图片', sha256: '4'.repeat(64), source: 'ocr' },
+      ],
+    ).map((entry) => entry.sha256).sort(),
+    ['1'.repeat(64), '2'.repeat(64), '3'.repeat(64)],
+  );
   assert.equal(
     matchLongtuAliasRequest('发在登录原神的那一刻起我才感受到生命的意义', [{
       alias: '在登录原神的那一刻起我才感受到生命的意义',
@@ -208,7 +236,7 @@ test('解析图库聊天管理指令', () => {
   );
 });
 
-test('OCR 文字别名可持久导入，管理员绑定会覆盖且删除后不会在重启时复活', async (t) => {
+test('管理员关键词支持一对多图片池，同图也能进入多个池并持久保存', async (t) => {
   const fixture = await createFixture();
   t.after(() => rm(fixture.root, { recursive: true, force: true }));
   const seedAliasesFilePath = path.join(fixture.root, 'text-aliases.json');
@@ -222,17 +250,79 @@ test('OCR 文字别名可持久导入，管理员绑定会覆盖且删除后不�
   assert.equal(library.resolveAlias('逆天原批').source, 'ocr');
   assert.equal(library.getStats().aliases, 1);
 
-  const bound = library.bindAlias('赛尔号', fixture.candidates[1].sha256, {
+  const first = library.bindAlias('赛尔号', fixture.candidates[0].sha256, {
     actor: 'qq:admin-user',
   });
-  assert.equal(bound.alias, '赛尔号');
-  assert.equal(library.resolveAlias('赛尔号').sha256, fixture.candidates[1].sha256);
-  library.unbindAlias('逆天原批', { actor: 'qq:admin-user' });
+  const second = library.bindAlias('赛尔号', fixture.candidates[1].sha256, {
+    actor: 'qq:admin-user',
+  });
+  library.bindAlias('原神', fixture.candidates[1].sha256, {
+    actor: 'qq:admin-user',
+  });
+  assert.equal(first.poolSize, 1);
+  assert.equal(second.poolSize, 2);
+  assert.deepEqual(
+    library.resolveAliases('赛尔号', { source: 'manual' }).map((entry) => entry.sha256),
+    [fixture.candidates[0].sha256, fixture.candidates[1].sha256],
+  );
+  assert.deepEqual(
+    matchLongtuAliasRequest('发赛尔号', library.listAliases()).sha256s,
+    [fixture.candidates[0].sha256, fixture.candidates[1].sha256],
+  );
+  assert.deepEqual(
+    library.listAliasesBySha(fixture.candidates[1].sha256, { source: 'manual' })
+      .map((entry) => entry.alias),
+    ['原神', '赛尔号'],
+  );
+  const removed = library.unbindAlias('赛尔号', {
+    actor: 'qq:admin-user',
+    sha256: fixture.candidates[0].sha256,
+  });
+  assert.equal(removed.poolSize, 1);
   library.close();
 
   const reopened = new LongtuLibrary(options);
   await reopened.load();
-  assert.equal(reopened.resolveAlias('逆天原批'), null);
-  assert.equal(reopened.resolveAlias('赛尔号').source, 'manual');
+  assert.equal(reopened.resolveAlias('逆天原批').source, 'ocr');
+  assert.deepEqual(
+    reopened.resolveAliases('赛尔号', { source: 'manual' }).map((entry) => entry.sha256),
+    [fixture.candidates[1].sha256],
+  );
+  assert.equal(reopened.getStats().manualAliases, 2);
+  assert.equal(reopened.getStats().manualAliasBindings, 2);
   reopened.close();
+});
+
+test('旧版单主键关键词表会无损迁移为关键词图片池', async (t) => {
+  const fixture = await createFixture();
+  t.after(() => rm(fixture.root, { recursive: true, force: true }));
+  const legacy = new DatabaseSync(fixture.databaseFilePath);
+  legacy.exec(`
+    CREATE TABLE longtu_aliases (
+      alias TEXT PRIMARY KEY,
+      sha256 TEXT NOT NULL,
+      source TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      deleted_at INTEGER,
+      deleted_by TEXT
+    );
+  `);
+  legacy.prepare(`
+    INSERT INTO longtu_aliases(
+      alias, sha256, source, created_by, created_at, updated_at,
+      deleted_at, deleted_by
+    ) VALUES (?, ?, 'manual', 'qq:admin-user', 1, 1, NULL, NULL)
+  `).run('原神', fixture.candidates[0].sha256);
+  legacy.close();
+
+  const library = new LongtuLibrary(fixture);
+  await library.load();
+  library.bindAlias('原神', fixture.candidates[1].sha256, { actor: 'qq:admin-user' });
+  assert.deepEqual(
+    library.resolveAliases('原神', { source: 'manual' }).map((entry) => entry.sha256),
+    [fixture.candidates[0].sha256, fixture.candidates[1].sha256],
+  );
+  library.close();
 });

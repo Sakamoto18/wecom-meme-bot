@@ -11,7 +11,7 @@ import {
   isLongtuAdministrator,
   matchLongtuAliasRequest,
   matchLongtuContextAlias,
-  matchLongtuSceneAlias,
+  matchLongtuSceneAliases,
   parseAdminUsers,
   parseLongtuManagementCommand,
 } from './longtu-management.js';
@@ -286,21 +286,21 @@ async function handleLongtuManagement(frame, command) {
       const stats = longtuLibrary.getStats();
       await replyManagementText(
         frame,
-        `图库可用 ${candidates.length} 张；动态加入 ${stats.dynamicActive} 张；已删除/屏蔽 ${stats.blocked} 张；管理员手动别名 ${stats.manualAliases ?? 0} 个；OCR 场景文字标签 ${stats.ocrAliases ?? 0} 条。`,
+        `图库可用 ${candidates.length} 张；动态加入 ${stats.dynamicActive} 张；已删除/屏蔽 ${stats.blocked} 张；管理员关键词池 ${stats.manualAliases ?? 0} 个、绑定 ${stats.manualAliasBindings ?? 0} 条；OCR 场景文字 ${stats.ocrAliases ?? 0} 个、绑定 ${stats.ocrAliasBindings ?? 0} 条。`,
       );
       return;
     }
 
     if (command.action === 'alias-status') {
-      const manualAliases = longtuLibrary.listAliases({ source: 'manual', limit: 100 });
+      const manualPools = longtuLibrary.listAliasPools({ source: 'manual', limit: 100 });
       const stats = longtuLibrary.getStats();
       await replyManagementText(
         frame,
         [
-          `管理员手动别名 ${stats.manualAliases ?? manualAliases.length} 个`,
-          manualAliases.length > 0
-            ? `可精确调用：${manualAliases.map((entry) => entry.alias).join('、')}`
-            : '目前还没有管理员手动别名',
+          `管理员关键词池 ${stats.manualAliases ?? manualPools.length} 个，共 ${stats.manualAliasBindings ?? 0} 条图片绑定`,
+          manualPools.length > 0
+            ? `关键词池：${manualPools.map((entry) => `${entry.alias}(${entry.imageCount}张)`).join('、')}`
+            : '目前还没有管理员关键词池',
           stats.ocrAliases > 0
             ? `OCR 场景文字标签 ${stats.ocrAliases} 条（只用于语境关键词匹配，不是需要完整输入的别名）`
             : '当前没有 OCR 场景关键词',
@@ -309,9 +309,115 @@ async function handleLongtuManagement(frame, command) {
       return;
     }
 
+    if (command.action === 'inspect-image') {
+      const buffer = await downloadManagementImage(frame.body);
+      const candidates = await memeStore.getLongtuCandidates();
+      const sha256 = buffer
+        ? await longtuLibrary.resolveShaByBuffer(buffer, candidates)
+        : getManagementTarget(frame.body);
+      if (!sha256) {
+        await replyManagementText(
+          frame,
+          buffer
+            ? '数据库核验结果：这张图不在当前龙图库中。需要收录时请引用图片发送“把这张图加入图库”。'
+            : '请引用要检查的图片，再发送“检查这张图”。',
+        );
+        return;
+      }
+      rememberManagementTarget(frame.body, sha256);
+      const manualAliases = longtuLibrary.listAliasesBySha(sha256, {
+        source: 'manual',
+      });
+      const ocrAliases = longtuLibrary.listAliasesBySha(sha256, {
+        source: 'ocr',
+      });
+      await replyManagementText(
+        frame,
+        [
+          '数据库核验结果：这张图已在图库中',
+          manualAliases.length > 0
+            ? `手动标记：${manualAliases.map((entry) => entry.alias).join('、')}`
+            : '尚未设置手动标记',
+          `OCR 场景文字 ${ocrAliases.length} 条`,
+          manualAliases.length === 0
+            ? '已设为当前标记目标，15 分钟内发送“图片标记XX”即可绑定'
+            : '',
+        ].filter(Boolean).join('；') + '。',
+      );
+      return;
+    }
+
+    if (command.action === 'inspect-alias') {
+      const manualBindings = longtuLibrary.resolveAliases(command.alias, { source: 'manual' });
+      if (manualBindings.length === 0) {
+        const sceneMatches = matchLongtuSceneAliases(
+          command.alias,
+          '',
+          longtuLibrary.listAliases(),
+        );
+        if (sceneMatches.length > 0) {
+          await replyManagementText(
+            frame,
+            `数据库核验结果：没有手动关键词池“${command.alias}”，但 OCR 场景当前匹配 ${sceneMatches.length} 张图；下面按候选池轮换返回其中一张。`,
+          );
+          const target = getMessageTarget(frame.body);
+          const selectionOptions = {
+            selectionScope: wecomSelectionScope(frame.body),
+          };
+          const meme = sceneMatches.length === 1
+            ? await memeStore.pickBySha(sceneMatches[0].sha256, selectionOptions)
+            : await memeStore.pickByShas(
+              sceneMatches.map((entry) => entry.sha256),
+              selectionOptions,
+            );
+          const mediaId = await memeStore.getMediaId(client, meme);
+          await client.sendMediaMessage(target, 'image', mediaId);
+          return;
+        }
+        await replyManagementText(
+          frame,
+          `数据库中没有管理员手动标记“${command.alias}”。`,
+        );
+        return;
+      }
+      await replyManagementText(
+        frame,
+        `数据库核验结果：手动关键词池“${command.alias}”已生效，当前包含 ${manualBindings.length} 张图；下面按池内去重轮换返回一张。`,
+      );
+      const target = getMessageTarget(frame.body);
+      const selectionOptions = { selectionScope: wecomSelectionScope(frame.body) };
+      const meme = manualBindings.length === 1
+        ? await memeStore.pickBySha(manualBindings[0].sha256, selectionOptions)
+        : await memeStore.pickByShas(
+          manualBindings.map((entry) => entry.sha256),
+          selectionOptions,
+        );
+      const mediaId = await memeStore.getMediaId(client, meme);
+      await client.sendMediaMessage(target, 'image', mediaId);
+      return;
+    }
+
     if (command.action === 'unbind-alias') {
       const removed = longtuLibrary.unbindAlias(command.alias, { actor });
-      await replyManagementText(frame, `已取消别名“${removed.alias}”的图片绑定。`);
+      await replyManagementText(
+        frame,
+        `已清空手动关键词池“${removed.alias}”，共移除 ${removed.removed} 张图的绑定。`,
+      );
+      return;
+    }
+
+    if (command.action === 'unbind-image-alias') {
+      const buffer = await downloadManagementImage(frame.body);
+      const candidates = await memeStore.getLongtuCandidates();
+      const sha256 = buffer
+        ? await longtuLibrary.resolveShaByBuffer(buffer, candidates)
+        : getManagementTarget(frame.body);
+      if (!sha256) throw new Error('请引用要取消标记的图片，或先发送“检查这张图”');
+      const removed = longtuLibrary.unbindAlias(command.alias, { actor, sha256 });
+      await replyManagementText(
+        frame,
+        `数据库已回查：已从关键词池“${removed.alias}”移除这张图，池内还剩 ${removed.poolSize} 张。`,
+      );
       return;
     }
 
@@ -340,12 +446,20 @@ async function handleLongtuManagement(frame, command) {
       }
       rememberManagementTarget(frame.body, sha256);
       const bound = longtuLibrary.bindAlias(command.alias, sha256, { actor });
+      const verifiedPool = longtuLibrary.resolveAliases(bound.alias, { source: 'manual' });
+      if (!verifiedPool.some((entry) => entry.sha256 === sha256)) {
+        throw new Error('数据库回查未找到刚写入的手动标记');
+      }
+      const verifiedAliases = longtuLibrary.listAliasesBySha(sha256, {
+        source: 'manual',
+      });
       await replyManagementText(
         frame,
         [
-          `${bound.replaced ? '已覆盖' : '已建立'}别名“${bound.alias}”`,
+          `${bound.added ? '已加入' : '图片原本就在'}关键词池“${bound.alias}”`,
           added ? (added.forced ? '图片已由管理员强制加入图库' : '图片已通过特征复核并加入图库') : '',
-          `发送“发${bound.alias}”可精确调用；普通对话提到“${bound.alias}”也会优先附这张图。`,
+          `数据库已回查：池内当前共 ${verifiedPool.length} 张图；当前图片的全部手动标记为 ${verifiedAliases.map((entry) => entry.alias).join('、')}`,
+          `发送“发${bound.alias}”或在普通对话提到“${bound.alias}”，会从该池随机轮换一张。`,
         ].filter(Boolean).join('；'),
       );
       return;
@@ -420,9 +534,14 @@ async function replyLongtu(frame, source = '文字请求', options = {}) {
   try {
     console.log(`收到龙图请求（来源：${source}）`);
     const selectionOptions = { selectionScope: wecomSelectionScope(frame.body) };
-    const meme = options.sha256
-      ? await memeStore.pickBySha(options.sha256, selectionOptions)
-      : await memeStore.pick('longtu', selectionOptions);
+    const sha256s = Array.isArray(options.sha256s)
+      ? [...new Set(options.sha256s.filter(Boolean))]
+      : [];
+    const meme = sha256s.length > 1
+      ? await memeStore.pickByShas(sha256s, selectionOptions)
+      : (sha256s.length === 1 || options.sha256
+        ? await memeStore.pickBySha(sha256s[0] ?? options.sha256, selectionOptions)
+        : await memeStore.pick('longtu', selectionOptions));
     const mediaId = await memeStore.getMediaId(client, meme);
     await client.replyMedia(frame, 'image', mediaId);
     const scoreInfo = meme.rank ? `，候选排名 ${meme.rank}，距离 ${meme.score.toFixed(4)}` : '';
@@ -493,15 +612,27 @@ async function replyConversation(frame, content) {
         }
         const aliases = longtuLibrary.listAliases();
         const manualContextMatch = matchLongtuContextAlias(content, aliases);
-        const sceneMatch = manualContextMatch
-          ?? matchLongtuSceneAlias(content, answer, aliases);
+        const sceneMatches = manualContextMatch
+          ? manualContextMatch.sha256s.map((sha256) => ({
+            alias: manualContextMatch.alias,
+            matchedKeyword: manualContextMatch.alias,
+            sha256,
+            source: 'manual',
+          }))
+          : matchLongtuSceneAliases(content, answer, aliases);
         let attachedMeme;
-        if (sceneMatch) {
+        if (sceneMatches.length > 0) {
           try {
-            attachedMeme = await memeStore.pickBySha(sceneMatch.sha256, {
+            const selectionOptions = {
               allowedExtensions: ['.png', '.jpg'],
               selectionScope: wecomSelectionScope(frame.body),
-            });
+            };
+            attachedMeme = sceneMatches.length === 1
+              ? await memeStore.pickBySha(sceneMatches[0].sha256, selectionOptions)
+              : await memeStore.pickByShas(
+                sceneMatches.map((entry) => entry.sha256),
+                selectionOptions,
+              );
           } catch (error) {
             console.warn(`场景关键词对应龙图不可用，回退随机：${error.message}`);
           }
@@ -512,7 +643,7 @@ async function replyConversation(frame, content) {
         });
         const mediaId = await memeStore.getMediaId(client, attachedMeme);
         await client.sendMediaMessage(target, 'image', mediaId);
-        console.log(`普通对话已主动附图：${attachedMeme.filename}${sceneMatch ? `（场景关键词：${sceneMatch.alias}）` : ''}`);
+        console.log(`普通对话已主动附图：${attachedMeme.filename}${sceneMatches.length > 0 ? `（场景关键词：${sceneMatches[0].matchedKeyword ?? sceneMatches[0].alias}，候选 ${sceneMatches.length} 张）` : ''}`);
       } catch (imageError) {
         console.warn(`普通回复主动附图失败，文本不受影响：${imageError.message}`);
       }
@@ -559,7 +690,7 @@ async function handleIncomingMessage(frame) {
   const aliasMatch = matchLongtuAliasRequest(content, longtuLibrary.listAliases());
   if (aliasMatch) {
     await replyLongtu(frame, `文字别名：${aliasMatch.alias}`, {
-      sha256: aliasMatch.sha256,
+      sha256s: aliasMatch.sha256s,
     });
     return;
   }

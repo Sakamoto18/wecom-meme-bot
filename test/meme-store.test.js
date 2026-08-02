@@ -233,3 +233,41 @@ test('仓库 manifest 为空时关闭龙图库，不回退到未审核索引', a
   assert.equal((await store.getStats()).longtuImageCount, 0);
   await assert.rejects(store.pick('longtu'), /龙图候选集为空/);
 });
+
+test('场景关键词可从多个哈希候选中按子池选择图片', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'wecom-meme-bot-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bundledDirectory = path.join(root, 'memes', 'longtu');
+  await mkdir(bundledDirectory, { recursive: true });
+  const buffers = [
+    Buffer.from('89504e470d0a1a0a41', 'hex'),
+    Buffer.from('89504e470d0a1a0a42', 'hex'),
+    Buffer.from('89504e470d0a1a0a43', 'hex'),
+  ];
+  const files = [];
+  for (const [index, buffer] of buffers.entries()) {
+    const filename = `${index}.png`;
+    const sha256 = createHash('sha256').update(buffer).digest('hex');
+    await writeFile(path.join(bundledDirectory, filename), buffer);
+    files.push({ filename, sha256, score: 0.1 });
+  }
+  await writeFile(
+    path.join(bundledDirectory, 'manifest.json'),
+    JSON.stringify({ files }),
+  );
+  const selectedPools = [];
+  const store = new MemeStore([bundledDirectory], {
+    trustedLongtuDirectory: bundledDirectory,
+    longtuLibrary: {
+      isBlocked: () => false,
+      async pickCandidate(candidates) {
+        selectedPools.push(candidates.map((candidate) => candidate.sha256));
+        return candidates.at(-1);
+      },
+    },
+  });
+  const meme = await store.pickByShas([files[0].sha256, files[2].sha256]);
+
+  assert.deepEqual(selectedPools[0].sort(), [files[0].sha256, files[2].sha256].sort());
+  assert.equal(meme.sha256, files[2].sha256);
+});
