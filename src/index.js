@@ -8,6 +8,7 @@ import { ConversationStore } from './conversation-store.js';
 import { MemeStore } from './meme-store.js';
 import { LongtuLibrary } from './longtu-library.js';
 import {
+  formatLongtuAutoOcr,
   isLongtuAdministrator,
   matchLongtuAliasRequest,
   matchLongtuContextAlias,
@@ -458,6 +459,7 @@ async function handleLongtuManagement(frame, command) {
         [
           `${bound.added ? '已加入' : '图片原本就在'}关键词池“${bound.alias}”`,
           added ? (added.forced ? '图片已由管理员强制加入图库' : '图片已通过特征复核并加入图库') : '',
+          formatLongtuAutoOcr(added?.autoOcr),
           `数据库已回查：池内当前共 ${verifiedPool.length} 张图；当前图片的全部手动标记为 ${verifiedAliases.map((entry) => entry.alias).join('、')}`,
           `发送“发${bound.alias}”或在普通对话提到“${bound.alias}”，会从该池随机轮换一张。`,
         ].filter(Boolean).join('；'),
@@ -481,10 +483,17 @@ async function handleLongtuManagement(frame, command) {
         referenceCandidates,
       });
       memeStore.invalidateLongtuCandidates();
+      const availableCount = (await memeStore.getLongtuCandidates()).length;
       rememberManagementTarget(frame.body, added.sha256);
+      if (added.autoOcr?.status === 'failed') {
+        console.warn(`龙图已入库，但自动 OCR 失败：${added.autoOcr.error}`);
+      }
       await replyManagementText(
         frame,
-        `${added.forced ? '已强制加入' : '特征复核通过，已加入'}图库：${added.shortId}（匹配距离 ${added.featureDistance.toFixed(3)}）`,
+        [
+          `${added.forced ? '已强制加入' : '特征复核通过，已加入'}图库；当前可用 ${availableCount} 张`,
+          formatLongtuAutoOcr(added.autoOcr),
+        ].filter(Boolean).join('；') + '。',
       );
       return;
     }

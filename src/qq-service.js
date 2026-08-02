@@ -5,6 +5,7 @@ import {
   getGroupInteractionContext,
 } from './message-utils.js';
 import {
+  formatLongtuAutoOcr,
   isLongtuAdministrator,
   matchLongtuAliasRequest,
   matchLongtuContextAlias,
@@ -777,6 +778,7 @@ export class QqBotService {
             text: [
               `${bound.added ? '已加入' : '图片原本就在'}关键词池“${bound.alias}”`,
               added ? (added.forced ? '图片已由超级管理员强制加入图库' : '图片已通过特征复核并加入图库') : '',
+              formatLongtuAutoOcr(added?.autoOcr),
               `数据库已回查：池内当前共 ${verifiedPool.length} 张图；当前图片的全部手动标记为 ${verifiedAliases.map((entry) => entry.alias).join('、')}`,
               `发送“发${bound.alias}”或在普通对话提到“${bound.alias}”，会从该池随机轮换一张。`,
             ].filter(Boolean).join('；'),
@@ -810,11 +812,17 @@ export class QqBotService {
         this.memeStore.invalidateLongtuCandidates();
         const availableCount = (await this.memeStore.getLongtuCandidates()).length;
         this.rememberManagementTarget(payload, message, added.sha256);
+        if (added.autoOcr?.status === 'failed') {
+          this.logger.warn(`QQ 龙图已入库，但自动 OCR 失败：${added.autoOcr.error}`);
+        }
         return {
           mode: 'management-added',
           messages: [{
             type: 'text',
-            text: `${added.forced ? '已强制加入' : '特征复核通过，已加入'}图库；当前可用 ${availableCount} 张。`,
+            text: [
+              `${added.forced ? '已强制加入' : '特征复核通过，已加入'}图库；当前可用 ${availableCount} 张`,
+              formatLongtuAutoOcr(added.autoOcr),
+            ].filter(Boolean).join('；') + '。',
           }],
         };
       }

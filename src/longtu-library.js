@@ -11,6 +11,7 @@ import {
 } from './image-features.js';
 import { normalizeLongtuAlias } from './longtu-management.js';
 import { detectImageExtension } from './meme-store.js';
+import { recognizeImageTextAliases } from './image-ocr.js';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const AUTO_ACCEPT_DISTANCE = 0.22;
@@ -75,6 +76,18 @@ export class LongtuLibrary {
     this.databaseFilePath = options.databaseFilePath?.trim() || '';
     this.assetsDirectory = options.assetsDirectory?.trim() || '';
     this.seedAliasesFilePath = options.seedAliasesFilePath?.trim() || '';
+    this.ocrCommand = String(
+      options.ocrCommand ?? process.env.LONGTU_OCR_COMMAND ?? '',
+    ).trim();
+    this.ocrLanguages = String(
+      options.ocrLanguages ?? process.env.LONGTU_OCR_LANGUAGES ?? 'chi_sim+eng',
+    ).trim() || 'chi_sim+eng';
+    this.ocrTimeoutMs = Number.parseInt(
+      options.ocrTimeoutMs ?? process.env.LONGTU_OCR_TIMEOUT_MS ?? '20000',
+      10,
+    );
+    this.ocrRecognizer = options.ocrRecognizer ?? recognizeImageTextAliases;
+    this.autoOcrEnabled = Boolean(options.ocrRecognizer || this.ocrCommand);
     this.now = options.now ?? Date.now;
     this.database = null;
     this.referenceFeatures = new Map();
@@ -437,13 +450,76 @@ export class LongtuLibrary {
       throw error;
     }
     this.referenceFeatures.set(sha256, candidateFeatures);
+    const autoOcr = await this.autoTagAssetByText(sha256, filename);
     return {
       sha256,
       shortId,
       extension,
       featureDistance,
       forced: Boolean(options.force),
+      autoOcr,
     };
+  }
+
+  storeOcrAliases(sha256, aliases) {
+    const normalizedSha = String(sha256 ?? '').trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(normalizedSha)) throw new Error('没有找到 OCR 对应图片');
+    const normalizedAliases = [...new Set(
+      (Array.isArray(aliases) ? aliases : [])
+        .map((alias) => normalizeLongtuAlias(alias))
+        .filter(Boolean),
+    )].slice(0, 12);
+    if (normalizedAliases.length === 0) return [];
+    const database = this.ensureOpen();
+    const currentTime = this.now();
+    const insert = database.prepare(`
+      INSERT OR IGNORE INTO longtu_aliases(
+        alias, sha256, source, created_by, created_at, updated_at,
+        deleted_at, deleted_by
+      ) VALUES (?, ?, 'ocr', 'system:tesseract', ?, ?, NULL, NULL)
+    `);
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      for (const alias of normalizedAliases) {
+        insert.run(alias, normalizedSha, currentTime, currentTime);
+      }
+      database.exec('COMMIT');
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
+    const stored = new Set(
+      this.listAliasesBySha(normalizedSha, { source: 'ocr' }).map((entry) => entry.alias),
+    );
+    return normalizedAliases.filter((alias) => stored.has(alias));
+  }
+
+  async autoTagAssetByText(sha256, filename = '') {
+    if (!this.autoOcrEnabled) return { status: 'disabled', aliases: [] };
+    try {
+      const resolvedFilename = filename || this.ensureOpen().prepare(`
+        SELECT filename FROM longtu_assets WHERE sha256 = ? AND deleted_at IS NULL
+      `).get(sha256)?.filename;
+      if (!resolvedFilename) throw new Error('找不到待识别的动态图片');
+      const aliases = await this.ocrRecognizer(
+        path.join(this.assetsDirectory, resolvedFilename),
+        {
+          command: this.ocrCommand,
+          languages: this.ocrLanguages,
+          timeoutMs: this.ocrTimeoutMs,
+        },
+      );
+      const storedAliases = this.storeOcrAliases(sha256, aliases);
+      return storedAliases.length > 0
+        ? { status: 'tagged', aliases: storedAliases }
+        : { status: 'no-text', aliases: [] };
+    } catch (error) {
+      return {
+        status: 'failed',
+        aliases: [],
+        error: String(error?.message ?? error).slice(0, 300),
+      };
+    }
   }
 
   resolveShaByShortId(shortId) {

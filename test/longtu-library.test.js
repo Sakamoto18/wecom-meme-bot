@@ -7,6 +7,7 @@ import path from 'node:path';
 import { Jimp } from 'jimp';
 import { DatabaseSync } from 'node:sqlite';
 import { LongtuLibrary } from '../src/longtu-library.js';
+import { parseTesseractTsv } from '../src/image-ocr.js';
 import {
   matchLongtuAliasRequest,
   matchLongtuContextAlias,
@@ -92,6 +93,66 @@ test('强制添加仍拦截完全重复，并支持软删除和撤销', async (t
   const restored = library.undoDelete({ actor: 'qq:admin-user' });
   assert.equal(restored.shortId, added.shortId);
   assert.equal(library.getDynamicCandidates().length, 1);
+  library.close();
+});
+
+test('Tesseract 结果只保留高置信度且适合作为场景匹配的文字', () => {
+  const tsv = [
+    'level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext',
+    '5\t1\t1\t1\t1\t1\t0\t0\t10\t10\t92\t玩',
+    '5\t1\t1\t1\t1\t2\t10\t0\t20\t10\t88\t原神',
+    '5\t1\t1\t1\t2\t1\t0\t20\t20\t10\t12\t错误低置信度',
+    '5\t1\t1\t1\t3\t1\t0\t40\t20\t10\t90\t12345',
+  ].join('\n');
+  assert.deepEqual(parseTesseractTsv(tsv), ['玩原神']);
+});
+
+test('新图入库后自动 OCR 标记，没文字或识别失败时仍按普通图片保存', async (t) => {
+  const fixture = await createFixture();
+  t.after(() => rm(fixture.root, { recursive: true, force: true }));
+  const responses = [
+    ['玩原神玩的', '原神启动'],
+    [],
+    new Error('模拟 OCR 不可用'),
+  ];
+  const library = new LongtuLibrary({
+    ...fixture,
+    ocrCommand: 'mock-tesseract',
+    async ocrRecognizer() {
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      return response;
+    },
+  });
+  await library.load();
+
+  const tagged = await library.reviewAndAdd(await imageBuffer(0xffff00ff), {
+    force: true,
+    actor: 'qq:admin-user',
+    referenceCandidates: fixture.candidates,
+  });
+  const noText = await library.reviewAndAdd(await imageBuffer(0x00ffffff), {
+    force: true,
+    actor: 'qq:admin-user',
+    referenceCandidates: fixture.candidates,
+  });
+  const failed = await library.reviewAndAdd(await imageBuffer(0xff00ffff), {
+    force: true,
+    actor: 'qq:admin-user',
+    referenceCandidates: fixture.candidates,
+  });
+
+  assert.deepEqual(tagged.autoOcr, {
+    status: 'tagged', aliases: ['玩原神玩的', '原神启动'],
+  });
+  assert.deepEqual(
+    library.listAliasesBySha(tagged.sha256, { source: 'ocr' }).map((entry) => entry.alias),
+    ['原神启动', '玩原神玩的'],
+  );
+  assert.deepEqual(noText.autoOcr, { status: 'no-text', aliases: [] });
+  assert.equal(failed.autoOcr.status, 'failed');
+  assert.match(failed.autoOcr.error, /模拟 OCR 不可用/);
+  assert.equal(library.getDynamicCandidates().length, 3);
   library.close();
 });
 
