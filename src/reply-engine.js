@@ -3,8 +3,11 @@ import {
   buildAttackRetryPrompt,
   buildNormalReplyPrompt,
   buildNormalReplyRetryPrompt,
+  buildProtectedIdentityFallback,
+  buildProtectedSelfIdentityPrompt,
   buildPureMentionReplyPrompt,
   buildSeriousReplyRetryPrompt,
+  hasRequiredIdentityRole,
   isInvalidPureMentionReply,
   isThinSeriousReply,
   removeInternalParticipantIds,
@@ -54,6 +57,7 @@ export async function generateConversationReply(options) {
     memorySummary = '',
     interactionContext = {},
     protectedIdentityContext = '',
+    requiredIdentityRole = '',
     pureBotMention = false,
   } = options;
 
@@ -181,6 +185,7 @@ export async function generateConversationReply(options) {
     protectedIdentityContext,
     memoryContext,
     buildNormalReplyPrompt({ thinkingEnabled, requirePersonaBite }),
+    buildProtectedSelfIdentityPrompt(requiredIdentityRole),
     useLongtuKnowledge ? knowledgeContext : '',
     searchResult.context,
   ].filter(Boolean).join('\n\n');
@@ -188,6 +193,7 @@ export async function generateConversationReply(options) {
   let thinkingFallback = false;
   let seriousAnswerExpanded = false;
   let normalPersonaRewritten = false;
+  let protectedIdentityFallback = false;
   let attempts = 1;
   try {
     answer = await chatClient.complete(history, modelInput, {
@@ -232,6 +238,7 @@ export async function generateConversationReply(options) {
   let review = reviewNormalReply(answer, {
     thinkingEnabled,
     requirePersonaBite,
+    requiredIdentityRole,
   });
   if (!review.valid && attempts < 2) {
     try {
@@ -244,6 +251,7 @@ export async function generateConversationReply(options) {
             : buildNormalReplyRetryPrompt(content, answer, review.issues, {
               thinkingEnabled,
               interactionContext,
+              requiredIdentityRole,
             }),
         ].join('\n\n'),
         maxTokens: thinkingEnabled ? 8_000 : 1_200,
@@ -253,6 +261,7 @@ export async function generateConversationReply(options) {
       const rewrittenReview = reviewNormalReply(rewrittenAnswer, {
         thinkingEnabled,
         requirePersonaBite,
+        requiredIdentityRole,
       });
       attempts += 1;
       normalPersonaRewritten = !needsSeriousExpansion;
@@ -265,9 +274,21 @@ export async function generateConversationReply(options) {
     }
   }
 
+  if (requiredIdentityRole && !hasRequiredIdentityRole(answer, requiredIdentityRole)) {
+    answer = buildProtectedIdentityFallback(requiredIdentityRole);
+    protectedIdentityFallback = true;
+    review = reviewNormalReply(answer, {
+      thinkingEnabled: false,
+      requirePersonaBite,
+      requiredIdentityRole,
+    });
+  }
+
   return {
     answer: removeInternalParticipantIds(answer),
-    mode: useLongtuKnowledge ? 'longtu-knowledge' : 'model',
+    mode: requiredIdentityRole
+      ? 'protected-identity'
+      : (useLongtuKnowledge ? 'longtu-knowledge' : 'model'),
     references: [],
     review,
     attempts,
@@ -278,6 +299,7 @@ export async function generateConversationReply(options) {
     thinkingFallback,
     seriousAnswerExpanded,
     normalPersonaRewritten,
+    protectedIdentityFallback,
     usedModel: true,
   };
 }

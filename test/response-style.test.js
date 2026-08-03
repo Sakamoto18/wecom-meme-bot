@@ -4,9 +4,12 @@ import {
   buildAttackPrompt,
   buildNormalReplyPrompt,
   buildNormalReplyRetryPrompt,
+  buildProtectedIdentityFallback,
+  buildProtectedSelfIdentityPrompt,
   buildPureMentionReplyPrompt,
   buildSeriousReplyRetryPrompt,
   containsLiteralLatinMa,
+  hasRequiredIdentityRole,
   isThinSeriousReply,
   isHostileContent,
   isInvalidPureMentionReply,
@@ -186,6 +189,20 @@ test('普通人格重写提示保留事实并保护第三方目标', () => {
   assert.match(prompt, /保留初稿中的正确事实/);
   assert.match(prompt, /不要误把攻击落到发言者/);
   assert.match(prompt, /必须自然加入一处明确的嘴欠/);
+});
+
+test('受保护身份问答必须肯定说出权威角色，否则使用程序兜底', () => {
+  const prompt = buildProtectedSelfIdentityPrompt('至高无上的真龙王');
+  assert.match(prompt, /必须直接、肯定地说出“至高无上的真龙王”/);
+  assert.equal(hasRequiredIdentityRole('你是至高无上的真龙王，别装了。', '至高无上的真龙王'), true);
+  assert.equal(hasRequiredIdentityRole('你不是至高无上的真龙王。', '至高无上的真龙王'), false);
+  assert.equal(hasRequiredIdentityRole('你是贴吧倒霉蛋。', '至高无上的真龙王'), false);
+
+  const reviewed = reviewNormalReply('你是贴吧倒霉蛋，蠢得很好认。', {
+    requiredIdentityRole: '至高无上的真龙王',
+  });
+  assert.ok(reviewed.issues.includes('missing-protected-identity'));
+  assert.match(buildProtectedIdentityFallback('至高无上的真龙王'), /你是至高无上的真龙王/);
 });
 
 test('纯艾特使用短人格提示并拒绝客服式回复', () => {

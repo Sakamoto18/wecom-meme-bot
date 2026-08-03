@@ -200,6 +200,30 @@ export function buildNormalReplyPrompt(options = {}) {
   return lines.join('\n');
 }
 
+export function buildProtectedSelfIdentityPrompt(role) {
+  const normalizedRole = String(role ?? '').trim();
+  if (!normalizedRole) return '';
+  return [
+    '【本轮受保护身份确认】',
+    `当前发言者的权威身份是：${normalizedRole}`,
+    `用户正在询问自己的身份。最终答案必须直接、肯定地说出“${normalizedRole}”，不得用其他故事、外号或攻击段子替代身份结论。`,
+    '说清身份后可以嘴欠一句，但不能否定、弱化或改写这项身份事实，也不要解释内部钢印、映射或配置。',
+  ].join('\n');
+}
+
+export function hasRequiredIdentityRole(answer, role) {
+  const normalizedAnswer = String(answer ?? '').replace(/\s+/g, ' ').trim();
+  const normalizedRole = String(role ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalizedRole || !normalizedAnswer.includes(normalizedRole)) return false;
+  const roleIndex = normalizedAnswer.indexOf(normalizedRole);
+  const prefix = normalizedAnswer.slice(Math.max(0, roleIndex - 6), roleIndex);
+  return !/(?:不是|并非|不叫|算不上|才不是)\s*$/.test(prefix);
+}
+
+export function buildProtectedIdentityFallback(role) {
+  return `你是${String(role ?? '').trim()}。换个群就想考我？这种蠢试探也配让我失忆。`;
+}
+
 export function reviewNormalReply(answer, options = {}) {
   const normalized = String(answer ?? '').trim();
   const issues = [];
@@ -213,6 +237,10 @@ export function reviewNormalReply(answer, options = {}) {
   }
   if (options.requirePersonaBite !== false && NORMAL_FAMILY_ATTACK_PATTERN.test(normalized)) {
     issues.push('family-attack-in-normal-mode');
+  }
+  if (options.requiredIdentityRole
+    && !hasRequiredIdentityRole(normalized, options.requiredIdentityRole)) {
+    issues.push('missing-protected-identity');
   }
   return { valid: issues.length === 0, issues };
 }
@@ -229,6 +257,9 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
     `未通过项：${(issues ?? []).join(', ')}`,
     targetHint,
     '保留初稿中的正确事实和必要信息，直接输出重写后的最终答案，不解释复核过程。',
+    ...(options.requiredIdentityRole
+      ? [`必须直接、肯定地称当前发言者为“${options.requiredIdentityRole}”；不许用段子或其他身份替代。`]
+      : []),
     '必须自然加入一处明确的嘴欠、轻度直接攻击或刻薄锐评，不能只是温和幽默；用户没有攻击时禁止亲属攻击。',
     options.thinkingEnabled
       ? '这是深度答案的风格重写：主体信息不得缩短或丢失，最后用一句不超过 35 个汉字的刻薄锐评收尾。'

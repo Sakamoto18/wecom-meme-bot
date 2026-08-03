@@ -134,6 +134,30 @@ test('真实痛苦场景不强制攻击性人格或触发重写', async () => {
   assert.equal(result.normalPersonaRewritten, false);
 });
 
+test('受保护账号询问身份时模型不遵守也由程序保证钢印结论', async () => {
+  let modelCalls = 0;
+  const result = await generateConversationReply({
+    content: '我是谁',
+    modelInput: '当前发言人：至高无上的真龙王\n当前消息：我是谁',
+    requiredIdentityRole: '至高无上的真龙王',
+    history: [],
+    chatClient: {
+      isConfigured: true,
+      complete: async () => {
+        modelCalls += 1;
+        return '你是那个换号重来的倒霉蛋，蠢得很好认。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.equal(modelCalls, 2);
+  assert.equal(result.mode, 'protected-identity');
+  assert.equal(result.protectedIdentityFallback, true);
+  assert.match(result.answer, /你是至高无上的真龙王/);
+  assert.equal(result.review.valid, true);
+});
+
 test('纯艾特强制快速人格模式，客服式草稿回退为角色招呼', async () => {
   const calls = [];
   const result = await generateConversationReply({
