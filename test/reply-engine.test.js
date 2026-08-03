@@ -79,7 +79,7 @@ test('孤立 ma 或与历史高度重复会触发一次模型重写', async () =
   assert.doesNotMatch(result.answer, /(?:^|[^a-z])ma(?:$|[^a-z])/i);
 });
 
-test('普通闲聊不联网且仍由已配置的大模型回答', async () => {
+test('普通闲聊人格过弱时自动重写且不联网', async () => {
   let modelCalls = 0;
   let searchCalls = 0;
   const result = await generateConversationReply({
@@ -90,7 +90,9 @@ test('普通闲聊不联网且仍由已配置的大模型回答', async () => {
       isConfigured: true,
       complete: async () => {
         modelCalls += 1;
-        return '普通模型答案';
+        return modelCalls === 1
+          ? '普通模型答案'
+          : '你好，别搁这试探了，有话快说。';
       },
     },
     webSearch: {
@@ -102,11 +104,34 @@ test('普通闲聊不联网且仍由已配置的大模型回答', async () => {
     webSearchEnabled: true,
   });
 
-  assert.equal(result.answer, '普通模型答案');
+  assert.equal(result.answer, '你好，别搁这试探了，有话快说。');
   assert.equal(result.mode, 'model');
-  assert.equal(modelCalls, 1);
+  assert.equal(modelCalls, 2);
   assert.equal(searchCalls, 0);
   assert.equal(result.searchAttempted, false);
+  assert.equal(result.normalPersonaRewritten, true);
+  assert.equal(result.review.valid, true);
+});
+
+test('真实痛苦场景不强制攻击性人格或触发重写', async () => {
+  let modelCalls = 0;
+  const result = await generateConversationReply({
+    content: '我妈去世了，我现在很难受',
+    modelInput: '我妈去世了，我现在很难受',
+    history: [],
+    chatClient: {
+      isConfigured: true,
+      complete: async () => {
+        modelCalls += 1;
+        return '听到这个消息很难受。先别逼自己立刻振作，找信任的人陪着你。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.equal(result.review.valid, true);
+  assert.equal(result.normalPersonaRewritten, false);
 });
 
 test('纯艾特强制快速人格模式，客服式草稿回退为角色招呼', async () => {
@@ -173,6 +198,7 @@ test('正经问题开启思考并提高输出预算', async () => {
           '四台设备同时通信时，每个千兆端口可以各自协商到千兆，但它们共享上联链路，因此还要看流量是否都经过同一上联。',
           '如果只是局域网设备互传，普通非管理型交换机即可；如果有 NAS、多 VLAN 或链路聚合需求，则选择管理型交换机。',
           '网线至少使用合格的超五类线，并检查路由器、NAS 和电脑端口速率，避免其中某个百兆口成为瓶颈。',
+          '这点破网络别瞎接，瓶颈都快把你脑回路堵死了。',
         ].join('。');
       },
     },
@@ -185,6 +211,7 @@ test('正经问题开启思考并提高输出预算', async () => {
   assert.equal(calls[0].options.maxTokens, 20_000);
   assert.equal(calls[0].options.timeoutMs, 120_000);
   assert.equal(result.seriousAnswerExpanded, false);
+  assert.equal(result.review.valid, true);
 });
 
 test('正经答案过短时再次开启思考做完整性复核', async () => {
@@ -195,6 +222,7 @@ test('正经答案过短时再次开启思考做完整性复核', async () => {
     'NTFS 在 macOS 默认只读，APFS 和 ext4 在另外两个平台缺少原生支持，因此不适合作为通用交换盘。',
     'exFAT 没有日志机制，意外拔盘时更容易损坏，所以它只适合交换介质，重要文件仍需另做备份。',
     '格式化前备份原数据，分区表选择 GPT，并在三种系统上分别测试大文件读写与安全弹出。',
+    '这破兼容性别瞎赌，笨蛋翻车了硬盘可不会替你哭。',
   ].join('。');
   const result = await generateConversationReply({
     content: '硬盘需要在 Windows、Linux 和 macOS 之间交换文件，应该格式化成什么文件系统',
@@ -221,6 +249,7 @@ test('正经答案过短时再次开启思考做完整性复核', async () => {
   assert.equal(result.answer, longAnswer);
   assert.equal(result.attempts, 2);
   assert.equal(result.seriousAnswerExpanded, true);
+  assert.equal(result.review.valid, true);
 });
 
 test('思考模式只返回空正文时自动降级快速模式', async () => {

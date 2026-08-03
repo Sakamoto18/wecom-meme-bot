@@ -447,6 +447,12 @@ export class QqBotService {
       });
 
       const answer = generated.answer;
+      this.logger.log(
+        `QQ 对话回复模式：${generated.mode}`
+        + `，thinking=${Boolean(generated.thinkingEnabled)}`
+        + `，attempts=${generated.attempts ?? 1}`
+        + `，review=${generated.review?.valid === false ? generated.review.issues.join('|') : 'ok'}`,
+      );
       this.conversationStore.appendExchange(conversationId, modelInput, answer);
       this.scheduleMemorySummary(conversationId);
       const messages = [{ type: 'text', text: answer }];
