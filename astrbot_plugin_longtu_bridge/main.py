@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import time
 
 import aiohttp
@@ -16,13 +17,14 @@ MAX_FORWARD_NODE_CHARACTERS = 600
 MAX_FORWARD_DEPTH = 2
 FORWARD_CACHE_TTL_SECONDS = 60 * 60
 FORWARD_CACHE_MAX_ENTRIES = 128
+ALLOWED_MANAGEMENT_SLASH_COMMANDS = {"/add", "/tag", "/del"}
 
 
 @register(
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.4.0",
+    "1.6.0",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -94,9 +96,6 @@ class LongtuQqBridge(Star):
         """读取 WakingCheck 修改前的原始文字，避免斜杠唤醒词被剥掉。"""
         raw_message = getattr(getattr(event, "message_obj", None), "raw_message", None)
         if isinstance(raw_message, dict):
-            raw_text = raw_message.get("raw_message")
-            if isinstance(raw_text, str) and raw_text.strip():
-                return raw_text.strip()
             segments = raw_message.get("message")
             if isinstance(segments, list):
                 text_parts = []
@@ -106,13 +105,24 @@ class LongtuQqBridge(Star):
                     data = segment.get("data")
                     if isinstance(data, dict):
                         text_parts.append(str(data.get("text") or ""))
-                return "".join(text_parts).strip()
+                segment_text = "".join(text_parts).strip()
+                if segment_text:
+                    return segment_text
+            raw_text = raw_message.get("raw_message")
+            if isinstance(raw_text, str) and raw_text.strip():
+                return re.sub(r"\[CQ:[^\]]+\]", "", raw_text).strip()
         return ""
 
     @classmethod
     def _is_slash_command(cls, event: AstrMessageEvent) -> bool:
         raw_text = cls._raw_text(event)
         return (raw_text or event.message_str or "").lstrip().startswith("/")
+
+    @classmethod
+    def _is_allowed_management_slash_command(cls, event: AstrMessageEvent) -> bool:
+        raw_text = (cls._raw_text(event) or event.message_str or "").strip()
+        matched = re.match(r"^/([a-z][a-z0-9_-]*)\b", raw_text, re.IGNORECASE)
+        return bool(matched and f"/{matched.group(1).lower()}" in ALLOWED_MANAGEMENT_SLASH_COMMANDS)
 
     def _ignore_slash_commands(self) -> bool:
         configured = (
@@ -123,13 +133,15 @@ class LongtuQqBridge(Star):
         return self._enabled(configured, True)
 
     def _should_reply(self, event: AstrMessageEvent) -> bool:
+        # 斜杠命令是 Bridge 的硬白名单，不受旧配置开关影响：只有图库管理
+        # 的 /add、/tag、/del 可以继续进入本项目，其余命令必须在这里停止。
+        if self._is_slash_command(event):
+            return self._is_allowed_management_slash_command(event)
         if event.is_private_chat():
             return True
         if not self._group_is_allowed(event):
             return False
         normalized_text = event.message_str.strip().lower()
-        if self._ignore_slash_commands() and self._is_slash_command(event):
-            return False
         ignored_commands = (
             os.getenv("LONGTU_QQ_IGNORED_WAKE_COMMANDS")
             or self.config.get("ignored_wake_commands")
@@ -158,7 +170,7 @@ class LongtuQqBridge(Star):
     def _should_observe(self, event: AstrMessageEvent) -> bool:
         if event.is_private_chat() or not self._group_is_allowed(event):
             return False
-        if self._ignore_slash_commands() and self._is_slash_command(event):
+        if self._is_slash_command(event):
             return False
         configured = os.getenv("LONGTU_QQ_OBSERVE_GROUP_MESSAGES")
         if configured is None:
@@ -188,6 +200,50 @@ class LongtuQqBridge(Star):
                 "name": str(getattr(component, "name", "") or "").strip(),
             })
         return mentions
+
+    @classmethod
+    def _reply_prefix(cls, event: AstrMessageEvent, components: list) -> list:
+        """群聊回复引用原消息，并把回复明确送达被艾特的成员。"""
+        if event.is_private_chat():
+            return []
+
+        prefix = []
+        message_id = str(
+            getattr(getattr(event, "message_obj", None), "message_id", "") or "",
+        ).strip()
+        if message_id:
+            prefix.append(Comp.Reply(id=message_id))
+
+        bot_user_id = str(event.get_self_id() or "").strip()
+        sender_id = str(event.get_sender_id() or "").strip()
+        targets = []
+        seen = set()
+        for component in components:
+            if not isinstance(component, Comp.At):
+                continue
+            user_id = str(getattr(component, "qq", "") or "").strip()
+            if (
+                not user_id
+                or user_id.lower() == "all"
+                or user_id in {bot_user_id, sender_id}
+                or user_id in seen
+            ):
+                continue
+            seen.add(user_id)
+            targets.append((
+                user_id,
+                str(getattr(component, "name", "") or "").strip(),
+            ))
+
+        # 没有第三方目标但发送者明确 @ 了机器人时，把回复送达发送者本人。
+        if not targets and cls._is_explicitly_at_bot(event) and sender_id:
+            targets.append((sender_id, str(event.get_sender_name() or "").strip()))
+
+        for user_id, name in targets[:3]:
+            prefix.append(Comp.At(qq=user_id, name=name))
+        if targets:
+            prefix.append(Comp.Plain(" "))
+        return prefix
 
     @staticmethod
     def _reply_component(components: list):
@@ -454,6 +510,8 @@ class LongtuQqBridge(Star):
 
     @staticmethod
     def _is_image_management_text(text: str) -> bool:
+        if re.match(r"^/(?:add|tag|del)(?:\s|$)", str(text or "").strip(), re.IGNORECASE):
+            return True
         normalized = str(text or "").replace(" ", "")
         library_management = (
             ("龙图" in normalized or "图库" in normalized)
@@ -499,18 +557,25 @@ class LongtuQqBridge(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def on_qq_message(self, event: AstrMessageEvent):
         """回复唤醒消息，并静默观察允许群中的普通消息。"""
-        if self._ignore_slash_commands() and self._is_slash_command(event):
+        if self._is_slash_command(event):
             # AstrBot 的 WakingCheck 会先剥掉 / 唤醒前缀；这里用原始 OneBot
-            # 消息识别并停止事件，避免 /w、/help 等内置命令继续被其他插件执行。
-            event.stop_event()
-            return
+            # 消息识别。仅放行图库管理的 /add、/tag、/del，其余斜杠命令
+            # 继续停止，避免 /w、/help 等内置命令或其他插件被误触发。
+            if not self._is_allowed_management_slash_command(event):
+                event.stop_event()
+                return
         should_reply = self._should_reply(event)
         observe_only = not should_reply and self._should_observe(event)
         if not should_reply and not observe_only:
             return
 
         components = event.get_messages()
-        text = event.message_str.strip()
+        raw_text = self._raw_text(event)
+        text = (
+            raw_text
+            if self._is_allowed_management_slash_command(event) and raw_text
+            else event.message_str.strip()
+        )
         has_image = any(isinstance(component, Comp.Image) for component in components)
         reply_component = self._reply_component(components)
         quoted_chain = getattr(reply_component, "chain", None) or []
@@ -594,6 +659,7 @@ class LongtuQqBridge(Star):
         # response pipeline. Keep text and the attached meme in one chain so
         # the image is not dropped after the text response has been sent.
         if reply_chain:
+            reply_chain = self._reply_prefix(event, components) + reply_chain
             yield event.chain_result(reply_chain)
 
     async def terminate(self):

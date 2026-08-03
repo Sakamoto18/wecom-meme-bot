@@ -280,6 +280,10 @@ async function handleLongtuManagement(frame, command) {
     await replyManagementText(frame, '你没有管理龙图库的权限。');
     return;
   }
+  if (command.action === 'invalid-slash') {
+    await replyManagementText(frame, command.message || '斜杠指令格式不正确。');
+    return;
+  }
   const actor = `wecom:${userId}`;
   try {
     if (command.action === 'status') {
@@ -440,7 +444,7 @@ async function handleLongtuManagement(frame, command) {
         candidates = await memeStore.getLongtuCandidates();
       }
       if (!sha256) {
-        throw new Error('请把图片和标记放在同一条消息、引用图片，或先把图片加入图库');
+        throw new Error('请把图片和 /tag 标记名放在同一条消息、引用图片，或先使用 /add');
       }
       if (!candidates.some((candidate) => candidate.sha256 === sha256)) {
         throw new Error('图片已识别，但当前图库中不可用');
@@ -474,7 +478,7 @@ async function handleLongtuManagement(frame, command) {
       const existingSha = await longtuLibrary.resolveShaByBuffer(buffer, referenceCandidates);
       if (existingSha) {
         rememberManagementTarget(frame.body, existingSha);
-        await replyManagementText(frame, '这张图已经在图库中，已设为当前标记目标；15 分钟内发送“这个是XX”即可绑定关键词。');
+        await replyManagementText(frame, '这张图已经在图库中，已设为当前标记目标；15 分钟内发送 /tag 标记名即可绑定。');
         return;
       }
       const added = await longtuLibrary.reviewAndAdd(buffer, {
@@ -517,8 +521,10 @@ async function handleLongtuManagement(frame, command) {
       )?.sha256 ?? '';
     } else {
       const buffer = await downloadManagementImage(frame.body);
-      if (!buffer) throw new Error('请引用要删除的图片，或使用“删除上一张龙图”');
-      sha256 = await longtuLibrary.resolveShaByBuffer(buffer, candidates);
+      sha256 = buffer
+        ? await longtuLibrary.resolveShaByBuffer(buffer, candidates)
+        : getManagementTarget(frame.body);
+      if (!sha256) throw new Error('请引用要删除的图片、使用 /del LT-XXXXXXXX，或先使用 /add 设定目标');
     }
     const deleted = longtuLibrary.deleteBySha(sha256, { actor });
     memeStore.invalidateLongtuCandidates();
@@ -682,6 +688,9 @@ async function handleIncomingMessage(frame) {
 
   const content = extractMessageText(frame.body);
   const managementCommand = parseLongtuManagementCommand(content);
+  if (managementCommand?.action === 'ignored-slash') {
+    return;
+  }
   if (managementCommand) {
     await handleLongtuManagement(frame, managementCommand);
     return;

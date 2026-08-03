@@ -42,10 +42,10 @@
     "hint": "英文逗号分隔；这些命令不会触发本机器人回复，也不会被拦截"
   },
   "ignore_slash_commands": {
-    "description": "群聊中忽略全部斜杠指令",
+    "description": "群聊中忽略未列出的斜杠指令",
     "type": "bool",
     "default": true,
-    "hint": "开启后 /w、/help 及其他插件命令都会被 Bridge 直接停止，不会继续交给 AstrBot 其他命令插件"
+    "hint": "兼容旧配置项；Bridge 始终只放行图库管理 /add、/tag、/del，/w、/help 及其他插件命令都会被直接停止"
   },
   "send_processing_hint": {
     "description": "生成回答前发送处理提示",

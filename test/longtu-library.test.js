@@ -157,47 +157,26 @@ test('新图入库后自动 OCR 标记，没文字或识别失败时仍按普通
 });
 
 test('解析图库聊天管理指令', () => {
-  assert.deepEqual(parseLongtuManagementCommand('把这张龙图添加进图库'), {
-    action: 'add', force: false, shortId: '',
+  assert.deepEqual(parseLongtuManagementCommand('/add'), {
+    action: 'add', force: true, shortId: '', alias: '',
   });
-  assert.deepEqual(parseLongtuManagementCommand('把这个添加到图库'), {
-    action: 'add', force: false, shortId: '',
-  });
-  assert.deepEqual(parseLongtuManagementCommand('把这张图加入图库'), {
-    action: 'add', force: false, shortId: '',
-  });
-  assert.deepEqual(parseLongtuManagementCommand('把这张图加进图库'), {
-    action: 'add', force: false, shortId: '',
-  });
-  assert.deepEqual(parseLongtuManagementCommand('强制添加这张龙图'), {
-    action: 'add', force: true, shortId: '',
-  });
-  assert.deepEqual(parseLongtuManagementCommand('强制添加'), {
-    action: 'add', force: true, shortId: '',
-  });
-  assert.deepEqual(parseLongtuManagementCommand('强制添加，并且标记为赛尔号'), {
+  assert.deepEqual(parseLongtuManagementCommand('/tag 赛尔号'), {
     action: 'bind-alias', force: true, shortId: '', alias: '赛尔号',
   });
-  assert.deepEqual(parseLongtuManagementCommand('添加图库，标记为赛尔号'), {
-    action: 'bind-alias', force: false, shortId: '', alias: '赛尔号',
+  assert.equal(parseLongtuManagementCommand('/tag').action, 'invalid-slash');
+  assert.equal(parseLongtuManagementCommand('/del invalid-id').action, 'invalid-slash');
+  assert.deepEqual(parseLongtuManagementCommand('/del'), {
+    action: 'delete-this', force: false, shortId: '', alias: '',
   });
-  assert.equal(parseLongtuManagementCommand('删除上一张龙图').action, 'delete-previous');
-  assert.equal(parseLongtuManagementCommand('删除龙图 LT-A1B2C3D4').shortId, 'LT-A1B2C3D4');
+  assert.deepEqual(parseLongtuManagementCommand('/del lt-a1b2c3d4'), {
+    action: 'delete-this', force: false, shortId: 'LT-A1B2C3D4', alias: '',
+  });
+  assert.equal(parseLongtuManagementCommand('/help').action, 'ignored-slash');
+  assert.equal(parseLongtuManagementCommand('把这张龙图添加进图库'), null);
+  assert.equal(parseLongtuManagementCommand('图片标记赛尔号'), null);
+  assert.equal(parseLongtuManagementCommand('删除上一张龙图'), null);
   assert.equal(parseLongtuManagementCommand('撤销删除').action, 'undo-delete');
   assert.equal(parseLongtuManagementCommand('图库状态').action, 'status');
-  assert.deepEqual(parseLongtuManagementCommand('以后发赛尔号的时候就调用这张图'), {
-    action: 'bind-alias', force: false, shortId: '', alias: '赛尔号',
-  });
-  assert.deepEqual(parseLongtuManagementCommand('强制绑定赛尔号到这张图'), {
-    action: 'bind-alias', force: true, shortId: '', alias: '赛尔号',
-  });
-  assert.equal(parseLongtuManagementCommand('图片标记赛尔号').alias, '赛尔号');
-  assert.deepEqual(parseLongtuManagementCommand('这个是耄耋'), {
-    action: 'bind-alias', force: false, shortId: '', alias: '耄耋',
-  });
-  assert.deepEqual(parseLongtuManagementCommand('这张图叫“耄耋”'), {
-    action: 'bind-alias', force: false, shortId: '', alias: '耄耋',
-  });
   assert.equal(parseLongtuManagementCommand('取消赛尔号绑定').action, 'unbind-alias');
   assert.deepEqual(parseLongtuManagementCommand('取消这张图的原神标记'), {
     action: 'unbind-image-alias', force: false, shortId: '', alias: '原神',

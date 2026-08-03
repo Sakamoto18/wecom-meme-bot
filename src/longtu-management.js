@@ -1,8 +1,3 @@
-const FORCE_ADD_PATTERN = /(?:强制添加|强制加入|强制存入|强制加)(?:(?:这张|这个)?(?:龙图|图片|图)(?:(?:进|到)?图库)?|(?:进|到)图库)|(?:把|将)?(?:(?:这张|这个)(?:龙图|图片|图)?|龙图)(?:强制添加|强制加入|强制加)(?:(?:进|到)?图库)?/;
-const BARE_FORCE_ADD_PATTERN = /^强制(?:添加|加入|存入|收录|加)(?:图库)?$/;
-const ADD_PATTERN = /(?:把|将)?(?:(?:这张|这个)(?:龙图|图片|图)?|龙图)(?:添加|加入|存入|保存|收录|加)(?:(?:进|到)?图库)?|(?:添加|加入|存入|保存|收录|加)(?:(?:这张|这个)?(?:龙图|图片|图)(?:(?:进|到)?图库)?|(?:进|到)图库)/;
-const DELETE_PREVIOUS_PATTERN = /(?:删除|删掉|移除)(?:刚才|刚刚|上一张|上张)(?:发的)?龙图/;
-const DELETE_THIS_PATTERN = /(?:删除|删掉|移除)(?:这张|这个)龙图|(?:这张|这个)龙图(?:删除|删掉|移除)/;
 const UNDO_DELETE_PATTERN = /(?:撤销|取消)(?:刚才|刚刚|上次)?删除|恢复(?:刚才|刚刚|上次)?删除(?:的龙图)?/;
 const STATUS_PATTERN = /(?:龙图|图库)(?:状态|统计|数量)|(?:状态|统计)(?:龙图|图库)/;
 const SHORT_ID_PATTERN = /\bLT-[A-F0-9]{8}\b/i;
@@ -12,15 +7,6 @@ const INSPECT_IMAGE_PATTERN = /^(?:(?:检查|查看|查询|确认)(?:一下)?(?:
 const INSPECT_ALIAS_PATTERNS = [
   /^(?:检查|查看|查询|确认)(?:一下)?(?:别名|标记|关键词|标签)[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:对应的?(?:图片|龙图|图))?$/,
   /^(?:别名|标记|关键词|标签)[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:绑定|对应)(?:了|的)?(?:哪张|什么)?(?:图片|龙图|图)$/,
-];
-const BIND_ALIAS_PATTERNS = [
-  /^(?:强制)?(?:添加|加入|存入|收录)(?:(?:这张|这个)?(?:龙图|图片|图))?(?:(?:进|到)?图库)?[，,、 ]*(?:并且|同时|然后)?[，,、 ]*(?:标记|打标|加标签|绑定)(?:为|成)?[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:吧)?$/,
-  /(?:把|将)?(?:这张|这个)?(?:龙图|图片|图)(?:标记|打标|加标签)(?:为|成)?[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:吧)?$/,
-  /^(?:图片|龙图)?(?:标记|打标|加标签)(?:为|成)?[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:吧)?$/,
-  /(?:以后|之后)?(?:再)?(?:发|说|输入|提到|喊)[“"'「『]?(.{1,48}?)[”"'」』]?(?:的时候|时)?(?:就)?(?:调用|使用|用|发|回复)(?:这张|这个)(?:龙图|图片|图)/,
-  /(?:把|将)?(?:这张|这个)(?:龙图|图片|图)(?:绑定|关联|设为|设置为|指定为|固定为)(?:别名|关键词|口令)?[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:吧)?$/,
-  /(?:绑定|关联|设定|设置)(?:别名|关键词|口令)?[“"'「『]?(.{1,48}?)[”"'」』]?(?:到|为)(?:这张|这个)(?:龙图|图片|图)/,
-  /^(?:这张|这个)(?:图片|图|龙图)?(?:是|叫|称为|命名为|叫做|标记为|标记成)[：:]?[“"'「『]?(.{1,48}?)[”"'」』]?(?:吧)?$/,
 ];
 const UNBIND_ALIAS_PATTERNS = [
   /(?:取消|删除|移除|解除)[“"'「『]?(.{1,48}?)[”"'」』]?(?:的)?(?:图片|龙图)?(?:别名)?绑定/,
@@ -39,6 +25,9 @@ const SCENE_ALIAS_STOPWORDS = new Set([
   '这是', '的是', '的话', '一个', '一下', '我们', '你们', '他们', '因为', '所以',
   '不过', '还是', '已经', '不会', '不能', '没有', '觉得', '时候', '东西',
 ]);
+const SLASH_COMMAND_PATTERN = /^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]*))?$/i;
+const ALLOWED_SLASH_COMMANDS = new Set(['add', 'tag', 'del']);
+const SHORT_ID_EXACT_PATTERN = /^LT-[A-F0-9]{8}$/i;
 
 export function normalizeLongtuAlias(value) {
   const normalized = String(value ?? '')
@@ -72,9 +61,65 @@ function extractAlias(text, patterns) {
   return '';
 }
 
+/**
+ * 只解析明确允许的三个图库斜杠命令。
+ * 其他以 / 开头的内容返回 ignored-slash，调用方必须静默丢弃，不能继续交给模型。
+ */
+export function parseLongtuSlashCommand(content) {
+  const text = String(content ?? '').replace(/\s+/g, ' ').trim();
+  if (!text.startsWith('/')) return null;
+  const matched = text.match(SLASH_COMMAND_PATTERN);
+  if (!matched) {
+    return { action: 'ignored-slash', force: false, shortId: '', alias: '' };
+  }
+  const command = matched[1].toLowerCase();
+  const argument = String(matched[2] ?? '').trim();
+  if (!ALLOWED_SLASH_COMMANDS.has(command)) {
+    return { action: 'ignored-slash', force: false, shortId: '', alias: '' };
+  }
+  if (command === 'add') {
+    return argument
+      ? {
+        action: 'invalid-slash',
+        force: true,
+        shortId: '',
+        alias: '',
+        message: '用法：/add（请在同一条消息附图，或引用图片后发送）',
+      }
+      : { action: 'add', force: true, shortId: '', alias: '' };
+  }
+  if (command === 'tag') {
+    const alias = normalizeLongtuAlias(argument);
+    return alias
+      ? { action: 'bind-alias', force: true, shortId: '', alias }
+      : {
+        action: 'invalid-slash',
+        force: true,
+        shortId: '',
+        alias: '',
+        message: '用法：/tag 标记名（请在同一条消息附图、引用图片，或先使用 /add）',
+      };
+  }
+  if (!argument) {
+    return { action: 'delete-this', force: false, shortId: '', alias: '' };
+  }
+  if (SHORT_ID_EXACT_PATTERN.test(argument)) {
+    return { action: 'delete-this', force: false, shortId: argument.toUpperCase(), alias: '' };
+  }
+  return {
+    action: 'invalid-slash',
+    force: false,
+    shortId: '',
+    alias: '',
+    message: '用法：/del（引用要删除的图片）或 /del LT-XXXXXXXX',
+  };
+}
+
 export function parseLongtuManagementCommand(content) {
   const text = String(content ?? '').replace(/\s+/g, ' ').trim();
   if (!text) return null;
+  const slashCommand = parseLongtuSlashCommand(text);
+  if (slashCommand) return slashCommand;
   const shortId = text.match(SHORT_ID_PATTERN)?.[0]?.toUpperCase() ?? '';
   const unbindImageAlias = extractAlias(text, UNBIND_IMAGE_ALIAS_PATTERNS);
   if (unbindImageAlias) {
@@ -98,23 +143,6 @@ export function parseLongtuManagementCommand(content) {
     return {
       action: 'inspect-alias', force: false, shortId: '', alias: inspectedAlias,
     };
-  }
-  const bindAlias = extractAlias(text, BIND_ALIAS_PATTERNS);
-  if (bindAlias) {
-    return {
-      action: 'bind-alias',
-      force: /强制/.test(text),
-      shortId: '',
-      alias: bindAlias,
-    };
-  }
-  if (BARE_FORCE_ADD_PATTERN.test(text) || FORCE_ADD_PATTERN.test(text)) {
-    return { action: 'add', force: true, shortId };
-  }
-  if (ADD_PATTERN.test(text)) return { action: 'add', force: false, shortId };
-  if (DELETE_PREVIOUS_PATTERN.test(text)) return { action: 'delete-previous', shortId };
-  if (DELETE_THIS_PATTERN.test(text) || (shortId && /(?:删除|删掉|移除)/.test(text))) {
-    return { action: 'delete-this', shortId };
   }
   if (UNDO_DELETE_PATTERN.test(text)) return { action: 'undo-delete', shortId };
   if (STATUS_PATTERN.test(text)) return { action: 'status', shortId };
