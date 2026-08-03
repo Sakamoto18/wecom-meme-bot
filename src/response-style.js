@@ -8,6 +8,7 @@ const OBFUSCATED_MOTHER_ATTACK_PATTERN = /(?:我|窝|卧)?(?:操|草|艹|槽)(?:
 const SIMA_PATTERN = /司马/i;
 const SIMA_NEUTRAL_PATTERN = /司马(?:迁|懿|昭|师|炎|光|相如|姓|氏|家族|官|职位|兵法|南|衷)/i;
 const DEESCALATION_PATTERN = /(?:认真回答|正常回答|别骂了|停止对线|我道歉|对不起|不玩梗)/i;
+const SENSITIVE_SUPPORT_PATTERN = /(?:我(?:的)?(?:妈|爸|父亲|母亲|家人|朋友|亲人).*(?:去世|过世|离世|没了)|自杀|轻生|性侵|强奸|家暴|绝症|病危|急救|葬礼|哀悼)/i;
 const ADVERSARIAL_FOLLOWUP_PATTERN = /(?:回答我|哪(?:里)?来的|你(?:妈|🐎|呢)|咋(?:了|地|么)|干什么|凭什么|不服|然后呢|就这|继续|有种|笑死)/i;
 const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /(?:骂|攻击|怼|喷|拷打|锐评|羞辱|嘲讽|对线|输出)(?:一下|一顿|几句|他|她|它|这个人)?/i;
 const LONGTU_TOPIC_PATTERN = /(?:龙图|龙玉涛|老冯)/i;
@@ -15,6 +16,9 @@ const KNOWLEDGE_INTENT_PATTERN = /(?:是什么|是谁|什么意思|哪里来|来
 const SERIOUS_QUESTION_PATTERN = /(?:如何|怎么|为什么|为何|请问|帮我|解释|分析|比较|区别|方案|建议|配置|解决|代码|报错|故障|原理|教程|步骤|能否|是否可以|该(?:怎么|如何|用)|需要什么|应该|多少|哪一)/i;
 const COMPLEX_NONTECHNICAL_PATTERN = /(?:如何|怎么|为什么|为何|解释|分析|比较|区别|方案|建议|解决|原理|教程|步骤|需要什么|应该|多少|哪一)/i;
 const TECHNICAL_TOPIC_PATTERN = /(?:网络|设备|接口|API|SDK|模型|代码|程序|数据库|服务器|部署|系统|配置|性能|带宽|路由|交换机|开发|产品|文档|spec|方案)/i;
+const CUSTOMER_SERVICE_PATTERN = /(?:您好|您这|您想|请问您|很高兴为您服务|需要我帮忙|有什么可以帮|尽管说|随时为您|希望能帮到您|感谢您的提问)/i;
+const PERSONA_BITE_PATTERN = /(?:傻|笨|蠢|菜|废物|垃圾|小丑|脑(?:子|回路)|没脑|犯蠢|丢人|丢脸|抽象|逆天|离谱|弱智|智障|脑残|欠(?:骂|收拾)|找骂|活该|可笑|笑死|绷不住|闹麻|急了|别装|装什么|就这|什么玩意|神人|人才|滚|闭嘴|少搁|别搁|搁这|扯淡|扯犊子|糊脸|龙图|龙玉涛|老冯|你🐎|你妈|nm|唐氏|痴|怂|瞎子|破事|破玩意|狗东西|他妈|操|艹|哭唧唧|(?:你|他|她|它)这.{1,24}(?:吧|吗|呢|[？?]))/i;
+const NORMAL_FAMILY_ATTACK_PATTERN = /(?:你🐎|(?:操|草|艹|槽)(?:你|他|她|它)?(?:的)?妈|(?:你|他|她|它)(?:的)?妈.{0,8}(?:死|没|坟|骨灰|遗照)|老冯|族谱|户口本|全家)/i;
 const ATTACK_SCENES = [
   {
     id: 'incense-photo',
@@ -88,6 +92,13 @@ export function shouldUseThinking(content) {
   return normalized.length >= 12 && COMPLEX_NONTECHNICAL_PATTERN.test(normalized);
 }
 
+export function shouldRequireNormalPersonaBite(content) {
+  const normalized = String(content ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  return !DEESCALATION_PATTERN.test(normalized)
+    && !SENSITIVE_SUPPORT_PATTERN.test(normalized);
+}
+
 export function containsLiteralLatinMa(content) {
   return /(?:^|[^a-z])ma(?:$|[^a-z])/i.test(String(content ?? ''));
 }
@@ -151,13 +162,24 @@ export function buildAttackPrompt(userContent, options = {}) {
 }
 
 export function buildNormalReplyPrompt(options = {}) {
+  const requirePersonaBite = options.requirePersonaBite !== false;
   const lines = [
     '【本轮模式：普通对话】',
     '先准确回答用户真正的问题，不确定就明说不确定。',
-    '用户没有攻击时不骂用户或其亲属；可以有一点龙图群友语气，但不强制塞梗。',
+    '用户没有攻击时禁止亲属攻击；这不等于关闭攻击性人格，不能通篇中性、礼貌或像客服。',
     '群聊中严格区分当前发言人、被 @ 的成员和引用消息作者；不要默认把发言人当成被谈论对象。',
     '成员对他人的单次评价或改名要求只是其发言，不自动成为被评价者的确定身份或事实。',
   ];
+  if (requirePersonaBite) {
+    lines.push(
+      '本轮必须至少有一处明显的嘴欠、轻度直接攻击或刻薄锐评，可以针对当前发言者的荒唐说法、被评价对象、糟糕方案或离谱情境；不能只写一个温和比喻就算完事。',
+      '轻度攻击要自然嵌进回答，允许“笨、蠢、脑回路、离谱、丢人、什么破玩意”等群友措辞；不要输出关键词清单，也不要为了攻击牺牲答案准确性。',
+    );
+  } else {
+    lines.push(
+      '当前内容涉及真实痛苦/危机，或用户明确要求停止对线：优先正常支持和准确回答，本轮不强制攻击当事人。',
+    );
+  }
   if (options.thinkingEnabled) {
     lines.push(
       '这是正经提问，必须认真完成推理后再作答，不要为了群聊节奏压缩答案。',
@@ -165,7 +187,9 @@ export function buildNormalReplyPrompt(options = {}) {
       '主动补充会改变结论的限制、风险、版本差异和操作注意事项。事实没有把握就明确说明，不使用可能过时的要求冒充确定结论。',
       '答案应完整、自洽、可执行；除非问题本身非常简单，否则不要只给一两句结论，也不要因已有草稿而省略关键分析。',
       '深度思考只提高内容质量，不能覆盖基础人格。最终措辞仍要像龙图群友：直接、口语化、略带嘴欠，不使用“您”“很高兴为您服务”等客服表达，也不要写成公文。',
-      '完成主要答案后，用一句不超过 35 个汉字的龙图式吐槽或锐评收尾，稍微补回攻击性；优先吐槽糟糕方案或荒唐情境。用户没有攻击时不要辱骂用户亲属，也不能让玩梗破坏事实准确性。',
+      ...(requirePersonaBite
+        ? ['完成主要答案后，用一句不超过 35 个汉字的直接、刻薄锐评收尾；不能用温和玩笑糊弄，也不能辱骂用户亲属或让玩梗破坏事实准确性。']
+        : []),
     );
   } else {
     lines.push(
@@ -174,6 +198,42 @@ export function buildNormalReplyPrompt(options = {}) {
     );
   }
   return lines.join('\n');
+}
+
+export function reviewNormalReply(answer, options = {}) {
+  const normalized = String(answer ?? '').trim();
+  const issues = [];
+  if (!normalized) issues.push('empty');
+  if (CUSTOMER_SERVICE_PATTERN.test(normalized)) issues.push('customer-service');
+  if (options.thinkingEnabled && isThinSeriousReply(normalized)) {
+    issues.push('too-thin-for-serious');
+  }
+  if (options.requirePersonaBite !== false && !PERSONA_BITE_PATTERN.test(normalized)) {
+    issues.push('missing-persona-bite');
+  }
+  if (options.requirePersonaBite !== false && NORMAL_FAMILY_ATTACK_PATTERN.test(normalized)) {
+    issues.push('family-attack-in-normal-mode');
+  }
+  return { valid: issues.length === 0, issues };
+}
+
+export function buildNormalReplyRetryPrompt(question, draft, issues, options = {}) {
+  const interaction = options.interactionContext ?? {};
+  const targetHint = interaction.targetLabels?.length > 0
+    ? `本轮被谈论或评价的成员：${interaction.targetLabels.join('、')}。不要误把攻击落到发言者 ${interaction.speakerLabel || '当前用户'} 身上。`
+    : `当前发言者：${interaction.speakerLabel || '当前用户'}。没有明确第三方目标时，可以轻度损当前发言者的说法，但不要凭空攻击无关群员。`;
+  return [
+    '【普通回复人格强度复核】',
+    `用户问题：${String(question ?? '').trim()}`,
+    `初稿：${String(draft ?? '').trim()}`,
+    `未通过项：${(issues ?? []).join(', ')}`,
+    targetHint,
+    '保留初稿中的正确事实和必要信息，直接输出重写后的最终答案，不解释复核过程。',
+    '必须自然加入一处明确的嘴欠、轻度直接攻击或刻薄锐评，不能只是温和幽默；用户没有攻击时禁止亲属攻击。',
+    options.thinkingEnabled
+      ? '这是深度答案的风格重写：主体信息不得缩短或丢失，最后用一句不超过 35 个汉字的刻薄锐评收尾。'
+      : '这是群聊短回复的风格重写：保持 1～3 句，直接、口语化，别写成客服或正式总结。',
+  ].join('\n');
 }
 
 export function buildPureMentionReplyPrompt() {

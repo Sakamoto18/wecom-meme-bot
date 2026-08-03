@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildAttackPrompt,
   buildNormalReplyPrompt,
+  buildNormalReplyRetryPrompt,
   buildPureMentionReplyPrompt,
   buildSeriousReplyRetryPrompt,
   containsLiteralLatinMa,
@@ -11,8 +12,10 @@ import {
   isInvalidPureMentionReply,
   removeInternalParticipantIds,
   reviewAttackReply,
+  reviewNormalReply,
   selectAttackScene,
   shouldSearchLongtuKnowledge,
+  shouldRequireNormalPersonaBite,
   shouldUseThinking,
   shouldUseAttackStyle,
 } from '../src/response-style.js';
@@ -111,7 +114,7 @@ test('正经问答提示不受群聊短句限制，并检测内容单薄的答�
   assert.match(prompt, /不要为了群聊节奏压缩答案/);
   assert.match(prompt, /比较主要备选项/);
   assert.match(prompt, /深度思考只提高内容质量，不能覆盖基础人格/);
-  assert.match(prompt, /不超过 35 个汉字的龙图式吐槽或锐评收尾/);
+  assert.match(prompt, /不超过 35 个汉字的直接、刻薄锐评收尾/);
   assert.doesNotMatch(prompt, /通常 1～3 句/);
 
   assert.equal(isThinSeriousReply('建议用 exFAT，三个系统都能用。'), true);
@@ -127,6 +130,62 @@ test('正经问答提示不受群聊短句限制，并检测内容单薄的答�
   assert.match(retryPrompt, /重新独立核对事实/);
   assert.match(retryPrompt, /兼容性\/限制/);
   assert.match(retryPrompt, /龙图群友式吐槽或锐评/);
+});
+
+test('普通回复默认要求明显嘴欠，真实痛苦与停止对线场景例外', () => {
+  assert.equal(shouldRequireNormalPersonaBite('你好'), true);
+  assert.equal(shouldRequireNormalPersonaBite('帮我分析这个方案'), true);
+  assert.equal(shouldRequireNormalPersonaBite('我妈去世了'), false);
+  assert.equal(shouldRequireNormalPersonaBite('认真回答，别骂了'), false);
+
+  const prompt = buildNormalReplyPrompt({ thinkingEnabled: false });
+  assert.match(prompt, /本轮必须至少有一处明显的嘴欠/);
+  assert.match(prompt, /不能通篇中性、礼貌或像客服/);
+
+  const supportivePrompt = buildNormalReplyPrompt({
+    thinkingEnabled: false,
+    requirePersonaBite: false,
+  });
+  assert.match(supportivePrompt, /不强制攻击当事人/);
+});
+
+test('普通人格复核拦截中性客服稿和亲属攻击，接受轻度直接锐评', () => {
+  const neutral = reviewNormalReply('可以，成员资料会持久化保存。');
+  assert.ok(neutral.issues.includes('missing-persona-bite'));
+
+  const customerService = reviewNormalReply('您好，有什么可以帮您的吗？');
+  assert.ok(customerService.issues.includes('customer-service'));
+
+  const sharp = reviewNormalReply('能记住，QQ 号会持久化；你别把我当成转头就忘的笨蛋。');
+  assert.equal(sharp.valid, true);
+
+  const rhetoricalJab = reviewNormalReply('攻击性降低？你这眼睛是拿来喘气的吧。');
+  assert.equal(rhetoricalJab.valid, true);
+
+  const familyAttack = reviewNormalReply('能记住，你🐎的族谱我都刻盘里了。');
+  assert.ok(familyAttack.issues.includes('family-attack-in-normal-mode'));
+
+  const supportive = reviewNormalReply('听到这个消息很难受，先照顾好自己。', {
+    requirePersonaBite: false,
+  });
+  assert.equal(supportive.valid, true);
+});
+
+test('普通人格重写提示保留事实并保护第三方目标', () => {
+  const prompt = buildNormalReplyRetryPrompt(
+    '评价一下他',
+    '这个方案不太合理。',
+    ['missing-persona-bite'],
+    {
+      interactionContext: {
+        speakerLabel: '发令者',
+        targetLabels: ['目标成员'],
+      },
+    },
+  );
+  assert.match(prompt, /保留初稿中的正确事实/);
+  assert.match(prompt, /不要误把攻击落到发言者/);
+  assert.match(prompt, /必须自然加入一处明确的嘴欠/);
 });
 
 test('纯艾特使用短人格提示并拒绝客服式回复', () => {

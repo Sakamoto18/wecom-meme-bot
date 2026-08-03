@@ -23,7 +23,7 @@ function createService(options = {}) {
     isConfigured: true,
     async complete(history, modelInput) {
       calls.push({ history, modelInput });
-      return '这是 QQ 回答';
+      return '这是 QQ 回答，别搁这装看不懂。';
     },
   };
   const memeStore = options.memeStore ?? {
@@ -108,11 +108,11 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆并附图',
   const second = await service.handleMessage({ ...input, message_id: 'm3', text: '还记得吗' });
 
   assert.deepEqual(first.messages.map((message) => message.type), ['text', 'image']);
-  assert.equal(first.messages[0].text, '这是 QQ 回答');
+  assert.equal(first.messages[0].text, '这是 QQ 回答，别搁这装看不懂。');
   assert.match(calls[0].modelInput, /发言人：QQ 小明/);
   assert.equal(calls[1].history.length, 2);
   assert.match(calls[1].history[0].content, /当前消息：你好/);
-  assert.equal(second.messages[0].text, '这是 QQ 回答');
+  assert.equal(second.messages[0].text, '这是 QQ 回答，别搁这装看不懂。');
 });
 
 test('QQ 纯艾特标记会传入快速人格模式并拦截客服式回复', async () => {
@@ -242,7 +242,9 @@ test('QQ 普通回复会读取长期摘要并在回答后调度新的滚动摘�
     isConfigured: true,
     async complete(history, modelInput, options) {
       modelCalls.push({ history, modelInput, options });
-      return options?.systemPrompt ? '更新后的长期摘要' : '我记得你喜欢蓝色。';
+      return options?.systemPrompt
+        ? '更新后的长期摘要'
+        : '我记得你喜欢蓝色，笨蛋才会转头就忘。';
     },
   };
   const { service } = createService({ chatClient, conversationStore });
@@ -757,7 +759,7 @@ test('普通语聊会按用户原话和模型文案命中 OCR 图库标签，而
   };
   const chatClient = {
     isConfigured: true,
-    async complete() { return '这段赛尔号场景很适合配图'; },
+    async complete() { return '这段赛尔号场景离谱得很，正适合配图。'; },
   };
   const memeStore = {
     async pickBySha(boundSha) {
@@ -794,7 +796,7 @@ test('OCR 整句只作为场景文字，输入其中关键词也能命中对应�
   };
   const chatClient = {
     isConfigured: true,
-    async complete() { return '这确实很像玩原神玩的场景'; },
+    async complete() { return '这确实很像玩原神玩的抽象场景。'; },
   };
   const memeStore = {
     async pickBySha(boundSha) {
@@ -831,7 +833,7 @@ test('同一 OCR 场景关键词会形成多图候选池而不是固定一张', 
   };
   const chatClient = {
     isConfigured: true,
-    async complete() { return '确实是原神玩家'; },
+    async complete() { return '确实是原神玩家，这脑回路没跑了。'; },
   };
   const memeStore = {
     async pickByShas(candidateShas) {

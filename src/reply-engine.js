@@ -2,6 +2,7 @@ import {
   buildAttackPrompt,
   buildAttackRetryPrompt,
   buildNormalReplyPrompt,
+  buildNormalReplyRetryPrompt,
   buildPureMentionReplyPrompt,
   buildSeriousReplyRetryPrompt,
   isInvalidPureMentionReply,
@@ -9,8 +10,10 @@ import {
   removeInternalParticipantIds,
   removeLiteralLatinMa,
   reviewAttackReply,
+  reviewNormalReply,
   selectAttackScene,
   shouldSearchLongtuKnowledge,
+  shouldRequireNormalPersonaBite,
   shouldUseThinking,
   shouldUseAttackStyle,
 } from './response-style.js';
@@ -173,16 +176,18 @@ export async function generateConversationReply(options) {
 
   const useLongtuKnowledge = shouldSearchLongtuKnowledge(content);
   const thinkingEnabled = shouldUseThinking(content);
+  const requirePersonaBite = shouldRequireNormalPersonaBite(content);
   const additionalSystemPrompt = [
     protectedIdentityContext,
     memoryContext,
-    buildNormalReplyPrompt({ thinkingEnabled }),
+    buildNormalReplyPrompt({ thinkingEnabled, requirePersonaBite }),
     useLongtuKnowledge ? knowledgeContext : '',
     searchResult.context,
   ].filter(Boolean).join('\n\n');
   let answer;
   let thinkingFallback = false;
   let seriousAnswerExpanded = false;
+  let normalPersonaRewritten = false;
   let attempts = 1;
   try {
     answer = await chatClient.complete(history, modelInput, {
@@ -194,6 +199,7 @@ export async function generateConversationReply(options) {
   } catch (error) {
     if (!thinkingEnabled || !/空内容/.test(error.message)) throw error;
     thinkingFallback = true;
+    attempts += 1;
     answer = await chatClient.complete(history, modelInput, {
       additionalSystemPrompt,
       maxTokens: 8_000,
@@ -223,11 +229,47 @@ export async function generateConversationReply(options) {
     }
   }
 
+  let review = reviewNormalReply(answer, {
+    thinkingEnabled,
+    requirePersonaBite,
+  });
+  if (!review.valid && attempts < 2) {
+    try {
+      const needsSeriousExpansion = review.issues.includes('too-thin-for-serious');
+      const rewrittenAnswer = await chatClient.complete(history, modelInput, {
+        additionalSystemPrompt: [
+          additionalSystemPrompt,
+          needsSeriousExpansion
+            ? buildSeriousReplyRetryPrompt(content, answer)
+            : buildNormalReplyRetryPrompt(content, answer, review.issues, {
+              thinkingEnabled,
+              interactionContext,
+            }),
+        ].join('\n\n'),
+        maxTokens: thinkingEnabled ? 8_000 : 1_200,
+        timeoutMs: thinkingEnabled ? 90_000 : 45_000,
+        thinking: { type: 'disabled' },
+      });
+      const rewrittenReview = reviewNormalReply(rewrittenAnswer, {
+        thinkingEnabled,
+        requirePersonaBite,
+      });
+      attempts += 1;
+      normalPersonaRewritten = !needsSeriousExpansion;
+      if (rewrittenReview.issues.length <= review.issues.length) {
+        answer = rewrittenAnswer;
+        review = rewrittenReview;
+      }
+    } catch {
+      // 风格复核失败时保留已有答案，避免整轮对话无回复。
+    }
+  }
+
   return {
     answer: removeInternalParticipantIds(answer),
     mode: useLongtuKnowledge ? 'longtu-knowledge' : 'model',
     references: [],
-    review: null,
+    review,
     attempts,
     searchResult,
     searchError,
@@ -235,6 +277,7 @@ export async function generateConversationReply(options) {
     thinkingEnabled,
     thinkingFallback,
     seriousAnswerExpanded,
+    normalPersonaRewritten,
     usedModel: true,
   };
 }
