@@ -544,7 +544,7 @@ export class LongtuLibrary {
   bindAlias(alias, sha256, options = {}) {
     const normalizedAlias = normalizeLongtuAlias(alias);
     const normalizedSha = String(sha256 ?? '').trim().toLowerCase();
-    if (!normalizedAlias) throw new Error('别名需要是 2～32 个有效字符');
+    if (!normalizedAlias) throw new Error('别名需要是 1～32 个有效字符');
     if (!/^[a-f0-9]{64}$/.test(normalizedSha)) throw new Error('没有找到要绑定的龙图');
     const actor = normalizeActor(options.actor);
     const currentTime = this.now();

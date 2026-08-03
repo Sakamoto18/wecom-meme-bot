@@ -163,6 +163,9 @@ test('解析图库聊天管理指令', () => {
   assert.deepEqual(parseLongtuManagementCommand('/tag 赛尔号'), {
     action: 'bind-alias', force: true, shortId: '', alias: '赛尔号',
   });
+  assert.deepEqual(parseLongtuManagementCommand('/tag 钱'), {
+    action: 'bind-alias', force: true, shortId: '', alias: '钱',
+  });
   assert.equal(parseLongtuManagementCommand('/tag').action, 'invalid-slash');
   assert.equal(parseLongtuManagementCommand('/del invalid-id').action, 'invalid-slash');
   assert.deepEqual(parseLongtuManagementCommand('/del'), {
@@ -296,7 +299,7 @@ test('管理员关键词支持一对多图片池，同图也能进入多个池�
   const second = library.bindAlias('赛尔号', fixture.candidates[1].sha256, {
     actor: 'qq:admin-user',
   });
-  library.bindAlias('原神', fixture.candidates[1].sha256, {
+  library.bindAlias('钱', fixture.candidates[1].sha256, {
     actor: 'qq:admin-user',
   });
   assert.equal(first.poolSize, 1);
@@ -312,7 +315,7 @@ test('管理员关键词支持一对多图片池，同图也能进入多个池�
   assert.deepEqual(
     library.listAliasesBySha(fixture.candidates[1].sha256, { source: 'manual' })
       .map((entry) => entry.alias),
-    ['原神', '赛尔号'],
+    ['钱', '赛尔号'],
   );
   const removed = library.unbindAlias('赛尔号', {
     actor: 'qq:admin-user',
@@ -324,6 +327,7 @@ test('管理员关键词支持一对多图片池，同图也能进入多个池�
   const reopened = new LongtuLibrary(options);
   await reopened.load();
   assert.equal(reopened.resolveAlias('逆天原批').source, 'ocr');
+  assert.equal(reopened.resolveAlias('钱').source, 'manual');
   assert.deepEqual(
     reopened.resolveAliases('赛尔号', { source: 'manual' }).map((entry) => entry.sha256),
     [fixture.candidates[1].sha256],

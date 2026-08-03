@@ -426,7 +426,7 @@ test('/add 入库失败时返回明确的手动添加错误', async () => {
   assert.equal(calls.length, 0);
 });
 
-test('/tag 遇到不在图库的图片会先强制入库再绑定', async () => {
+test('/tag 单字标记遇到不在图库的图片会先强制入库再绑定', async () => {
   const sha256 = 'b'.repeat(64);
   let reviewOptions;
   let bound;
@@ -466,13 +466,13 @@ test('/tag 遇到不在图库的图片会先强制入库再绑定', async () => 
     message_type: 'group',
     group_id: 'g1',
     user_id: '1079175957',
-    text: '/tag 赛尔号',
+    text: '/tag 钱',
     quoted_image_base64: Buffer.from('not-in-library').toString('base64'),
   });
 
   assert.equal(result.mode, 'management-alias-bound');
   assert.equal(reviewOptions.force, true);
-  assert.deepEqual(bound, { alias: '赛尔号', sha256, source: 'manual' });
+  assert.deepEqual(bound, { alias: '钱', sha256, source: 'manual' });
   assert.match(result.messages[0].text, /强制加入图库/);
 });
 
