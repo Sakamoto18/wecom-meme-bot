@@ -18,13 +18,14 @@ MAX_FORWARD_DEPTH = 2
 FORWARD_CACHE_TTL_SECONDS = 60 * 60
 FORWARD_CACHE_MAX_ENTRIES = 128
 ALLOWED_MANAGEMENT_SLASH_COMMANDS = {"/add", "/tag", "/del"}
+PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
 
 @register(
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.6.0",
+    "1.6.1",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -176,6 +177,23 @@ class LongtuQqBridge(Star):
         if configured is None:
             configured = self.config.get("observe_group_messages", True)
         return self._enabled(configured, True)
+
+    @classmethod
+    def _text_for_backend(
+        cls,
+        event: AstrMessageEvent,
+        text: str,
+        *,
+        should_reply: bool,
+        has_image: bool,
+        has_forward: bool,
+    ) -> str:
+        normalized = str(text or "").strip()
+        if normalized or has_image or has_forward or not should_reply:
+            return normalized
+        if cls._is_explicitly_at_bot(event):
+            return PURE_BOT_MENTION_TEXT
+        return ""
 
     @staticmethod
     def _quoted_text(components: list) -> str:
@@ -583,8 +601,6 @@ class LongtuQqBridge(Star):
             self._forward_components(components)
             or self._forward_components(quoted_chain)
         )
-        if not text and not has_image and not has_forward:
-            return
 
         # 旁观消息也必须截断 AstrBot 后续的默认 LLM 流程。否则没有
         # @机器人的普通群消息会一边写入本 Bot 的语境记忆，一边继续
@@ -592,6 +608,15 @@ class LongtuQqBridge(Star):
         # 传给只接受纯文本的模型并返回 400。
         if should_reply or observe_only:
             event.stop_event()
+        text = self._text_for_backend(
+            event,
+            text,
+            should_reply=should_reply,
+            has_image=has_image,
+            has_forward=has_forward,
+        )
+        if not text and not has_image and not has_forward:
+            return
         if should_reply and bool(self.config.get("send_processing_hint", False)) and text:
             yield event.plain_result("正在翻龙图小本本……")
 

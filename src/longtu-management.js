@@ -35,7 +35,9 @@ export function normalizeLongtuAlias(value) {
     .replace(/^[\s“”"'「」『』【】《》]+|[\s“”"'「」『』【】《》，。！？!?；;：:]+$/g, '')
     .replace(/\s+/g, '')
     .trim();
-  if (normalized.length < 2 || normalized.length > 32) return '';
+  // 管理员显式输入的单字标记也是合法关键词（例如“钱”）。普通对话的
+  // 场景自动匹配仍在下方单独要求至少 2 个字符，避免单字误触图片。
+  if (normalized.length < 1 || normalized.length > 32) return '';
   if (RESERVED_ALIASES.has(normalized) || /^LT-[A-F0-9]{8}$/i.test(normalized)) return '';
   return normalized;
 }
