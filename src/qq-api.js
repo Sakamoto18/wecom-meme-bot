@@ -192,17 +192,47 @@ export async function createQqRuntime() {
     || 'data/qq-conversation-memory.json';
   const memoryDatabaseFile = process.env.QQ_MEMORY_DATABASE_FILE?.trim()
     || 'data/qq-memory.sqlite';
+  const rawMessageRetentionDays = parsePositiveNumber(
+    process.env.QQ_MEMORY_RAW_RETENTION_DAYS,
+  );
+  const maintenanceHours = parsePositiveNumber(
+    process.env.QQ_MEMORY_MAINTENANCE_HOURS,
+  );
   const conversationStore = new QqMemoryStore({
     maxMessages: parsePositiveInteger(process.env.CONVERSATION_MEMORY_MESSAGES),
     maxCharacters: parsePositiveInteger(process.env.CONVERSATION_MEMORY_CHARACTERS),
     maxConversations: parsePositiveInteger(process.env.CONVERSATION_MEMORY_CONVERSATIONS),
     maxStoredMessages: parsePositiveInteger(process.env.QQ_MEMORY_MAX_STORED_MESSAGES),
+    maxTotalStoredMessages: parsePositiveInteger(
+      process.env.QQ_MEMORY_MAX_TOTAL_STORED_MESSAGES,
+    ),
+    minStoredMessagesPerConversation: parsePositiveInteger(
+      process.env.QQ_MEMORY_MIN_MESSAGES_PER_CONVERSATION,
+    ),
+    rawMessageRetentionMs: rawMessageRetentionDays
+      ? rawMessageRetentionDays * 24 * 60 * 60 * 1000
+      : undefined,
+    maintenanceIntervalMs: maintenanceHours
+      ? maintenanceHours * 60 * 60 * 1000
+      : undefined,
     summaryTriggerMessages: parsePositiveInteger(
       process.env.QQ_MEMORY_SUMMARY_TRIGGER_MESSAGES,
     ),
     summaryKeepMessages: parsePositiveInteger(process.env.QQ_MEMORY_SUMMARY_KEEP_MESSAGES),
     maxSummaryCharacters: parsePositiveInteger(
       process.env.QQ_MEMORY_SUMMARY_MAX_CHARACTERS,
+    ),
+    memberSummaryTriggerMessages: parsePositiveInteger(
+      process.env.QQ_MEMBER_MEMORY_SUMMARY_TRIGGER_MESSAGES,
+    ),
+    memberSummaryKeepMessages: parsePositiveInteger(
+      process.env.QQ_MEMBER_MEMORY_SUMMARY_KEEP_MESSAGES,
+    ),
+    maxMemberMemoryCharacters: parsePositiveInteger(
+      process.env.QQ_MEMBER_MEMORY_MAX_CHARACTERS,
+    ),
+    maxMemberObservations: parsePositiveInteger(
+      process.env.QQ_MEMBER_MEMORY_MAX_OBSERVATIONS,
     ),
     ttlMs: parsePositiveNumber(process.env.CONVERSATION_MEMORY_HOURS)
       ? parsePositiveNumber(process.env.CONVERSATION_MEMORY_HOURS) * 60 * 60 * 1000

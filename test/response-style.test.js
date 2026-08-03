@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import {
   buildAttackPrompt,
   buildNormalReplyPrompt,
+  buildPureMentionReplyPrompt,
   buildSeriousReplyRetryPrompt,
   containsLiteralLatinMa,
   isThinSeriousReply,
   isHostileContent,
+  isInvalidPureMentionReply,
   removeInternalParticipantIds,
   reviewAttackReply,
   selectAttackScene,
@@ -96,7 +98,9 @@ test('只在用户询问龙图出处或含义时触发联网资料', () => {
 test('正经问题开启思考，攻击和简单闲聊保持快速模式', () => {
   assert.equal(shouldUseThinking('我有四个千兆设备，应该使用什么网络方案'), true);
   assert.equal(shouldUseThinking('这段代码为什么报错，应该怎么解决'), true);
-  assert.equal(shouldUseThinking('司马迁是谁'), true);
+  assert.equal(shouldUseThinking('为什么很多人会把网络流行梗当成群体身份，请分析原因'), true);
+  assert.equal(shouldUseThinking('司马迁是谁'), false);
+  assert.equal(shouldUseThinking('那我问你这个不是芳芳的话是谁'), false);
   assert.equal(shouldUseThinking('你好'), false);
   assert.equal(shouldUseThinking('说话！'), false);
   assert.equal(shouldUseThinking('你妈死了'), false);
@@ -106,6 +110,8 @@ test('正经问答提示不受群聊短句限制，并检测内容单薄的答�
   const prompt = buildNormalReplyPrompt({ thinkingEnabled: true });
   assert.match(prompt, /不要为了群聊节奏压缩答案/);
   assert.match(prompt, /比较主要备选项/);
+  assert.match(prompt, /深度思考只提高内容质量，不能覆盖基础人格/);
+  assert.match(prompt, /不超过 35 个汉字的龙图式吐槽或锐评收尾/);
   assert.doesNotMatch(prompt, /通常 1～3 句/);
 
   assert.equal(isThinSeriousReply('建议用 exFAT，三个系统都能用。'), true);
@@ -120,6 +126,20 @@ test('正经问答提示不受群聊短句限制，并检测内容单薄的答�
   const retryPrompt = buildSeriousReplyRetryPrompt('硬盘选什么文件系统', '建议 exFAT。');
   assert.match(retryPrompt, /重新独立核对事实/);
   assert.match(retryPrompt, /兼容性\/限制/);
+  assert.match(retryPrompt, /龙图群友式吐槽或锐评/);
+});
+
+test('纯艾特使用短人格提示并拒绝客服式回复', () => {
+  const prompt = buildPureMentionReplyPrompt();
+  assert.match(prompt, /纯艾特回应/);
+  assert.match(prompt, /5～35 个汉字/);
+  assert.match(prompt, /禁止.*客服话术/);
+  assert.equal(isInvalidPureMentionReply('叫你爹干嘛？'), false);
+  assert.equal(
+    isInvalidPureMentionReply('嗨～想聊天、想问问题，还是有什么需要我帮忙的，尽管说！'),
+    true,
+  );
+  assert.equal(isInvalidPureMentionReply('**你好**\n- 有什么问题？'), true);
 });
 
 test('攻击提示要求直接攻击，不强求逻辑关联或固定语料', () => {

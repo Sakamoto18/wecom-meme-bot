@@ -2,7 +2,9 @@ import {
   buildAttackPrompt,
   buildAttackRetryPrompt,
   buildNormalReplyPrompt,
+  buildPureMentionReplyPrompt,
   buildSeriousReplyRetryPrompt,
+  isInvalidPureMentionReply,
   isThinSeriousReply,
   removeInternalParticipantIds,
   removeLiteralLatinMa,
@@ -12,6 +14,8 @@ import {
   shouldUseThinking,
   shouldUseAttackStyle,
 } from './response-style.js';
+
+const PURE_MENTION_FALLBACK = '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。';
 
 function emptySearchResult() {
   return {
@@ -47,12 +51,45 @@ export async function generateConversationReply(options) {
     memorySummary = '',
     interactionContext = {},
     protectedIdentityContext = '',
+    pureBotMention = false,
   } = options;
 
   const memoryContext = buildMemoryContext(memorySummary);
 
   if (!chatClient?.isConfigured) {
     throw new Error('普通对话服务还没配好');
+  }
+
+  if (pureBotMention) {
+    const draft = await chatClient.complete(history, modelInput, {
+      additionalSystemPrompt: [
+        protectedIdentityContext,
+        memoryContext,
+        buildPureMentionReplyPrompt(),
+      ].filter(Boolean).join('\n\n'),
+      maxTokens: 120,
+      timeoutMs: 30_000,
+      temperature: 0.9,
+      thinking: { type: 'disabled' },
+    });
+    const pureMentionFallback = isInvalidPureMentionReply(draft);
+    return {
+      answer: removeInternalParticipantIds(
+        pureMentionFallback ? PURE_MENTION_FALLBACK : draft,
+      ),
+      mode: 'pure-mention',
+      references: [],
+      review: null,
+      attempts: 1,
+      searchResult: emptySearchResult(),
+      searchError: null,
+      searchAttempted: false,
+      thinkingEnabled: false,
+      thinkingFallback: false,
+      seriousAnswerExpanded: false,
+      pureMentionFallback,
+      usedModel: true,
+    };
   }
 
   if (shouldUseAttackStyle(content, history, interactionContext)) {

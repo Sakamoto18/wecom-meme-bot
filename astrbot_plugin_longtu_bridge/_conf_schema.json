@@ -36,10 +36,10 @@
     "hint": "不会回复，但会停止 AstrBot 后续默认 LLM，避免普通消息被重复处理；可用 LONGTU_QQ_OBSERVE_GROUP_MESSAGES 覆盖"
   },
   "ignored_wake_commands": {
-    "description": "不由龙图 Bridge 接管的 AstrBot 唤醒命令",
+    "description": "不由龙图服务回复的旧 AstrBot 唤醒命令",
     "type": "string",
     "default": "/w",
-    "hint": "英文逗号分隔；这些命令不会触发本机器人回复，也不会被拦截"
+    "hint": "英文逗号分隔；专用 Bot 模式下所有非白名单斜杠命令仍会被 Bridge 静默拦截，不会进入默认模型"
   },
   "ignore_slash_commands": {
     "description": "群聊中忽略未列出的斜杠指令",
