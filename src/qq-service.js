@@ -562,6 +562,12 @@ export class QqBotService {
         messages: [{ type: 'text', text: '你没有管理龙图库的权限。' }],
       };
     }
+    if (command.action === 'invalid-slash') {
+      return {
+        mode: 'management-error',
+        messages: [{ type: 'text', text: command.message || '斜杠指令格式不正确。' }],
+      };
+    }
 
     try {
       const actor = `qq:${payload.userId}`;
@@ -755,7 +761,7 @@ export class QqBotService {
           candidates = await this.memeStore.getLongtuCandidates();
         }
         if (!sha256) {
-          throw new Error('请把图片和标记指令放在同一条消息、引用图片，或先对图片执行加入图库操作');
+          throw new Error('请把图片和 /tag 标记名放在同一条消息、引用图片，或先使用 /add');
         }
         if (!candidates.some((candidate) => candidate.sha256 === sha256)) {
           throw new Error('图片已识别，但当前图库中不可用');
@@ -788,7 +794,7 @@ export class QqBotService {
 
       if (command.action === 'add') {
         const buffer = await this.resolveManagementImage(payload);
-        if (!buffer) throw new Error('请把图片和添加指令放在同一条消息，或引用图片后发送添加指令');
+        if (!buffer) throw new Error('请把图片和 /add 放在同一条消息，或引用图片后发送 /add');
         const referenceCandidates = await this.memeStore.getLongtuCandidates();
         const existingSha = await this.longtuLibrary.resolveShaByBuffer(
           buffer,
@@ -846,8 +852,10 @@ export class QqBotService {
         sha256 = this.longtuLibrary.getLastSelection(selectionScope)?.sha256 ?? '';
       } else {
         const buffer = await this.resolveManagementImage(payload);
-        if (!buffer) throw new Error('请引用要删除的图片，或使用“删除上一张龙图”');
-        sha256 = await this.longtuLibrary.resolveShaByBuffer(buffer, candidates);
+        sha256 = buffer
+          ? await this.longtuLibrary.resolveShaByBuffer(buffer, candidates)
+          : this.getManagementTarget(payload, message);
+        if (!sha256) throw new Error('请引用要删除的图片、使用 /del LT-XXXXXXXX，或先使用 /add 设定目标');
       }
       const deleted = this.longtuLibrary.deleteBySha(sha256, { actor });
       this.memeStore.invalidateLongtuCandidates();
@@ -914,6 +922,9 @@ export class QqBotService {
     }
 
     const managementCommand = parseLongtuManagementCommand(payload.text);
+    if (managementCommand?.action === 'ignored-slash') {
+      return { mode: 'ignored', messages: [] };
+    }
     if (managementCommand) {
       return this.handleManagementCommand(managementCommand, payload, message);
     }

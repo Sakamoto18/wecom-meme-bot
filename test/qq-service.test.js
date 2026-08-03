@@ -346,7 +346,7 @@ test('图库管理命令只允许配置的 QQ 管理员', async () => {
   assert.match(allowed.messages[0].text, /图库可用 0 张/);
 });
 
-test('引用图片说“把这个添加到图库”会真正执行入库而不是交给模型假确认', async () => {
+test('引用图片发送 /add 会强制入库而不是交给模型假确认', async () => {
   let reviewCall;
   let invalidated = false;
   let candidates = [{ sha256: 'a'.repeat(64) }];
@@ -381,13 +381,13 @@ test('引用图片说“把这个添加到图库”会真正执行入库而不�
     message_type: 'group',
     group_id: 'g1',
     user_id: '1079175957',
-    text: '把这个添加到图库',
+    text: '/add',
     quoted_image_base64: image.toString('base64'),
   });
 
   assert.equal(result.mode, 'management-added');
   assert.deepEqual(reviewCall.buffer, image);
-  assert.equal(reviewCall.options.force, false);
+  assert.equal(reviewCall.options.force, true);
   assert.equal(invalidated, true);
   assert.match(result.messages[0].text, /当前可用 2 张/);
   assert.match(result.messages[0].text, /自动识别图片文字.*玩原神玩的/);
@@ -395,7 +395,7 @@ test('引用图片说“把这个添加到图库”会真正执行入库而不�
   assert.equal(calls.length, 0);
 });
 
-test('图片自动入库失败时提示管理员改用强制添加', async () => {
+test('/add 入库失败时返回明确的手动添加错误', async () => {
   const longtuLibrary = {
     async resolveShaByBuffer() { return ''; },
     async reviewAndAdd() {
@@ -417,14 +417,104 @@ test('图片自动入库失败时提示管理员改用强制添加', async () =>
     message_type: 'group',
     group_id: 'g1',
     user_id: '1079175957',
-    text: '把这张图加进图库',
+    text: '/add',
     image_base64: Buffer.from('candidate-image').toString('base64'),
   });
 
   assert.equal(result.mode, 'management-error');
-  assert.match(result.messages[0].text, /自动加入图库失败/);
-  assert.match(result.messages[0].text, /强制添加这张龙图/);
+  assert.match(result.messages[0].text, /手动添加失败/);
   assert.equal(calls.length, 0);
+});
+
+test('/tag 遇到不在图库的图片会先强制入库再绑定', async () => {
+  const sha256 = 'b'.repeat(64);
+  let reviewOptions;
+  let bound;
+  let candidates = [];
+  const longtuLibrary = {
+    async resolveShaByBuffer() { return ''; },
+    async reviewAndAdd(_buffer, options) {
+      reviewOptions = options;
+      candidates = [{ sha256 }];
+      return {
+        sha256,
+        shortId: 'LT-BBBBBBBB',
+        forced: true,
+        autoOcr: { status: 'no-text', aliases: [] },
+      };
+    },
+    bindAlias(alias, boundSha) {
+      bound = { alias, sha256: boundSha, source: 'manual' };
+      return { ...bound, added: true, poolSize: 1 };
+    },
+    resolveAliases() { return bound ? [bound] : []; },
+    listAliasesBySha() { return bound ? [bound] : []; },
+    listAliases() { return bound ? [bound] : []; },
+  };
+  const memeStore = {
+    async getLongtuCandidates() { return candidates; },
+    invalidateLongtuCandidates() {},
+    async pick() { return createMeme(); },
+  };
+  const { service } = createService({
+    longtuLibrary,
+    memeStore,
+    adminUsers: new Set(['1079175957']),
+  });
+  const result = await service.handleMessage({
+    message_id: 'slash-tag-force-add-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    text: '/tag 赛尔号',
+    quoted_image_base64: Buffer.from('not-in-library').toString('base64'),
+  });
+
+  assert.equal(result.mode, 'management-alias-bound');
+  assert.equal(reviewOptions.force, true);
+  assert.deepEqual(bound, { alias: '赛尔号', sha256, source: 'manual' });
+  assert.match(result.messages[0].text, /强制加入图库/);
+});
+
+test('/del 可按引用图片删除，未列出的斜杠指令静默忽略', async () => {
+  const sha256 = 'c'.repeat(64);
+  const deleted = [];
+  const longtuLibrary = {
+    async resolveShaByBuffer() { return sha256; },
+    deleteBySha(boundSha) {
+      deleted.push(boundSha);
+      return { shortId: 'LT-CCCCCCCC' };
+    },
+  };
+  const memeStore = {
+    async getLongtuCandidates() { return [{ sha256 }]; },
+    invalidateLongtuCandidates() {},
+    async pick() { return createMeme(); },
+  };
+  const { service } = createService({
+    longtuLibrary,
+    memeStore,
+    adminUsers: new Set(['1079175957']),
+  });
+  const result = await service.handleMessage({
+    message_id: 'slash-del-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    text: '/del',
+    quoted_image_base64: Buffer.from('wrong-image').toString('base64'),
+  });
+  const ignored = await service.handleMessage({
+    message_id: 'slash-disabled-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: '1079175957',
+    text: '/help',
+  });
+
+  assert.equal(result.mode, 'management-deleted');
+  assert.deepEqual(deleted, [sha256]);
+  assert.deepEqual(ignored, { mode: 'ignored', messages: [] });
 });
 
 test('QQ 超级管理员可把附图绑定为别名，后续精确调用同一张图', async () => {
@@ -464,7 +554,7 @@ test('QQ 超级管理员可把附图绑定为别名，后续精确调用同一�
     message_type: 'group',
     group_id: 'g1',
     user_id: '1079175957',
-    text: '以后发赛尔号的时候就调用这张图',
+    text: '/tag 赛尔号',
     has_image: true,
     image_base64: Buffer.from('binding-image').toString('base64'),
   });
@@ -513,7 +603,7 @@ test('QQ 精确关键词从同名手动图片池选择而不是固定第一张',
   assert.equal(calls.length, 0);
 });
 
-test('管理员可先把现有图设为目标，再用“图片标记赛尔号”连续绑定', async () => {
+test('管理员可先用 /add 设定现有图目标，再用 /tag 连续绑定', async () => {
   const sha256 = 'c'.repeat(64);
   let bound;
   const longtuLibrary = {
@@ -540,7 +630,7 @@ test('管理员可先把现有图设为目标，再用“图片标记赛尔号�
     message_type: 'group',
     group_id: 'g1',
     user_id: '1079175957',
-    text: '把这张图加进图库',
+    text: '/add',
     image_base64: Buffer.from('existing-image').toString('base64'),
   });
   const marked = await service.handleMessage({
@@ -548,7 +638,7 @@ test('管理员可先把现有图设为目标，再用“图片标记赛尔号�
     message_type: 'group',
     group_id: 'g1',
     user_id: '1079175957',
-    text: '图片标记赛尔号',
+    text: '/tag 赛尔号',
   });
 
   assert.equal(existing.mode, 'management-existing');
