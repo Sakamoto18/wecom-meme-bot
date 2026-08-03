@@ -384,3 +384,29 @@ test('全库硬上限优先淘汰已摘要原文而不删除摘要', async () =>
     store.close();
   });
 });
+
+test('摘要服务不可用时全库硬上限仍会保底清理原文', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = new QqMemoryStore({
+      databaseFilePath: path.join(directory, 'qq-memory.sqlite'),
+      maxStoredMessages: 50,
+      maxTotalStoredMessages: 3,
+      minStoredMessagesPerConversation: 1,
+      rawMessageRetentionMs: Number.MAX_SAFE_INTEGER,
+      maintenanceIntervalMs: Number.MAX_SAFE_INTEGER,
+    });
+    await store.load();
+    for (const conversationId of ['group:g1', 'group:g2']) {
+      for (let index = 1; index <= 3; index += 1) {
+        store.appendObservation(conversationId, `${conversationId} 未摘要消息 ${index}`);
+      }
+    }
+
+    const result = store.performMaintenance({ force: true });
+    assert.equal(result.overflowMessagesRemoved, 3);
+    assert.equal(store.getStats().messages, 3);
+    assert.ok(store.get('group:g1').length >= 1);
+    assert.ok(store.get('group:g2').length >= 1);
+    store.close();
+  });
+});
