@@ -165,6 +165,9 @@ test('普通人格复核拦截中性客服稿和亲属攻击，接受轻度直�
   const rhetoricalJab = reviewNormalReply('攻击性降低？你这眼睛是拿来喘气的吧。');
   assert.equal(rhetoricalJab.valid, true);
 
+  const naturalTaunt = reviewNormalReply('草，背地里天天追着龙王要饭。立雪你丢不丢人。');
+  assert.equal(naturalTaunt.valid, true);
+
   const familyAttack = reviewNormalReply('能记住，你🐎的族谱我都刻盘里了。');
   assert.ok(familyAttack.issues.includes('family-attack-in-normal-mode'));
 
