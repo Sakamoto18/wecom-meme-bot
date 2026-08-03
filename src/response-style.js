@@ -18,6 +18,7 @@ const COMPLEX_NONTECHNICAL_PATTERN = /(?:如何|怎么|为什么|为何|解释|�
 const TECHNICAL_TOPIC_PATTERN = /(?:网络|设备|接口|API|SDK|模型|代码|程序|数据库|服务器|部署|系统|配置|性能|带宽|路由|交换机|开发|产品|文档|spec|方案)/i;
 const CUSTOMER_SERVICE_PATTERN = /(?:您好|您这|您想|请问您|很高兴为您服务|需要我帮忙|有什么可以帮|尽管说|随时为您|希望能帮到您|感谢您的提问)/i;
 const PERSONA_BITE_PATTERN = /(?:傻|笨|蠢|菜|废物|垃圾|小丑|脑(?:子|回路)|没脑|犯蠢|丢人|丢脸|抽象|逆天|离谱|弱智|智障|脑残|欠(?:骂|收拾)|找骂|活该|可笑|笑死|绷不住|闹麻|急了|别装|装什么|就这|什么玩意|神人|人才|滚|闭嘴|少搁|别搁|搁这|扯淡|扯犊子|糊脸|龙图|龙玉涛|老冯|你🐎|你妈|nm|唐氏|痴|怂|瞎子|破事|破玩意|狗东西|他妈|操|艹|哭唧唧|(?:你|他|她|它)这.{1,24}(?:吧|吗|呢|[？?]))/i;
+const DIRECT_TAUNT_PATTERN = /(?:乞丐|要饭|饭桶|废柴|菜鸡|穷鬼|白痴|蠢蛋|二货|欠揍|拿脚做|丢不丢人|好不好意思|还好意思|也配|(?:^|[\s，。！？!?])草(?:$|[\s，。！？!?])|(?:你|他|她|它).{0,20}(?:算个什么|有什么脸|敢不敢|能不能))/i;
 const NORMAL_FAMILY_ATTACK_PATTERN = /(?:你🐎|(?:操|草|艹|槽)(?:你|他|她|它)?(?:的)?妈|(?:你|他|她|它)(?:的)?妈.{0,8}(?:死|没|坟|骨灰|遗照)|老冯|族谱|户口本|全家)/i;
 const ATTACK_SCENES = [
   {
@@ -232,7 +233,9 @@ export function reviewNormalReply(answer, options = {}) {
   if (options.thinkingEnabled && isThinSeriousReply(normalized)) {
     issues.push('too-thin-for-serious');
   }
-  if (options.requirePersonaBite !== false && !PERSONA_BITE_PATTERN.test(normalized)) {
+  if (options.requirePersonaBite !== false
+    && !PERSONA_BITE_PATTERN.test(normalized)
+    && !DIRECT_TAUNT_PATTERN.test(normalized)) {
     issues.push('missing-persona-bite');
   }
   if (options.requirePersonaBite !== false && NORMAL_FAMILY_ATTACK_PATTERN.test(normalized)) {
