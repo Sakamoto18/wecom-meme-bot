@@ -4,6 +4,10 @@
 
 用户在单聊或群聊中发送龙图请求或图片时，机器人只从 `memes/longtu/` 中经过校准的龙图库回复；目录尚未导出时才回退到 Mac 版企业微信本地 `Emotion` 缓存索引。通用表情包和普通熊猫头能力已关闭。项目使用企业微信官方 `@wecom/aibot-node-sdk`，SDK 自动处理长连接认证、心跳和断线重连。
 
+## 架构与 Node.js 学习文档
+
+如果你完全没有 Node.js 服务经验，先阅读[从零解释 Node.js 基础概念](docs/nodejs-foundations-explained.md)，再阅读[架构、设计与 Node.js 学习指南](docs/node-service-architecture-and-learning-guide.md)。两份文档分别负责解释概念本身，以及把概念放回消息主链路、会话并发、缓存、测试、部署和运行成本中。
+
 ## 1. 企业微信后台配置
 
 进入智能机器人的配置页面：

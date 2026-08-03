@@ -33,7 +33,7 @@
     "description": "静默记录允许群中的普通消息，用于成员身份和群聊语境记忆",
     "type": "bool",
     "default": true,
-    "hint": "不会回复也不会拦截其他插件；可用 LONGTU_QQ_OBSERVE_GROUP_MESSAGES 覆盖"
+    "hint": "不会回复，但会停止 AstrBot 后续默认 LLM，避免普通消息被重复处理；可用 LONGTU_QQ_OBSERVE_GROUP_MESSAGES 覆盖"
   },
   "ignored_wake_commands": {
     "description": "不由龙图 Bridge 接管的 AstrBot 唤醒命令",

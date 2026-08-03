@@ -521,7 +521,11 @@ class LongtuQqBridge(Star):
         if not text and not has_image and not has_forward:
             return
 
-        if should_reply:
+        # 旁观消息也必须截断 AstrBot 后续的默认 LLM 流程。否则没有
+        # @机器人的普通群消息会一边写入本 Bot 的语境记忆，一边继续
+        # 进入 AstrBot 自己的模型；引用图片时，后者可能把 image_url
+        # 传给只接受纯文本的模型并返回 400。
+        if should_reply or observe_only:
             event.stop_event()
         if should_reply and bool(self.config.get("send_processing_hint", False)) and text:
             yield event.plain_result("正在翻龙图小本本……")
