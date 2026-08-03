@@ -351,7 +351,7 @@ test('受保护 QQ 角色覆盖可变昵称并作为高优先级钢印注入', a
   const { service, calls } = createService({
     protectedRoles: new Map([['1000000001', '至高无上的真龙王']]),
   });
-  await service.handleMessage({
+  const protectedReply = await service.handleMessage({
     message_id: 'protected-1',
     message_type: 'group',
     group_id: 'g1',
@@ -361,6 +361,8 @@ test('受保护 QQ 角色覆盖可变昵称并作为高优先级钢印注入', a
   });
 
   assert.match(calls[0].modelInput, /至高无上的真龙王（成员-[a-f0-9]{6}）/);
+  assert.equal(protectedReply.mode, 'protected-identity');
+  assert.match(protectedReply.messages[0].text, /你是至高无上的真龙王/);
   // createService 的测试客户端只采集前两个参数，另建一次直接检查完整参数。
   let capturedOptions;
   service.chatClient.complete = async (_history, _input, options) => {

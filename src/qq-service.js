@@ -25,6 +25,7 @@ const DEFAULT_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
 const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
 const MEMBER_HISTORY_INTENT_PATTERN = /(?:之前|以前|历史|上次|上回|曾经|说过|提过|聊过|记得|原话|哪次|什么时候)/;
+const PROTECTED_SELF_IDENTITY_PATTERN = /(?:我是谁|知道我是谁|还(?:认得|认识|记得)我|不认识(?:你的)?超管|认不出我)/i;
 const MEMORY_SUMMARIZER_SYSTEM_PROMPT = [
   '你是 QQ 对话长期记忆整理器。',
   '把已有摘要和新增对话合并成一份简洁、准确、可供以后对话使用的中文记忆。',
@@ -428,6 +429,10 @@ export class QqBotService {
       buildModelInput(message, content, aliases),
     ].filter(Boolean).join('\n\n');
     const interactionContext = getGroupInteractionContext(message, aliases);
+    const speakerUserId = String(message?.from?.userid ?? '').trim();
+    const requiredIdentityRole = PROTECTED_SELF_IDENTITY_PATTERN.test(content)
+      ? String(this.protectedRoles.get(speakerUserId) ?? '').trim()
+      : '';
 
     return this.conversationStore.runExclusive(conversationId, async () => {
       const history = this.conversationStore.get(conversationId);
@@ -439,6 +444,7 @@ export class QqBotService {
         memorySummary,
         interactionContext,
         protectedIdentityContext: this.protectedIdentityContext,
+        requiredIdentityRole,
         chatClient: this.chatClient,
         webSearch: this.webSearch,
         webSearchEnabled: this.webSearchEnabled,
