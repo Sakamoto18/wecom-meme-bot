@@ -25,7 +25,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.6.1",
+    "1.6.2",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -575,12 +575,16 @@ class LongtuQqBridge(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def on_qq_message(self, event: AstrMessageEvent):
         """回复唤醒消息，并静默观察允许群中的普通消息。"""
+        # 这是专用 QQ Bot：任何 AIOCQHTTP 消息都不得继续进入 AstrBot 的
+        # 默认 LLM 或其他命令链路。必须在所有配置判断、字段解析和网络请求
+        # 之前截断，确保禁用群、关闭旁观、后端异常等提前返回分支也不会漏出。
+        event.stop_event()
+
         if self._is_slash_command(event):
             # AstrBot 的 WakingCheck 会先剥掉 / 唤醒前缀；这里用原始 OneBot
             # 消息识别。仅放行图库管理的 /add、/tag、/del，其余斜杠命令
             # 继续停止，避免 /w、/help 等内置命令或其他插件被误触发。
             if not self._is_allowed_management_slash_command(event):
-                event.stop_event()
                 return
         should_reply = self._should_reply(event)
         observe_only = not should_reply and self._should_observe(event)
@@ -602,12 +606,13 @@ class LongtuQqBridge(Star):
             or self._forward_components(quoted_chain)
         )
 
-        # 旁观消息也必须截断 AstrBot 后续的默认 LLM 流程。否则没有
-        # @机器人的普通群消息会一边写入本 Bot 的语境记忆，一边继续
-        # 进入 AstrBot 自己的模型；引用图片时，后者可能把 image_url
-        # 传给只接受纯文本的模型并返回 400。
-        if should_reply or observe_only:
-            event.stop_event()
+        pure_bot_mention = bool(
+            should_reply
+            and not str(text or "").strip()
+            and not has_image
+            and not has_forward
+            and self._is_explicitly_at_bot(event)
+        )
         text = self._text_for_backend(
             event,
             text,
@@ -649,6 +654,7 @@ class LongtuQqBridge(Star):
             "mentions": self._mentions(components),
             "bot_user_id": bot_user_id,
             "has_image": has_image,
+            "pure_bot_mention": pure_bot_mention,
             "image_base64": image_base64,
             "quoted_image_base64": quoted_image_base64,
             "observe_only": observe_only,

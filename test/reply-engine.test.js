@@ -109,6 +109,32 @@ test('普通闲聊不联网且仍由已配置的大模型回答', async () => {
   assert.equal(result.searchAttempted, false);
 });
 
+test('纯艾特强制快速人格模式，客服式草稿回退为角色招呼', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '（用户仅 @ 了你，没有附加文字）',
+    modelInput: '当前消息：（用户仅 @ 了你，没有附加文字）',
+    pureBotMention: true,
+    history: [],
+    chatClient: {
+      isConfigured: true,
+      complete: async (history, input, options) => {
+        calls.push({ history, input, options });
+        return '嗨～想聊天、想问问题，还是有什么需要我帮忙的，尽管说！';
+      },
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.equal(result.mode, 'pure-mention');
+  assert.equal(result.thinkingEnabled, false);
+  assert.equal(result.pureMentionFallback, true);
+  assert.equal(result.answer, '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。');
+  assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
+  assert.equal(calls[0].options.maxTokens, 120);
+  assert.match(calls[0].options.additionalSystemPrompt, /纯艾特回应/);
+});
+
 test('更早的 QQ 记忆摘要会作为不可信背景注入回复提示词', async () => {
   const calls = [];
   await generateConversationReply({

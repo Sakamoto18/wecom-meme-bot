@@ -12,7 +12,8 @@ const ADVERSARIAL_FOLLOWUP_PATTERN = /(?:回答我|哪(?:里)?来的|你(?:妈|�
 const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /(?:骂|攻击|怼|喷|拷打|锐评|羞辱|嘲讽|对线|输出)(?:一下|一顿|几句|他|她|它|这个人)?/i;
 const LONGTU_TOPIC_PATTERN = /(?:龙图|龙玉涛|老冯)/i;
 const KNOWLEDGE_INTENT_PATTERN = /(?:是什么|是谁|什么意思|哪里来|来源|出处|由来|什么梗|语录|搜索|联网|资料|历史)/i;
-const SERIOUS_QUESTION_PATTERN = /(?:如何|怎么|为什么|为何|请问|帮我|解释|分析|比较|区别|方案|建议|配置|解决|代码|报错|故障|原理|教程|步骤|能否|是否可以|该(?:怎么|如何|用)|需要什么|应该|多少|哪一|是谁|是什么)/i;
+const SERIOUS_QUESTION_PATTERN = /(?:如何|怎么|为什么|为何|请问|帮我|解释|分析|比较|区别|方案|建议|配置|解决|代码|报错|故障|原理|教程|步骤|能否|是否可以|该(?:怎么|如何|用)|需要什么|应该|多少|哪一)/i;
+const COMPLEX_NONTECHNICAL_PATTERN = /(?:如何|怎么|为什么|为何|解释|分析|比较|区别|方案|建议|解决|原理|教程|步骤|需要什么|应该|多少|哪一)/i;
 const TECHNICAL_TOPIC_PATTERN = /(?:网络|设备|接口|API|SDK|模型|代码|程序|数据库|服务器|部署|系统|配置|性能|带宽|路由|交换机|开发|产品|文档|spec|方案)/i;
 const ATTACK_SCENES = [
   {
@@ -82,7 +83,9 @@ export function shouldUseThinking(content) {
   if (TECHNICAL_TOPIC_PATTERN.test(normalized)) {
     return SERIOUS_QUESTION_PATTERN.test(normalized) || normalized.length >= 18;
   }
-  return normalized.length >= 5 && SERIOUS_QUESTION_PATTERN.test(normalized);
+  // “这是谁/这是什么”通常只是群聊接话，不应升级成长篇正经问答。
+  // 非技术问题只有具备明确推理意图且内容足够长时才开启 thinking。
+  return normalized.length >= 12 && COMPLEX_NONTECHNICAL_PATTERN.test(normalized);
 }
 
 export function containsLiteralLatinMa(content) {
@@ -161,11 +164,32 @@ export function buildNormalReplyPrompt(options = {}) {
       '先核对用户的前提和目标；再给明确结论，并解释判断依据。涉及选择或方案时，比较主要备选项的兼容性、优缺点和适用条件，再给具体建议。',
       '主动补充会改变结论的限制、风险、版本差异和操作注意事项。事实没有把握就明确说明，不使用可能过时的要求冒充确定结论。',
       '答案应完整、自洽、可执行；除非问题本身非常简单，否则不要只给一两句结论，也不要因已有草稿而省略关键分析。',
+      '深度思考只提高内容质量，不能覆盖基础人格。最终措辞仍要像龙图群友：直接、口语化、略带嘴欠，不使用“您”“很高兴为您服务”等客服表达，也不要写成公文。',
+      '完成主要答案后，用一句不超过 35 个汉字的龙图式吐槽或锐评收尾，稍微补回攻击性；优先吐槽糟糕方案或荒唐情境。用户没有攻击时不要辱骂用户亲属，也不能让玩梗破坏事实准确性。',
     );
   } else {
-    lines.push('这是闲聊或简单问题：直接回答，通常 1～3 句。');
+    lines.push(
+      '这是闲聊或简单问题：像真实群友一样直接接话，通常 1～3 句。',
+      '禁止小标题、分点分析、Markdown 加粗和“您”等客服敬语；不要把随口一问写成正式测评或总结。',
+    );
   }
   return lines.join('\n');
+}
+
+export function buildPureMentionReplyPrompt() {
+  return [
+    '【本轮模式：纯艾特回应】',
+    '用户只 @ 了你，没有附加文字。像熟悉的龙图群友突然被点名一样回一句，5～35 个汉字。',
+    '必须保持角色的短、嘴欠、接地气；可以使用角色固定招呼“这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。”，也可以现场写一句。',
+    '禁止“您好”“您”“想聊天”“想问问题”“需要我帮忙”“尽管说”“有什么可以帮”等客服话术。',
+    '禁止解释自己正在被召唤，禁止 Markdown、分点、小标题或长篇分析。',
+  ].join('\n');
+}
+
+export function isInvalidPureMentionReply(answer) {
+  const normalized = String(answer ?? '').trim();
+  if (!normalized || normalized.length > 80) return true;
+  return /(?:您好|您这|您想|想聊天|想问问题|需要我帮忙|尽管说|有什么可以帮|召唤我|洗耳恭听|\*\*|^\s*[-#])/i.test(normalized);
 }
 
 export function isThinSeriousReply(answer) {
@@ -183,6 +207,7 @@ export function buildSeriousReplyRetryPrompt(question, draft) {
     '初稿过短或缺少必要权衡，不能直接发送。请重新独立核对事实并输出一份完整答案，不要解释你正在重写。',
     '保留正确结论，纠正不准确或过时的说法；给出推荐依据、主要备选方案、兼容性/限制、风险和可执行建议。',
     '不要为了凑字重复内容，但也不要再压缩成几句话。',
+    '重写后的主体保持准确完整，结尾仍要补一句不超过 35 个汉字的龙图群友式吐槽或锐评；不要变成客服、公文，也不要无故辱骂用户亲属。',
   ].join('\n');
 }
 

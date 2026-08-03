@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -255,6 +256,131 @@ test('旧版群成员表升级后按历史发言次数恢复已确认身份', as
     const member = store.getGroupMembers('g1')[0];
     assert.equal(member.identityConfirmed, true);
     assert.deepEqual(member.confirmedNames, ['本人昵称']);
+    store.close();
+  });
+});
+
+test('群成员画像独立持久化，不随会话消息上限或 TTL 清理', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    let now = 1_000;
+    const databaseFilePath = path.join(directory, 'qq-memory.sqlite');
+    const store = new QqMemoryStore({
+      databaseFilePath,
+      maxStoredMessages: 2,
+      ttlMs: 100,
+      memberSummaryTriggerMessages: 4,
+      memberSummaryKeepMessages: 1,
+      now: () => now,
+    });
+    await store.load();
+    store.recordGroupMember('g1', 'u1', '小蓝');
+    for (const content of ['我喜欢蓝色', '我养了一只猫', '我平时写前端', '今天吃面']) {
+      store.appendMemberObservation('g1', 'u1', content);
+      store.appendObservation('group:g1', content);
+      now += 1;
+    }
+
+    let snapshot;
+    assert.equal(await store.scheduleMemberMemory('g1', 'u1', async (value) => {
+      snapshot = value;
+      return '稳定偏好：喜欢蓝色；养了一只猫；平时写前端。';
+    }), true);
+    assert.deepEqual(snapshot.observations, ['我喜欢蓝色', '我养了一只猫', '我平时写前端']);
+    assert.equal(store.getStats().messages, 2);
+    assert.match(store.getGroupMemberMemories('g1', ['u1'])[0].memory, /喜欢蓝色/);
+
+    now += 200;
+    assert.equal(store.size, 0);
+    assert.equal(store.getStats().messages, 0);
+    assert.match(store.getGroupMemberMemories('g1', ['u1'])[0].memory, /养了一只猫/);
+    store.close();
+
+    const reopened = new QqMemoryStore({ databaseFilePath, now: () => now });
+    await reopened.load();
+    assert.match(reopened.getGroupMemberMemories('g1', ['u1'])[0].memory, /写前端/);
+    reopened.close();
+  });
+});
+
+test('成员历史检索可越过模型近期窗口读取 SQLite 中的较早原文', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = new QqMemoryStore({
+      databaseFilePath: path.join(directory, 'qq-memory.sqlite'),
+      maxMessages: 2,
+      maxStoredMessages: 50,
+    });
+    await store.load();
+    const speakerId = createHash('sha256').update('u1').digest('hex').slice(0, 6);
+    store.appendObservation('group:g1', `当前发言人：小蓝（成员-${speakerId}）\n当前消息：最早说过喜欢蓝色`);
+    for (let index = 0; index < 6; index += 1) {
+      store.appendObservation('group:g1', `当前发言人：其他人（成员-ffffff）\n当前消息：消息 ${index}`);
+    }
+
+    assert.doesNotMatch(store.get('group:g1').map((entry) => entry.content).join('\n'), /喜欢蓝色/);
+    const history = store.getGroupMemberHistory('g1', ['u1']);
+    assert.equal(history.length, 1);
+    assert.match(history[0].content, /最早说过喜欢蓝色/);
+    store.close();
+  });
+});
+
+test('定时维护只清理已摘要旧原文，并保留每会话最低窗口', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    let now = 1_000;
+    const store = new QqMemoryStore({
+      databaseFilePath: path.join(directory, 'qq-memory.sqlite'),
+      maxStoredMessages: 50,
+      maxTotalStoredMessages: 50,
+      minStoredMessagesPerConversation: 1,
+      rawMessageRetentionMs: 100,
+      maintenanceIntervalMs: 50,
+      summaryTriggerMessages: 4,
+      summaryKeepMessages: 1,
+      now: () => now,
+    });
+    await store.load();
+    for (let index = 1; index <= 4; index += 1) {
+      store.appendObservation('group:g1', `旧消息 ${index}`);
+      now += 1;
+    }
+    assert.equal(await store.scheduleSummary('group:g1', async () => '旧消息已摘要。'), true);
+
+    now += 200;
+    store.appendObservation('group:g1', '当前消息');
+    assert.deepEqual(store.get('group:g1').map((message) => message.content), [
+      '旧消息 4',
+      '当前消息',
+    ]);
+    assert.equal(store.getSummary('group:g1'), '旧消息已摘要。');
+    store.close();
+  });
+});
+
+test('全库硬上限优先淘汰已摘要原文而不删除摘要', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = new QqMemoryStore({
+      databaseFilePath: path.join(directory, 'qq-memory.sqlite'),
+      maxStoredMessages: 50,
+      maxTotalStoredMessages: 4,
+      minStoredMessagesPerConversation: 1,
+      rawMessageRetentionMs: Number.MAX_SAFE_INTEGER,
+      maintenanceIntervalMs: Number.MAX_SAFE_INTEGER,
+      summaryTriggerMessages: 4,
+      summaryKeepMessages: 1,
+    });
+    await store.load();
+    for (const conversationId of ['group:g1', 'group:g2']) {
+      for (let index = 1; index <= 4; index += 1) {
+        store.appendObservation(conversationId, `${conversationId} 消息 ${index}`);
+      }
+      await store.scheduleSummary(conversationId, async () => `${conversationId} 摘要`);
+    }
+
+    const result = store.performMaintenance({ force: true });
+    assert.equal(result.overflowMessagesRemoved, 4);
+    assert.equal(store.getStats().messages, 4);
+    assert.equal(store.getSummary('group:g1'), 'group:g1 摘要');
+    assert.equal(store.getSummary('group:g2'), 'group:g2 摘要');
     store.close();
   });
 });

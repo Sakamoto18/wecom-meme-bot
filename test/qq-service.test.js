@@ -51,10 +51,12 @@ test('QQ 请求字段会映射到现有消息模型且私聊无需 group_id', ()
     user_id: 20,
     text: ' 你好 ',
     quoted_text: '上一句',
+    pure_bot_mention: true,
   });
   const message = buildQqCompatibleMessage(payload);
 
   assert.equal(payload.text, '你好');
+  assert.equal(payload.pureBotMention, true);
   assert.equal(message.chattype, 'single');
   assert.equal(message.from.userid, '20');
   assert.equal(message.quote.text.content, '上一句');
@@ -111,6 +113,32 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆并附图',
   assert.equal(calls[1].history.length, 2);
   assert.match(calls[1].history[0].content, /当前消息：你好/);
   assert.equal(second.messages[0].text, '这是 QQ 回答');
+});
+
+test('QQ 纯艾特标记会传入快速人格模式并拦截客服式回复', async () => {
+  const calls = [];
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete(history, modelInput, options) {
+        calls.push({ history, modelInput, options });
+        return '嗨～想聊天、想问问题，还是有什么需要我帮忙的，尽管说！';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'pure-mention-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'u1',
+    sender_name: '小明',
+    text: '（用户仅 @ 了你，没有附加文字）',
+    pure_bot_mention: true,
+  });
+
+  assert.equal(result.mode, 'pure-mention');
+  assert.equal(result.messages[0].text, '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。');
+  assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
 });
 
 test('QQ 合并转发内容会作为非可信引用资料进入模型上下文', async () => {
@@ -240,6 +268,43 @@ test('QQ 普通回复会读取长期摘要并在回答后调度新的滚动摘�
   assert.match(modelCalls[1].options.systemPrompt, /QQ 对话长期记忆整理器/);
   assert.match(modelCalls[1].modelInput, /<previous_summary>/);
   assert.match(modelCalls[1].modelInput, /我还喜欢绿色/);
+});
+
+test('相关成员画像和越过近期窗口的历史原文会按需注入回答', async () => {
+  const conversationStore = {
+    recordGroupMember() {},
+    getGroupMembers: () => [],
+    getGroupMemberAliases: () => ({}),
+    getGroupMemberMemories: () => [{
+      userId: 'u-memory',
+      speakerId: 'abc123',
+      name: '小蓝',
+      memory: '稳定偏好：喜欢蓝色；平时写前端。',
+    }],
+    getGroupMemberHistory: () => [{
+      content: '当前发言人：小蓝（成员-abc123）\n当前消息：我养了一只猫',
+    }],
+    runExclusive: (_conversationId, task) => task(),
+    get: () => [],
+    getSummary: () => '',
+    appendExchange() {},
+    scheduleSummary: () => Promise.resolve(false),
+  };
+  const { service, calls } = createService({ conversationStore });
+  await service.handleMessage({
+    message_id: 'member-memory-1',
+    message_type: 'group',
+    group_id: 'g-memory',
+    user_id: 'u-memory',
+    sender_name: '小蓝',
+    text: '你还记得我之前说过什么吗',
+  });
+
+  assert.match(calls[0].modelInput, /相关群成员的独立持久画像/);
+  assert.match(calls[0].modelInput, /喜欢蓝色；平时写前端/);
+  assert.match(calls[0].modelInput, /按相关成员定位到的较早群聊原文/);
+  assert.match(calls[0].modelInput, /我养了一只猫/);
+  assert.match(calls[0].modelInput, /当前消息：你还记得我之前说过什么吗/);
 });
 
 test('QQ 普通群消息只进入观察记忆，不调用模型也不回复', async () => {
