@@ -83,7 +83,7 @@ QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称�
 
 会话数据库默认每个会话保留 50000 条原文，但普通回答只读取最近 80 条和滚动摘要，避免上下文成本随数据库增长。出现“之前、上次、说过、原话”等历史意图时，后端会按相关成员的稳定编号从完整 SQLite 原文中额外检索最多 12 条命中记录。每个成员另有一份独立持久画像：每累计 12 条本人发言，就把其中较早 8 条合并为最多 1500 字的稳定画像，保留 4 条供下一轮衔接；画像只接受本人自述、稳定偏好、反复出现的关系和共同梗，不把他人的单次评价、辱骂或转发内容写成事实。成员画像不受会话原文清理、30 天会话 TTL 或近期 80 条模型窗口影响。昵称变化不会导致成员串号，内部匿名编号也会在发送回复前统一删除。
 
-原文采用三层清理：每会话最多 50000 条；全库最多 500000 条；每 6 小时清理 180 天前且已经写入滚动摘要的原文。按时间或全库上限淘汰时，每个会话至少保留最近 1000 条，未摘要原文不会被主动清理（只有单会话 50000 条硬上限仍可兜底）。维护后执行 SQLite optimize 和 WAL checkpoint；删除产生的空闲页会被后续写入复用，避免数据库无限增长。相关参数为 `QQ_MEMORY_MAX_STORED_MESSAGES`、`QQ_MEMORY_MAX_TOTAL_STORED_MESSAGES`、`QQ_MEMORY_MIN_MESSAGES_PER_CONVERSATION`、`QQ_MEMORY_RAW_RETENTION_DAYS` 和 `QQ_MEMORY_MAINTENANCE_HOURS`。
+原文采用三层清理：每会话最多 50000 条；全库最多 500000 条；每 6 小时清理 180 天前且已经写入滚动摘要的原文。按时间或全库上限淘汰时，每个会话至少保留最近 1000 条。全库超限时先删已摘要原文；如果摘要服务长期失败、删完后仍超限，才会紧急清理最低保留窗口之外的最老未摘要原文，确保磁盘硬保护不依赖模型可用性。维护后执行 SQLite optimize 和 WAL checkpoint；删除产生的空闲页会被后续写入复用，避免数据库无限增长。相关参数为 `QQ_MEMORY_MAX_STORED_MESSAGES`、`QQ_MEMORY_MAX_TOTAL_STORED_MESSAGES`、`QQ_MEMORY_MIN_MESSAGES_PER_CONVERSATION`、`QQ_MEMORY_RAW_RETENTION_DAYS` 和 `QQ_MEMORY_MAINTENANCE_HOURS`。
 
 `LONGTU_QQ_PROTECTED_ROLES` 的身份映射高于昵称、群聊内容和旧摘要，群成员无法通过改名、冒充或反复要求来覆盖。相关原始数据只保存在服务器的 `data/qq-memory.sqlite` 中。
 

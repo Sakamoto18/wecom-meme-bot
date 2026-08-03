@@ -403,7 +403,7 @@ export class QqMemoryStore {
     ).get().count);
     const overflow = count - this.maxTotalStoredMessages;
     if (overflow <= 0) return 0;
-    const result = database.prepare(`
+    const summarizedResult = database.prepare(`
       DELETE FROM qq_messages
       WHERE id IN (
         SELECT message.id
@@ -422,7 +422,30 @@ export class QqMemoryStore {
         LIMIT ?
       )
     `).run(this.minStoredMessagesPerConversation, overflow);
-    return Number(result.changes);
+    let removed = Number(summarizedResult.changes);
+    const emergencyOverflow = overflow - removed;
+    if (emergencyOverflow <= 0) return removed;
+
+    // 摘要服务长期失败时仍必须保证全库硬上限。第二阶段只从每个
+    // 会话最低保留窗口之外选择最老原文，避免磁盘保护依赖模型可用性。
+    const emergencyResult = database.prepare(`
+      DELETE FROM qq_messages
+      WHERE id IN (
+        SELECT message.id
+        FROM qq_messages AS message
+        WHERE message.id NOT IN (
+          SELECT retained.id
+          FROM qq_messages AS retained
+          WHERE retained.conversation_id = message.conversation_id
+          ORDER BY retained.id DESC
+          LIMIT ?
+        )
+        ORDER BY message.created_at ASC, message.id ASC
+        LIMIT ?
+      )
+    `).run(this.minStoredMessagesPerConversation, emergencyOverflow);
+    removed += Number(emergencyResult.changes);
+    return removed;
   }
 
   performMaintenance(options = {}) {
