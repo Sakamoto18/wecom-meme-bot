@@ -3,6 +3,7 @@ import {
   buildAttackRetryPrompt,
   buildNormalReplyPrompt,
   buildNormalReplyRetryPrompt,
+  buildNormalVenomFallback,
   buildProtectedIdentityFallback,
   buildProtectedSelfIdentityPrompt,
   buildPureMentionReplyPrompt,
@@ -16,6 +17,8 @@ import {
   reviewNormalReply,
   selectAttackScene,
   shouldSearchLongtuKnowledge,
+  shouldSearchMemeKnowledge,
+  shouldSearchCurrentInformation,
   shouldRequireNormalPersonaBite,
   shouldUseThinking,
   shouldUseAttackStyle,
@@ -42,6 +45,35 @@ function buildMemoryContext(memorySummary) {
     '<qq_memory_summary>',
     normalized,
     '</qq_memory_summary>',
+  ].join('\n');
+}
+
+function buildWebSearchStatus(options = {}) {
+  if (!options.requested || options.context) return '';
+  let reason = '搜索引擎没有返回可用摘要';
+  if (!options.enabled || !options.webSearchAvailable) {
+    reason = '联网检索当前未启用';
+  } else if (options.error) {
+    reason = `联网检索失败：${options.error.message}`;
+  }
+  if (options.mode === 'meme') {
+    return [
+      '【本轮网络梗检索状态】',
+      reason,
+      '必须明确告诉用户当前没有找到可用的联网证据。可以给出已有理解，但要标注为未联网核实；不要伪造梗的出处、人物或时间线。',
+    ].join('\n');
+  }
+  if (options.mode === 'general') {
+    return [
+      '【本轮通用联网检索状态】',
+      reason,
+      '搜索能力本轮已开放，但没有可用外部摘要。如果用户问的是外部事实、冷门知识或新近信息，必须说明本轮未联网核实，不得编造来源；普通闲聊可以直接接话。',
+    ].join('\n');
+  }
+  return [
+    '【本轮时效信息状态】',
+    reason,
+    '这是可能晚于模型知识截止时间的问题。必须明确告诉用户当前无法通过联网结果确认；不要把训练数据中的旧信息冒充最新事实，也不要编造来源。',
   ].join('\n');
 }
 
@@ -91,6 +123,7 @@ export async function generateConversationReply(options) {
       searchResult: emptySearchResult(),
       searchError: null,
       searchAttempted: false,
+      searchMode: '',
       thinkingEnabled: false,
       thinkingFallback: false,
       seriousAnswerExpanded: false,
@@ -158,41 +191,71 @@ export async function generateConversationReply(options) {
       searchResult: emptySearchResult(),
       searchError: null,
       searchAttempted: false,
+      searchMode: '',
       usedModel: true,
     };
   }
 
+  const useLongtuKnowledge = shouldSearchLongtuKnowledge(content);
+  // Meme wording is an intent hint for the persona/attack guard, not a
+  // restriction on information retrieval.  A question such as “这是什么梗”
+  // can still be a current event or an otherwise unknown topic; routing it to
+  // the meme parser makes the parser discard useful results when the query has
+  // multiple subjects.  Keep the broad, unfiltered general search as the
+  // default and reserve dedicated modes for longtu knowledge and explicit
+  // time-sensitive requests.
+  const useMemeKnowledge = !useLongtuKnowledge && shouldSearchMemeKnowledge(content);
+  const useCurrentInformation = !useLongtuKnowledge
+    && shouldSearchCurrentInformation(content);
+  const searchMode = useLongtuKnowledge
+    ? 'longtu'
+    : (useCurrentInformation ? 'current' : 'general');
   const searchAttempted = Boolean(
     webSearchEnabled
     && webSearch
-    && shouldSearchLongtuKnowledge(content),
+    && searchMode,
   );
   let searchResult = emptySearchResult();
   let searchError = null;
 
   if (searchAttempted) {
     try {
-      searchResult = await webSearch.search(content);
+      searchResult = await webSearch.search(content, {
+        mode: searchMode,
+      });
     } catch (error) {
       searchError = error;
     }
   }
 
-  const useLongtuKnowledge = shouldSearchLongtuKnowledge(content);
   const thinkingEnabled = shouldUseThinking(content);
   const requirePersonaBite = shouldRequireNormalPersonaBite(content);
+  const webSearchStatus = buildWebSearchStatus({
+    requested: useCurrentInformation || useMemeKnowledge || searchMode === 'general',
+    mode: searchMode,
+    enabled: webSearchEnabled,
+    webSearchAvailable: Boolean(webSearch),
+    error: searchError,
+    context: searchResult.context,
+  });
   const additionalSystemPrompt = [
     protectedIdentityContext,
     memoryContext,
-    buildNormalReplyPrompt({ thinkingEnabled, requirePersonaBite }),
+    buildNormalReplyPrompt({
+      thinkingEnabled,
+      requirePersonaBite,
+      interactionContext,
+    }),
     buildProtectedSelfIdentityPrompt(requiredIdentityRole),
     useLongtuKnowledge ? knowledgeContext : '',
+    webSearchStatus,
     searchResult.context,
   ].filter(Boolean).join('\n\n');
   let answer;
   let thinkingFallback = false;
   let seriousAnswerExpanded = false;
   let normalPersonaRewritten = false;
+  let normalPersonaFallback = false;
   let protectedIdentityFallback = false;
   let attempts = 1;
   try {
@@ -284,21 +347,37 @@ export async function generateConversationReply(options) {
     });
   }
 
+  if (requirePersonaBite
+    && String(answer ?? '').trim()
+    && review.issues.includes('missing-venomous-bite')) {
+    answer = `${String(answer).trim()}\n${buildNormalVenomFallback(content, { interactionContext })}`;
+    normalPersonaFallback = true;
+    review = reviewNormalReply(answer, {
+      thinkingEnabled,
+      requirePersonaBite,
+      requiredIdentityRole,
+    });
+  }
+
   return {
     answer: removeInternalParticipantIds(answer),
     mode: requiredIdentityRole
       ? 'protected-identity'
-      : (useLongtuKnowledge ? 'longtu-knowledge' : 'model'),
+      : (useLongtuKnowledge
+        ? 'longtu-knowledge'
+        : (searchAttempted ? 'web-knowledge' : 'model')),
     references: [],
     review,
     attempts,
     searchResult,
     searchError,
     searchAttempted,
+    searchMode,
     thinkingEnabled,
     thinkingFallback,
     seriousAnswerExpanded,
     normalPersonaRewritten,
+    normalPersonaFallback,
     protectedIdentityFallback,
     usedModel: true,
   };

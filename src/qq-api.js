@@ -245,13 +245,17 @@ export async function createQqRuntime() {
   });
 
   const webSearchEnabled = !/^(?:0|false|off)$/i.test(
-    process.env.LONGTU_WEB_SEARCH_ENABLED?.trim() || 'true',
+    (process.env.WEB_SEARCH_ENABLED ?? process.env.LONGTU_WEB_SEARCH_ENABLED)?.trim() || 'true',
   );
   const webSearch = new LongtuWebSearch({
     enabled: webSearchEnabled,
-    endpoint: process.env.LONGTU_WEB_SEARCH_ENDPOINT,
-    timeoutMs: parsePositiveInteger(process.env.LONGTU_WEB_SEARCH_TIMEOUT_MS),
-    cacheTtlMs: parsePositiveInteger(process.env.LONGTU_WEB_SEARCH_CACHE_TTL_MS),
+    endpoint: process.env.WEB_SEARCH_ENDPOINT ?? process.env.LONGTU_WEB_SEARCH_ENDPOINT,
+    timeoutMs: parsePositiveInteger(
+      process.env.WEB_SEARCH_TIMEOUT_MS ?? process.env.LONGTU_WEB_SEARCH_TIMEOUT_MS,
+    ),
+    cacheTtlMs: parsePositiveInteger(
+      process.env.WEB_SEARCH_CACHE_TTL_MS ?? process.env.LONGTU_WEB_SEARCH_CACHE_TTL_MS,
+    ),
   });
 
   const promptPath = path.resolve(
@@ -331,6 +335,7 @@ export async function startQqApi() {
         ok: true,
         platform: 'qq',
         model_configured: runtime.chatClient.isConfigured,
+        web_search_enabled: runtime.webSearchEnabled,
         image_count: currentStats.longtuImageCount,
         bundled_image_count: currentStats.longtuImageCount - currentStats.dynamicActive,
         dynamic_image_count: currentStats.dynamicActive,
@@ -349,6 +354,9 @@ export async function startQqApi() {
   console.log(runtime.chatClient.isConfigured
     ? `QQ 普通对话已启用：${runtime.chatClient.model}`
     : 'QQ 普通对话未启用：缺少大模型配置');
+  console.log(runtime.webSearchEnabled
+    ? 'QQ 联网检索已启用：普通模型回复默认先检索，其余查询走 general 模式'
+    : 'QQ 联网检索已关闭');
 
   let shuttingDown = false;
   const shutdown = async (signal) => {

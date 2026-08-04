@@ -102,12 +102,20 @@ try {
 } catch (error) {
   console.warn(error.message);
 }
-const webSearchEnabled = !/^(?:0|false|off)$/i.test(process.env.LONGTU_WEB_SEARCH_ENABLED?.trim() || 'true');
-const configuredSearchTimeout = Number.parseInt(process.env.LONGTU_WEB_SEARCH_TIMEOUT_MS ?? '', 10);
-const configuredSearchCacheTtl = Number.parseInt(process.env.LONGTU_WEB_SEARCH_CACHE_TTL_MS ?? '', 10);
+const webSearchEnabled = !/^(?:0|false|off)$/i.test(
+  (process.env.WEB_SEARCH_ENABLED ?? process.env.LONGTU_WEB_SEARCH_ENABLED)?.trim() || 'true',
+);
+const configuredSearchTimeout = Number.parseInt(
+  process.env.WEB_SEARCH_TIMEOUT_MS ?? process.env.LONGTU_WEB_SEARCH_TIMEOUT_MS ?? '',
+  10,
+);
+const configuredSearchCacheTtl = Number.parseInt(
+  process.env.WEB_SEARCH_CACHE_TTL_MS ?? process.env.LONGTU_WEB_SEARCH_CACHE_TTL_MS ?? '',
+  10,
+);
 const webSearch = new LongtuWebSearch({
   enabled: webSearchEnabled,
-  endpoint: process.env.LONGTU_WEB_SEARCH_ENDPOINT,
+  endpoint: process.env.WEB_SEARCH_ENDPOINT ?? process.env.LONGTU_WEB_SEARCH_ENDPOINT,
   timeoutMs: Number.isInteger(configuredSearchTimeout) && configuredSearchTimeout > 0
     ? configuredSearchTimeout
     : undefined,
@@ -199,8 +207,8 @@ client.on('authenticated', async () => {
     ? `普通对话已启用：${chatClient.model}`
     : '普通对话未启用：缺少大模型配置');
   console.log(webSearchEnabled
-    ? '联网龙图资料：已启用（仅查询龙图出处/含义，对线不注入固定语料）'
-    : '联网龙图资料：已关闭');
+    ? '联网资料：已启用（时效问题主动检索；对线仍不联网）'
+    : '联网资料：已关闭');
 });
 
 function markMessageProcessed(frame) {
@@ -597,10 +605,13 @@ async function replyConversation(frame, content) {
       });
 
       if (generated.searchError) {
-        console.warn(`联网龙图语料暂不可用：${generated.searchError.message}`);
+        console.warn(`联网检索暂不可用：${generated.searchError.message}`);
       } else if (generated.searchAttempted) {
         const { searchResult } = generated;
-        console.log(`联网龙图语料：${searchResult.resultCount} 条${searchResult.fromCache ? '（缓存）' : ''}`);
+        console.log(
+          `联网检索（${generated.searchMode}）：${searchResult.resultCount} 条`
+          + `${searchResult.fromCache ? '（缓存）' : ''}`,
+        );
       }
 
       const answer = generated.answer;
