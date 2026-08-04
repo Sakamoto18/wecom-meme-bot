@@ -452,6 +452,24 @@ export class QqBotService {
         pureBotMention: options.pureBotMention === true,
       });
 
+      if (generated.searchError) {
+        this.logger.warn(
+          `QQ 联网检索失败（${generated.searchMode || 'unknown'}）：${generated.searchError.message}`,
+        );
+      } else if (generated.searchAttempted) {
+        let sourceDomain = '无可用来源';
+        try {
+          sourceDomain = new URL(generated.searchResult.endpoint).hostname;
+        } catch {
+          // 搜索无结果时 endpoint 可能为空，日志保留“无可用来源”。
+        }
+        this.logger.log(
+          `QQ 联网检索（${generated.searchMode}）：${generated.searchResult.resultCount} 条`
+          + `，来源=${sourceDomain}`
+          + (generated.searchResult.fromCache ? '（缓存）' : ''),
+        );
+      }
+
       const answer = generated.answer;
       this.logger.log(
         `QQ 对话回复模式：${generated.mode}`

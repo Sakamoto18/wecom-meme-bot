@@ -3,8 +3,12 @@ import assert from 'node:assert/strict';
 import {
   LongtuWebSearch,
   parseBaiduSearchHtml,
+  parseSoSearchHtml,
   parseSearchRss,
+  selectCurrentSearchQuery,
+  selectGeneralSearchQuery,
   selectLongtuSearchQuery,
+  selectMemeSearchQuery,
 } from '../src/web-search.js';
 
 const SAMPLE_BAIDU = `
@@ -34,6 +38,20 @@ const SAMPLE_RSS = `<?xml version="1.0"?>
   </item>
 </channel></rss>`;
 
+const SAMPLE_SO = `
+<html><body><ul class="result">
+  <li class="res-list"><h3 class="res-title">
+    <a href="https://www.so.com/link?m=redirect" data-mdurl="https://www.bilibili.com/video/BV1meme">
+      <em>曼波曼波</em>是什么梗？【网络梗知识】
+    </a></h3>
+    <p class="res-desc"><span class="gray">2024年4月7日&nbsp;-&nbsp;</span>
+      <em>曼波</em>梗来自赛马娘二创，随后因魔性配音传播。</p>
+  </li>
+  <li class="res-list"><h3 class="res-title"><a data-mdurl="https://example.com/other">普通电影新闻</a></h3>
+    <p class="res-desc">与查询词完全无关的摘要</p>
+  </li>
+</ul></body></html>`;
+
 test('解析搜索 RSS 时只保留龙图相关摘要', () => {
   const results = parseSearchRss(SAMPLE_RSS, 5);
   assert.equal(results.length, 2);
@@ -41,11 +59,28 @@ test('解析搜索 RSS 时只保留龙图相关摘要', () => {
   assert.match(results[0].description, /斗图语境 & 用法/);
 });
 
+test('普通时效检索会保留非龙图搜索结果', () => {
+  const results = parseSearchRss(SAMPLE_RSS, 5, { mode: 'current' });
+  assert.equal(results.length, 3);
+  assert.equal(results[0].title, '普通的龙百科');
+});
+
 test('解析百度公开搜索摘要并保留可核验原句', () => {
   const results = parseBaiduSearchHtml(SAMPLE_BAIDU, 5);
   assert.equal(results.length, 2);
   assert.match(results[0].description, /难说\s*,毕竟你不配/);
   assert.match(results[1].description, /杀妈/);
+});
+
+test('解析 360 搜索结果时使用原始目标链接并过滤无关梗结果', () => {
+  const results = parseSoSearchHtml(SAMPLE_SO, 5, {
+    mode: 'meme',
+    relevanceTerms: ['曼波'],
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].title, '曼波曼波 是什么梗？【网络梗知识】');
+  assert.equal(results[0].url, 'https://www.bilibili.com/video/BV1meme');
+  assert.match(results[0].description, /赛马娘二创/);
 });
 
 test('搜索只发送固定白名单查询，不泄露群聊原文，并缓存结果', async () => {
@@ -72,20 +107,20 @@ test('搜索只发送固定白名单查询，不泄露群聊原文，并缓存�
   assert.match(first.context, /不可信外部资料/);
 });
 
-test('百度没有结果时自动降级到 Bing RSS', async () => {
+test('360 没有结果时自动降级到 Bing RSS', async () => {
   const requestedHosts = [];
   const search = new LongtuWebSearch({
     fetchImpl: async (url) => {
       requestedHosts.push(new URL(url).hostname);
       if (requestedHosts.length === 1) {
-        return new Response('<title>百度安全验证</title>', { status: 200 });
+        return new Response('<title>空搜索结果</title>', { status: 200 });
       }
       return new Response(SAMPLE_RSS, { status: 200 });
     },
   });
 
   const result = await search.search('你真是司马了');
-  assert.deepEqual(requestedHosts, ['www.baidu.com', 'www.bing.com']);
+  assert.deepEqual(requestedHosts, ['www.so.com', 'www.bing.com']);
   assert.equal(result.resultCount, 2);
   assert.match(result.endpoint, /bing\.com/);
 });
@@ -98,4 +133,133 @@ test('按龙图话题选择有限的固定查询', () => {
   assert.match(selectLongtuSearchQuery('尼玛'), /你妈/);
   assert.match(selectLongtuSearchQuery('你玩原神吗'), /原神/);
   assert.match(selectLongtuSearchQuery('你好'), /经典文案/);
+});
+
+test('时效搜索查询会清理内部成员编号并补充当前年份', () => {
+  const query = selectCurrentSearchQuery(
+    '帮我联网查询一下 OpenAI 最新模型 成员-acde12',
+    { currentYear: 2026 },
+  );
+  assert.match(query, /OpenAI 最新模型/);
+  assert.match(query, /2026/);
+  assert.doesNotMatch(query, /成员-acde12|联网查询/);
+});
+
+test('通用搜索保留当前问题但不泄露内部成员编号', () => {
+  assert.equal(
+    selectGeneralSearchQuery('帮我联网查一下 如何评价时代少年团粉丝 成员-acde12'),
+    '如何评价时代少年团粉丝',
+  );
+});
+
+test('网络梗搜索会提取梗词并追加来源与含义查询词', () => {
+  assert.equal(selectMemeSearchQuery('牢大是什么梗'), '牢大 网络梗 来源 含义');
+  assert.equal(selectMemeSearchQuery('查一下牢大这个梗'), '牢大 网络梗 来源 含义');
+  assert.equal(selectMemeSearchQuery('帮我联网查一下曼波是什么意思'), '曼波 网络梗 来源 含义');
+  assert.equal(
+    selectMemeSearchQuery('最近的新梗是什么梗', { currentYear: 2026 }),
+    '最近的新梗 网络梗 来源 含义 2026',
+  );
+});
+
+test('meme 模式通过 360 搜索相关梗并注入来源约束', async () => {
+  let capturedUrl;
+  const search = new LongtuWebSearch({
+    endpoint: 'https://www.so.com/s',
+    fallbackEndpoint: null,
+    fetchImpl: async (url) => {
+      capturedUrl = String(url);
+      return new Response(SAMPLE_SO, { status: 200 });
+    },
+  });
+
+  const result = await search.search('曼波是什么意思', { mode: 'meme' });
+  assert.equal(result.resultCount, 1);
+  assert.equal(new URL(capturedUrl).searchParams.get('q'), '曼波 网络梗 来源 含义');
+  assert.match(result.context, /网络梗联网检索摘要/);
+  assert.match(result.context, /来源域名：www\.bilibili\.com/);
+  assert.match(result.context, /不得编造/);
+});
+
+test('复合梗词会拆成多个相关性词，不再被整串过滤', async () => {
+  const search = new LongtuWebSearch({
+    endpoint: 'https://www.so.com/s',
+    fallbackEndpoint: null,
+    fetchImpl: async () => new Response(SAMPLE_SO, { status: 200 }),
+  });
+
+  const result = await search.search('曼波和赛马娘是什么梗', { mode: 'meme' });
+  assert.equal(result.resultCount, 1);
+  assert.match(result.results[0].description, /赛马娘/);
+});
+
+test('general 模式搜索原问题并保留普通结果', async () => {
+  let capturedUrl;
+  const search = new LongtuWebSearch({
+    endpoint: 'https://www.bing.com/search',
+    fallbackEndpoint: null,
+    fetchImpl: async (url) => {
+      capturedUrl = String(url);
+      return new Response(SAMPLE_RSS, { status: 200 });
+    },
+  });
+
+  const result = await search.search('如何评价时代少年团粉丝', { mode: 'general' });
+  assert.equal(new URL(capturedUrl).searchParams.get('q'), '如何评价时代少年团粉丝');
+  assert.equal(result.resultCount, 3);
+  assert.match(result.context, /通用联网检索摘要/);
+  assert.match(result.context, /只采用与用户当前问题直接相关的信息/);
+});
+
+test('通用复合查询在 Bing 退化时按核心词回退并过滤无关结果', async () => {
+  const queries = [];
+  const rss = (title, url) => `<rss><channel><item><title>${title}</title><link>https://example.com/${url}</link><description>摘要</description></item></channel></rss>`;
+  const search = new LongtuWebSearch({
+    endpoint: 'https://www.bing.com/search',
+    fallbackEndpoint: null,
+    fetchImpl: async (url) => {
+      const query = new URL(url).searchParams.get('q');
+      queries.push(query);
+      if (query === '竹知了和玄武之声到底是什么梗') {
+        return new Response(rss('竹（植物）百科', 'irrelevant'), { status: 200 });
+      }
+      if (query === '竹知了') {
+        return new Response(rss('竹知了近期话题', 'zhu'), { status: 200 });
+      }
+      return new Response(rss('玄武之声相关报道', 'xuanwu'), { status: 200 });
+    },
+  });
+
+  const result = await search.search('竹知了和玄武之声到底是什么梗', { mode: 'general' });
+  assert.deepEqual(queries, [
+    '竹知了和玄武之声到底是什么梗',
+    '竹知了',
+    '玄武之声',
+  ]);
+  assert.equal(result.resultCount, 2);
+  assert.match(result.context, /竹知了近期话题/);
+  assert.match(result.context, /玄武之声相关报道/);
+  assert.doesNotMatch(result.context, /竹（植物）百科/);
+});
+
+test('current 模式发送普通查询并注入带来源的时效摘要', async () => {
+  let capturedUrl;
+  const search = new LongtuWebSearch({
+    endpoint: 'https://www.bing.com/search',
+    fallbackEndpoint: null,
+    fetchImpl: async (url) => {
+      capturedUrl = String(url);
+      return new Response(SAMPLE_RSS, { status: 200 });
+    },
+  });
+
+  const result = await search.search('今天有什么新消息', {
+    mode: 'current',
+    currentYear: 2026,
+  });
+  assert.equal(result.resultCount, 3);
+  assert.equal(new URL(capturedUrl).searchParams.get('q'), '今天有什么新消息 2026');
+  assert.match(result.context, /检索时间/);
+  assert.match(result.context, /只是搜索引擎返回的标题和摘要/);
+  assert.match(result.context, /来源域名：example\.com/);
 });

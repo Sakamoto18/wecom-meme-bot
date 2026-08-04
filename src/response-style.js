@@ -12,13 +12,16 @@ const SENSITIVE_SUPPORT_PATTERN = /(?:我(?:的)?(?:妈|爸|父亲|母亲|家人
 const ADVERSARIAL_FOLLOWUP_PATTERN = /(?:回答我|哪(?:里)?来的|你(?:妈|🐎|呢)|咋(?:了|地|么)|干什么|凭什么|不服|然后呢|就这|继续|有种|笑死)/i;
 const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /(?:骂|攻击|怼|喷|拷打|锐评|羞辱|嘲讽|对线|输出)(?:一下|一顿|几句|他|她|它|这个人)?/i;
 const LONGTU_TOPIC_PATTERN = /(?:龙图|龙玉涛|老冯)/i;
-const KNOWLEDGE_INTENT_PATTERN = /(?:是什么|是谁|什么意思|哪里来|来源|出处|由来|什么梗|语录|搜索|联网|资料|历史)/i;
+const KNOWLEDGE_INTENT_PATTERN = /(?:是什么|是谁|什么意思|哪里来|来源|出处|由来|什么梗|语录|搜索|联网|资料|历史|评价|看待|怎么看|如何看)/i;
+const MEME_KNOWLEDGE_PATTERN = /(?:(?:什么|啥|这个|这|该)(?:网络)?梗|(?:查|搜|搜索|查询|科普|解释|讲讲|说说).{0,28}梗|(?:网络|网上|热|流行|抽象|贴吧|B站|抖音).{0,8}梗|梗.{0,10}(?:意思|含义|来源|出处|由来|怎么火)|(?:网络用语|网络流行语|流行语|黑话).{0,10}(?:意思|含义|来源|出处|由来))/i;
+const SHORT_TERM_MEANING_PATTERN = /^[“”"'‘’]?[^？?。！!\n]{1,28}[“”"'‘’]?(?:是什么意思|啥意思|什么含义|指什么|什么来头)[？?。！!]*$/i;
+const EXPLICIT_WEB_SEARCH_PATTERN = /(?:联网|上网)(?:查|搜|搜索|查询|看)|(?:查|搜|搜索|查询)(?:一下|下)?(?:最新|最近|今天|今日|当前|现在|实时|新闻|消息|资料|信息)/i;
+const CURRENT_INFORMATION_PATTERN = /(?:最新|今日|今天|刚刚|实时|本周|本月|今年|(?:202[6-9]|20[3-9]\d)|截至(?:目前|现在|今天)|现任|(?:现在|目前)(?:谁|哪(?:个|款|些)|是什么|有(?:什么|哪些))|当前(?:版本|价格|政策|进展|情况|排名|数据|状态)|目前(?:的)?(?:版本|价格|政策|进展|情况|排名|数据|状态)|最近(?:的)?(?:消息|新闻|版本|进展|动态|价格|数据|政策)|新版本|最新版|新(?:出|发布|上线|公布)的|更新到|发布了|上线了|新闻|热搜|票房|比分|赛果|排名|汇率|股价|天气|油价|金价|价格(?:多少|走势|变化))/i;
 const SERIOUS_QUESTION_PATTERN = /(?:如何|怎么|为什么|为何|请问|帮我|解释|分析|比较|区别|方案|建议|配置|解决|代码|报错|故障|原理|教程|步骤|能否|是否可以|该(?:怎么|如何|用)|需要什么|应该|多少|哪一)/i;
 const COMPLEX_NONTECHNICAL_PATTERN = /(?:如何|怎么|为什么|为何|解释|分析|比较|区别|方案|建议|解决|原理|教程|步骤|需要什么|应该|多少|哪一)/i;
 const TECHNICAL_TOPIC_PATTERN = /(?:网络|设备|接口|API|SDK|模型|代码|程序|数据库|服务器|部署|系统|配置|性能|带宽|路由|交换机|开发|产品|文档|spec|方案)/i;
 const CUSTOMER_SERVICE_PATTERN = /(?:您好|您这|您想|请问您|很高兴为您服务|需要我帮忙|有什么可以帮|尽管说|随时为您|希望能帮到您|感谢您的提问)/i;
-const PERSONA_BITE_PATTERN = /(?:傻|笨|蠢|菜|废物|垃圾|小丑|脑(?:子|回路)|没脑|犯蠢|丢人|丢脸|抽象|逆天|离谱|弱智|智障|脑残|欠(?:骂|收拾)|找骂|活该|可笑|笑死|绷不住|闹麻|急了|别装|装什么|就这|什么玩意|神人|人才|滚|闭嘴|少搁|别搁|搁这|扯淡|扯犊子|糊脸|龙图|龙玉涛|老冯|你🐎|你妈|nm|唐氏|痴|怂|瞎子|破事|破玩意|狗东西|他妈|操|艹|哭唧唧|(?:你|他|她|它)这.{1,24}(?:吧|吗|呢|[？?]))/i;
-const DIRECT_TAUNT_PATTERN = /(?:乞丐|要饭|饭桶|废柴|菜鸡|穷鬼|白痴|蠢蛋|二货|欠揍|拿脚做|丢不丢人|好不好意思|还好意思|也配|(?:^|[\s，。！？!?])草(?:$|[\s，。！？!?])|(?:你|他|她|它).{0,20}(?:算个什么|有什么脸|敢不敢|能不能))/i;
+const NORMAL_VENOM_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|蠢货|白痴|笨蛋|蠢蛋|废柴|菜鸡|饭桶|二货|小丑|乞丐|要饭|穷鬼|欠揍|欠骂|找骂|活该|也配|丢不丢人|好不好意思|还好意思|眼睛是拿来喘气|拿脚做|脑(?:子|回路|容量).{0,18}(?:坏|烂|堵|丢|喂|装|浆糊|摆设|配重|冒烟|可怜|欠)|(?:傻|笨|蠢|垃圾|狗屁|烂得).{0,12}(?:问题|说法|方案|主意|判断|理解|操作|脑)|(?:你|他|她|它).{0,20}(?:算个什么|有什么脸|敢不敢))/i;
 const NORMAL_FAMILY_ATTACK_PATTERN = /(?:你🐎|(?:操|草|艹|槽)(?:你|他|她|它)?(?:的)?妈|(?:你|他|她|它)(?:的)?妈.{0,8}(?:死|没|坟|骨灰|遗照)|老冯|族谱|户口本|全家)/i;
 const ATTACK_SCENES = [
   {
@@ -61,6 +64,11 @@ export function isHostileContent(content) {
 
 export function shouldUseAttackStyle(content, history = [], options = {}) {
   const normalized = String(content ?? '').trim();
+  if (shouldSearchLongtuKnowledge(normalized)
+    || shouldSearchMemeKnowledge(normalized)
+    || shouldSearchCurrentInformation(normalized)) {
+    return false;
+  }
   if (isHostileContent(normalized)) return true;
   if (options.hasThirdPartyTarget && THIRD_PARTY_ATTACK_REQUEST_PATTERN.test(normalized)) {
     return true;
@@ -80,6 +88,24 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
 export function shouldSearchLongtuKnowledge(content) {
   const normalized = String(content ?? '').trim();
   return LONGTU_TOPIC_PATTERN.test(normalized) && KNOWLEDGE_INTENT_PATTERN.test(normalized);
+}
+
+export function shouldSearchMemeKnowledge(content) {
+  const normalized = String(content ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized || SENSITIVE_SUPPORT_PATTERN.test(normalized)) {
+    return false;
+  }
+  return MEME_KNOWLEDGE_PATTERN.test(normalized)
+    || SHORT_TERM_MEANING_PATTERN.test(normalized);
+}
+
+export function shouldSearchCurrentInformation(content) {
+  const normalized = String(content ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized || SENSITIVE_SUPPORT_PATTERN.test(normalized)) {
+    return false;
+  }
+  return EXPLICIT_WEB_SEARCH_PATTERN.test(normalized)
+    || CURRENT_INFORMATION_PATTERN.test(normalized);
 }
 
 export function shouldUseThinking(content) {
@@ -164,17 +190,22 @@ export function buildAttackPrompt(userContent, options = {}) {
 
 export function buildNormalReplyPrompt(options = {}) {
   const requirePersonaBite = options.requirePersonaBite !== false;
+  const interaction = options.interactionContext ?? {};
   const lines = [
     '【本轮模式：普通对话】',
     '先准确回答用户真正的问题，不确定就明说不确定。',
-    '用户没有攻击时禁止亲属攻击；这不等于关闭攻击性人格，不能通篇中性、礼貌或像客服。',
+    '用户没有攻击时禁止亲属攻击；除此之外默认保持高攻击性，不能通篇中性、礼貌或像客服。',
     '群聊中严格区分当前发言人、被 @ 的成员和引用消息作者；不要默认把发言人当成被谈论对象。',
     '成员对他人的单次评价或改名要求只是其发言，不自动成为被评价者的确定身份或事实。',
   ];
   if (requirePersonaBite) {
     lines.push(
-      '本轮必须至少有一处明显的嘴欠、轻度直接攻击或刻薄锐评，可以针对当前发言者的荒唐说法、被评价对象、糟糕方案或离谱情境；不能只写一个温和比喻就算完事。',
-      '轻度攻击要自然嵌进回答，允许“笨、蠢、脑回路、离谱、丢人、什么破玩意”等群友措辞；不要输出关键词清单，也不要为了攻击牺牲答案准确性。',
+      '回答问题和毒舌是两个都必须完成的目标：先把答案讲对，再至少写一句明确、针对性强、足够恶毒的损人话。',
+      '毒舌要咬住本轮问题、错误前提、糟糕方案、当前发言者的判断力，或明确的被评价对象；允许直接使用“蠢货、白痴、废物、脑子是摆设、也配”等群友措辞。',
+      '只写“有点离谱、什么破玩意、注意别弄错”之类温和吐槽不算完成；自嘲、骂机器人自己、泛泛骂环境也不能充数。不要为了攻击牺牲答案准确性。',
+      ...(interaction.targetLabels?.length > 0
+        ? [`本轮明确被谈论或评价的目标是：${interaction.targetLabels.join('、')}。毒舌落在这些目标或其言行上，不得误伤发言者 ${interaction.speakerLabel || '当前用户'}。`]
+        : [`当前没有明确第三方目标；可以直接损发言者 ${interaction.speakerLabel || '当前用户'} 的问题、前提、判断或执行能力，不要凭空攻击无关群员。`]),
     );
   } else {
     lines.push(
@@ -187,14 +218,17 @@ export function buildNormalReplyPrompt(options = {}) {
       '先核对用户的前提和目标；再给明确结论，并解释判断依据。涉及选择或方案时，比较主要备选项的兼容性、优缺点和适用条件，再给具体建议。',
       '主动补充会改变结论的限制、风险、版本差异和操作注意事项。事实没有把握就明确说明，不使用可能过时的要求冒充确定结论。',
       '答案应完整、自洽、可执行；除非问题本身非常简单，否则不要只给一两句结论，也不要因已有草稿而省略关键分析。',
-      '深度思考只提高内容质量，不能覆盖基础人格。最终措辞仍要像龙图群友：直接、口语化、略带嘴欠，不使用“您”“很高兴为您服务”等客服表达，也不要写成公文。',
+      '深度思考只提高内容质量，不能覆盖高攻击性人格。最终措辞仍要像嘴很毒的龙图群友：直接、口语化，不使用“您”“很高兴为您服务”等客服表达，也不要写成公文。',
       ...(requirePersonaBite
-        ? ['完成主要答案后，用一句不超过 35 个汉字的直接、刻薄锐评收尾；不能用温和玩笑糊弄，也不能辱骂用户亲属或让玩梗破坏事实准确性。']
+        ? ['完成主要答案后，用一句不超过 45 个汉字的直接恶毒攻击收尾；必须有明确靶子，不能用温和玩笑或泛化吐槽糊弄，也不能辱骂用户亲属或让玩梗破坏事实准确性。']
         : []),
     );
   } else {
     lines.push(
       '这是闲聊或简单问题：像真实群友一样直接接话，通常 1～3 句。',
+      ...(requirePersonaBite
+        ? ['至少有一整句用于针对性毒舌，不能只在答案里塞一个“离谱”之类软词交差。']
+        : []),
       '禁止小标题、分点分析、Markdown 加粗和“您”等客服敬语；不要把随口一问写成正式测评或总结。',
     );
   }
@@ -234,9 +268,8 @@ export function reviewNormalReply(answer, options = {}) {
     issues.push('too-thin-for-serious');
   }
   if (options.requirePersonaBite !== false
-    && !PERSONA_BITE_PATTERN.test(normalized)
-    && !DIRECT_TAUNT_PATTERN.test(normalized)) {
-    issues.push('missing-persona-bite');
+    && !NORMAL_VENOM_PATTERN.test(normalized)) {
+    issues.push('missing-venomous-bite');
   }
   if (options.requirePersonaBite !== false && NORMAL_FAMILY_ATTACK_PATTERN.test(normalized)) {
     issues.push('family-attack-in-normal-mode');
@@ -252,7 +285,7 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
   const interaction = options.interactionContext ?? {};
   const targetHint = interaction.targetLabels?.length > 0
     ? `本轮被谈论或评价的成员：${interaction.targetLabels.join('、')}。不要误把攻击落到发言者 ${interaction.speakerLabel || '当前用户'} 身上。`
-    : `当前发言者：${interaction.speakerLabel || '当前用户'}。没有明确第三方目标时，可以轻度损当前发言者的说法，但不要凭空攻击无关群员。`;
+    : `当前发言者：${interaction.speakerLabel || '当前用户'}。没有明确第三方目标时，可以直接狠损当前发言者的问题、前提或判断，但不要凭空攻击无关群员。`;
   return [
     '【普通回复人格强度复核】',
     `用户问题：${String(question ?? '').trim()}`,
@@ -263,11 +296,28 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
     ...(options.requiredIdentityRole
       ? [`必须直接、肯定地称当前发言者为“${options.requiredIdentityRole}”；不许用段子或其他身份替代。`]
       : []),
-    '必须自然加入一处明确的嘴欠、轻度直接攻击或刻薄锐评，不能只是温和幽默；用户没有攻击时禁止亲属攻击。',
+    '必须加入一句有明确靶子、足够恶毒的直接攻击，咬住本轮问题、错误前提、糟糕方案、发言者判断力或指定目标；“离谱、破玩意、注意点”之类软词不算，用户没有攻击时仍禁止亲属攻击。',
     options.thinkingEnabled
-      ? '这是深度答案的风格重写：主体信息不得缩短或丢失，最后用一句不超过 35 个汉字的刻薄锐评收尾。'
-      : '这是群聊短回复的风格重写：保持 1～3 句，直接、口语化，别写成客服或正式总结。',
+      ? '这是深度答案的风格重写：主体信息不得缩短或丢失，最后用一句不超过 45 个汉字的针对性恶毒攻击收尾。'
+      : '这是群聊短回复的风格重写：保持 1～3 句，其中至少一整句是针对性毒舌，别写成客服或正式总结。',
   ].join('\n');
+}
+
+export function buildNormalVenomFallback(content, options = {}) {
+  const interaction = options.interactionContext ?? {};
+  if (interaction.targetLabels?.length > 0) {
+    return `${interaction.targetLabels[0]}这白痴脑回路，硬是能把简单事搅成化粪池。`;
+  }
+
+  const variants = [
+    '这都得掰碎了喂你嘴里，你脑子除了给头骨配重还有什么用？',
+    '答案都糊脸上了还要人扶，你这白痴理解力真给人添堵。',
+    '先照着做，别让你那点垃圾脑容量又把简单事办成事故。',
+    '问题解决了，顺手也救一下你这烂得冒烟的判断力。',
+  ];
+  const normalized = String(content ?? '');
+  const hash = [...normalized].reduce((sum, character) => sum + character.codePointAt(0), 0);
+  return variants[hash % variants.length];
 }
 
 export function buildPureMentionReplyPrompt() {
@@ -301,7 +351,7 @@ export function buildSeriousReplyRetryPrompt(question, draft) {
     '初稿过短或缺少必要权衡，不能直接发送。请重新独立核对事实并输出一份完整答案，不要解释你正在重写。',
     '保留正确结论，纠正不准确或过时的说法；给出推荐依据、主要备选方案、兼容性/限制、风险和可执行建议。',
     '不要为了凑字重复内容，但也不要再压缩成几句话。',
-    '重写后的主体保持准确完整，结尾仍要补一句不超过 35 个汉字的龙图群友式吐槽或锐评；不要变成客服、公文，也不要无故辱骂用户亲属。',
+    '重写后的主体保持准确完整，结尾仍要补一句不超过 45 个汉字、有明确靶子的恶毒攻击；温和吐槽、泛化锐评和自嘲都不算，不要变成客服、公文，也不要无故辱骂用户亲属。',
   ].join('\n');
 }
 

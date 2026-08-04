@@ -23,7 +23,7 @@ function createService(options = {}) {
     isConfigured: true,
     async complete(history, modelInput) {
       calls.push({ history, modelInput });
-      return '这是 QQ 回答，别搁这装看不懂。';
+      return '这是 QQ 回答，蠢货，别搁这装看不懂。';
     },
   };
   const memeStore = options.memeStore ?? {
@@ -108,11 +108,11 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆并附图',
   const second = await service.handleMessage({ ...input, message_id: 'm3', text: '还记得吗' });
 
   assert.deepEqual(first.messages.map((message) => message.type), ['text', 'image']);
-  assert.equal(first.messages[0].text, '这是 QQ 回答，别搁这装看不懂。');
+  assert.equal(first.messages[0].text, '这是 QQ 回答，蠢货，别搁这装看不懂。');
   assert.match(calls[0].modelInput, /发言人：QQ 小明/);
   assert.equal(calls[1].history.length, 2);
   assert.match(calls[1].history[0].content, /当前消息：你好/);
-  assert.equal(second.messages[0].text, '这是 QQ 回答，别搁这装看不懂。');
+  assert.equal(second.messages[0].text, '这是 QQ 回答，蠢货，别搁这装看不懂。');
 });
 
 test('QQ 纯艾特标记会传入快速人格模式并拦截客服式回复', async () => {

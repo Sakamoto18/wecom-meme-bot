@@ -66,7 +66,7 @@ flowchart LR
     F -.特定知识问题.-> I[网页检索适配器<br/>web-search]
 
     H --> L[OpenAI 兼容 LLM]
-    I --> S[百度 / Bing]
+    I --> S[360 搜索 / Bing RSS]
     E <--> P[(data/conversation-memory.json)]
     D <--> M[(memes/longtu + manifest)]
     D --> A
@@ -142,8 +142,10 @@ client.on('message.mixed', receiveMessage);
 | 明确龙图指令，且不是攻击语境 | 直接返回一张审核龙图 | 否 | 否 |
 | 攻击内容或对线延续 | 生成短回复，必要时重试一次 | 1～2 次 | 否 |
 | 询问龙图出处、含义等知识 | 注入本地知识和搜索摘要后回答 | 通常 1 次，可能复核 | 1 次搜索流程 |
-| 普通正经问题 | 开启模型思考，过短时复核 | 1～2 次 | 否 |
-| 普通闲聊 | 快速回答 | 1 次 | 否 |
+| 普通外部事实、网络梗、流行语或短词含义 | 直接用当前问题做通用信息检索后回答 | 通常 1 次，可能复核 | 1 次搜索流程 |
+| 最新、今天、现任、实时价格、新闻、版本等时效问题 | 注入普通搜索摘要后回答 | 通常 1 次，可能复核 | 1 次搜索流程 |
+| 普通正经问题 | 开启模型思考，过短或毒舌不足时复核 | 1～2 次 | 否 |
+| 普通闲聊 | 快速回答，毒舌不足时重写 | 1～2 次 | 否 |
 
 只要进入对话流程，文本完成后程序还会主动再发一张 JPG/PNG 本地龙图。文本和图片拆成两条消息，是为了兼容部分企业微信客户端对流式图文的限制。
 
@@ -199,7 +201,7 @@ sequenceDiagram
 | [`src/response-style.js`](../src/response-style.js) | 内容分类、Prompt 构建、回复质量检查 | 正则、数组方法、不可变数据、文本相似度、规则系统 |
 | [`src/reply-engine.js`](../src/reply-engine.js) | 选择回复模式，编排搜索、模型调用、降级和复核 | `async/await`、策略分支、错误降级、返回结构设计 |
 | [`src/chat-client.js`](../src/chat-client.js) | 封装 OpenAI 兼容的 `/chat/completions` | `fetch`、HTTP、JSON、`AbortController`、依赖注入 |
-| [`src/web-search.js`](../src/web-search.js) | 使用固定查询检索、解析结果、缓存和回退 | URL API、HTTP、超时、缓存、容错、不可信输入 |
+| [`src/web-search.js`](../src/web-search.js) | 分模式构造查询、解析结果、缓存和回退 | URL API、HTTP、超时、缓存、容错、不可信输入 |
 | [`src/conversation-store.js`](../src/conversation-store.js) | 会话隔离、裁剪、TTL、数量限制、落盘、串行队列 | `Map`、Promise 队列、文件 I/O、原子替换、LRU 思想 |
 | [`src/meme-store.js`](../src/meme-store.js) | 扫描/校验图片、白名单选择、读取 Buffer、上传素材缓存 | 文件系统、`Buffer`、路径安全、哈希、随机数、TTL 缓存 |
 
@@ -357,17 +359,17 @@ await chatClient.complete(history, currentMessage, options);
 
 ### 8.3 网页检索
 
-只有用户询问特定知识时才触发搜索。程序不会把群聊原文直接发送给搜索引擎，而是从三个固定查询中选择一个。
+普通模型回复默认先做通用信息检索：把清理过内部成员编号的当前问题直接作为搜索词，不因“什么梗、什么意思”等措辞把主题改写成 meme 查询，也不把复合主题限制为单一词条。时效问题会附加当前年份；龙图出处/含义可另外注入本地知识。搜索不会发送群聊历史、记忆摘要或模型输入中的身份上下文；纯艾特和单纯对线仍完全不联网。
 
 检索流程为：
 
 1. 请求主端点；
 2. 主端点报错或没有有效结果时尝试备用端点；
-3. 解析并过滤主题相关摘要；
+3. 龙图模式过滤主题相关摘要；通用信息检索保留与当前问题相关的结果，并在复合主题上按核心词做回退和交错合并，避免搜索引擎把中文短词拆错；
 4. 把结果标注为“不可信外部资料”后加入模型上下文；
 5. 按查询缓存 30 分钟。
 
-当前主端点默认是 `http://www.baidu.com/s`，不是 HTTPS。这在不可信网络中存在被篡改风险，生产环境应优先改成可验证的 HTTPS 数据源。
+当前主端点默认是 `https://www.so.com/s`，解析结果中的 `data-mdurl` 原始目标地址；主源报错或没有相关摘要时降级到 Bing RSS。`WEB_SEARCH_ENDPOINT` 可以覆盖主端点。搜索 HTML/RSS 结构仍可能变化，因此运行日志会记录检索模式、结果数和来源域名，方便发现解析失效。
 
 ### 8.4 图片发送
 
@@ -386,7 +388,8 @@ await chatClient.complete(history, currentMessage, options);
 | 失败点 | 当前行为 |
 | --- | --- |
 | 龙图读取或上传失败 | 尝试回复错误提示 |
-| 搜索失败 | 记录警告，模型仍可使用本地知识回答 |
+| 龙图搜索失败 | 记录警告，模型仍可使用本地知识回答 |
+| 时效搜索失败 | 明确注入失败状态，禁止模型把旧训练数据冒充最新事实 |
 | 模型思考模式返回空正文 | 再用关闭思考的快速模式调用一次 |
 | 正经回答过短 | 再做一次完整性复核，失败则保留已有回答 |
 | 对话整体失败 | 完成流式错误提示或发送 Markdown 错误提示 |
@@ -433,11 +436,13 @@ Docker 镜像基于 `node:20-bookworm-slim`，只安装生产依赖。服务不�
 | 消息路径 | 模型调用次数 | 主要额外调用 |
 | --- | ---: | --- |
 | 直接发图 | 0 | 可能上传企业微信素材 |
-| 普通闲聊 | 1 | 发送一张附图 |
+| 普通闲聊 | 1，毒舌不足时 2 | 发送一张附图；连续软回复会由程序补毒舌收尾 |
 | 攻击模式 | 1，质量不合格时 2 | 不联网 |
 | 正经问题 | 1，答案过短时 2 | 可能使用更高 token 上限 |
 | 思考模式空正文 | 2 | 第二次关闭思考 |
 | 龙图知识问题 | 通常 1，可能 2 | 最多一轮主/备搜索流程 |
+| 普通联网问题 | 通常 1，可能 2 | 最多一轮主/备搜索流程 |
+| 普通时效问题 | 通常 1，可能 2 | 最多一轮主/备搜索流程 |
 
 注意：`max_tokens` 是允许的输出上限，不等于实际一定消耗这么多 token。真正估价应从模型供应商返回的 `usage` 字段累计；当前 `chat-client.js` 只返回正文，没有保存 `usage`，所以项目暂时无法直接生成准确账单统计。
 
@@ -735,14 +740,16 @@ npm run dev
 | `LLM_LONGTU_KNOWLEDGE_FILE` | 否 | `config/longtu-knowledge.md` |
 | `LONGTU_LIMIT` | 否 | 800 |
 | `LONGTU_MAX_SCORE` | 否 | 0.6 |
-| `LONGTU_WEB_SEARCH_ENABLED` | 否 | `true` |
-| `LONGTU_WEB_SEARCH_ENDPOINT` | 否 | `http://www.baidu.com/s` |
-| `LONGTU_WEB_SEARCH_TIMEOUT_MS` | 否 | 6000 |
-| `LONGTU_WEB_SEARCH_CACHE_TTL_MS` | 否 | 1800000 |
+| `WEB_SEARCH_ENABLED` | 否 | `true` |
+| `WEB_SEARCH_ENDPOINT` | 否 | `https://www.so.com/s` |
+| `WEB_SEARCH_TIMEOUT_MS` | 否 | 6000 |
+| `WEB_SEARCH_CACHE_TTL_MS` | 否 | 1800000 |
 | `CONVERSATION_MEMORY_MESSAGES` | 否 | 200，环境配置至少为 4 |
 | `CONVERSATION_MEMORY_CHARACTERS` | 否 | 20000，环境配置至少为 1000 |
 | `CONVERSATION_MEMORY_HOURS` | 否 | 6 |
 | `CONVERSATION_MEMORY_CONVERSATIONS` | 否 | 50 |
+
+旧版 `LONGTU_WEB_SEARCH_ENABLED`、`LONGTU_WEB_SEARCH_ENDPOINT`、`LONGTU_WEB_SEARCH_TIMEOUT_MS` 和 `LONGTU_WEB_SEARCH_CACHE_TTL_MS` 仍作为兼容别名读取；同名新配置优先。
 
 ### 13.2 示例文件中的漂移
 
@@ -751,7 +758,7 @@ npm run dev
 - 包含未生效的 `MEME_TRIGGERS`、`LONGTU_ONLINE_QUOTES_FILE`；
 - 没列出 `LLM_LONGTU_KNOWLEDGE_FILE`；
 - 没列出四个 `CONVERSATION_MEMORY_*`；
-- 没列出 `LONGTU_WEB_SEARCH_ENDPOINT`。
+- 没列出 `WEB_SEARCH_ENDPOINT`。
 
 运行时行为应以源码为准。后续维护时建议集中建立一个配置模块，由它完成读取、默认值、校验和示例文档生成，减少漂移。
 
@@ -766,7 +773,7 @@ npm run dev
 - 会话采用临时文件加 rename，降低文件损坏风险；
 - 图片使用内容签名和 SHA-256，而不是盲信扩展名；
 - 当前仓库的 manifest 作为强制白名单；manifest 存在但为空时不会悄悄回退到未审核索引；
-- 搜索使用固定查询，减少原始群聊内容外泄；
+- 龙图搜索使用固定查询；普通信息检索直接发送清理后的当前公开问题，复合主题必要时拆分核心词回退；所有搜索都不附带群聊历史、记忆摘要或内部成员编号；
 - 附图失败不影响已经成功的文本，错误被隔离。
 
 ### 14.2 当前限制
@@ -775,7 +782,7 @@ npm run dev
 - 会话内容以明文写到本机 JSON，需要明确数据保留和磁盘权限；
 - 去重、媒体缓存和搜索缓存重启后丢失，也无法跨进程共享；
 - 网页 HTML/RSS 用正则解析，页面结构变化时容易失效；
-- 默认百度端点是 HTTP；
+- 默认 360/Bing 搜索依赖第三方 HTML/RSS 结构和可用性；
 - manifest 文件完全缺失时会扫描仓库图片目录，没有做到严格的失败关闭；
 - 日志主要是字符串，没有请求耗时、token 使用量和结构化指标；
 - 没有对企业微信 frame 做正式 schema 校验；

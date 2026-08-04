@@ -1463,7 +1463,7 @@ CMD ["npm", "start"]
 8. 先通过 SDK 发企业微信流式占位文本；
 9. 从内存 `Map` 读取该群历史；
 10. `reply-engine` 判断需要本地知识、网页检索和模型思考；
-11. `web-search` 用固定查询发 HTTP 请求，并按 TTL 缓存结果；
+11. `web-search` 按龙图固定查询或普通时效查询发 HTTP 请求，并按 TTL 缓存结果；
 12. `chat-client` 用 `fetch` POST JSON，`AbortController` 负责超时；
 13. 等网络时，事件循环仍能开始处理其他群的消息；
 14. 模型返回后，程序把本轮对话追加到 `Map`；

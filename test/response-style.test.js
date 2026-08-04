@@ -4,6 +4,7 @@ import {
   buildAttackPrompt,
   buildNormalReplyPrompt,
   buildNormalReplyRetryPrompt,
+  buildNormalVenomFallback,
   buildProtectedIdentityFallback,
   buildProtectedSelfIdentityPrompt,
   buildPureMentionReplyPrompt,
@@ -18,6 +19,8 @@ import {
   reviewNormalReply,
   selectAttackScene,
   shouldSearchLongtuKnowledge,
+  shouldSearchMemeKnowledge,
+  shouldSearchCurrentInformation,
   shouldRequireNormalPersonaBite,
   shouldUseThinking,
   shouldUseAttackStyle,
@@ -92,13 +95,51 @@ test('对线语境可延续一轮，但明确降级时停止攻击', () => {
   assert.equal(shouldUseAttackStyle('你的输出结果是哪里来的', history), true);
   assert.equal(shouldUseAttackStyle('认真回答，别骂了', history), false);
   assert.equal(shouldUseAttackStyle('今天天气怎么样', history), false);
+  assert.equal(shouldUseAttackStyle('nmsl 是什么意思', history), false);
 });
 
 test('只在用户询问龙图出处或含义时触发联网资料', () => {
   assert.equal(shouldSearchLongtuKnowledge('龙玉涛是什么梗'), true);
   assert.equal(shouldSearchLongtuKnowledge('联网搜索龙图语录'), true);
+  assert.equal(shouldSearchLongtuKnowledge('如何评价龙玉涛'), true);
   assert.equal(shouldSearchLongtuKnowledge('你妈死了'), false);
   assert.equal(shouldSearchLongtuKnowledge('今天天气怎么样'), false);
+});
+
+test('最新信息、实时数据和明确联网请求会触发普通联网检索', () => {
+  for (const content of [
+    'OpenAI 最新模型是什么',
+    '今天有什么 AI 新闻',
+    '现在的 Node.js 最新版是多少',
+    '查一下当前美元汇率',
+    '帮我联网查询新发布的显卡',
+    '2026 年新出的显卡有哪些',
+    '目前谁是英伟达 CEO',
+    '认真回答别骂了，今天有什么新闻',
+  ]) {
+    assert.equal(shouldSearchCurrentInformation(content), true, content);
+  }
+  assert.equal(shouldSearchCurrentInformation('解释一下 TCP 三次握手'), false);
+  assert.equal(shouldSearchCurrentInformation('我现在很难受'), false);
+  assert.equal(shouldSearchCurrentInformation('认真回答，别骂了'), false);
+});
+
+test('普通网络梗和短词释义会触发梗检索，直接辱骂仍走对线', () => {
+  for (const content of [
+    '牢大是什么梗',
+    '查一下牢大这个梗',
+    '曼波是什么意思',
+    '这个梗的出处是什么',
+    'nmsl 是什么意思',
+    '求科普这个 B 站热梗的由来',
+    '网络用语 YYDS 的含义',
+  ]) {
+    assert.equal(shouldSearchMemeKnowledge(content), true, content);
+  }
+  assert.equal(shouldSearchMemeKnowledge('解释一下 TCP 三次握手'), false);
+  assert.equal(shouldSearchMemeKnowledge('我现在很难受'), false);
+  assert.equal(shouldUseAttackStyle('nmsl'), true);
+  assert.equal(shouldUseAttackStyle('nmsl 是什么意思'), false);
 });
 
 test('正经问题开启思考，攻击和简单闲聊保持快速模式', () => {
@@ -116,8 +157,8 @@ test('正经问答提示不受群聊短句限制，并检测内容单薄的答�
   const prompt = buildNormalReplyPrompt({ thinkingEnabled: true });
   assert.match(prompt, /不要为了群聊节奏压缩答案/);
   assert.match(prompt, /比较主要备选项/);
-  assert.match(prompt, /深度思考只提高内容质量，不能覆盖基础人格/);
-  assert.match(prompt, /不超过 35 个汉字的直接、刻薄锐评收尾/);
+  assert.match(prompt, /深度思考只提高内容质量，不能覆盖高攻击性人格/);
+  assert.match(prompt, /不超过 45 个汉字的直接恶毒攻击收尾/);
   assert.doesNotMatch(prompt, /通常 1～3 句/);
 
   assert.equal(isThinSeriousReply('建议用 exFAT，三个系统都能用。'), true);
@@ -132,17 +173,18 @@ test('正经问答提示不受群聊短句限制，并检测内容单薄的答�
   const retryPrompt = buildSeriousReplyRetryPrompt('硬盘选什么文件系统', '建议 exFAT。');
   assert.match(retryPrompt, /重新独立核对事实/);
   assert.match(retryPrompt, /兼容性\/限制/);
-  assert.match(retryPrompt, /龙图群友式吐槽或锐评/);
+  assert.match(retryPrompt, /有明确靶子的恶毒攻击/);
 });
 
-test('普通回复默认要求明显嘴欠，真实痛苦与停止对线场景例外', () => {
+test('普通回复默认要求针对性毒舌，真实痛苦与停止对线场景例外', () => {
   assert.equal(shouldRequireNormalPersonaBite('你好'), true);
   assert.equal(shouldRequireNormalPersonaBite('帮我分析这个方案'), true);
   assert.equal(shouldRequireNormalPersonaBite('我妈去世了'), false);
   assert.equal(shouldRequireNormalPersonaBite('认真回答，别骂了'), false);
 
   const prompt = buildNormalReplyPrompt({ thinkingEnabled: false });
-  assert.match(prompt, /本轮必须至少有一处明显的嘴欠/);
+  assert.match(prompt, /至少写一句明确、针对性强、足够恶毒的损人话/);
+  assert.match(prompt, /温和吐槽不算完成/);
   assert.match(prompt, /不能通篇中性、礼貌或像客服/);
 
   const supportivePrompt = buildNormalReplyPrompt({
@@ -152,9 +194,12 @@ test('普通回复默认要求明显嘴欠，真实痛苦与停止对线场景�
   assert.match(supportivePrompt, /不强制攻击当事人/);
 });
 
-test('普通人格复核拦截中性客服稿和亲属攻击，接受轻度直接锐评', () => {
+test('普通人格复核拒绝中性稿和软吐槽，接受强烈直接锐评', () => {
   const neutral = reviewNormalReply('可以，成员资料会持久化保存。');
-  assert.ok(neutral.issues.includes('missing-persona-bite'));
+  assert.ok(neutral.issues.includes('missing-venomous-bite'));
+
+  const soft = reviewNormalReply('可以，成员资料会持久化保存，这设计有点离谱。');
+  assert.ok(soft.issues.includes('missing-venomous-bite'));
 
   const customerService = reviewNormalReply('您好，有什么可以帮您的吗？');
   assert.ok(customerService.issues.includes('customer-service'));
@@ -181,7 +226,7 @@ test('普通人格重写提示保留事实并保护第三方目标', () => {
   const prompt = buildNormalReplyRetryPrompt(
     '评价一下他',
     '这个方案不太合理。',
-    ['missing-persona-bite'],
+    ['missing-venomous-bite'],
     {
       interactionContext: {
         speakerLabel: '发令者',
@@ -191,7 +236,18 @@ test('普通人格重写提示保留事实并保护第三方目标', () => {
   );
   assert.match(prompt, /保留初稿中的正确事实/);
   assert.match(prompt, /不要误把攻击落到发言者/);
-  assert.match(prompt, /必须自然加入一处明确的嘴欠/);
+  assert.match(prompt, /足够恶毒的直接攻击/);
+});
+
+test('模型连续给软回复时可生成区分目标的毒舌兜底', () => {
+  const direct = buildNormalVenomFallback('你好');
+  assert.equal(reviewNormalReply(`你好。${direct}`).valid, true);
+
+  const targeted = buildNormalVenomFallback('评价一下他', {
+    interactionContext: { targetLabels: ['目标成员'] },
+  });
+  assert.match(targeted, /目标成员/);
+  assert.equal(reviewNormalReply(`方案能用。${targeted}`).valid, true);
 });
 
 test('受保护身份问答必须肯定说出权威角色，否则使用程序兜底', () => {
