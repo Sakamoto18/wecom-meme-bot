@@ -83,6 +83,30 @@ function normalizeBase64(value) {
   return /^[a-z0-9+/]+={0,2}$/i.test(normalized) ? normalized : '';
 }
 
+function isRenderedPureBotMention(payload) {
+  if (payload.messageType !== 'group'
+    || !payload.botUserId
+    || !payload.text
+    || payload.hasImage
+    || payload.forwardedText
+    || payload.quotedText
+    || payload.quotedForwardedText
+    || payload.quotedAuthor
+    || payload.mentions.length === 0
+    || payload.mentions.some((participant) => participant.userId !== payload.botUserId)) {
+    return false;
+  }
+  const compactText = compactParticipantName(payload.text);
+  return payload.mentions.some((participant) => {
+    const candidates = [participant.name, participant.userId]
+      .map(compactParticipantName)
+      .filter(Boolean);
+    return candidates.some((candidate) => (
+      compactText === candidate || compactText === `@${candidate}`
+    ));
+  });
+}
+
 function formatForwardedContext(value) {
   const text = normalizeString(value, MAX_FORWARD_CHARACTERS);
   if (!text) return '';
@@ -113,7 +137,7 @@ export function normalizeQqPayload(payload) {
     messageType === 'group',
   );
 
-  return {
+  const normalized = {
     messageId: normalizeIdentifier(payload.message_id, 'message_id', false),
     messageType,
     userId,
@@ -140,6 +164,10 @@ export function normalizeQqPayload(payload) {
     pureBotMention: payload.pure_bot_mention === true,
     observeOnly: payload.observe_only === true && messageType === 'group',
   };
+  if (!normalized.pureBotMention && isRenderedPureBotMention(normalized)) {
+    normalized.pureBotMention = true;
+  }
+  return normalized;
 }
 
 export function buildQqCompatibleMessage(payload) {

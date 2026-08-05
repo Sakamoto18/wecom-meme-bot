@@ -20,7 +20,7 @@ const CURRENT_INFORMATION_PATTERN = /(?:最新|今日|今天|刚刚|实时|本�
 const SERIOUS_QUESTION_PATTERN = /(?:如何|怎么|为什么|为何|请问|帮我|解释|分析|比较|区别|方案|建议|配置|解决|代码|报错|故障|原理|教程|步骤|能否|是否可以|该(?:怎么|如何|用)|需要什么|应该|多少|哪一)/i;
 const COMPLEX_NONTECHNICAL_PATTERN = /(?:如何|怎么|为什么|为何|解释|分析|比较|区别|方案|建议|解决|原理|教程|步骤|需要什么|应该|多少|哪一)/i;
 const TECHNICAL_TOPIC_PATTERN = /(?:网络|设备|接口|API|SDK|模型|代码|程序|数据库|服务器|部署|系统|配置|性能|带宽|路由|交换机|开发|产品|文档|spec|方案)/i;
-const CUSTOMER_SERVICE_PATTERN = /(?:您好|您这|您想|请问您|很高兴为您服务|需要我帮忙|有什么可以帮|尽管说|随时为您|希望能帮到您|感谢您的提问)/i;
+const CUSTOMER_SERVICE_PATTERN = /(?:您好|您这|您想|请问您|很高兴为您服务|需要我帮忙|需要我搭把手|有什么可以帮|有什么想跟我聊|听到(?:你(?:的)?)?呼唤|不用拘束|尽管(?:说|开口)|随时为您|希望能帮到您|感谢您的提问)/i;
 const NORMAL_VENOM_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|蠢货|白痴|笨蛋|蠢蛋|废柴|菜鸡|饭桶|二货|小丑|乞丐|要饭|穷鬼|欠揍|欠骂|找骂|活该|也配|丢不丢人|好不好意思|还好意思|眼睛是拿来喘气|拿脚做|脑(?:子|回路|容量).{0,18}(?:坏|烂|堵|丢|喂|装|浆糊|摆设|配重|冒烟|可怜|欠)|(?:傻|笨|蠢|垃圾|狗屁|烂得).{0,12}(?:问题|说法|方案|主意|判断|理解|操作|脑)|(?:你|他|她|它).{0,20}(?:算个什么|有什么脸|敢不敢))/i;
 const NORMAL_FAMILY_ATTACK_PATTERN = /(?:你🐎|(?:操|草|艹|槽)(?:你|他|她|它)?(?:的)?妈|(?:你|他|她|它)(?:的)?妈.{0,8}(?:死|没|坟|骨灰|遗照)|老冯|族谱|户口本|全家)/i;
 const ATTACK_SCENES = [
@@ -369,8 +369,8 @@ export function buildPureMentionReplyPrompt() {
 
 export function isInvalidPureMentionReply(answer) {
   const normalized = String(answer ?? '').trim();
-  if (!normalized || normalized.length > 80) return true;
-  return /(?:您好|您这|您想|想聊天|想问问题|需要我帮忙|尽管说|有什么可以帮|召唤我|洗耳恭听|\*\*|^\s*[-#])/i.test(normalized);
+  if (!normalized || normalized.length > 45) return true;
+  return /(?:您好|您这|您想|想聊天|想问问题|需要我帮忙|需要我搭把手|有什么可以帮|有什么想跟我聊|听到(?:你(?:的)?)?呼唤|不用拘束|尽管(?:说|开口)|召唤我|洗耳恭听|\*\*|^\s*[-#])/i.test(normalized);
 }
 
 export function isThinSeriousReply(answer) {

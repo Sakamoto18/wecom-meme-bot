@@ -25,7 +25,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.8.0",
+    "1.8.1",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -113,6 +113,15 @@ class LongtuQqBridge(Star):
             if isinstance(raw_text, str) and raw_text.strip():
                 return re.sub(r"\[CQ:[^\]]+\]", "", raw_text).strip()
         return ""
+
+    @staticmethod
+    def _plain_component_text(components: list) -> str:
+        """只读取用户实际输入的 Plain 文本，不把 At 的显示昵称算作正文。"""
+        return "".join(
+            str(getattr(component, "text", "") or "")
+            for component in components
+            if isinstance(component, Comp.Plain)
+        ).strip()
 
     @classmethod
     def _is_slash_command(cls, event: AstrMessageEvent) -> bool:
@@ -606,19 +615,27 @@ class LongtuQqBridge(Star):
             or self._forward_components(quoted_chain)
         )
 
+        # event.message_str 会把 At 组件渲染成“@机器人昵称”，不能用它判断
+        # 用户是否附带正文。只检查 OneBot 原始 text 段和 Plain 组件。
         pure_bot_mention = bool(
             should_reply
-            and not str(text or "").strip()
+            and not str(raw_text or "").strip()
+            and not self._plain_component_text(components)
             and not has_image
             and not has_forward
+            and reply_component is None
             and self._is_explicitly_at_bot(event)
         )
-        text = self._text_for_backend(
-            event,
-            text,
-            should_reply=should_reply,
-            has_image=has_image,
-            has_forward=has_forward,
+        text = (
+            PURE_BOT_MENTION_TEXT
+            if pure_bot_mention
+            else self._text_for_backend(
+                event,
+                text,
+                should_reply=should_reply,
+                has_image=has_image,
+                has_forward=has_forward,
+            )
         )
         if not text and not has_image and not has_forward:
             return
