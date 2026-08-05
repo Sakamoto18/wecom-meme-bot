@@ -1088,7 +1088,11 @@ export class QqBotService {
     }
 
     try {
-      return await this.handleNormalizedMessage(payload);
+      const result = await this.handleNormalizedMessage(payload);
+      if (payload.messageType === 'group' && result?.messages?.length > 0) {
+        this.activeReplyDecider?.recordBotReply?.(payload.groupId);
+      }
+      return result;
     } catch (error) {
       if (dedupeKey) this.processedMessageIds.delete(dedupeKey);
       throw error;

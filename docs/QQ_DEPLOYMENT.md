@@ -79,21 +79,26 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 
 ### 群聊主动回复（ChatPlus 风格）
 
-本项目参考 [ChatPlus](https://github.com/Him666233/astrbot_plugin_group_chat_plus) 的“概率筛选 + AI 读空气”思路，但不安装原插件。原插件会直接调用 AstrBot LLM 生成答案，与现有 Longtu Bridge 同时启用会造成两套人格、记忆与联网路径；这里的判定器只决定“要不要接话”，命中后仍调用 Node 回复引擎。
+本项目参考 [ChatPlus](https://github.com/Him666233/astrbot_plugin_group_chat_plus) 的“AI 读空气”思路，但不安装原插件。原插件会直接调用 AstrBot LLM 生成答案，与现有 Longtu Bridge 同时启用会造成两套人格、记忆与联网路径；这里的判定器只决定“要不要接话”，命中后仍调用 Node 回复引擎。
 
 `.env.qq` 可配置：
 
 ```dotenv
 LONGTU_QQ_ACTIVE_REPLY_ENABLED=true
 LONGTU_QQ_ACTIVE_REPLY_GROUPS=
+LONGTU_QQ_ACTIVE_REPLY_NAMES=龙玉涛
 LONGTU_QQ_ACTIVE_REPLY_PROBABILITY=0.35
 LONGTU_QQ_ACTIVE_REPLY_COOLDOWN_SECONDS=120
 LONGTU_QQ_ACTIVE_REPLY_MAX_PER_HOUR=6
 LONGTU_QQ_ACTIVE_REPLY_CONTEXT_MESSAGES=12
 LONGTU_QQ_ACTIVE_REPLY_DECISION_TIMEOUT_SECONDS=15
+LONGTU_QQ_ACTIVE_REPLY_BUSY_WINDOW_SECONDS=20
+LONGTU_QQ_ACTIVE_REPLY_BUSY_MESSAGE_COUNT=4
+LONGTU_QQ_ACTIVE_REPLY_BUSY_SENDER_COUNT=2
+LONGTU_QQ_ACTIVE_REPLY_DISENGAGE_AFTER_MESSAGES=3
 ```
 
-`LONGTU_QQ_ACTIVE_REPLY_GROUPS` 留空时沿用 Bridge 的 `LONGTU_QQ_ALLOWED_GROUPS` 范围。判定器会忽略明确发给其他成员的 `@`/引用、图片、斜杠指令和机器人自身消息；判定模型超时或输出异常时默认沉默，不影响原有明确 `@机器人` 的回复。
+`LONGTU_QQ_ACTIVE_REPLY_GROUPS` 留空时沿用 Bridge 的 `LONGTU_QQ_ALLOWED_GROUPS` 范围。判定器先输出 `must/may/no`：点名、引用机器人、明确公开提问/求助以及模型识别出的风险或明显错误信息为 `must`，会绕过概率、群聊热度、冷却和小时上限；`may` 才受这些可选插话限制。默认 20 秒内至少 4 条消息且涉及 2 名发送者时判断为群聊正热；机器人发言后连续 3 条消息没人接它时，`may` 主动退场，直到 `must` 再次把它拉回。判定器仍会忽略明确发给其他成员的 `@`/引用、图片、斜杠指令和机器人自身消息。判定模型故障时，点名、引用机器人和明确问句会按 `must` 放行，其他消息默认沉默，不影响原有明确 `@机器人` 的回复。
 
 ### 群角色认知
 
@@ -187,7 +192,7 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs --tail=200 qq-bo
 
 ### 群里完全不回复
 
-- 先明确 `@机器人` 测试主链路；主动回复还需要 `LLM_API_KEY`、`LONGTU_QQ_ACTIVE_REPLY_ENABLED=true`，并受候选概率、冷却和每小时上限影响。
+- 先明确 `@机器人` 测试主链路；主动回复还需要 `LLM_API_KEY`、`LONGTU_QQ_ACTIVE_REPLY_ENABLED=true`。只有 `may` 类可选插话受候选概率、群聊热度、无人接话退场、冷却和每小时上限影响。
 - 检查 `LONGTU_QQ_ALLOWED_GROUPS` 是否包含当前群号。
 - 确认 AstrBot 控制台已经收到该群的消息事件。
 
