@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OpenAICompatibleChatClient } from './chat-client.js';
 import { ActiveReplyDecider } from './active-reply.js';
+import { PeerBotContinuationDecider } from './peer-bot-gate.js';
 import { MemeStore } from './meme-store.js';
 import { LongtuLibrary } from './longtu-library.js';
 import { parseAdminUsers, parseProtectedRoles } from './longtu-management.js';
@@ -343,6 +344,20 @@ export async function createQqRuntime() {
     personaPrompt: systemPrompt,
     logger: console,
   });
+  const peerBotContinuationDecider = new PeerBotContinuationDecider({
+    chatClient,
+    enabled: parseBoolean(
+      process.env.LONGTU_QQ_PEER_BOT_CONTEXT_GATE_ENABLED,
+      true,
+    ),
+    contextMessages: parsePositiveInteger(
+      process.env.LONGTU_QQ_PEER_BOT_CONTEXT_MESSAGES,
+    ) ?? 12,
+    timeoutMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_PEER_BOT_DECISION_TIMEOUT_SECONDS,
+    ) ?? 10) * 1000,
+    logger: console,
+  });
   const service = new QqBotService({
     chatClient,
     conversationStore,
@@ -355,10 +370,11 @@ export async function createQqRuntime() {
     adminUsers: parseAdminUsers(process.env.LONGTU_QQ_ADMIN_USERS),
     protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
     activeReplyDecider,
+    peerBotContinuationDecider,
     peerBotUsers: parseIdentifierSet(process.env.LONGTU_QQ_PEER_BOT_USERS),
     peerBotMaxConsecutiveReplies: parsePositiveInteger(
       process.env.LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES,
-    ) ?? 2,
+    ) ?? 4,
     peerBotLoopWindowMs: (parsePositiveNumber(
       process.env.LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS,
     ) ?? 300) * 1000,
@@ -373,6 +389,8 @@ export async function createQqRuntime() {
     memberAliases,
     webSearchEnabled,
     activeReplyEnabled: activeReplyDecider.enabled && chatClient.isConfigured,
+    peerBotContextGateEnabled: peerBotContinuationDecider.enabled
+      && chatClient.isConfigured,
   };
 }
 
@@ -407,6 +425,7 @@ export async function startQqApi() {
         model_configured: runtime.chatClient.isConfigured,
         web_search_enabled: runtime.webSearchEnabled,
         active_reply_enabled: runtime.activeReplyEnabled,
+        peer_bot_context_gate_enabled: runtime.peerBotContextGateEnabled,
         image_count: currentStats.longtuImageCount,
         bundled_image_count: currentStats.longtuImageCount - currentStats.dynamicActive,
         dynamic_image_count: currentStats.dynamicActive,
@@ -431,6 +450,9 @@ export async function startQqApi() {
   console.log(runtime.activeReplyEnabled
     ? 'QQ 群主动回复已启用：must/may/no 优先级 + 热度与退场判定，回复仍走现有 Node 引擎'
     : 'QQ 群主动回复已关闭');
+  console.log(runtime.peerBotContextGateEnabled
+    ? 'QQ peer Bot 续聊阀门已启用：首轮必回，后续按语境判断并保留硬上限'
+    : 'QQ peer Bot 续聊阀门未启用：仅使用硬上限');
 
   let shuttingDown = false;
   const shutdown = async (signal) => {

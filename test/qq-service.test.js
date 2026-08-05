@@ -40,6 +40,7 @@ function createService(options = {}) {
     adminUsers: options.adminUsers,
     protectedRoles: options.protectedRoles,
     activeReplyDecider: options.activeReplyDecider,
+    peerBotContinuationDecider: options.peerBotContinuationDecider,
     peerBotUsers: options.peerBotUsers,
     peerBotMaxConsecutiveReplies: options.peerBotMaxConsecutiveReplies,
     peerBotLoopWindowMs: options.peerBotLoopWindowMs,
@@ -532,6 +533,80 @@ test('明确艾特也不能让 peer Bot 绕过循环阈值，真人艾特不受�
     assert.equal(humanReply.messages.length > 0, true);
   }
   assert.equal(calls.length, 5);
+});
+
+test('peer Bot 首轮回复后先过语境阀门，空泛续话不等到硬阈值就静默', async () => {
+  const gateInputs = [];
+  const { service, calls } = createService({
+    peerBotUsers: new Set(['peer-bot']),
+    peerBotMaxConsecutiveReplies: 4,
+    peerBotContinuationDecider: {
+      async shouldContinue(input) {
+        gateInputs.push(input);
+        return { continue: false, reason: 'ai-stop' };
+      },
+    },
+  });
+  const directMessage = (messageId) => ({
+    message_id: messageId,
+    message_type: 'group',
+    group_id: 'g-context-gate',
+    user_id: 'peer-bot',
+    sender_name: '另一个机器人',
+    text: '@龙玉涛 你说得对，我再接一句',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  });
+
+  const first = await service.handleMessage(directMessage('gate-peer-1'));
+  const stoppedEarly = await service.handleMessage(directMessage('gate-peer-2'));
+
+  assert.equal(first.messages.length > 0, true);
+  assert.deepEqual(stoppedEarly, { mode: 'observed', messages: [] });
+  assert.equal(calls.length, 1);
+  assert.equal(gateInputs.length, 1);
+  assert.equal(gateInputs[0].replyCount, 1);
+  assert.match(gateInputs[0].currentContent, /再接一句/);
+});
+
+test('peer Bot 有实质新问题可继续，但语境判定失手仍受更高硬上限保护', async () => {
+  const gateCounts = [];
+  const { service, calls } = createService({
+    peerBotUsers: new Set(['peer-bot']),
+    peerBotMaxConsecutiveReplies: 3,
+    peerBotContinuationDecider: {
+      async shouldContinue({ replyCount }) {
+        gateCounts.push(replyCount);
+        return { continue: true, reason: replyCount === 0 ? 'initial' : 'ai-continue' };
+      },
+    },
+  });
+  const directMessage = (messageId, userId = 'peer-bot') => ({
+    message_id: messageId,
+    message_type: 'group',
+    group_id: 'g-context-limit',
+    user_id: userId,
+    sender_name: userId === 'peer-bot' ? '另一个机器人' : '真人',
+    text: '@龙玉涛 新问题：请继续解释不同群 ID 的处理',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  });
+
+  for (let index = 1; index <= 3; index += 1) {
+    const result = await service.handleMessage(directMessage(`context-${index}`));
+    assert.equal(result.messages.length > 0, true);
+  }
+  const callsAfterThreeReplies = calls.length;
+  const hardStopped = await service.handleMessage(directMessage('context-4'));
+  assert.deepEqual(hardStopped, { mode: 'observed', messages: [] });
+  assert.deepEqual(gateCounts, [1, 2]);
+  assert.equal(calls.length, callsAfterThreeReplies);
+
+  await service.handleMessage(directMessage('context-human', 'human'));
+  const callsAfterHuman = calls.length;
+  const afterHuman = await service.handleMessage(directMessage('context-5'));
+  assert.equal(afterHuman.messages.length > 0, true);
+  assert.equal(calls.length > callsAfterHuman, true);
 });
 
 test('读空气判定不回复时继续把普通群消息写入旁观记忆', async () => {
