@@ -422,7 +422,7 @@ export async function startQqApi() {
     ? 'QQ 联网检索已启用：普通模型回复默认先检索，其余查询走 general 模式'
     : 'QQ 联网检索已关闭');
   console.log(runtime.activeReplyEnabled
-    ? 'QQ 群主动回复已启用：概率预筛 + 冷却限流 + AI 读空气，回复仍走现有 Node 引擎'
+    ? 'QQ 群主动回复已启用：must/may/no 优先级 + 热度与退场判定，回复仍走现有 Node 引擎'
     : 'QQ 群主动回复已关闭');
 
   let shuttingDown = false;
