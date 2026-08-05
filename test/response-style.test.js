@@ -301,6 +301,10 @@ test('纯艾特使用短人格提示并拒绝客服式回复', () => {
     isInvalidPureMentionReply('嗨～想聊天、想问问题，还是有什么需要我帮忙的，尽管说！'),
     true,
   );
+  assert.equal(
+    isInvalidPureMentionReply('嘿！听到呼唤我就来了～有什么想跟我聊聊的吗？尽管开口～'),
+    true,
+  );
   assert.equal(isInvalidPureMentionReply('**你好**\n- 有什么问题？'), true);
 });
 

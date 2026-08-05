@@ -71,6 +71,33 @@ test('QQ 请求字段会映射到现有消息模型且私聊无需 group_id', ()
   );
 });
 
+test('Bridge 显示出来的纯 At 昵称仍走短回复并拦截客服话术', async () => {
+  const input = {
+    message_id: 'rendered-at-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'u1',
+    sender_name: '群友',
+    text: '@龙玉涛AI2.0',
+    bot_user_id: 'bot-qq',
+    mentions: [{ user_id: 'bot-qq', name: '龙玉涛AI2.0' }],
+  };
+  const payload = normalizeQqPayload(input);
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '嘿！听到呼唤我就来了～有什么想跟我聊聊的吗？尽管开口～';
+      },
+    },
+  });
+  const result = await service.handleMessage(input);
+
+  assert.equal(payload.pureBotMention, true);
+  assert.equal(result.mode, 'pure-mention');
+  assert.equal(result.messages[0].text, '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。');
+});
+
 test('明确龙图指令直接返回 Base64 图片且不调用模型', async () => {
   const chatClient = {
     isConfigured: true,
