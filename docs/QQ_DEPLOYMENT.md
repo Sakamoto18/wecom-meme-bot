@@ -5,7 +5,7 @@
 ```text
 QQ → NapCat（OneBot v11）→ AstrBot → 龙图 Bridge 插件 → QQ Bot HTTP 服务
                                                         ↓
-                                         现有回复引擎 / 龙图库 / 大模型
+                              读空气判定 / 现有回复引擎 / 搜索 / 龙图库
 ```
 
 原企业微信入口仍然是 `npm start`（`src/index.js`）；QQ 入口是 `npm run start:qq`（`src/qq-api.js`）。两边使用不同的连接方式和会话记忆，可以同时运行。QQ 后端要求 Node.js 22.5 或更新版本，并使用 SQLite 保存最多 30 天的近期原文和滚动摘要。
@@ -68,14 +68,32 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 插件默认行为：
 
 - QQ 私聊消息直接响应。
-- QQ 群聊只有 `@机器人` 或命中 AstrBot 唤醒词才响应。
+- QQ 群聊明确 `@机器人` 时必定响应；普通群消息默认先经过 ChatPlus 风格的主动回复判定，适合接话时才响应。
 - `LONGTU_QQ_ALLOWED_GROUPS` 留空时允许所有群；填写后只处理白名单群。
 - 默认不发送“处理中”占位消息，因此明确龙图指令仍然只回图片；需要时可在插件配置中开启。
 - 插件处理消息后会停止 AstrBot 默认 LLM 流程，避免同一条消息回复两次。
-- Bridge 会在收到任何 QQ 消息时先无条件停止 AstrBot 后续事件链；禁用群、关闭旁观、空消息及后端异常等提前返回路径也不会进入默认 LLM。允许群中的普通消息只会静默进入角色/语境记忆，不会回复。
+- Bridge 会在收到任何 QQ 消息时先无条件停止 AstrBot 后续事件链；禁用群、关闭旁观、空消息及后端异常等提前返回路径也不会进入默认 LLM。允许群中的普通消息会先交给 Node 服务“读空气”，判定不回复时静默进入角色/语境记忆，判定回复时仍由现有人格、搜索和记忆链路生成。
 - 群内只有 `/add`、`/tag`、`/del` 会进入图库服务；其他以 `/` 开头的 AstrBot/插件指令都会被 Bridge 停止。
 - 群聊回复会引用原消息。原消息明确 `@` 第三人时，回复优先 `@` 这些目标（最多 3 人）；如果只 `@机器人`，回复会 `@` 发令者。机器人自身、发送者自艾特和 `@全体成员` 不会被当成第三方目标，私聊不附加引用或艾特。
 - 纯 `@机器人` 没有附加文字时会进入独立 QQ 服务的快速人格模式，强制关闭 thinking，并对客服式草稿使用角色招呼兜底；Bridge 会先停止 AstrBot 默认 LLM。
+
+### 群聊主动回复（ChatPlus 风格）
+
+本项目参考 [ChatPlus](https://github.com/Him666233/astrbot_plugin_group_chat_plus) 的“概率筛选 + AI 读空气”思路，但不安装原插件。原插件会直接调用 AstrBot LLM 生成答案，与现有 Longtu Bridge 同时启用会造成两套人格、记忆与联网路径；这里的判定器只决定“要不要接话”，命中后仍调用 Node 回复引擎。
+
+`.env.qq` 可配置：
+
+```dotenv
+LONGTU_QQ_ACTIVE_REPLY_ENABLED=true
+LONGTU_QQ_ACTIVE_REPLY_GROUPS=
+LONGTU_QQ_ACTIVE_REPLY_PROBABILITY=0.35
+LONGTU_QQ_ACTIVE_REPLY_COOLDOWN_SECONDS=120
+LONGTU_QQ_ACTIVE_REPLY_MAX_PER_HOUR=6
+LONGTU_QQ_ACTIVE_REPLY_CONTEXT_MESSAGES=12
+LONGTU_QQ_ACTIVE_REPLY_DECISION_TIMEOUT_SECONDS=15
+```
+
+`LONGTU_QQ_ACTIVE_REPLY_GROUPS` 留空时沿用 Bridge 的 `LONGTU_QQ_ALLOWED_GROUPS` 范围。判定器会忽略明确发给其他成员的 `@`/引用、图片、斜杠指令和机器人自身消息；判定模型超时或输出异常时默认沉默，不影响原有明确 `@机器人` 的回复。
 
 ### 群角色认知
 
@@ -169,7 +187,7 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs --tail=200 qq-bo
 
 ### 群里完全不回复
 
-- 默认需要 `@机器人`；先在私聊里测试。
+- 先明确 `@机器人` 测试主链路；主动回复还需要 `LLM_API_KEY`、`LONGTU_QQ_ACTIVE_REPLY_ENABLED=true`，并受候选概率、冷却和每小时上限影响。
 - 检查 `LONGTU_QQ_ALLOWED_GROUPS` 是否包含当前群号。
 - 确认 AstrBot 控制台已经收到该群的消息事件。
 

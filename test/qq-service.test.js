@@ -39,6 +39,7 @@ function createService(options = {}) {
     longtuLibrary: options.longtuLibrary,
     adminUsers: options.adminUsers,
     protectedRoles: options.protectedRoles,
+    activeReplyDecider: options.activeReplyDecider,
     logger: { log() {}, warn() {} },
   });
   return { service, calls };
@@ -345,6 +346,75 @@ test('QQ 普通群消息只进入观察记忆，不调用模型也不回复', as
   assert.match(observations[0].content, /当前发言人：群友甲/);
   assert.match(observations[0].content, /群友乙/);
   assert.equal(members.length, 2);
+});
+
+test('普通群消息经读空气判定命中后复用现有人格回复引擎', async () => {
+  const decisions = [];
+  const { service, calls } = createService({
+    activeReplyDecider: {
+      async shouldReply(input) {
+        decisions.push(input);
+        return { reply: true, reason: 'ai-yes' };
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'active-reply-1',
+    message_type: 'group',
+    group_id: 'g-active',
+    user_id: 'u-active',
+    sender_name: '群友甲',
+    text: '竹知了和玄武之声到底是什么',
+    observe_only: true,
+  });
+
+  assert.equal(decisions.length, 1);
+  assert.match(decisions[0].currentContent, /竹知了和玄武之声/);
+  assert.equal(calls.length, 1);
+  assert.equal(result.active_reply, true);
+  assert.deepEqual(result.messages.map((message) => message.type), ['text', 'image']);
+});
+
+test('读空气判定不回复时继续把普通群消息写入旁观记忆', async () => {
+  const observations = [];
+  const decisions = [];
+  const conversationStore = {
+    recordGroupMember() {},
+    getGroupMemberAliases: () => ({}),
+    getGroupMembers: () => [{
+      userId: 'u-target',
+      identityConfirmed: true,
+      confirmedNames: ['群友乙'],
+    }],
+    get: () => [],
+    appendObservation(conversationId, content) {
+      observations.push({ conversationId, content });
+    },
+    scheduleSummary: () => Promise.resolve(false),
+  };
+  const { service, calls } = createService({
+    conversationStore,
+    activeReplyDecider: {
+      async shouldReply(input) {
+        decisions.push(input);
+        return { reply: false, reason: 'ai-no' };
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'active-reply-no-1',
+    message_type: 'group',
+    group_id: 'g-active',
+    user_id: 'u-active',
+    sender_name: '群友甲',
+    text: '群友乙你怎么看',
+    observe_only: true,
+  });
+
+  assert.deepEqual(result, { mode: 'observed', messages: [] });
+  assert.equal(calls.length, 0);
+  assert.equal(observations.length, 1);
+  assert.equal(decisions[0].payload.mentions[0].userId, 'u-target');
 });
 
 test('受保护 QQ 角色覆盖可变昵称并作为高优先级钢印注入', async () => {
