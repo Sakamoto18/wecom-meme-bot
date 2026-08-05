@@ -87,9 +87,9 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 LONGTU_QQ_ACTIVE_REPLY_ENABLED=true
 LONGTU_QQ_ACTIVE_REPLY_GROUPS=
 LONGTU_QQ_ACTIVE_REPLY_NAMES=龙玉涛
-LONGTU_QQ_ACTIVE_REPLY_PROBABILITY=0.35
-LONGTU_QQ_ACTIVE_REPLY_COOLDOWN_SECONDS=120
-LONGTU_QQ_ACTIVE_REPLY_MAX_PER_HOUR=6
+LONGTU_QQ_ACTIVE_REPLY_PROBABILITY=0.15
+LONGTU_QQ_ACTIVE_REPLY_COOLDOWN_SECONDS=300
+LONGTU_QQ_ACTIVE_REPLY_MAX_PER_HOUR=3
 LONGTU_QQ_ACTIVE_REPLY_CONTEXT_MESSAGES=12
 LONGTU_QQ_ACTIVE_REPLY_DECISION_TIMEOUT_SECONDS=15
 LONGTU_QQ_ACTIVE_REPLY_BUSY_WINDOW_SECONDS=20
@@ -101,7 +101,7 @@ LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES=2
 LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 ```
 
-`LONGTU_QQ_ACTIVE_REPLY_GROUPS` 留空时沿用 Bridge 的 `LONGTU_QQ_ALLOWED_GROUPS` 范围。判定器先输出 `must/may/no`：点名、引用机器人、明确公开提问/求助以及模型识别出的风险或明显错误信息为 `must`，会绕过概率、群聊热度、冷却和小时上限；`may` 才受这些可选插话限制。默认 20 秒内至少 4 条消息且涉及 2 名发送者时判断为群聊正热；机器人发言后连续 3 条消息没人接它时，`may` 主动退场，直到 `must` 再次把它拉回。判定器仍会忽略明确发给其他成员的 `@`/引用、图片、斜杠指令和机器人自身消息。判定模型故障时，点名、引用机器人和明确问句会按 `must` 放行，其他消息默认沉默，不影响原有明确 `@机器人` 的回复。
+`LONGTU_QQ_ACTIVE_REPLY_GROUPS` 留空时沿用 Bridge 的 `LONGTU_QQ_ALLOWED_GROUPS` 范围。判定器先输出 `must/may/no`：只有明确点名/引用机器人、紧迫风险和可能造成现实损失的关键纠错属于 `must`，会绕过可选插话限制；普通公开提问/求助、话题延续和有趣话题都属于 `may`，需要继续通过概率、群聊热度、冷却和小时上限。默认候选概率为 0.15、同群冷却 300 秒、每群每小时最多 3 次。20 秒内至少 4 条消息且涉及 2 名发送者时判断为群聊正热；机器人发言后连续 3 条消息没人接它时，`may` 主动退场，直到直接点名或引用再次把它拉回。判定器仍会忽略明确发给其他成员的 `@`/引用、图片、斜杠指令和机器人自身消息。判定模型故障时，只有点名或引用机器人按 `must` 放行，普通公开问句默认沉默，不影响原有明确 `@机器人` 的被动回复。
 
 主动回复还会使用自适应长度：`may` 作为群友插话，默认只生成一句 15～70 字的短评，超过安全长度会触发压缩重写；`must` 的简单问题保持 1～3 句，只有方案、排障、比较或需要证据的问题才开启详细回答。该长度策略只改变表达密度，不关闭既有人格、记忆或联网检索。
 

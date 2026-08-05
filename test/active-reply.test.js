@@ -208,7 +208,7 @@ test('机器人发言后连续三条没人接话，may 进入主动静默', asyn
   assert.deepEqual(result, { reply: false, reason: 'disengaged' });
 });
 
-test('点名、引用机器人和明确问句在判定模型故障时按 must 放行', async () => {
+test('点名和引用机器人在判定模型故障时按 must 放行，普通问句保持沉默', async () => {
   const warnings = [];
   const decider = new ActiveReplyDecider({
     chatClient: {
@@ -231,11 +231,13 @@ test('点名、引用机器人和明确问句在判定模型故障时按 must �
     results.push(await decider.shouldReply({ payload, history: [] }));
   }
 
-  assert.ok(results.every((result) => (
+  assert.ok(results.slice(0, 2).every((result) => (
     result.reply === true && result.reason === 'signal-must'
   )));
+  assert.deepEqual(results[2], { reply: false, reason: 'decision-error' });
   assert.equal(warnings.length, 3);
-  assert.ok(warnings.every((warning) => /强信号按 must 放行/.test(warning)));
+  assert.ok(warnings.slice(0, 2).every((warning) => /强信号按 must 放行/.test(warning)));
+  assert.match(warnings[2], /默认保持沉默/);
 });
 
 test('强信号不会被模型误判为 no 而漏掉', async () => {
@@ -249,11 +251,30 @@ test('强信号不会被模型误判为 no 而漏掉', async () => {
   });
 
   const result = await decider.shouldReply({
-    payload: groupPayload({ text: '这个到底怎么解决' }),
+    payload: groupPayload({ text: '龙玉涛，这个到底怎么解决' }),
     history: [],
   });
 
   assert.deepEqual(result, { reply: true, reason: 'signal-must' });
+});
+
+test('普通公开问句属于可选插话，必须经过概率与频率限制', async () => {
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return 'may'; },
+    },
+    enabled: true,
+    candidateProbability: 0,
+    now: () => 10_000,
+  });
+
+  const result = await decider.shouldReply({
+    payload: groupPayload({ text: '竹知了和玄武之声到底是什么？' }),
+    history: [],
+  });
+
+  assert.deepEqual(result, { reply: false, reason: 'probability' });
 });
 
 test('消息明确发给其他群友、带图片或来自机器人自身时保持沉默但仍计入群聊热度', async () => {

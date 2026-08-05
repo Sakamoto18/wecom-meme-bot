@@ -308,14 +308,14 @@ export async function createQqRuntime() {
     enabled: parseBoolean(process.env.LONGTU_QQ_ACTIVE_REPLY_ENABLED, true),
     candidateProbability: parseProbability(
       process.env.LONGTU_QQ_ACTIVE_REPLY_PROBABILITY,
-      0.35,
+      0.15,
     ),
     cooldownMs: (parsePositiveNumber(
       process.env.LONGTU_QQ_ACTIVE_REPLY_COOLDOWN_SECONDS,
-    ) ?? 120) * 1000,
+    ) ?? 300) * 1000,
     maxRepliesPerHour: parsePositiveInteger(
       process.env.LONGTU_QQ_ACTIVE_REPLY_MAX_PER_HOUR,
-    ) ?? 6,
+    ) ?? 3,
     contextMessages: parsePositiveInteger(
       process.env.LONGTU_QQ_ACTIVE_REPLY_CONTEXT_MESSAGES,
     ) ?? 12,

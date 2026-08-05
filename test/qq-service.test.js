@@ -473,6 +473,40 @@ test('peer Bot 循环窗口过期后自动恢复回复额度', async () => {
   assert.equal(calls.length, 2);
 });
 
+test('明确艾特也不能让 peer Bot 绕过循环阈值，真人艾特不受限制', async () => {
+  const { service, calls } = createService({
+    peerBotUsers: new Set(['peer-bot']),
+    peerBotMaxConsecutiveReplies: 2,
+  });
+  const directMessage = (messageId, userId) => ({
+    message_id: messageId,
+    message_type: 'group',
+    group_id: 'g-direct-loop',
+    user_id: userId,
+    sender_name: userId === 'peer-bot' ? '另一个机器人' : '真人群友',
+    text: '@龙玉涛 再补一句',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  });
+
+  const first = await service.handleMessage(directMessage('direct-peer-1', 'peer-bot'));
+  const second = await service.handleMessage(directMessage('direct-peer-2', 'peer-bot'));
+  const blocked = await service.handleMessage(directMessage('direct-peer-3', 'peer-bot'));
+
+  assert.equal(first.messages.length > 0, true);
+  assert.equal(second.messages.length > 0, true);
+  assert.deepEqual(blocked, { mode: 'observed', messages: [] });
+  assert.equal(calls.length, 2);
+
+  for (let index = 0; index < 3; index += 1) {
+    const humanReply = await service.handleMessage(
+      directMessage(`direct-human-${index}`, 'human'),
+    );
+    assert.equal(humanReply.messages.length > 0, true);
+  }
+  assert.equal(calls.length, 5);
+});
+
 test('读空气判定不回复时继续把普通群消息写入旁观记忆', async () => {
   const observations = [];
   const decisions = [];
