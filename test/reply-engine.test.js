@@ -340,6 +340,69 @@ test('正经问题开启思考并提高输出预算', async () => {
   assert.equal(result.review.valid, true);
 });
 
+test('主动 may 插话强制快速短回复，过长草稿会压缩重写', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '这个竹子玩具转得还挺快',
+    modelInput: '这个竹子玩具转得还挺快',
+    activeReply: true,
+    activeReplyPriority: 'may',
+    history: [],
+    chatClient: {
+      isConfigured: true,
+      complete: async (history, input, options) => {
+        calls.push({ history, input, options });
+        if (calls.length === 1) {
+          return `这个竹子玩具确实转得很快，蠢货。${'但这里其实没有必要反复解释同一个结论'.repeat(10)}`;
+        }
+        return '闭着眼都知道是个破竹子玩具，你这白痴还想听论文？';
+      },
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.options.thinking), [
+    { type: 'disabled' },
+    { type: 'disabled' },
+  ]);
+  assert.deepEqual(calls.map((call) => call.options.maxTokens), [280, 280]);
+  assert.match(calls[0].options.additionalSystemPrompt, /最终只发 1 句/);
+  assert.equal(result.answer, '闭着眼都知道是个破竹子玩具，你这白痴还想听论文？');
+  assert.equal(result.review.valid, true);
+});
+
+test('主动 must 遇到复杂技术问题仍允许详细回答', async () => {
+  const calls = [];
+  const answer = [
+    '先隔离写操作并检查参数来源，避免继续影响生产数据。',
+    '随后用最小复现确认删除条件，补上事务、权限校验和 dry-run，再从备份恢复受影响记录。',
+    '最后增加针对空条件和全表更新的回归测试；拿生产库试错的白痴操作一次就够了。',
+  ].join('');
+  const result = await generateConversationReply({
+    content: '这段代码为什么会删生产数据，应该怎么修',
+    modelInput: '这段代码为什么会删生产数据，应该怎么修',
+    activeReply: true,
+    activeReplyPriority: 'must',
+    history: [],
+    chatClient: {
+      isConfigured: true,
+      complete: async (history, input, options) => {
+        calls.push({ history, input, options });
+        return answer;
+      },
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].options.thinking, { type: 'enabled' });
+  assert.equal(calls[0].options.maxTokens, 20_000);
+  assert.match(calls[0].options.additionalSystemPrompt, /确实需要方案、步骤或证据时才详细展开/);
+  assert.equal(result.answer, answer);
+  assert.equal(result.review.valid, true);
+});
+
 test('正经答案过短时再次开启思考做完整性复核', async () => {
   const calls = [];
   const longAnswer = [
