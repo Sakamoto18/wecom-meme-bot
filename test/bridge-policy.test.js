@@ -21,4 +21,5 @@ test('QQ Bridge 在任何分支判断前停止 AstrBot 默认事件链', async (
   assert.ok(stopIndex < slashBranchIndex);
   assert.ok(stopIndex < routingIndex);
   assert.equal(handler.match(/event\.stop_event\(\)/g)?.length, 1);
+  assert.match(handler, /if observe_only and not response\["messages"\]:/);
 });

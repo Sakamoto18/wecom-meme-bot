@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OpenAICompatibleChatClient } from './chat-client.js';
+import { ActiveReplyDecider } from './active-reply.js';
 import { MemeStore } from './meme-store.js';
 import { LongtuLibrary } from './longtu-library.js';
 import { parseAdminUsers, parseProtectedRoles } from './longtu-management.js';
@@ -31,6 +32,26 @@ function parsePositiveInteger(value) {
 function parsePositiveNumber(value) {
   const parsed = Number.parseFloat(value ?? '');
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseBoolean(value, defaultValue = false) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return defaultValue;
+  return !/^(?:0|false|off|no)$/i.test(normalized);
+}
+
+function parseProbability(value, defaultValue) {
+  const parsed = Number.parseFloat(value ?? '');
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1
+    ? parsed
+    : defaultValue;
+}
+
+function parseIdentifierSet(value) {
+  return new Set(String(value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean));
 }
 
 async function readOptionalConfig(filePath, label) {
@@ -282,6 +303,31 @@ export async function createQqRuntime() {
     model: process.env.LLM_MODEL || 'deepseek-chat',
     systemPrompt,
   });
+  const activeReplyDecider = new ActiveReplyDecider({
+    chatClient,
+    enabled: parseBoolean(process.env.LONGTU_QQ_ACTIVE_REPLY_ENABLED, true),
+    candidateProbability: parseProbability(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_PROBABILITY,
+      0.35,
+    ),
+    cooldownMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_COOLDOWN_SECONDS,
+    ) ?? 120) * 1000,
+    maxRepliesPerHour: parsePositiveInteger(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_MAX_PER_HOUR,
+    ) ?? 6,
+    contextMessages: parsePositiveInteger(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_CONTEXT_MESSAGES,
+    ) ?? 12,
+    timeoutMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_DECISION_TIMEOUT_SECONDS,
+    ) ?? 15) * 1000,
+    allowedGroups: parseIdentifierSet(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_GROUPS,
+    ),
+    personaPrompt: systemPrompt,
+    logger: console,
+  });
   const service = new QqBotService({
     chatClient,
     conversationStore,
@@ -293,6 +339,7 @@ export async function createQqRuntime() {
     longtuLibrary,
     adminUsers: parseAdminUsers(process.env.LONGTU_QQ_ADMIN_USERS),
     protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
+    activeReplyDecider,
   });
 
   return {
@@ -303,6 +350,7 @@ export async function createQqRuntime() {
     longtuLibrary,
     memberAliases,
     webSearchEnabled,
+    activeReplyEnabled: activeReplyDecider.enabled && chatClient.isConfigured,
   };
 }
 
@@ -336,6 +384,7 @@ export async function startQqApi() {
         platform: 'qq',
         model_configured: runtime.chatClient.isConfigured,
         web_search_enabled: runtime.webSearchEnabled,
+        active_reply_enabled: runtime.activeReplyEnabled,
         image_count: currentStats.longtuImageCount,
         bundled_image_count: currentStats.longtuImageCount - currentStats.dynamicActive,
         dynamic_image_count: currentStats.dynamicActive,
@@ -357,6 +406,9 @@ export async function startQqApi() {
   console.log(runtime.webSearchEnabled
     ? 'QQ 联网检索已启用：普通模型回复默认先检索，其余查询走 general 模式'
     : 'QQ 联网检索已关闭');
+  console.log(runtime.activeReplyEnabled
+    ? 'QQ 群主动回复已启用：概率预筛 + 冷却限流 + AI 读空气，回复仍走现有 Node 引擎'
+    : 'QQ 群主动回复已关闭');
 
   let shuttingDown = false;
   const shutdown = async (signal) => {

@@ -25,7 +25,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.6.2",
+    "1.7.0",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -673,7 +673,9 @@ class LongtuQqBridge(Star):
             yield event.plain_result(str(error_message))
             return
 
-        if observe_only:
+        # 普通群消息原本以 observe_only 进入 Node 服务。Node 现在可能通过
+        # “读空气”判定把它升级为主动回复；只有确实没有返回消息时才保持静默。
+        if observe_only and not response["messages"]:
             return
 
         reply_chain = []
