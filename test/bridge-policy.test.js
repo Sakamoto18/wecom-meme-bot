@@ -32,9 +32,32 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
     handler,
     /if not bool\(response\.get\("active_reply"\)\):\s+reply_chain = self\._reply_prefix/,
   );
-  assert.match(handler, /not str\(raw_text or ""\)\.strip\(\)/);
-  assert.match(handler, /not self\._plain_component_text\(components\)/);
+  assert.match(source, /not str\(cls\._raw_text\(event\) or ""\)\.strip\(\)/);
+  assert.match(source, /not cls\._plain_component_text\(components\)/);
   assert.match(source, /getattr\(component, "text", ""\)/);
   assert.match(handler, /PURE_BOT_MENTION_TEXT\s+if pure_bot_mention/);
   assert.doesNotMatch(handler, /and not str\(text or ""\)\.strip\(\)/);
+});
+
+test('QQ Bridge 在默认 LLM 启动前兜底接管漏过 Adapter handler 的纯 At', async () => {
+  const source = await readFile(
+    new URL('../astrbot_plugin_longtu_bridge/main.py', import.meta.url),
+    'utf8',
+  );
+  const hookStart = source.indexOf('async def rescue_pure_mention_before_default_llm');
+  const handlerStart = source.indexOf('async def on_qq_message');
+  assert.notEqual(hookStart, -1);
+  assert.notEqual(handlerStart, -1);
+
+  const hook = source.slice(hookStart, handlerStart);
+  assert.match(
+    source.slice(0, hookStart),
+    /@filter\.on_waiting_llm_request\(priority=1000\)/,
+  );
+  assert.match(hook, /self\._is_pure_bot_mention\(event\)/);
+  assert.match(hook, /self\._request_backend/);
+  assert.match(hook, /await event\.send\(MessageChain\(chain=reply_chain\)\)/);
+  assert.match(hook, /event\.call_llm = True/);
+  assert.match(hook, /event\.stop_event\(\)/);
+  assert.ok(hook.indexOf('await event.send') < hook.lastIndexOf('event.stop_event()'));
 });

@@ -6,7 +6,7 @@ import time
 import aiohttp
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 
@@ -25,7 +25,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.8.2",
+    "1.8.3",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -122,6 +122,26 @@ class LongtuQqBridge(Star):
             for component in components
             if isinstance(component, Comp.Plain)
         ).strip()
+
+    @classmethod
+    def _is_pure_bot_mention(cls, event: AstrMessageEvent) -> bool:
+        """只认 OneBot 组件中的纯 At，避免把昵称渲染文字当成正文。"""
+        components = event.get_messages()
+        reply_component = cls._reply_component(components)
+        quoted_chain = getattr(reply_component, "chain", None) or []
+        has_image = any(isinstance(component, Comp.Image) for component in components)
+        has_forward = bool(
+            cls._forward_components(components)
+            or cls._forward_components(quoted_chain)
+        )
+        return bool(
+            not str(cls._raw_text(event) or "").strip()
+            and not cls._plain_component_text(components)
+            and not has_image
+            and not has_forward
+            and reply_component is None
+            and cls._is_explicitly_at_bot(event)
+        )
 
     @classmethod
     def _is_slash_command(cls, event: AstrMessageEvent) -> bool:
@@ -580,6 +600,81 @@ class LongtuQqBridge(Star):
                 raise RuntimeError("QQ Bot API 返回格式无效")
             return body
 
+    @staticmethod
+    def _reply_chain_from_backend(response: dict) -> list:
+        reply_chain = []
+        for message in response.get("messages", []):
+            message_type = message.get("type")
+            if message_type == "text" and message.get("text"):
+                reply_chain.append(Comp.Plain(str(message["text"])))
+            elif message_type == "image" and message.get("base64"):
+                reply_chain.append(
+                    Comp.Image.fromBase64(str(message["base64"])),
+                )
+        return reply_chain
+
+    def _pure_mention_payload(self, event: AstrMessageEvent) -> dict:
+        components = event.get_messages()
+        return {
+            "message_id": str(event.message_obj.message_id or ""),
+            "message_type": "private" if event.is_private_chat() else "group",
+            "group_id": event.get_group_id(),
+            "user_id": event.get_sender_id(),
+            "sender_name": event.get_sender_name(),
+            "text": PURE_BOT_MENTION_TEXT,
+            "quoted_text": "",
+            "forwarded_text": "",
+            "quoted_forwarded_text": "",
+            "quoted_user_id": "",
+            "quoted_sender_name": "",
+            "mentions": self._mentions(components),
+            "bot_user_id": str(event.get_self_id() or "").strip(),
+            "has_image": False,
+            "pure_bot_mention": True,
+            "image_base64": "",
+            "quoted_image_base64": "",
+            "observe_only": False,
+        }
+
+    @filter.on_waiting_llm_request(priority=1000)
+    async def rescue_pure_mention_before_default_llm(
+        self,
+        event: AstrMessageEvent,
+    ) -> None:
+        """纯 At 未进入 Adapter handler 时，在默认 LLM 调用前改走 Node。"""
+        if event.get_platform_name() != "aiocqhttp":
+            return
+        if event.is_private_chat() or not self._group_is_allowed(event):
+            return
+        if not self._is_pure_bot_mention(event):
+            return
+        if event.get_extra("longtu_pure_mention_sent", False):
+            event.call_llm = True
+            event.stop_event()
+            return
+
+        event.call_llm = True
+        try:
+            response = await self._request_backend(
+                self._pure_mention_payload(event),
+            )
+        except Exception as error:
+            logger.error(f"纯 At 前置兜底请求失败，保持静默以避免默认客服回复：{error}")
+            event.stop_event()
+            return
+
+        reply_chain = self._reply_chain_from_backend(response)
+        if reply_chain:
+            reply_chain = self._reply_prefix(event, event.get_messages()) + reply_chain
+            await event.send(MessageChain(chain=reply_chain))
+            event.set_extra("longtu_pure_mention_sent", True)
+            logger.info(
+                "纯 At 未进入 Adapter handler，已在默认 LLM 前改走 Node 人格回复",
+            )
+        else:
+            logger.info("纯 At 前置兜底被 Node 判定为静默")
+        event.stop_event()
+
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def on_qq_message(self, event: AstrMessageEvent):
@@ -623,13 +718,7 @@ class LongtuQqBridge(Star):
             # event.message_str 会把 At 组件渲染成“@机器人昵称”，不能用它判断
             # 用户是否附带正文。只检查 OneBot 原始 text 段和 Plain 组件。
             pure_bot_mention = bool(
-                should_reply
-                and not str(raw_text or "").strip()
-                and not self._plain_component_text(components)
-                and not has_image
-                and not has_forward
-                and reply_component is None
-                and self._is_explicitly_at_bot(event)
+                should_reply and self._is_pure_bot_mention(event)
             )
             text = (
                 PURE_BOT_MENTION_TEXT
@@ -706,15 +795,7 @@ class LongtuQqBridge(Star):
             if observe_only and not response["messages"]:
                 return
 
-            reply_chain = []
-            for message in response["messages"]:
-                message_type = message.get("type")
-                if message_type == "text" and message.get("text"):
-                    reply_chain.append(Comp.Plain(str(message["text"])))
-                elif message_type == "image" and message.get("base64"):
-                    reply_chain.append(
-                        Comp.Image.fromBase64(str(message["base64"])),
-                    )
+            reply_chain = self._reply_chain_from_backend(response)
 
             # AstrBot only consumes one result from this handler in the normal
             # response pipeline. Keep text and the attached meme in one chain so
