@@ -325,6 +325,21 @@ export async function createQqRuntime() {
     allowedGroups: parseIdentifierSet(
       process.env.LONGTU_QQ_ACTIVE_REPLY_GROUPS,
     ),
+    botNames: parseIdentifierSet(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_NAMES || '龙玉涛',
+    ),
+    busyWindowMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_BUSY_WINDOW_SECONDS,
+    ) ?? 20) * 1000,
+    busyMessageCount: parsePositiveInteger(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_BUSY_MESSAGE_COUNT,
+    ) ?? 4,
+    busySenderCount: parsePositiveInteger(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_BUSY_SENDER_COUNT,
+    ) ?? 2,
+    disengageAfterMessages: parsePositiveInteger(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_DISENGAGE_AFTER_MESSAGES,
+    ) ?? 3,
     personaPrompt: systemPrompt,
     logger: console,
   });

@@ -350,11 +350,15 @@ test('QQ 普通群消息只进入观察记忆，不调用模型也不回复', as
 
 test('普通群消息经读空气判定命中后复用现有人格回复引擎', async () => {
   const decisions = [];
+  const recordedBotReplies = [];
   const { service, calls } = createService({
     activeReplyDecider: {
       async shouldReply(input) {
         decisions.push(input);
-        return { reply: true, reason: 'ai-yes' };
+        return { reply: true, reason: 'ai-must' };
+      },
+      recordBotReply(groupId) {
+        recordedBotReplies.push(groupId);
       },
     },
   });
@@ -373,6 +377,7 @@ test('普通群消息经读空气判定命中后复用现有人格回复引擎',
   assert.equal(calls.length, 1);
   assert.equal(result.active_reply, true);
   assert.deepEqual(result.messages.map((message) => message.type), ['text', 'image']);
+  assert.deepEqual(recordedBotReplies, ['g-active']);
 });
 
 test('读空气判定不回复时继续把普通群消息写入旁观记忆', async () => {
