@@ -25,7 +25,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.8.1",
+    "1.8.2",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -585,135 +585,148 @@ class LongtuQqBridge(Star):
     async def on_qq_message(self, event: AstrMessageEvent):
         """回复唤醒消息，并静默观察允许群中的普通消息。"""
         # 这是专用 QQ Bot：任何 AIOCQHTTP 消息都不得继续进入 AstrBot 的
-        # 默认 LLM 或其他命令链路。必须在所有配置判断、字段解析和网络请求
-        # 之前截断，确保禁用群、关闭旁观、后端异常等提前返回分支也不会漏出。
-        event.stop_event()
-
-        if self._is_slash_command(event):
-            # AstrBot 的 WakingCheck 会先剥掉 / 唤醒前缀；这里用原始 OneBot
-            # 消息识别。仅放行图库管理的 /add、/tag、/del，其余斜杠命令
-            # 继续停止，避免 /w、/help 等内置命令或其他插件被误触发。
-            if not self._is_allowed_management_slash_command(event):
-                return
-        should_reply = self._should_reply(event)
-        observe_only = not should_reply and self._should_observe(event)
-        if not should_reply and not observe_only:
-            return
-
-        components = event.get_messages()
-        raw_text = self._raw_text(event)
-        text = (
-            raw_text
-            if self._is_allowed_management_slash_command(event) and raw_text
-            else event.message_str.strip()
-        )
-        has_image = any(isinstance(component, Comp.Image) for component in components)
-        reply_component = self._reply_component(components)
-        quoted_chain = getattr(reply_component, "chain", None) or []
-        has_forward = bool(
-            self._forward_components(components)
-            or self._forward_components(quoted_chain)
-        )
-
-        # event.message_str 会把 At 组件渲染成“@机器人昵称”，不能用它判断
-        # 用户是否附带正文。只检查 OneBot 原始 text 段和 Plain 组件。
-        pure_bot_mention = bool(
-            should_reply
-            and not str(raw_text or "").strip()
-            and not self._plain_component_text(components)
-            and not has_image
-            and not has_forward
-            and reply_component is None
-            and self._is_explicitly_at_bot(event)
-        )
-        text = (
-            PURE_BOT_MENTION_TEXT
-            if pure_bot_mention
-            else self._text_for_backend(
-                event,
-                text,
-                should_reply=should_reply,
-                has_image=has_image,
-                has_forward=has_forward,
-            )
-        )
-        if not text and not has_image and not has_forward:
-            return
-        if should_reply and bool(self.config.get("send_processing_hint", False)) and text:
-            yield event.plain_result("正在翻龙图小本本……")
-
-        quoted_user_id, quoted_sender_name = self._quoted_author(reply_component)
-        forwarded_text = await self._forwarded_text(event, components)
-        quoted_forwarded_text = await self._forwarded_text(event, quoted_chain)
-        image_base64 = ""
-        quoted_image_base64 = ""
-        if should_reply and self._is_image_management_text(text):
-            try:
-                image_base64 = await self._first_image_base64(components)
-                quoted_image_base64 = await self._quoted_image_base64(reply_component)
-            except Exception as error:
-                logger.warning(f"龙图库管理图片读取失败：{error}")
-
-        bot_user_id = str(event.get_self_id() or "").strip()
-
-        payload = {
-            "message_id": str(event.message_obj.message_id or ""),
-            "message_type": "private" if event.is_private_chat() else "group",
-            "group_id": event.get_group_id(),
-            "user_id": event.get_sender_id(),
-            "sender_name": event.get_sender_name(),
-            "text": text,
-            "quoted_text": self._quoted_text(components),
-            "forwarded_text": forwarded_text,
-            "quoted_forwarded_text": quoted_forwarded_text,
-            "quoted_user_id": quoted_user_id,
-            "quoted_sender_name": quoted_sender_name,
-            "mentions": self._mentions(components),
-            "bot_user_id": bot_user_id,
-            "has_image": has_image,
-            "pure_bot_mention": pure_bot_mention,
-            "image_base64": image_base64,
-            "quoted_image_base64": quoted_image_base64,
-            "observe_only": observe_only,
-        }
+        # 默认 LLM 或其他命令链路。先禁止 ProcessStage 的默认 LLM；不能在
+        # yield 回复前 stop_event，否则 AstrBot 4.26 会跳过 RespondStage，纯 At
+        # 便会落回默认模型。结果发送完成后再在 finally 中停止后续传播。
+        event.call_llm = True
 
         try:
-            response = await self._request_backend(payload)
-        except Exception as error:
-            logger.error(f"龙图 QQ Bridge 请求失败：{error}")
-            if observe_only:
+            if self._is_slash_command(event):
+                # AstrBot 的 WakingCheck 会先剥掉 / 唤醒前缀；这里用原始 OneBot
+                # 消息识别。仅放行图库管理的 /add、/tag、/del，其余斜杠命令
+                # 继续停止，避免 /w、/help 等内置命令或其他插件被误触发。
+                if not self._is_allowed_management_slash_command(event):
+                    return
+            should_reply = self._should_reply(event)
+            observe_only = not should_reply and self._should_observe(event)
+            if not should_reply and not observe_only:
                 return
-            error_message = self.config.get(
-                "error_message",
-                "龙图服务暂时不可用，请稍后再试。",
+
+            components = event.get_messages()
+            raw_text = self._raw_text(event)
+            text = (
+                raw_text
+                if self._is_allowed_management_slash_command(event) and raw_text
+                else event.message_str.strip()
             )
-            yield event.plain_result(str(error_message))
-            return
+            has_image = any(
+                isinstance(component, Comp.Image)
+                for component in components
+            )
+            reply_component = self._reply_component(components)
+            quoted_chain = getattr(reply_component, "chain", None) or []
+            has_forward = bool(
+                self._forward_components(components)
+                or self._forward_components(quoted_chain)
+            )
 
-        # 普通群消息原本以 observe_only 进入 Node 服务。Node 现在可能通过
-        # “读空气”判定把它升级为主动回复；只有确实没有返回消息时才保持静默。
-        if observe_only and not response["messages"]:
-            return
-
-        reply_chain = []
-        for message in response["messages"]:
-            message_type = message.get("type")
-            if message_type == "text" and message.get("text"):
-                reply_chain.append(Comp.Plain(str(message["text"])))
-            elif message_type == "image" and message.get("base64"):
-                reply_chain.append(
-                    Comp.Image.fromBase64(str(message["base64"])),
+            # event.message_str 会把 At 组件渲染成“@机器人昵称”，不能用它判断
+            # 用户是否附带正文。只检查 OneBot 原始 text 段和 Plain 组件。
+            pure_bot_mention = bool(
+                should_reply
+                and not str(raw_text or "").strip()
+                and not self._plain_component_text(components)
+                and not has_image
+                and not has_forward
+                and reply_component is None
+                and self._is_explicitly_at_bot(event)
+            )
+            text = (
+                PURE_BOT_MENTION_TEXT
+                if pure_bot_mention
+                else self._text_for_backend(
+                    event,
+                    text,
+                    should_reply=should_reply,
+                    has_image=has_image,
+                    has_forward=has_forward,
                 )
+            )
+            if not text and not has_image and not has_forward:
+                return
+            if (
+                should_reply
+                and bool(self.config.get("send_processing_hint", False))
+                and text
+            ):
+                yield event.plain_result("正在翻龙图小本本……")
 
-        # AstrBot only consumes one result from this handler in the normal
-        # response pipeline. Keep text and the attached meme in one chain so
-        # the image is not dropped after the text response has been sent.
-        if reply_chain:
-            # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
-            # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
-            if not bool(response.get("active_reply")):
-                reply_chain = self._reply_prefix(event, components) + reply_chain
-            yield event.chain_result(reply_chain)
+            quoted_user_id, quoted_sender_name = self._quoted_author(reply_component)
+            forwarded_text = await self._forwarded_text(event, components)
+            quoted_forwarded_text = await self._forwarded_text(event, quoted_chain)
+            image_base64 = ""
+            quoted_image_base64 = ""
+            if should_reply and self._is_image_management_text(text):
+                try:
+                    image_base64 = await self._first_image_base64(components)
+                    quoted_image_base64 = await self._quoted_image_base64(
+                        reply_component,
+                    )
+                except Exception as error:
+                    logger.warning(f"龙图库管理图片读取失败：{error}")
+
+            bot_user_id = str(event.get_self_id() or "").strip()
+
+            payload = {
+                "message_id": str(event.message_obj.message_id or ""),
+                "message_type": "private" if event.is_private_chat() else "group",
+                "group_id": event.get_group_id(),
+                "user_id": event.get_sender_id(),
+                "sender_name": event.get_sender_name(),
+                "text": text,
+                "quoted_text": self._quoted_text(components),
+                "forwarded_text": forwarded_text,
+                "quoted_forwarded_text": quoted_forwarded_text,
+                "quoted_user_id": quoted_user_id,
+                "quoted_sender_name": quoted_sender_name,
+                "mentions": self._mentions(components),
+                "bot_user_id": bot_user_id,
+                "has_image": has_image,
+                "pure_bot_mention": pure_bot_mention,
+                "image_base64": image_base64,
+                "quoted_image_base64": quoted_image_base64,
+                "observe_only": observe_only,
+            }
+
+            try:
+                response = await self._request_backend(payload)
+            except Exception as error:
+                logger.error(f"龙图 QQ Bridge 请求失败：{error}")
+                if observe_only:
+                    return
+                error_message = self.config.get(
+                    "error_message",
+                    "龙图服务暂时不可用，请稍后再试。",
+                )
+                yield event.plain_result(str(error_message))
+                return
+
+            # 普通群消息原本以 observe_only 进入 Node 服务。Node 现在可能通过
+            # “读空气”判定把它升级为主动回复；只有确实没有返回消息时才保持静默。
+            if observe_only and not response["messages"]:
+                return
+
+            reply_chain = []
+            for message in response["messages"]:
+                message_type = message.get("type")
+                if message_type == "text" and message.get("text"):
+                    reply_chain.append(Comp.Plain(str(message["text"])))
+                elif message_type == "image" and message.get("base64"):
+                    reply_chain.append(
+                        Comp.Image.fromBase64(str(message["base64"])),
+                    )
+
+            # AstrBot only consumes one result from this handler in the normal
+            # response pipeline. Keep text and the attached meme in one chain so
+            # the image is not dropped after the text response has been sent.
+            if reply_chain:
+                # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
+                # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
+                if not bool(response.get("active_reply")):
+                    reply_chain = self._reply_prefix(event, components) + reply_chain
+                yield event.chain_result(reply_chain)
+        finally:
+            event.stop_event()
 
     async def terminate(self):
         if self.session and not self.session.closed:

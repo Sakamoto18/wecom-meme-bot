@@ -97,7 +97,10 @@ LONGTU_QQ_ACTIVE_REPLY_BUSY_MESSAGE_COUNT=4
 LONGTU_QQ_ACTIVE_REPLY_BUSY_SENDER_COUNT=2
 LONGTU_QQ_ACTIVE_REPLY_DISENGAGE_AFTER_MESSAGES=3
 LONGTU_QQ_PEER_BOT_USERS=
-LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES=2
+LONGTU_QQ_PEER_BOT_CONTEXT_GATE_ENABLED=true
+LONGTU_QQ_PEER_BOT_CONTEXT_MESSAGES=12
+LONGTU_QQ_PEER_BOT_DECISION_TIMEOUT_SECONDS=10
+LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES=4
 LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 ```
 
@@ -105,7 +108,7 @@ LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 
 主动回复还会使用自适应长度：`may` 作为群友插话，默认只生成一句 15～70 字的短评，超过安全长度会触发压缩重写；`must` 的简单问题保持 1～3 句，只有方案、排障、比较或需要证据的问题才开启详细回答。该长度策略只改变表达密度，不关闭既有人格、记忆或联网检索。
 
-两个 Bot 同群时，把对方的 QQ 号填入 `LONGTU_QQ_PEER_BOT_USERS`（多个用英文逗号分隔）。循环保护按“群号 + 对方 Bot QQ 号”计数，默认最多连续产生 2 次回复；第三次消息仍写入旁观记忆，但不会再调用回复模型或发送消息。真人群友插话会立即清空该群计数，`LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS` 到期也会自动恢复。该硬阈值覆盖 `must` 和明确 `@`，避免两个 Bot 互相强制唤醒。
+两个 Bot 同群时，把对方的 QQ 号填入 `LONGTU_QQ_PEER_BOT_USERS`（多个用英文逗号分隔）。首轮明确 `@` 正常回复；从第二轮起，续聊阀门会结合最近群聊判断对方是否提出了尚未回答的新问题、新指令、新事实或有效纠错。重复 `@`、复读、客套寒暄、客服套话、挑衅和没有新增信息的 Bot 发言会提前静默；判定失败同样按静默处理。程序仍按“群号 + 对方 Bot QQ 号”保留默认 4 次的绝对硬上限，防止模型误判后形成永动循环。真人群友插话会立即清空该群计数，`LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS` 到期也会自动恢复。
 
 ### 群角色认知
 

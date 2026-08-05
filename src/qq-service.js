@@ -22,7 +22,7 @@ const MAX_NAME_CHARACTERS = 80;
 const MAX_IDENTIFIER_CHARACTERS = 128;
 const MAX_IMAGE_BASE64_CHARACTERS = 14 * 1024 * 1024;
 const DEFAULT_DEDUPE_TTL_MS = 10 * 60 * 1000;
-const DEFAULT_PEER_BOT_MAX_CONSECUTIVE_REPLIES = 2;
+const DEFAULT_PEER_BOT_MAX_CONSECUTIVE_REPLIES = 4;
 const DEFAULT_PEER_BOT_LOOP_WINDOW_MS = 5 * 60 * 1000;
 const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
 const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
@@ -365,6 +365,7 @@ export class QqBotService {
     this.adminUsers = options.adminUsers ?? new Set();
     this.protectedRoles = options.protectedRoles ?? new Map();
     this.activeReplyDecider = options.activeReplyDecider ?? null;
+    this.peerBotContinuationDecider = options.peerBotContinuationDecider ?? null;
     this.peerBotUsers = new Set(
       [...(options.peerBotUsers ?? [])]
         .map((userId) => String(userId ?? '').trim())
@@ -418,6 +419,10 @@ export class QqBotService {
   peerBotReplyLimitReached(payload) {
     const state = this.getPeerBotReplyState(payload);
     return (state?.count ?? 0) >= this.peerBotMaxConsecutiveReplies;
+  }
+
+  peerBotReplyCount(payload) {
+    return this.getPeerBotReplyState(payload)?.count ?? 0;
   }
 
   recordPeerBotReply(payload) {
@@ -1250,6 +1255,25 @@ export class QqBotService {
         + `，连续 ${this.peerBotMaxConsecutiveReplies} 次后静默`,
       );
       return this.observeMessage(payload, message);
+    } else if (
+      this.isPeerBotMessage(payload)
+      && this.peerBotContinuationDecider
+      && this.peerBotReplyCount(payload) > 0
+    ) {
+      const replyCount = this.peerBotReplyCount(payload);
+      const decision = await this.peerBotContinuationDecider.shouldContinue({
+        payload,
+        currentContent: conversationContent,
+        history: this.conversationStore.get(getConversationId(message)),
+        replyCount,
+      });
+      if (!decision.continue) {
+        this.logger.log(
+          `QQ peer Bot 续聊阀门静默：${payload.groupId}/${payload.userId}`
+          + `，已回复 ${replyCount} 次，原因 ${decision.reason}`,
+        );
+        return this.observeMessage(payload, message);
+      }
     }
     if (payload.observeOnly) {
       return this.handleObservedMessage(payload, message, conversationContent);
