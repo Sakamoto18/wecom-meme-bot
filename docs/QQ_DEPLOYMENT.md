@@ -68,13 +68,13 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 插件默认行为：
 
 - QQ 私聊消息直接响应。
-- QQ 群聊明确 `@机器人` 时必定响应；普通群消息默认先经过 ChatPlus 风格的主动回复判定，适合接话时才响应。
+- QQ 群聊明确 `@机器人` 时必定响应；普通群消息默认先经过 ChatPlus 风格的主动回复判定，适合接话时才以独立群消息响应。
 - `LONGTU_QQ_ALLOWED_GROUPS` 留空时允许所有群；填写后只处理白名单群。
 - 默认不发送“处理中”占位消息，因此明确龙图指令仍然只回图片；需要时可在插件配置中开启。
 - 插件处理消息后会停止 AstrBot 默认 LLM 流程，避免同一条消息回复两次。
 - Bridge 会在收到任何 QQ 消息时先无条件停止 AstrBot 后续事件链；禁用群、关闭旁观、空消息及后端异常等提前返回路径也不会进入默认 LLM。允许群中的普通消息会先交给 Node 服务“读空气”，判定不回复时静默进入角色/语境记忆，判定回复时仍由现有人格、搜索和记忆链路生成。
 - 群内只有 `/add`、`/tag`、`/del` 会进入图库服务；其他以 `/` 开头的 AstrBot/插件指令都会被 Bridge 停止。
-- 群聊回复会引用原消息。原消息明确 `@` 第三人时，回复优先 `@` 这些目标（最多 3 人）；如果只 `@机器人`，回复会 `@` 发令者。机器人自身、发送者自艾特和 `@全体成员` 不会被当成第三方目标，私聊不附加引用或艾特。
+- 被动群聊回复会引用原消息。原消息明确 `@` 第三人时，回复优先 `@` 这些目标（最多 3 人）；如果只 `@机器人`，回复会 `@` 发令者。机器人自身、发送者自艾特和 `@全体成员` 不会被当成第三方目标，私聊不附加引用或艾特。Node 判定产生的主动插话不引用触发消息，表现为机器人自己发送的一条群消息。
 - 纯 `@机器人` 没有附加文字时会进入独立 QQ 服务的快速人格模式，强制关闭 thinking，并对客服式草稿使用角色招呼兜底；Bridge 会先停止 AstrBot 默认 LLM。
 
 ### 群聊主动回复（ChatPlus 风格）
@@ -96,9 +96,16 @@ LONGTU_QQ_ACTIVE_REPLY_BUSY_WINDOW_SECONDS=20
 LONGTU_QQ_ACTIVE_REPLY_BUSY_MESSAGE_COUNT=4
 LONGTU_QQ_ACTIVE_REPLY_BUSY_SENDER_COUNT=2
 LONGTU_QQ_ACTIVE_REPLY_DISENGAGE_AFTER_MESSAGES=3
+LONGTU_QQ_PEER_BOT_USERS=
+LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES=2
+LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 ```
 
 `LONGTU_QQ_ACTIVE_REPLY_GROUPS` 留空时沿用 Bridge 的 `LONGTU_QQ_ALLOWED_GROUPS` 范围。判定器先输出 `must/may/no`：点名、引用机器人、明确公开提问/求助以及模型识别出的风险或明显错误信息为 `must`，会绕过概率、群聊热度、冷却和小时上限；`may` 才受这些可选插话限制。默认 20 秒内至少 4 条消息且涉及 2 名发送者时判断为群聊正热；机器人发言后连续 3 条消息没人接它时，`may` 主动退场，直到 `must` 再次把它拉回。判定器仍会忽略明确发给其他成员的 `@`/引用、图片、斜杠指令和机器人自身消息。判定模型故障时，点名、引用机器人和明确问句会按 `must` 放行，其他消息默认沉默，不影响原有明确 `@机器人` 的回复。
+
+主动回复还会使用自适应长度：`may` 作为群友插话，默认只生成一句 15～70 字的短评，超过安全长度会触发压缩重写；`must` 的简单问题保持 1～3 句，只有方案、排障、比较或需要证据的问题才开启详细回答。该长度策略只改变表达密度，不关闭既有人格、记忆或联网检索。
+
+两个 Bot 同群时，把对方的 QQ 号填入 `LONGTU_QQ_PEER_BOT_USERS`（多个用英文逗号分隔）。循环保护按“群号 + 对方 Bot QQ 号”计数，默认最多连续产生 2 次回复；第三次消息仍写入旁观记忆，但不会再调用回复模型或发送消息。真人群友插话会立即清空该群计数，`LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS` 到期也会自动恢复。该硬阈值覆盖 `must` 和明确 `@`，避免两个 Bot 互相强制唤醒。
 
 ### 群角色认知
 

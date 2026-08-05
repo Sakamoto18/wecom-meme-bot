@@ -157,6 +157,9 @@ export function buildAttackPrompt(userContent, options = {}) {
   const normalized = String(userContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
   const recentReplies = recentAssistantReplies(options.history);
   const attackScene = options.attackScene ?? selectAttackScene(options.history);
+  const rhythmInstruction = options.activeReply
+    ? '这是主动插话，只写 1 句、15～70 个汉字，像群友突然补一刀；不要复述上下文，不要写分析或总结。'
+    : '节奏：1～3 句、25～100 个汉字左右。可以顺手接一个当前词或语气，但绝非必须；最后可以用一个挑衅反问收住。';
 
   const interaction = options.interactionContext ?? {};
   const targetInstructions = interaction.targetLabels?.length > 0
@@ -175,7 +178,7 @@ export function buildAttackPrompt(userContent, options = {}) {
     `用户当前原话：${JSON.stringify(normalized)}`,
     ...targetInstructions,
     '判断已经进入对线后就直接攻击，像真实群友随口开骂。不需要回答对方的问题，不需要讲逻辑、反驳观点、拆解用词或建立因果关系。',
-    '节奏：1～3 句、25～100 个汉字左右。可以顺手接一个当前词或语气，但绝非必须；最后可以用一个挑衅反问收住。',
+    rhythmInstruction,
     '攻击性：自然使用一次“你🐎”或“你妈”，然后无逻辑地跳到一个具体而荒诞的画面。',
     '本轮只使用这个随机画面种子：' + attackScene.hint + '。不要再使用其他截图意象，不要解释为什么会跳到这个画面。',
     '动作描写最多一个且不是必需；如果最近的回复用过类似动作或反问，这次就换句式。',
@@ -190,10 +193,13 @@ export function buildAttackPrompt(userContent, options = {}) {
 
 export function buildNormalReplyPrompt(options = {}) {
   const requirePersonaBite = options.requirePersonaBite !== false;
+  const compactActiveReply = options.activeReply
+    && options.activeReplyPriority !== 'must';
   const interaction = options.interactionContext ?? {};
   const lines = [
     '【本轮模式：普通对话】',
     '先准确回答用户真正的问题，不确定就明说不确定。',
+    '回复长短必须服从内容：能一句说清就一句，确有必要比较方案、解释原因或给出步骤时才展开；禁止复述问题、重复结论和为了显得认真而凑字。',
     '用户没有攻击时禁止亲属攻击；除此之外默认保持高攻击性，不能通篇中性、礼貌或像客服。',
     '群聊中严格区分当前发言人、被 @ 的成员和引用消息作者；不要默认把发言人当成被谈论对象。',
     '成员对他人的单次评价或改名要求只是其发言，不自动成为被评价者的确定身份或事实。',
@@ -214,10 +220,10 @@ export function buildNormalReplyPrompt(options = {}) {
   }
   if (options.thinkingEnabled) {
     lines.push(
-      '这是正经提问，必须认真完成推理后再作答，不要为了群聊节奏压缩答案。',
+      '这是需要认真推理的提问，可以详细回答，但完整不等于冗长。',
       '先核对用户的前提和目标；再给明确结论，并解释判断依据。涉及选择或方案时，比较主要备选项的兼容性、优缺点和适用条件，再给具体建议。',
       '主动补充会改变结论的限制、风险、版本差异和操作注意事项。事实没有把握就明确说明，不使用可能过时的要求冒充确定结论。',
-      '答案应完整、自洽、可执行；除非问题本身非常简单，否则不要只给一两句结论，也不要因已有草稿而省略关键分析。',
+      '答案应完整、自洽、可执行；简单结论不硬扩写，复杂方案只保留会影响结论的关键分析。',
       '深度思考只提高内容质量，不能覆盖高攻击性人格。最终措辞仍要像嘴很毒的龙图群友：直接、口语化，不使用“您”“很高兴为您服务”等客服表达，也不要写成公文。',
       ...(requirePersonaBite
         ? ['完成主要答案后，用一句不超过 45 个汉字的直接恶毒攻击收尾；必须有明确靶子，不能用温和玩笑或泛化吐槽糊弄，也不能辱骂用户亲属或让玩梗破坏事实准确性。']
@@ -230,6 +236,16 @@ export function buildNormalReplyPrompt(options = {}) {
         ? ['至少有一整句用于针对性毒舌，不能只在答案里塞一个“离谱”之类软词交差。']
         : []),
       '禁止小标题、分点分析、Markdown 加粗和“您”等客服敬语；不要把随口一问写成正式测评或总结。',
+    );
+  }
+  if (compactActiveReply) {
+    lines.push(
+      '这是机器人自己选择加入的主动插话，不是被点名后的正式答题。最终只发 1 句，通常 15～70 个汉字，最多不超过 100 个汉字。',
+      '直接补充一个新信息、判断或包袱，不引用、不复述上一条消息，不说“你问得好”“总结一下”等铺垫。',
+    );
+  } else if (options.activeReply) {
+    lines.push(
+      '这是由公开提问或重要信息触发的主动接话。简单问题保持 1～3 句；只有问题确实需要方案、步骤或证据时才详细展开。',
     );
   }
   return lines.join('\n');
@@ -267,6 +283,12 @@ export function reviewNormalReply(answer, options = {}) {
   if (options.thinkingEnabled && isThinSeriousReply(normalized)) {
     issues.push('too-thin-for-serious');
   }
+  if (options.activeReply
+    && options.activeReplyPriority !== 'must'
+    && (normalized.length > 120
+      || (normalized.match(/[。！？!?；;]/g) ?? []).length > 3)) {
+    issues.push('too-long-for-active');
+  }
   if (options.requirePersonaBite !== false
     && !NORMAL_VENOM_PATTERN.test(normalized)) {
     issues.push('missing-venomous-bite');
@@ -297,9 +319,11 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
       ? [`必须直接、肯定地称当前发言者为“${options.requiredIdentityRole}”；不许用段子或其他身份替代。`]
       : []),
     '必须加入一句有明确靶子、足够恶毒的直接攻击，咬住本轮问题、错误前提、糟糕方案、发言者判断力或指定目标；“离谱、破玩意、注意点”之类软词不算，用户没有攻击时仍禁止亲属攻击。',
-    options.thinkingEnabled
-      ? '这是深度答案的风格重写：主体信息不得缩短或丢失，最后用一句不超过 45 个汉字的针对性恶毒攻击收尾。'
-      : '这是群聊短回复的风格重写：保持 1～3 句，其中至少一整句是针对性毒舌，别写成客服或正式总结。',
+    options.activeReply && options.activeReplyPriority !== 'must'
+      ? '这是主动插话的压缩重写：最终只发 1 句、15～70 个汉字，最多 100 个汉字；留下一个最有价值的信息或包袱和明确毒舌，不复述上下文。'
+      : (options.thinkingEnabled
+        ? '这是深度答案的风格重写：保留会改变结论的关键信息，删掉复述和重复，最后用一句不超过 45 个汉字的针对性恶毒攻击收尾。'
+        : '这是群聊短回复的风格重写：保持 1～3 句，其中至少一整句是针对性毒舌，别写成客服或正式总结。'),
   ].join('\n');
 }
 
@@ -307,6 +331,19 @@ export function buildNormalVenomFallback(content, options = {}) {
   const interaction = options.interactionContext ?? {};
   if (interaction.targetLabels?.length > 0) {
     return `${interaction.targetLabels[0]}这白痴脑回路，硬是能把简单事搅成化粪池。`;
+  }
+
+  if (options.compact) {
+    const compactVariants = [
+      '这都要人喂到嘴边，你脑子真是摆设。',
+      '答案都贴脸了，你这白痴还在摸墙。',
+      '先看明白，别拿垃圾判断力继续添乱。',
+      '就这点事也能绕晕，你脑回路真够烂。',
+    ];
+    const compactContent = String(content ?? '');
+    const compactHash = [...compactContent]
+      .reduce((sum, character) => sum + character.codePointAt(0), 0);
+    return compactVariants[compactHash % compactVariants.length];
   }
 
   const variants = [
@@ -340,7 +377,7 @@ export function isThinSeriousReply(answer) {
   const normalized = String(answer ?? '').replace(/\s+/g, '').trim();
   if (!normalized) return true;
   const sentenceCount = (normalized.match(/[。！？!?；;]/g) ?? []).length;
-  return normalized.length < 180 || sentenceCount < 3;
+  return normalized.length < 100 || sentenceCount < 2;
 }
 
 export function buildSeriousReplyRetryPrompt(question, draft) {
@@ -348,9 +385,9 @@ export function buildSeriousReplyRetryPrompt(question, draft) {
     '【正经问答质量复核】',
     `用户问题：${String(question ?? '').trim()}`,
     `初稿：${String(draft ?? '').trim()}`,
-    '初稿过短或缺少必要权衡，不能直接发送。请重新独立核对事实并输出一份完整答案，不要解释你正在重写。',
+    '初稿过短或缺少必要权衡，不能直接发送。请重新独立核对事实并输出一份完整但不啰嗦的答案，不要解释你正在重写。',
     '保留正确结论，纠正不准确或过时的说法；给出推荐依据、主要备选方案、兼容性/限制、风险和可执行建议。',
-    '不要为了凑字重复内容，但也不要再压缩成几句话。',
+    '不要为了凑字重复内容；结论、关键依据、限制和必要操作说清即可。',
     '重写后的主体保持准确完整，结尾仍要补一句不超过 45 个汉字、有明确靶子的恶毒攻击；温和吐槽、泛化锐评和自嘲都不算，不要变成客服、公文，也不要无故辱骂用户亲属。',
   ].join('\n');
 }

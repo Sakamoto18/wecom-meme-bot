@@ -355,6 +355,13 @@ export async function createQqRuntime() {
     adminUsers: parseAdminUsers(process.env.LONGTU_QQ_ADMIN_USERS),
     protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
     activeReplyDecider,
+    peerBotUsers: parseIdentifierSet(process.env.LONGTU_QQ_PEER_BOT_USERS),
+    peerBotMaxConsecutiveReplies: parsePositiveInteger(
+      process.env.LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES,
+    ) ?? 2,
+    peerBotLoopWindowMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS,
+    ) ?? 300) * 1000,
   });
 
   return {

@@ -25,7 +25,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.7.0",
+    "1.8.0",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -692,7 +692,10 @@ class LongtuQqBridge(Star):
         # response pipeline. Keep text and the attached meme in one chain so
         # the image is not dropped after the text response has been sent.
         if reply_chain:
-            reply_chain = self._reply_prefix(event, components) + reply_chain
+            # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
+            # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
+            if not bool(response.get("active_reply")):
+                reply_chain = self._reply_prefix(event, components) + reply_chain
             yield event.chain_result(reply_chain)
 
     async def terminate(self):

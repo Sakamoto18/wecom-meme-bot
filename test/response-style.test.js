@@ -155,7 +155,8 @@ test('正经问题开启思考，攻击和简单闲聊保持快速模式', () =>
 
 test('正经问答提示不受群聊短句限制，并检测内容单薄的答案', () => {
   const prompt = buildNormalReplyPrompt({ thinkingEnabled: true });
-  assert.match(prompt, /不要为了群聊节奏压缩答案/);
+  assert.match(prompt, /完整不等于冗长/);
+  assert.match(prompt, /简单结论不硬扩写/);
   assert.match(prompt, /比较主要备选项/);
   assert.match(prompt, /深度思考只提高内容质量，不能覆盖高攻击性人格/);
   assert.match(prompt, /不超过 45 个汉字的直接恶毒攻击收尾/);
@@ -174,6 +175,32 @@ test('正经问答提示不受群聊短句限制，并检测内容单薄的答�
   assert.match(retryPrompt, /重新独立核对事实/);
   assert.match(retryPrompt, /兼容性\/限制/);
   assert.match(retryPrompt, /有明确靶子的恶毒攻击/);
+});
+
+test('主动 may 插话要求单句短评，过长草稿会被风格复核拦截', () => {
+  const prompt = buildNormalReplyPrompt({
+    thinkingEnabled: false,
+    activeReply: true,
+    activeReplyPriority: 'may',
+  });
+  assert.match(prompt, /机器人自己选择加入的主动插话/);
+  assert.match(prompt, /最终只发 1 句/);
+  assert.match(prompt, /15～70 个汉字/);
+
+  const longDraft = `这段话没必要写这么长，蠢货。${'还在重复同一个结论'.repeat(12)}`;
+  const reviewed = reviewNormalReply(longDraft, {
+    activeReply: true,
+    activeReplyPriority: 'may',
+  });
+  assert.ok(reviewed.issues.includes('too-long-for-active'));
+
+  const retryPrompt = buildNormalReplyRetryPrompt(
+    '这个玩具挺有意思',
+    longDraft,
+    reviewed.issues,
+    { activeReply: true, activeReplyPriority: 'may' },
+  );
+  assert.match(retryPrompt, /主动插话的压缩重写/);
 });
 
 test('普通回复默认要求针对性毒舌，真实痛苦与停止对线场景例外', () => {
@@ -289,6 +316,13 @@ test('攻击提示要求直接攻击，不强求逻辑关联或固定语料', ()
   assert.match(prompt, /本轮只使用这个随机画面种子：测试用的单一截图画面/);
   assert.match(prompt, /禁止孤立拉丁字母 ma/);
   assert.doesNotMatch(prompt, /公开龙图语料参考/);
+
+  const activePrompt = buildAttackPrompt('你真是司马了', {
+    activeReply: true,
+    attackScene: { id: 'test', hint: '测试画面' },
+  });
+  assert.match(activePrompt, /主动插话，只写 1 句/);
+  assert.match(activePrompt, /15～70 个汉字/);
 });
 
 test('有第三方目标时攻击提示不会默认攻击指令发送者', () => {

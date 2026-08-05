@@ -91,6 +91,8 @@ export async function generateConversationReply(options) {
     protectedIdentityContext = '',
     requiredIdentityRole = '',
     pureBotMention = false,
+    activeReply = false,
+    activeReplyPriority = '',
   } = options;
 
   const memoryContext = buildMemoryContext(memorySummary);
@@ -142,9 +144,10 @@ export async function generateConversationReply(options) {
           history,
           attackScene: firstScene,
           interactionContext,
+          activeReply,
         }),
       ].filter(Boolean).join('\n\n'),
-      maxTokens: 220,
+      maxTokens: activeReply ? 160 : 220,
       thinking: { type: 'disabled' },
     });
     const firstReview = reviewAttackReply(firstDraft, { history });
@@ -164,10 +167,15 @@ export async function generateConversationReply(options) {
             content,
             firstDraft,
             firstReview.issues,
-            { history, attackScene: retryScene, interactionContext },
+            {
+              history,
+              attackScene: retryScene,
+              interactionContext,
+              activeReply,
+            },
           ),
         ].filter(Boolean).join('\n\n'),
-        maxTokens: 220,
+        maxTokens: activeReply ? 160 : 220,
         thinking: { type: 'disabled' },
       });
       const secondReview = reviewAttackReply(secondDraft, { history });
@@ -228,7 +236,8 @@ export async function generateConversationReply(options) {
     }
   }
 
-  const thinkingEnabled = shouldUseThinking(content);
+  const compactActiveReply = activeReply && activeReplyPriority !== 'must';
+  const thinkingEnabled = !compactActiveReply && shouldUseThinking(content);
   const requirePersonaBite = shouldRequireNormalPersonaBite(content);
   const webSearchStatus = buildWebSearchStatus({
     requested: useCurrentInformation || useMemeKnowledge || searchMode === 'general',
@@ -245,6 +254,8 @@ export async function generateConversationReply(options) {
       thinkingEnabled,
       requirePersonaBite,
       interactionContext,
+      activeReply,
+      activeReplyPriority,
     }),
     buildProtectedSelfIdentityPrompt(requiredIdentityRole),
     useLongtuKnowledge ? knowledgeContext : '',
@@ -261,7 +272,7 @@ export async function generateConversationReply(options) {
   try {
     answer = await chatClient.complete(history, modelInput, {
       additionalSystemPrompt,
-      maxTokens: thinkingEnabled ? 20_000 : 5_000,
+      maxTokens: thinkingEnabled ? 20_000 : (compactActiveReply ? 280 : 1_200),
       timeoutMs: thinkingEnabled ? 120_000 : 60_000,
       thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
     });
@@ -302,6 +313,8 @@ export async function generateConversationReply(options) {
     thinkingEnabled,
     requirePersonaBite,
     requiredIdentityRole,
+    activeReply,
+    activeReplyPriority,
   });
   if (!review.valid && attempts < 2) {
     try {
@@ -315,9 +328,11 @@ export async function generateConversationReply(options) {
               thinkingEnabled,
               interactionContext,
               requiredIdentityRole,
+              activeReply,
+              activeReplyPriority,
             }),
         ].join('\n\n'),
-        maxTokens: thinkingEnabled ? 8_000 : 1_200,
+        maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
         timeoutMs: thinkingEnabled ? 90_000 : 45_000,
         thinking: { type: 'disabled' },
       });
@@ -325,6 +340,8 @@ export async function generateConversationReply(options) {
         thinkingEnabled,
         requirePersonaBite,
         requiredIdentityRole,
+        activeReply,
+        activeReplyPriority,
       });
       attempts += 1;
       normalPersonaRewritten = !needsSeriousExpansion;
@@ -344,18 +361,25 @@ export async function generateConversationReply(options) {
       thinkingEnabled: false,
       requirePersonaBite,
       requiredIdentityRole,
+      activeReply,
+      activeReplyPriority,
     });
   }
 
   if (requirePersonaBite
     && String(answer ?? '').trim()
     && review.issues.includes('missing-venomous-bite')) {
-    answer = `${String(answer).trim()}\n${buildNormalVenomFallback(content, { interactionContext })}`;
+    answer = `${String(answer).trim()}\n${buildNormalVenomFallback(content, {
+      interactionContext,
+      compact: compactActiveReply,
+    })}`;
     normalPersonaFallback = true;
     review = reviewNormalReply(answer, {
       thinkingEnabled,
       requirePersonaBite,
       requiredIdentityRole,
+      activeReply,
+      activeReplyPriority,
     });
   }
 

@@ -40,6 +40,10 @@ function createService(options = {}) {
     adminUsers: options.adminUsers,
     protectedRoles: options.protectedRoles,
     activeReplyDecider: options.activeReplyDecider,
+    peerBotUsers: options.peerBotUsers,
+    peerBotMaxConsecutiveReplies: options.peerBotMaxConsecutiveReplies,
+    peerBotLoopWindowMs: options.peerBotLoopWindowMs,
+    now: options.now,
     logger: { log() {}, warn() {} },
   });
   return { service, calls };
@@ -376,8 +380,97 @@ test('普通群消息经读空气判定命中后复用现有人格回复引擎',
   assert.match(decisions[0].currentContent, /竹知了和玄武之声/);
   assert.equal(calls.length, 1);
   assert.equal(result.active_reply, true);
+  assert.equal(result.active_reply_priority, 'must');
   assert.deepEqual(result.messages.map((message) => message.type), ['text', 'image']);
   assert.deepEqual(recordedBotReplies, ['g-active']);
+});
+
+test('同群 peer Bot 最多连续回复两次，真人插话后解除静默', async () => {
+  const observations = [];
+  const conversationStore = new ConversationStore();
+  conversationStore.appendObservation = (conversationId, content) => {
+    observations.push({ conversationId, content });
+  };
+  const { service, calls } = createService({
+    conversationStore,
+    peerBotUsers: new Set(['peer-bot']),
+    peerBotMaxConsecutiveReplies: 2,
+    activeReplyDecider: {
+      async shouldReply({ payload }) {
+        return payload.userId === 'peer-bot'
+          ? { reply: true, reason: 'ai-must' }
+          : { reply: false, reason: 'ai-no' };
+      },
+      recordBotReply() {},
+    },
+  });
+  const peerMessage = (messageId) => ({
+    message_id: messageId,
+    message_type: 'group',
+    group_id: 'g-loop',
+    user_id: 'peer-bot',
+    sender_name: '另一个机器人',
+    text: '你说得对，但我还要接一句',
+    observe_only: true,
+  });
+
+  const first = await service.handleMessage(peerMessage('peer-1'));
+  const second = await service.handleMessage(peerMessage('peer-2'));
+  const blocked = await service.handleMessage(peerMessage('peer-3'));
+
+  assert.equal(first.active_reply, true);
+  assert.equal(second.active_reply, true);
+  assert.deepEqual(blocked, { mode: 'observed', messages: [] });
+  assert.equal(calls.length, 2);
+  assert.equal(observations.length, 1);
+
+  await service.handleMessage({
+    message_id: 'human-1',
+    message_type: 'group',
+    group_id: 'g-loop',
+    user_id: 'human',
+    sender_name: '真人群友',
+    text: '你俩先停一下',
+    observe_only: true,
+  });
+  const resumed = await service.handleMessage(peerMessage('peer-4'));
+
+  assert.equal(resumed.active_reply, true);
+  assert.equal(calls.length, 3);
+});
+
+test('peer Bot 循环窗口过期后自动恢复回复额度', async () => {
+  let now = 1_000;
+  const { service, calls } = createService({
+    peerBotUsers: new Set(['peer-bot']),
+    peerBotMaxConsecutiveReplies: 1,
+    peerBotLoopWindowMs: 5_000,
+    now: () => now,
+    activeReplyDecider: {
+      async shouldReply() {
+        return { reply: true, reason: 'ai-must' };
+      },
+      recordBotReply() {},
+    },
+  });
+  const peerMessage = (messageId) => ({
+    message_id: messageId,
+    message_type: 'group',
+    group_id: 'g-expire',
+    user_id: 'peer-bot',
+    sender_name: '另一个机器人',
+    text: '继续循环',
+    observe_only: true,
+  });
+
+  await service.handleMessage(peerMessage('expire-1'));
+  const blocked = await service.handleMessage(peerMessage('expire-2'));
+  now += 5_001;
+  const resumed = await service.handleMessage(peerMessage('expire-3'));
+
+  assert.deepEqual(blocked, { mode: 'observed', messages: [] });
+  assert.equal(resumed.active_reply, true);
+  assert.equal(calls.length, 2);
 });
 
 test('读空气判定不回复时继续把普通群消息写入旁观记忆', async () => {
