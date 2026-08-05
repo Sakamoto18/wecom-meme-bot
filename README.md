@@ -1,4 +1,4 @@
-# 企业微信长连接龙图机器人
+# 龙图机器人 - 支持QQ和企业微信
 
 > QQ 版采用独立的 AstrBot + NapCat + OneBot v11 链路，不修改企业微信入口。部署步骤见 [QQ 部署文档](docs/QQ_DEPLOYMENT.md)。
 
