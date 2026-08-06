@@ -74,4 +74,5 @@ services:
 
 networks:
   longtu-qq:
-    driver: bridge
+    name: ${LONGTU_QQ_DOCKER_NETWORK:-longtu-qq}
+    external: ${LONGTU_QQ_DOCKER_NETWORK_EXTERNAL:-false}
