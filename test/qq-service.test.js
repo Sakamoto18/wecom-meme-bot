@@ -381,13 +381,13 @@ test('QQ 普通群消息只进入观察记忆，不调用模型也不回复', as
   assert.equal(members.length, 2);
 });
 
-test('“能的”等低信息群消息不会误触发主动回复或联网链路', async () => {
-  let calls = 0;
+test('回答群友的短消息经上下文语义复核后不会误触发回复链路', async () => {
+  const calls = [];
   const chatClient = {
     isConfigured: true,
-    async complete() {
-      calls += 1;
-      return 'may';
+    async complete(history, input, options) {
+      calls.push({ history, input, options });
+      return /发言价值复核器/.test(options.systemPrompt) ? 'skip' : 'may';
     },
   };
   const activeReplyDecider = new ActiveReplyDecider({
@@ -409,7 +409,9 @@ test('“能的”等低信息群消息不会误触发主动回复或联网链�
   });
 
   assert.deepEqual(result, { mode: 'observed', messages: [] });
-  assert.equal(calls, 0);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].options.systemPrompt, /读空气/);
+  assert.match(calls[1].options.systemPrompt, /发言价值复核器/);
 });
 
 test('普通群消息经读空气判定命中后复用现有人格回复引擎', async () => {
@@ -451,6 +453,7 @@ test('真人艾特后开启群级话题窗口，其他真人相关发言选择�
   const chatClient = {
     isConfigured: true,
     async complete(history, modelInput, options) {
+      if (/发言价值复核器/.test(options?.systemPrompt)) return 'speak';
       if (options?.maxTokens === 8) return 'may';
       replyCalls.push({ history, modelInput, options });
       return '具体做法我给你说明白，省得你又把简单事折腾成事故现场。';
@@ -649,7 +652,7 @@ test('peer Bot 明确艾特不会开启真人接管窗口', async () => {
   assert.equal(engagementOpens, 0);
 });
 
-test('超级管理员结束指令优先关闭全群真人窗口并熔断所有 peer Bot', async () => {
+test('超级管理员自然语言结束指令优先关闭全群真人窗口并熔断所有 peer Bot', async () => {
   const activeReplyDecider = new ActiveReplyDecider({
     chatClient: { isConfigured: true },
     enabled: true,
@@ -675,9 +678,8 @@ test('超级管理员结束指令优先关闭全群真人窗口并熔断所有 p
     group_id: 'g-admin-stop',
     user_id: 'admin',
     sender_name: '超级管理员',
-    text: '@龙玉涛 结束这个话题',
+    text: '不许回复了',
     bot_user_id: 'longtu-bot',
-    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
   });
 
   assert.deepEqual(result, { mode: 'observed', messages: [] });
@@ -740,6 +742,106 @@ test('超级管理员结束指令优先关闭全群真人窗口并熔断所有 p
     messageType: 'group', groupId: 'g-admin-stop', userId: 'human-3',
   }), null);
   assert.equal(activeReplyDecider.isGroupPaused('g-admin-stop'), false);
+});
+
+test('只有超级管理员可以用 /stop 硬终止该群 Bot 对话', async () => {
+  const activeReplyDecider = new ActiveReplyDecider({
+    chatClient: { isConfigured: true },
+    enabled: true,
+  });
+  const owner = {
+    messageType: 'group', groupId: 'g-slash-stop', userId: 'human-1',
+  };
+  activeReplyDecider.openEngagement(owner);
+  const { service, calls } = createService({
+    activeReplyDecider,
+    adminUsers: new Set(['admin']),
+    peerBotUsers: new Set(['peer-a']),
+  });
+
+  const denied = await service.handleMessage({
+    message_id: 'slash-stop-denied-1',
+    message_type: 'group',
+    group_id: 'g-slash-stop',
+    user_id: 'human-2',
+    sender_name: '普通群友',
+    text: '/stop',
+    bot_user_id: 'longtu-bot',
+  });
+  assert.deepEqual(denied, { mode: 'admin-stop-denied', messages: [] });
+  assert.notEqual(activeReplyDecider.getEngagement(owner), null);
+
+  const stopped = await service.handleMessage({
+    message_id: 'slash-stop-admin-1',
+    message_type: 'group',
+    group_id: 'g-slash-stop',
+    user_id: 'admin',
+    sender_name: '超级管理员',
+    text: '/stop',
+    bot_user_id: 'longtu-bot',
+  });
+
+  assert.deepEqual(stopped, { mode: 'admin-stopped', messages: [] });
+  assert.equal(activeReplyDecider.getEngagement(owner), null);
+  assert.equal(activeReplyDecider.isGroupPaused('g-slash-stop'), true);
+  assert.equal(service.peerBotReplyLimitReached({
+    messageType: 'group', groupId: 'g-slash-stop', userId: 'peer-a',
+  }), true);
+  assert.equal(calls.length, 0);
+});
+
+test('超管 /stop 会抢占同群尚未发送完成的模型回复', async () => {
+  const activeReplyDecider = new ActiveReplyDecider({
+    chatClient: { isConfigured: true },
+    enabled: true,
+  });
+  const { service } = createService({
+    activeReplyDecider,
+    adminUsers: new Set(['admin']),
+  });
+  let releaseReply;
+  let markReplyStarted;
+  const replyStarted = new Promise((resolve) => {
+    markReplyStarted = resolve;
+  });
+  service.replyConversation = async () => {
+    markReplyStarted();
+    await new Promise((resolve) => {
+      releaseReply = resolve;
+    });
+    return {
+      mode: 'conversation',
+      messages: [{ type: 'text', text: '这条回复不应该再发出去' }],
+    };
+  };
+
+  const pendingReply = service.handleMessage({
+    message_id: 'preempted-reply-1',
+    message_type: 'group',
+    group_id: 'g-stop-preempt',
+    user_id: 'human-1',
+    sender_name: '真人',
+    text: '@龙玉涛 说点什么',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  });
+  await replyStarted;
+  const pendingStop = service.handleMessage({
+    message_id: 'preempting-stop-1',
+    message_type: 'group',
+    group_id: 'g-stop-preempt',
+    user_id: 'admin',
+    sender_name: '超级管理员',
+    text: '/stop',
+    bot_user_id: 'longtu-bot',
+  });
+  releaseReply();
+
+  assert.deepEqual(await pendingReply, {
+    mode: 'admin-stop-preempted',
+    messages: [],
+  });
+  assert.deepEqual(await pendingStop, { mode: 'admin-stopped', messages: [] });
 });
 
 test('同群 peer Bot 最多连续回复两次，真人插话后解除静默', async () => {

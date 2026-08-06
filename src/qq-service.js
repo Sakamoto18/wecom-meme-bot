@@ -14,7 +14,10 @@ import {
 } from './longtu-management.js';
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
 import { generateConversationReply } from './reply-engine.js';
-import { isExplicitEngagementEnd } from './active-reply.js';
+import {
+  isAdminStopCommand,
+  isExplicitEngagementEnd,
+} from './active-reply.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -395,6 +398,7 @@ export class QqBotService {
     this.managementTargets = new Map();
     this.peerBotReplyStates = new Map();
     this.adminStoppedPeerGroups = new Map();
+    this.groupStopRevisions = new Map();
     this.groupProcessingQueues = new Map();
   }
 
@@ -484,6 +488,30 @@ export class QqBotService {
         lastReplyAt: this.now(),
       });
     }
+  }
+
+  stopGroupBotReplies(payload, source) {
+    const closed = this.activeReplyDecider?.closeEngagementsForGroup?.(
+      payload.groupId,
+    ) ?? 0;
+    this.activeReplyDecider?.pauseGroup?.(payload.groupId);
+    this.suppressPeerBotRepliesForGroup(payload.groupId);
+    this.logger.log(
+      `QQ 超级管理员结束群内 Bot 对话（${source}）：${payload.groupId}/${payload.userId}`
+      + `，关闭真人窗口 ${closed} 个并熔断 peer Bot`,
+    );
+  }
+
+  markGroupStopRequested(groupId) {
+    const normalizedGroupId = String(groupId ?? '').trim();
+    if (!normalizedGroupId) return 0;
+    const revision = (this.groupStopRevisions.get(normalizedGroupId) ?? 0) + 1;
+    this.groupStopRevisions.set(normalizedGroupId, revision);
+    return revision;
+  }
+
+  groupStopRevision(groupId) {
+    return this.groupStopRevisions.get(String(groupId ?? '').trim()) ?? 0;
   }
 
   isPeerBotGroupSuppressed(groupId) {
@@ -1269,9 +1297,30 @@ export class QqBotService {
       }, this.dedupeTtlMs).unref();
     }
 
+    const preemptiveAdminStop = payload.messageType === 'group'
+      && isLongtuAdministrator(payload.userId, this.adminUsers)
+      && (
+        isAdminStopCommand(payload.text)
+        || isExplicitEngagementEnd(payload.text)
+      );
+    if (preemptiveAdminStop) {
+      this.markGroupStopRequested(payload.groupId);
+    }
+
     try {
       const processMessage = async () => {
+        const startedAtStopRevision = payload.messageType === 'group'
+          ? this.groupStopRevision(payload.groupId)
+          : 0;
         const result = await this.handleNormalizedMessage(payload);
+        if (payload.messageType === 'group'
+          && result?.messages?.length > 0
+          && this.groupStopRevision(payload.groupId) !== startedAtStopRevision) {
+          this.logger.log(
+            `QQ 超管终止抢占了尚未发出的 Bot 回复：${payload.groupId}/${payload.userId}`,
+          );
+          return { mode: 'admin-stop-preempted', messages: [] };
+        }
         if (payload.messageType === 'group' && result?.messages?.length > 0) {
           this.activeReplyDecider?.recordBotReply?.(payload.groupId);
           if (this.isPeerBotMessage(payload)) {
@@ -1301,19 +1350,23 @@ export class QqBotService {
     this.recordParticipants(payload);
     this.recordMemberObservation(payload);
     this.inferPlainTextTargets(payload, message);
+    const adminStopCommand = payload.messageType === 'group'
+      && isAdminStopCommand(payload.text);
+    if (adminStopCommand) {
+      if (isLongtuAdministrator(payload.userId, this.adminUsers)) {
+        this.stopGroupBotReplies(payload, '/stop');
+        return { mode: 'admin-stopped', messages: [] };
+      }
+      this.logger.warn(
+        `QQ 非管理员尝试执行 /stop，已拒绝：${payload.groupId}/${payload.userId}`,
+      );
+      return { mode: 'admin-stop-denied', messages: [] };
+    }
     const explicitEngagementEnd = payload.messageType === 'group'
       && isExplicitEngagementEnd(payload.text);
     if (explicitEngagementEnd
       && isLongtuAdministrator(payload.userId, this.adminUsers)) {
-      const closed = this.activeReplyDecider?.closeEngagementsForGroup?.(
-        payload.groupId,
-      ) ?? 0;
-      this.activeReplyDecider?.pauseGroup?.(payload.groupId);
-      this.suppressPeerBotRepliesForGroup(payload.groupId);
-      this.logger.log(
-        `QQ 超级管理员结束群内 Bot 对话：${payload.groupId}/${payload.userId}`
-        + `，关闭真人窗口 ${closed} 个并熔断 peer Bot`,
-      );
+      this.stopGroupBotReplies(payload, '自然语言');
       return this.observeMessage(payload, message);
     }
     if (payload.messageType === 'group' && !this.isPeerBotMessage(payload)) {
