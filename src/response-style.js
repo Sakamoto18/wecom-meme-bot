@@ -285,7 +285,7 @@ export function reviewNormalReply(answer, options = {}) {
   }
   if (options.activeReply
     && options.activeReplyPriority !== 'must'
-    && (normalized.length > 120
+    && (normalized.length > 70
       || (normalized.match(/[。！？!?；;]/g) ?? []).length > 3)) {
     issues.push('too-long-for-active');
   }
