@@ -1,5 +1,8 @@
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_ENGAGEMENT_WINDOW_MS = 100_000;
+const DEFAULT_ENGAGEMENT_REPLY_COOLDOWN_MS = 18_000;
+const DEFAULT_ENGAGEMENT_REPLY_PROBABILITY = 0.6;
+const DEFAULT_ENGAGEMENT_MAX_REPLIES = 4;
 const DEFAULT_DISENGAGE_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_ENGAGEMENTS = 1_000;
 
@@ -17,6 +20,8 @@ const DECISION_SYSTEM_PROMPT = [
   'no：消息明显发给其他人、属于私密对话、无实质内容、话题已经结束或已被充分回答、用户拒绝机器人参与，或机器人再插话会明显抢话。',
   '严格限制 must：普通公开问句并不等于在找机器人，除非存在上述紧迫风险，否则只能判为 may 或 no。',
   '不要因为话题有趣、机器人答得上或机器人刚参与过，就把 may 升成 must。',
+  '程序提示群内存在连续话题时，其他群成员只有在明显承接同一话题、并且机器人确实有新增价值时才能判 may；单纯附和、感叹、复读、插科打诨或转向新话题应判 no。',
+  '群内连续话题不会让每条消息都变成 must；只有直接点名/引用机器人或紧迫高风险信息仍可判 must。',
   '拿不准是否值得主动参与时选择 no。',
   '只输出 must、may 或 no，禁止解释、标点、Markdown 和其他文字。',
 ].join('\n');
@@ -116,6 +121,29 @@ export class ActiveReplyDecider {
       1_000,
       Number(options.engagementWindowMs ?? DEFAULT_ENGAGEMENT_WINDOW_MS),
     );
+    this.engagementReplyCooldownMs = Math.max(
+      0,
+      Number(
+        options.engagementReplyCooldownMs
+          ?? DEFAULT_ENGAGEMENT_REPLY_COOLDOWN_MS,
+      ),
+    );
+    this.engagementReplyProbability = Math.min(
+      1,
+      Math.max(
+        0,
+        Number(
+          options.engagementReplyProbability
+            ?? DEFAULT_ENGAGEMENT_REPLY_PROBABILITY,
+        ),
+      ),
+    );
+    this.engagementMaxReplies = Math.max(
+      1,
+      Math.floor(
+        Number(options.engagementMaxReplies ?? DEFAULT_ENGAGEMENT_MAX_REPLIES),
+      ),
+    );
     this.maxEngagements = Math.max(
       1,
       Math.floor(Number(options.maxEngagements ?? DEFAULT_MAX_ENGAGEMENTS)),
@@ -188,12 +216,11 @@ export class ActiveReplyDecider {
 
   engagementKey(payload) {
     const groupId = String(payload?.groupId ?? '').trim();
-    const userId = String(payload?.userId ?? '').trim();
-    return groupId && userId ? `${groupId}:${userId}` : '';
+    return groupId;
   }
 
-  getEngagement(payload, now = this.now()) {
-    const key = this.engagementKey(payload);
+  getGroupEngagement(groupId, now = this.now()) {
+    const key = String(groupId ?? '').trim();
     if (!key) return null;
     const state = this.engagements.get(key);
     if (!state) return null;
@@ -204,10 +231,20 @@ export class ActiveReplyDecider {
     return state;
   }
 
+  getEngagement(payload, now = this.now()) {
+    if (payload?.isPeerBot) return null;
+    const state = this.getGroupEngagement(payload?.groupId, now);
+    const userId = String(payload?.userId ?? '').trim();
+    if (!state || (userId && state.mutedUserIds.has(userId))) return null;
+    return state;
+  }
+
   openEngagement(payload) {
     if (payload?.messageType !== 'group') return false;
     const key = this.engagementKey(payload);
     if (!key) return false;
+    const ownerUserId = String(payload?.userId ?? '').trim();
+    if (!ownerUserId || payload?.isPeerBot) return false;
     const now = this.now();
     this.groupPauses.delete(String(payload.groupId));
     for (const [candidateKey, state] of this.engagements) {
@@ -219,40 +256,52 @@ export class ActiveReplyDecider {
     this.engagements.set(key, {
       openedAt: now,
       lastActivityAt: now,
+      lastReplyAt: now,
       expiresAt: now + this.engagementWindowMs,
+      ownerUserId,
+      participantUserIds: new Set([ownerUserId]),
+      mutedUserIds: new Set(),
+      replyCount: 0,
     });
     return true;
   }
 
-  refreshEngagement(payload, now = this.now()) {
+  refreshEngagement(payload, now = this.now(), options = {}) {
     const key = this.engagementKey(payload);
     const state = this.getEngagement(payload, now);
     if (!key || !state) return false;
+    const userId = String(payload?.userId ?? '').trim();
+    const participantUserIds = new Set(state.participantUserIds);
+    if (userId) participantUserIds.add(userId);
     this.engagements.delete(key);
     this.engagements.set(key, {
       ...state,
       lastActivityAt: now,
+      lastReplyAt: options.replied ? now : state.lastReplyAt,
       expiresAt: now + this.engagementWindowMs,
+      participantUserIds,
+      replyCount: state.replyCount + (options.replied ? 1 : 0),
     });
     return true;
   }
 
   closeEngagement(payload) {
     const key = this.engagementKey(payload);
-    return key ? this.engagements.delete(key) : false;
+    const state = this.getGroupEngagement(key);
+    if (!key || !state) return false;
+    const userId = String(payload?.userId ?? '').trim();
+    if (!userId || state.ownerUserId === userId) {
+      return this.engagements.delete(key);
+    }
+    state.mutedUserIds.add(userId);
+    state.participantUserIds.delete(userId);
+    return true;
   }
 
   closeEngagementsForGroup(groupId) {
     const normalizedGroupId = String(groupId ?? '').trim();
     if (!normalizedGroupId) return 0;
-    const prefix = `${normalizedGroupId}:`;
-    let closed = 0;
-    for (const key of this.engagements.keys()) {
-      if (!key.startsWith(prefix)) continue;
-      this.engagements.delete(key);
-      closed += 1;
-    }
-    return closed;
+    return this.engagements.delete(normalizedGroupId) ? 1 : 0;
   }
 
   pauseGroup(groupId, now = this.now()) {
@@ -347,6 +396,34 @@ export class ActiveReplyDecider {
     return false;
   }
 
+  acceptEngagementReply(payload, engagement, signals, now, options = {}) {
+    const force = options.force === true;
+    const isOwner = engagement.ownerUserId === String(payload?.userId ?? '').trim();
+    if (!force) {
+      if (engagement.replyCount >= this.engagementMaxReplies) {
+        return { reply: false, reason: 'engagement-reply-limit' };
+      }
+      if (engagement.lastReplyAt > 0
+        && now - engagement.lastReplyAt < this.engagementReplyCooldownMs) {
+        return { reply: false, reason: 'engagement-cooldown' };
+      }
+      const probability = isOwner && signals.explicitQuestion
+        ? 1
+        : this.engagementReplyProbability;
+      if (probability < 1 && this.random() > probability) {
+        return { reply: false, reason: 'engagement-probability' };
+      }
+    }
+    this.refreshEngagement(payload, now, { replied: true });
+    if (force) return { reply: true, reason: 'engagement-must' };
+    return {
+      reply: true,
+      reason: isOwner && signals.explicitQuestion
+        ? 'engagement-owner-must'
+        : 'engagement-group-may',
+    };
+  }
+
   async shouldReply(input) {
     const payload = input?.payload;
     const groupId = String(payload?.groupId ?? '').trim();
@@ -382,8 +459,19 @@ export class ActiveReplyDecider {
       this.recordIncomingMessage(payload, now);
       return { reply: false, reason: 'admin-paused' };
     }
-    const engagement = this.getEngagement(payload, now);
-    this.recordIncomingMessage(payload, now, Boolean(engagement));
+    const groupEngagement = this.getGroupEngagement(groupId, now);
+    const userId = String(payload.userId ?? '').trim();
+    if (!payload.isPeerBot
+      && groupEngagement?.mutedUserIds.has(userId)) {
+      this.recordIncomingMessage(payload, now);
+      return { reply: false, reason: 'engagement-user-muted' };
+    }
+    const engagement = payload.isPeerBot ? null : groupEngagement;
+    this.recordIncomingMessage(
+      payload,
+      now,
+      Boolean(engagement && engagement.ownerUserId === String(payload.userId ?? '')),
+    );
     if (!this.isEligible(payload)) {
       return { reply: false, reason: 'ineligible' };
     }
@@ -394,7 +482,12 @@ export class ActiveReplyDecider {
       signals.namedBot ? `当前消息点名了机器人（已配置名称：${this.botNames.join('、')}）。` : '',
       signals.explicitQuestion ? '当前消息包含明确问句或求助信号。' : '',
       engagement
-        ? `当前发送者仍在被点名后 ${Math.ceil(this.engagementWindowMs / 1_000)} 秒的连续对话窗口内。`
+        ? [
+          `当前群仍在被点名后 ${Math.ceil(this.engagementWindowMs / 1_000)} 秒的连续话题窗口内。`,
+          engagement.ownerUserId === String(payload.userId ?? '')
+            ? '当前发送者是开启该话题的群成员。'
+            : '当前发送者是另一位群成员；只有明显承接同一话题且值得机器人补充时才可判 may。',
+        ].join('')
         : '',
     ].filter(Boolean);
     const transcript = recentTranscript(input.history, this.contextMessages);
@@ -422,13 +515,22 @@ export class ActiveReplyDecider {
       decision = parseDecision(answer);
     } catch (error) {
       if (engagement) {
-        if (signals.explicitQuestion) {
-          this.refreshEngagement(payload, now);
-          this.logger.warn(`QQ 接管窗口判定失败，明确追问继续回复：${error.message}`);
-          return { reply: true, reason: 'engagement-signal-must' };
+        const isOwner = engagement.ownerUserId === String(payload.userId ?? '');
+        if (signals.quotedBot || signals.namedBot) {
+          this.logger.warn(`QQ 群话题判定失败，直接点名仍回复：${error.message}`);
+          return this.acceptEngagementReply(
+            payload,
+            engagement,
+            signals,
+            now,
+            { force: true },
+          );
         }
-        this.closeEngagement(payload);
-        this.logger.warn(`QQ 接管窗口判定失败，关闭连续对话：${error.message}`);
+        if (isOwner && signals.explicitQuestion) {
+          this.logger.warn(`QQ 群话题判定失败，原发起者追问按节奏阀门处理：${error.message}`);
+          return this.acceptEngagementReply(payload, engagement, signals, now);
+        }
+        this.logger.warn(`QQ 群话题判定失败，当前消息保持静默：${error.message}`);
         return { reply: false, reason: 'engagement-decision-error' };
       }
       if (signals.quotedBot || signals.namedBot) {
@@ -440,14 +542,21 @@ export class ActiveReplyDecider {
     }
 
     if (engagement) {
-      if (decision === 'must' || decision === 'may') {
-        this.refreshEngagement(payload, now);
-        return { reply: true, reason: 'engagement-must' };
+      if (signals.quotedBot || signals.namedBot || decision === 'must') {
+        return this.acceptEngagementReply(
+          payload,
+          engagement,
+          signals,
+          now,
+          { force: true },
+        );
       }
-      this.closeEngagement(payload);
+      if (decision === 'may') {
+        return this.acceptEngagementReply(payload, engagement, signals, now);
+      }
       return {
         reply: false,
-        reason: decision === 'no' ? 'engagement-ended-by-context' : 'invalid-ai-output',
+        reason: decision === 'no' ? 'engagement-unrelated' : 'invalid-ai-output',
       };
     }
 

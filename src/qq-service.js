@@ -865,6 +865,7 @@ export class QqBotService {
 
     const decisionPayload = {
       ...payload,
+      isPeerBot: this.isPeerBotMessage(payload),
       mentions: (message.mentions ?? []).map((participant) => ({
         userId: participant.user_id ?? participant.userid,
         name: participant.name,

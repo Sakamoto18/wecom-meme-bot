@@ -414,7 +414,7 @@ test('普通群消息经读空气判定命中后复用现有人格回复引擎',
   assert.deepEqual(recordedBotReplies, ['g-active']);
 });
 
-test('真人艾特后开启 100 秒接管窗口，相关追问必回且明确结束立即静默', async () => {
+test('真人艾特后开启群级话题窗口，其他真人相关发言选择性接入并受群级节流', async () => {
   let currentTime = 10_000;
   const replyCalls = [];
   const chatClient = {
@@ -432,6 +432,8 @@ test('真人艾特后开启 100 秒接管窗口，相关追问必回且明确结
     questionProbability: 0,
     cooldownMs: 60_000,
     engagementWindowMs: 100_000,
+    engagementReplyCooldownMs: 18_000,
+    engagementReplyProbability: 1,
     now: () => currentTime,
   });
   const { service } = createService({
@@ -451,14 +453,36 @@ test('真人艾特后开启 100 秒接管窗口，相关追问必回且明确结
   };
 
   const first = await service.handleMessage(directMention);
-  currentTime += 99_000;
-  const followup = await service.handleMessage({
+  currentTime += 18_000;
+  const participantFollowup = await service.handleMessage({
     message_id: 'engagement-followup-1',
+    message_type: 'group',
+    group_id: 'g-engagement',
+    user_id: 'human-2',
+    sender_name: '真人二号',
+    text: '这个方案的数据库具体怎么迁移？',
+    bot_user_id: 'longtu-bot',
+    observe_only: true,
+  });
+  currentTime += 1_000;
+  const throttled = await service.handleMessage({
+    message_id: 'engagement-followup-2',
+    message_type: 'group',
+    group_id: 'g-engagement',
+    user_id: 'human-3',
+    sender_name: '真人三号',
+    text: '那回滚流程呢？',
+    bot_user_id: 'longtu-bot',
+    observe_only: true,
+  });
+  currentTime += 18_000;
+  const ownerFollowup = await service.handleMessage({
+    message_id: 'engagement-owner-followup-1',
     message_type: 'group',
     group_id: 'g-engagement',
     user_id: 'human',
     sender_name: '真人',
-    text: '那具体应该怎么落地？',
+    text: '最后应该按什么顺序执行？',
     bot_user_id: 'longtu-bot',
     observe_only: true,
   });
@@ -485,8 +509,11 @@ test('真人艾特后开启 100 秒接管窗口，相关追问必回且明确结
   });
 
   assert.equal(first.messages.length > 0, true);
-  assert.equal(followup.active_reply, true);
-  assert.equal(followup.active_reply_priority, 'must');
+  assert.equal(participantFollowup.active_reply, true);
+  assert.equal(participantFollowup.active_reply_priority, 'may');
+  assert.deepEqual(throttled, { mode: 'observed', messages: [] });
+  assert.equal(ownerFollowup.active_reply, true);
+  assert.equal(ownerFollowup.active_reply_priority, 'must');
   assert.deepEqual(ended, { mode: 'observed', messages: [] });
   assert.deepEqual(afterEnd, { mode: 'observed', messages: [] });
   assert.equal(replyCalls.length, callsBeforeEnd);
