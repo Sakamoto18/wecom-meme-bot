@@ -162,6 +162,7 @@ test('群聊在 20 秒内由多人连续发言时阻止 may 抢话', async () =>
     busyMessageCount: 4,
     busySenderCount: 2,
     now: () => currentTime,
+    random: () => 0,
   });
 
   for (let index = 0; index < 3; index += 1) {
@@ -441,7 +442,8 @@ test('peer Bot 不会继承或续期真人群话题窗口', async () => {
   assert.equal(decider.getEngagement(owner)?.replyCount, 0);
 });
 
-test('群话题窗口达到主动补充上限后保持静默，重新明确艾特可重置', async () => {
+test('群话题达到补充上限后，窗口内再次艾特只续期且受短节流', async () => {
+  let currentTime = 10_000;
   const decider = new ActiveReplyDecider({
     chatClient: {
       isConfigured: true,
@@ -449,23 +451,51 @@ test('群话题窗口达到主动补充上限后保持静默，重新明确艾�
     },
     enabled: true,
     engagementReplyCooldownMs: 0,
+    engagementMentionCooldownMs: 5_000,
     engagementReplyProbability: 1,
     engagementMaxReplies: 2,
+    engagementWindowMs: 100_000,
+    now: () => currentTime,
   });
-  const owner = groupPayload({ userId: 'u1' });
+  const owner = groupPayload({
+    userId: 'u1',
+    text: '@龙玉涛 先聊这个话题',
+    mentions: [{ userId: 'bot', name: '龙玉涛' }],
+  });
   const participant = groupPayload({ userId: 'u2' });
   decider.openEngagement(owner);
 
   const first = await decider.shouldReply({ payload: participant, history: [] });
   const second = await decider.shouldReply({ payload: participant, history: [] });
   const limited = await decider.shouldReply({ payload: participant, history: [] });
-  decider.openEngagement(participant);
+  currentTime += 5_000;
+  const nextMention = groupPayload({
+    userId: 'u2',
+    text: '@龙玉涛 再补一句',
+    mentions: [{ userId: 'bot', name: '龙玉涛' }],
+  });
+  const admitted = decider.admitDirectMention(nextMention);
+  decider.openEngagement(nextMention);
+  currentTime += 1_000;
+  const burstMention = groupPayload({
+    userId: 'u3',
+    text: '@龙玉涛 还有我',
+    mentions: [{ userId: 'bot', name: '龙玉涛' }],
+  });
+  const throttled = decider.admitDirectMention(burstMention);
+  const state = decider.getEngagement(owner);
 
   assert.equal(first.reply, true);
   assert.equal(second.reply, true);
   assert.deepEqual(limited, { reply: false, reason: 'engagement-reply-limit' });
-  assert.equal(decider.getEngagement(participant)?.replyCount, 0);
-  assert.equal(decider.getEngagement(participant)?.ownerUserId, 'u2');
+  assert.deepEqual(admitted, { reply: true, reason: 'engagement-mention-must' });
+  assert.equal(throttled.reply, false);
+  assert.equal(throttled.reason, 'engagement-mention-cooldown');
+  assert.equal(throttled.retryAfterMs, 4_000);
+  assert.equal(state?.replyCount, 2);
+  assert.equal(state?.ownerUserId, 'u1');
+  assert.equal(state?.participantUserIds.has('u3'), true);
+  assert.equal(state?.expiresAt, currentTime + 100_000);
 });
 
 test('明确结束指令由程序硬拦截，不依赖模型是否听话', async () => {

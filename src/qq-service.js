@@ -414,6 +414,16 @@ export class QqBotService {
       || payload.quotedAuthor?.userId === payload.botUserId;
   }
 
+  isDirectHumanMentionTrigger(payload) {
+    if (payload.messageType !== 'group'
+      || this.isPeerBotMessage(payload)
+      || !payload.botUserId) {
+      return false;
+    }
+    return payload.pureBotMention
+      || payload.mentions.some((participant) => participant.userId === payload.botUserId);
+  }
+
   peerBotReplyKey(payload) {
     return `${payload.groupId}:${payload.userId}`;
   }
@@ -1340,6 +1350,16 @@ export class QqBotService {
       this.activeReplyDecider?.closeEngagement?.(payload);
       this.logger.log(`QQ 真人主动结束连续对话：${payload.groupId}/${payload.userId}`);
       return this.observeMessage(payload, message);
+    }
+    if (this.isDirectHumanMentionTrigger(payload)) {
+      const admission = this.activeReplyDecider?.admitDirectMention?.(payload);
+      if (admission?.reply === false) {
+        this.logger.log(
+          `QQ 群话题连续艾特节流：${payload.groupId}/${payload.userId}`
+          + `，${Math.ceil((admission.retryAfterMs ?? 0) / 1_000)} 秒后可再次触发`,
+        );
+        return this.observeMessage(payload, message);
+      }
     }
     if (payload.observeOnly) {
       return this.handleObservedMessage(payload, message, conversationContent);

@@ -524,6 +524,75 @@ test('真人艾特后开启群级话题窗口，其他真人相关发言选择�
   }), null);
 });
 
+test('群话题窗口内连续艾特按群短节流且不会重置发起者和计数', async () => {
+  let currentTime = 10_000;
+  let replyCalls = 0;
+  const chatClient = {
+    isConfigured: true,
+    async complete() {
+      replyCalls += 1;
+      return '知道了，别挤，一个个说。';
+    },
+  };
+  const activeReplyDecider = new ActiveReplyDecider({
+    chatClient,
+    enabled: true,
+    engagementWindowMs: 100_000,
+    engagementMentionCooldownMs: 5_000,
+    now: () => currentTime,
+  });
+  const { service } = createService({
+    chatClient,
+    activeReplyDecider,
+    now: () => currentTime,
+  });
+  const mention = (messageId, userId, text) => ({
+    message_id: messageId,
+    message_type: 'group',
+    group_id: 'g-mention-cooldown',
+    user_id: userId,
+    sender_name: userId,
+    text,
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  });
+
+  const first = await service.handleMessage(
+    mention('mention-cooldown-1', 'human-1', '@龙玉涛 先听我说'),
+  );
+  const callsAfterFirst = replyCalls;
+  currentTime += 1_000;
+  const burst = await service.handleMessage(
+    mention('mention-cooldown-2', 'human-2', '@龙玉涛 我也要说'),
+  );
+  const callsAfterBurst = replyCalls;
+  currentTime += 4_000;
+  const admitted = await service.handleMessage(
+    mention('mention-cooldown-3', 'human-2', '@龙玉涛 现在轮到我了吧'),
+  );
+  const callsAfterAdmitted = replyCalls;
+  const stateBeforeEnd = activeReplyDecider.getGroupEngagement(
+    'g-mention-cooldown',
+  );
+  currentTime += 1_000;
+  const ended = await service.handleMessage(
+    mention('mention-cooldown-end', 'human-1', '@龙玉涛 结束这个话题'),
+  );
+
+  assert.equal(first.messages.length > 0, true);
+  assert.deepEqual(burst, { mode: 'observed', messages: [] });
+  assert.equal(admitted.messages.length > 0, true);
+  assert.equal(callsAfterBurst, callsAfterFirst);
+  assert.equal(callsAfterAdmitted > callsAfterBurst, true);
+  assert.equal(stateBeforeEnd?.ownerUserId, 'human-1');
+  assert.equal(stateBeforeEnd?.replyCount, 0);
+  assert.equal(stateBeforeEnd?.participantUserIds.has('human-2'), true);
+  assert.equal(stateBeforeEnd?.expiresAt, 115_000);
+  assert.deepEqual(ended, { mode: 'observed', messages: [] });
+  assert.equal(replyCalls, callsAfterAdmitted);
+  assert.equal(activeReplyDecider.getGroupEngagement('g-mention-cooldown'), null);
+});
+
 test('peer Bot 明确艾特不会开启真人接管窗口', async () => {
   let engagementOpens = 0;
   const { service } = createService({

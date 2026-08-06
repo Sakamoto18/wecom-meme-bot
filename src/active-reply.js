@@ -1,6 +1,7 @@
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_ENGAGEMENT_WINDOW_MS = 100_000;
 const DEFAULT_ENGAGEMENT_REPLY_COOLDOWN_MS = 18_000;
+const DEFAULT_ENGAGEMENT_MENTION_COOLDOWN_MS = 5_000;
 const DEFAULT_ENGAGEMENT_REPLY_PROBABILITY = 0.6;
 const DEFAULT_ENGAGEMENT_MAX_REPLIES = 4;
 const DEFAULT_DISENGAGE_MS = 10 * 60 * 1000;
@@ -128,6 +129,13 @@ export class ActiveReplyDecider {
           ?? DEFAULT_ENGAGEMENT_REPLY_COOLDOWN_MS,
       ),
     );
+    this.engagementMentionCooldownMs = Math.max(
+      0,
+      Number(
+        options.engagementMentionCooldownMs
+          ?? DEFAULT_ENGAGEMENT_MENTION_COOLDOWN_MS,
+      ),
+    );
     this.engagementReplyProbability = Math.min(
       1,
       Math.max(
@@ -219,6 +227,15 @@ export class ActiveReplyDecider {
     return groupId;
   }
 
+  isDirectMention(payload) {
+    return payload?.pureBotMention === true || Boolean(
+      payload?.botUserId
+      && (payload?.mentions ?? []).some(
+        (participant) => participant.userId === payload.botUserId,
+      ),
+    );
+  }
+
   getGroupEngagement(groupId, now = this.now()) {
     const key = String(groupId ?? '').trim();
     if (!key) return null;
@@ -247,6 +264,26 @@ export class ActiveReplyDecider {
     if (!ownerUserId || payload?.isPeerBot) return false;
     const now = this.now();
     this.groupPauses.delete(String(payload.groupId));
+    const current = this.getGroupEngagement(key, now);
+    if (current) {
+      const participantUserIds = new Set(current.participantUserIds);
+      const mutedUserIds = new Set(current.mutedUserIds);
+      participantUserIds.add(ownerUserId);
+      mutedUserIds.delete(ownerUserId);
+      this.engagements.delete(key);
+      this.engagements.set(key, {
+        ...current,
+        lastActivityAt: now,
+        lastReplyAt: now,
+        lastMentionReplyAt: this.isDirectMention(payload)
+          ? now
+          : current.lastMentionReplyAt,
+        expiresAt: now + this.engagementWindowMs,
+        participantUserIds,
+        mutedUserIds,
+      });
+      return true;
+    }
     for (const [candidateKey, state] of this.engagements) {
       if (state.expiresAt <= now) this.engagements.delete(candidateKey);
     }
@@ -257,6 +294,7 @@ export class ActiveReplyDecider {
       openedAt: now,
       lastActivityAt: now,
       lastReplyAt: now,
+      lastMentionReplyAt: this.isDirectMention(payload) ? now : null,
       expiresAt: now + this.engagementWindowMs,
       ownerUserId,
       participantUserIds: new Set([ownerUserId]),
@@ -264,6 +302,50 @@ export class ActiveReplyDecider {
       replyCount: 0,
     });
     return true;
+  }
+
+  admitDirectMention(payload, now = this.now()) {
+    const key = this.engagementKey(payload);
+    if (!this.enabled || !this.isAllowedGroup(payload)) {
+      return { reply: true, reason: 'mention-throttle-disabled' };
+    }
+    const state = this.getGroupEngagement(key, now);
+    if (!key || !state || !this.isDirectMention(payload)) {
+      return { reply: true, reason: 'mention-not-in-engagement' };
+    }
+
+    const userId = String(payload?.userId ?? '').trim();
+    const participantUserIds = new Set(state.participantUserIds);
+    const mutedUserIds = new Set(state.mutedUserIds);
+    if (userId) {
+      participantUserIds.add(userId);
+      mutedUserIds.delete(userId);
+    }
+    this.engagements.delete(key);
+    this.engagements.set(key, {
+      ...state,
+      lastActivityAt: now,
+      expiresAt: now + this.engagementWindowMs,
+      participantUserIds,
+      mutedUserIds,
+    });
+
+    const hasMentionReplyAt = state.lastMentionReplyAt !== null
+      && state.lastMentionReplyAt !== undefined;
+    const lastMentionReplyAt = Number(state.lastMentionReplyAt);
+    const elapsedMs = now - lastMentionReplyAt;
+    if (this.engagementMentionCooldownMs > 0
+      && hasMentionReplyAt
+      && Number.isFinite(lastMentionReplyAt)
+      && elapsedMs >= 0
+      && elapsedMs < this.engagementMentionCooldownMs) {
+      return {
+        reply: false,
+        reason: 'engagement-mention-cooldown',
+        retryAfterMs: this.engagementMentionCooldownMs - elapsedMs,
+      };
+    }
+    return { reply: true, reason: 'engagement-mention-must' };
   }
 
   refreshEngagement(payload, now = this.now(), options = {}) {
