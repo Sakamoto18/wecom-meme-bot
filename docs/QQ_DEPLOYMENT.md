@@ -42,6 +42,15 @@ openssl rand -hex 32
 
 ## 2. 启动三个服务
 
+三个服务都由本仓库的 Compose 启动时，不需要设置 Docker 网络变量。如果 AstrBot/NapCat 已由另一套 Compose 运行，请先用 `docker inspect astrbot` 确认其网络名，然后在 `.env.qq` 中设置：
+
+```dotenv
+LONGTU_QQ_DOCKER_NETWORK=现有的_AstrBot_Docker_网络名
+LONGTU_QQ_DOCKER_NETWORK_EXTERNAL=true
+```
+
+这样 `qq-bot` 重建后仍会自动加入 AstrBot 的外部网络，不依赖容易丢失的手工 `docker network connect`。
+
 ```bash
 docker compose --env-file .env.qq -f docker-compose.qq.yml up -d --build
 ```
