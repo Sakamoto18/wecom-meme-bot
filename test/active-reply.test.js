@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ActiveReplyDecider,
+  isAdminStopCommand,
   isExplicitEngagementEnd,
 } from '../src/active-reply.js';
 
@@ -22,7 +23,7 @@ function groupPayload(overrides = {}) {
   };
 }
 
-test('主动回复判定会结合现有人格和近期群聊，AI 返回 must 时放行', async () => {
+test('主动回复判定使用中立规则和近期群聊，AI 返回 must 时放行', async () => {
   const calls = [];
   const decider = new ActiveReplyDecider({
     chatClient: {
@@ -49,7 +50,8 @@ test('主动回复判定会结合现有人格和近期群聊，AI 返回 must �
 
   assert.deepEqual(result, { reply: true, reason: 'ai-must' });
   assert.equal(calls.length, 1);
-  assert.match(calls[0].options.systemPrompt, /互联网文化/);
+  assert.doesNotMatch(calls[0].options.systemPrompt, /互联网文化/);
+  assert.match(calls[0].options.systemPrompt, /不加载机器人聊天人格/);
   assert.match(calls[0].options.systemPrompt, /must、may 或 no/);
   assert.match(calls[0].input, /最近群聊/);
   assert.match(calls[0].input, /当前消息/);
@@ -84,6 +86,7 @@ test('must 绕过可选插话的概率、群聊热度、无人接话、冷却和
       async complete() { return nextDecision; },
     },
     enabled: true,
+    semanticValueGateEnabled: false,
     candidateProbability: 1,
     questionProbability: 1,
     cooldownMs: HOUR_FOR_TEST,
@@ -127,6 +130,7 @@ test('may 在冷却期与每小时上限内不会连续主动插话', async () =
       async complete() { return 'may'; },
     },
     enabled: true,
+    semanticValueGateEnabled: false,
     candidateProbability: 1,
     cooldownMs: 1_000,
     maxRepliesPerHour: 2,
@@ -157,6 +161,7 @@ test('群聊在 20 秒内由多人连续发言时阻止 may 抢话', async () =>
       async complete() { return 'may'; },
     },
     enabled: true,
+    semanticValueGateEnabled: false,
     candidateProbability: 1,
     busyWindowMs: 20_000,
     busyMessageCount: 4,
@@ -196,6 +201,7 @@ test('机器人发言后连续三条没人接话，may 进入主动静默', asyn
       async complete() { return 'may'; },
     },
     enabled: true,
+    semanticValueGateEnabled: false,
     candidateProbability: 1,
     busyMessageCount: 99,
     disengageAfterMessages: 3,
@@ -226,6 +232,7 @@ test('无人接话退场只暂停一段时间，不会永久关闭主动回复',
       async complete() { return 'may'; },
     },
     enabled: true,
+    semanticValueGateEnabled: false,
     candidateProbability: 1,
     busyMessageCount: 99,
     cooldownMs: 0,
@@ -260,6 +267,7 @@ test('公开问句使用更高候选概率，普通趣味消息仍使用基础�
       async complete() { return 'may'; },
     },
     enabled: true,
+    semanticValueGateEnabled: false,
     candidateProbability: 0.3,
     questionProbability: 0.6,
     cooldownMs: 0,
@@ -288,6 +296,7 @@ test('群级话题窗口允许其他真人承接，但按 18 秒节流且只有�
       async complete() { return decisionOutputs.shift(); },
     },
     enabled: true,
+    semanticValueGateEnabled: false,
     candidateProbability: 0,
     questionProbability: 0,
     cooldownMs: 60_000,
@@ -331,6 +340,7 @@ test('群话题中的无关消息保持静默但不替其他参与者关闭话�
       async complete() { return decisions.shift(); },
     },
     enabled: true,
+    semanticValueGateEnabled: false,
     candidateProbability: 0,
     questionProbability: 0,
     engagementWindowMs: 100_000,
@@ -356,7 +366,66 @@ test('群话题中的无关消息保持静默但不替其他参与者关闭话�
   assert.notEqual(decider.getEngagement(owner), null);
 });
 
-test('低信息附和和表情由程序直接静默，明确点名或真实问句仍放行', async () => {
+test('may 候选按上下文语义价值复核，不维护低信息关键词黑名单', async () => {
+  const calls = [];
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push({ history, input, options });
+        return /发言价值复核器/.test(options.systemPrompt) ? 'skip' : 'may';
+      },
+    },
+    enabled: true,
+    candidateProbability: 1,
+    questionProbability: 1,
+    personaPrompt: '你喜欢毒舌吐槽，看到什么都想骂一句。',
+  });
+  decider.openEngagement(groupPayload({ userId: 'u1', text: '这个周末能发布吗？' }));
+
+  const result = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u2', senderName: '群友乙', text: '能的' }),
+    history: [
+      { role: 'user', content: '群友甲：这个周末能发布吗？' },
+      { role: 'user', content: '群友乙：能的' },
+    ],
+  });
+
+  assert.deepEqual(result, {
+    reply: false,
+    reason: 'engagement-semantic-value-skip',
+  });
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].options.systemPrompt, /不得按固定关键词、字数或句式/);
+  assert.doesNotMatch(calls[1].options.systemPrompt, /毒舌吐槽/);
+  assert.match(calls[1].input, /这个周末能发布吗/);
+  assert.match(calls[1].input, /复核机器人是否应主动发言/);
+});
+
+test('may 候选确有未解决问题和新增价值时通过语义复核', async () => {
+  const outputs = ['may', 'speak'];
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return outputs.shift(); },
+    },
+    enabled: true,
+    candidateProbability: 1,
+    cooldownMs: 0,
+  });
+
+  const result = await decider.shouldReply({
+    payload: groupPayload({ text: '我按刚才步骤试了，还是报同一个错' }),
+    history: [
+      { role: 'assistant', content: '机器人：先清缓存再重启服务。' },
+      { role: 'user', content: '群友甲：我按刚才步骤试了，还是报同一个错' },
+    ],
+  });
+
+  assert.deepEqual(result, { reply: true, reason: 'ai-may' });
+});
+
+test('明确点名或引用机器人绕过 may 的语义复核', async () => {
   let calls = 0;
   const decider = new ActiveReplyDecider({
     chatClient: {
@@ -364,37 +433,53 @@ test('低信息附和和表情由程序直接静默，明确点名或真实问�
       async complete() { calls += 1; return 'may'; },
     },
     enabled: true,
-    candidateProbability: 1,
-    questionProbability: 1,
-    engagementReplyCooldownMs: 0,
-    engagementReplyProbability: 1,
+    candidateProbability: 0,
   });
-  const owner = groupPayload({ userId: 'u1', text: '先聊这个方案' });
-  decider.openEngagement(owner);
 
-  for (const text of ['能的', '好的', '确实', '哈哈哈', '收到', '👍']) {
-    const result = await decider.shouldReply({
-      payload: groupPayload({ userId: 'u2', text }),
-      history: [],
-    });
-    assert.deepEqual(result, { reply: false, reason: 'low-information-message' });
-  }
   const named = await decider.shouldReply({
     payload: groupPayload({
-      userId: 'u2',
       text: '@龙玉涛 能的',
       mentions: [{ userId: 'bot', name: '龙玉涛' }],
     }),
     history: [],
   });
-  const question = await decider.shouldReply({
-    payload: groupPayload({ userId: 'u1', text: '能不能继续讲？' }),
+  const quoted = await decider.shouldReply({
+    payload: groupPayload({
+      text: '能的',
+      quotedAuthor: { userId: 'bot', name: '龙玉涛' },
+    }),
     history: [],
   });
 
-  assert.deepEqual(named, { reply: true, reason: 'engagement-must' });
-  assert.equal(question.reply, true);
+  assert.deepEqual(named, { reply: true, reason: 'signal-must' });
+  assert.deepEqual(quoted, { reply: true, reason: 'signal-must' });
   assert.equal(calls, 2);
+});
+
+test('语义价值复核输出无效或调用失败时默认静默', async () => {
+  const warnings = [];
+  const outputs = ['may', '不确定', 'may'];
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        const output = outputs.shift();
+        if (output === undefined) throw new Error('上游超时');
+        return output;
+      },
+    },
+    enabled: true,
+    candidateProbability: 1,
+    cooldownMs: 0,
+    logger: { warn(message) { warnings.push(message); } },
+  });
+
+  const invalid = await decider.shouldReply({ payload: groupPayload(), history: [] });
+  const failed = await decider.shouldReply({ payload: groupPayload(), history: [] });
+
+  assert.deepEqual(invalid, { reply: false, reason: 'semantic-value-invalid' });
+  assert.deepEqual(failed, { reply: false, reason: 'semantic-value-error' });
+  assert.match(warnings[0], /默认静默/);
 });
 
 test('群级话题窗口按群共享，群级结束不影响其他群', () => {
@@ -491,6 +576,7 @@ test('群话题达到补充上限后，窗口内再次艾特只续期且受短�
       async complete() { return 'may'; },
     },
     enabled: true,
+    semanticValueGateEnabled: false,
     engagementReplyCooldownMs: 0,
     engagementMentionCooldownMs: 5_000,
     engagementReplyProbability: 1,
@@ -541,9 +627,14 @@ test('群话题达到补充上限后，窗口内再次艾特只续期且受短�
 
 test('明确结束指令由程序硬拦截，不依赖模型是否听话', async () => {
   assert.equal(isExplicitEngagementEnd('别再回复我了'), true);
+  assert.equal(isExplicitEngagementEnd('不许回复了'), true);
+  assert.equal(isExplicitEngagementEnd('不允许再搭理我了'), true);
   assert.equal(isExplicitEngagementEnd('不用回复了，结束这个话题'), true);
   assert.equal(isExplicitEngagementEnd('到此为止'), true);
   assert.equal(isExplicitEngagementEnd('如何实现“停止回复”这个功能？'), false);
+  assert.equal(isAdminStopCommand('/stop'), true);
+  assert.equal(isAdminStopCommand('/STOP'), true);
+  assert.equal(isAdminStopCommand('/stop 其他参数'), false);
 
   let calls = 0;
   const decider = new ActiveReplyDecider({

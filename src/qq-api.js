@@ -364,7 +364,10 @@ export async function createQqRuntime() {
     engagementMaxReplies: parsePositiveInteger(
       process.env.LONGTU_QQ_ENGAGEMENT_MAX_REPLIES,
     ) ?? 4,
-    personaPrompt: systemPrompt,
+    semanticValueGateEnabled: parseBoolean(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_SEMANTIC_GATE_ENABLED,
+      true,
+    ),
     logger: console,
   });
   const peerBotContinuationDecider = new PeerBotContinuationDecider({

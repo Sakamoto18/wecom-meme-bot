@@ -17,7 +17,7 @@ MAX_FORWARD_NODE_CHARACTERS = 600
 MAX_FORWARD_DEPTH = 2
 FORWARD_CACHE_TTL_SECONDS = 60 * 60
 FORWARD_CACHE_MAX_ENTRIES = 128
-ALLOWED_MANAGEMENT_SLASH_COMMANDS = {"/add", "/tag", "/del"}
+ALLOWED_BRIDGE_SLASH_COMMANDS = {"/add", "/tag", "/del", "/stop"}
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
 
@@ -25,7 +25,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.8.3",
+    "1.8.4",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -149,10 +149,10 @@ class LongtuQqBridge(Star):
         return (raw_text or event.message_str or "").lstrip().startswith("/")
 
     @classmethod
-    def _is_allowed_management_slash_command(cls, event: AstrMessageEvent) -> bool:
+    def _is_allowed_bridge_slash_command(cls, event: AstrMessageEvent) -> bool:
         raw_text = (cls._raw_text(event) or event.message_str or "").strip()
         matched = re.match(r"^/([a-z][a-z0-9_-]*)\b", raw_text, re.IGNORECASE)
-        return bool(matched and f"/{matched.group(1).lower()}" in ALLOWED_MANAGEMENT_SLASH_COMMANDS)
+        return bool(matched and f"/{matched.group(1).lower()}" in ALLOWED_BRIDGE_SLASH_COMMANDS)
 
     def _ignore_slash_commands(self) -> bool:
         configured = (
@@ -163,10 +163,10 @@ class LongtuQqBridge(Star):
         return self._enabled(configured, True)
 
     def _should_reply(self, event: AstrMessageEvent) -> bool:
-        # 斜杠命令是 Bridge 的硬白名单，不受旧配置开关影响：只有图库管理
-        # 的 /add、/tag、/del 可以继续进入本项目，其余命令必须在这里停止。
+        # 斜杠命令是 Bridge 的硬白名单，不受旧配置开关影响：图库管理命令
+        # 与超管 /stop 可以继续进入本项目，其余命令必须在这里停止。
         if self._is_slash_command(event):
-            return self._is_allowed_management_slash_command(event)
+            return self._is_allowed_bridge_slash_command(event)
         if event.is_private_chat():
             return True
         if not self._group_is_allowed(event):
@@ -688,9 +688,9 @@ class LongtuQqBridge(Star):
         try:
             if self._is_slash_command(event):
                 # AstrBot 的 WakingCheck 会先剥掉 / 唤醒前缀；这里用原始 OneBot
-                # 消息识别。仅放行图库管理的 /add、/tag、/del，其余斜杠命令
-                # 继续停止，避免 /w、/help 等内置命令或其他插件被误触发。
-                if not self._is_allowed_management_slash_command(event):
+                # 消息识别。仅放行图库管理命令与超管 /stop，其余斜杠命令继续
+                # 停止，避免 /w、/help 等内置命令或其他插件被误触发。
+                if not self._is_allowed_bridge_slash_command(event):
                     return
             should_reply = self._should_reply(event)
             observe_only = not should_reply and self._should_observe(event)
@@ -701,7 +701,7 @@ class LongtuQqBridge(Star):
             raw_text = self._raw_text(event)
             text = (
                 raw_text
-                if self._is_allowed_management_slash_command(event) and raw_text
+                if self._is_allowed_bridge_slash_command(event) and raw_text
                 else event.message_str.strip()
             )
             has_image = any(
