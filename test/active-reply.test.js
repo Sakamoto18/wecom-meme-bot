@@ -277,9 +277,10 @@ test('公开问句使用更高候选概率，普通趣味消息仍使用基础�
   assert.deepEqual(question, { reply: true, reason: 'ai-may' });
 });
 
-test('真人被点名后 100 秒内的相关追问绕过概率和冷却，超时后恢复普通判定', async () => {
+test('群级话题窗口允许其他真人承接，但按 18 秒节流且只有实际回复才续期', async () => {
   let currentTime = 10_000;
-  const decisionOutputs = ['may', 'may'];
+  const decisionOutputs = ['may', 'may', 'may', 'may'];
+  const randomValues = [0.4, 1];
   const decider = new ActiveReplyDecider({
     chatClient: {
       isConfigured: true,
@@ -290,21 +291,38 @@ test('真人被点名后 100 秒内的相关追问绕过概率和冷却，超时
     questionProbability: 0,
     cooldownMs: 60_000,
     engagementWindowMs: 100_000,
+    engagementReplyCooldownMs: 18_000,
+    engagementReplyProbability: 0.6,
     now: () => currentTime,
+    random: () => randomValues.shift(),
   });
-  const payload = groupPayload({ text: '那具体应该怎么做？' });
-  decider.openEngagement(payload);
+  const owner = groupPayload({ userId: 'u1', text: '先聊聊这个部署方案' });
+  decider.openEngagement(owner);
 
-  currentTime += 99_999;
-  const engaged = await decider.shouldReply({ payload, history: [] });
+  currentTime += 18_000;
+  const participant = groupPayload({ userId: 'u2', text: '那数据库迁移怎么办？' });
+  const joined = await decider.shouldReply({ payload: participant, history: [] });
+  currentTime += 1_000;
+  const cooledDown = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u3', text: '回滚方案也得补吧？' }),
+    history: [],
+  });
+  currentTime += 18_001;
+  const ownerFollowup = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u1', text: '那具体应该怎么做？' }),
+    history: [],
+  });
   currentTime += 100_001;
-  const expired = await decider.shouldReply({ payload, history: [] });
+  const expired = await decider.shouldReply({ payload: participant, history: [] });
 
-  assert.deepEqual(engaged, { reply: true, reason: 'engagement-must' });
+  assert.deepEqual(joined, { reply: true, reason: 'engagement-group-may' });
+  assert.deepEqual(cooledDown, { reply: false, reason: 'engagement-cooldown' });
+  assert.deepEqual(ownerFollowup, { reply: true, reason: 'engagement-owner-must' });
   assert.deepEqual(expired, { reply: false, reason: 'probability' });
 });
 
-test('接管窗口内语义判定为 no 会直接结束，后续消息不再绕过概率', async () => {
+test('群话题中的无关消息保持静默但不替其他参与者关闭话题', async () => {
+  let currentTime = 10_000;
   const decisions = ['no', 'may'];
   const decider = new ActiveReplyDecider({
     chatClient: {
@@ -315,21 +333,29 @@ test('接管窗口内语义判定为 no 会直接结束，后续消息不再绕�
     candidateProbability: 0,
     questionProbability: 0,
     engagementWindowMs: 100_000,
+    engagementReplyCooldownMs: 18_000,
+    engagementReplyProbability: 1,
+    now: () => currentTime,
   });
-  const payload = groupPayload({ text: '好的，就这样吧' });
-  decider.openEngagement(payload);
+  const owner = groupPayload({ userId: 'u1', text: '先聊部署方案' });
+  decider.openEngagement(owner);
 
-  const ended = await decider.shouldReply({ payload, history: [] });
+  currentTime += 18_000;
+  const unrelated = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u2', text: '今晚吃什么' }),
+    history: [],
+  });
   const later = await decider.shouldReply({
-    payload: groupPayload({ text: '那再问一句？' }),
+    payload: groupPayload({ userId: 'u3', text: '这个方案的回滚步骤还没说' }),
     history: [],
   });
 
-  assert.deepEqual(ended, { reply: false, reason: 'engagement-ended-by-context' });
-  assert.deepEqual(later, { reply: false, reason: 'probability' });
+  assert.deepEqual(unrelated, { reply: false, reason: 'engagement-unrelated' });
+  assert.deepEqual(later, { reply: true, reason: 'engagement-group-may' });
+  assert.notEqual(decider.getEngagement(owner), null);
 });
 
-test('群级结束会关闭该群所有真人接管窗口，不影响其他群', () => {
+test('群级话题窗口按群共享，群级结束不影响其他群', () => {
   const decider = new ActiveReplyDecider({
     chatClient: { isConfigured: true },
     enabled: true,
@@ -338,15 +364,108 @@ test('群级结束会关闭该群所有真人接管窗口，不影响其他群',
   const second = groupPayload({ groupId: 'g1', userId: 'u2' });
   const otherGroup = groupPayload({ groupId: 'g2', userId: 'u1' });
   decider.openEngagement(first);
-  decider.openEngagement(second);
   decider.openEngagement(otherGroup);
+
+  assert.equal(decider.getEngagement(second)?.ownerUserId, 'u1');
 
   const closed = decider.closeEngagementsForGroup('g1');
 
-  assert.equal(closed, 2);
+  assert.equal(closed, 1);
   assert.equal(decider.getEngagement(first), null);
   assert.equal(decider.getEngagement(second), null);
   assert.notEqual(decider.getEngagement(otherGroup), null);
+});
+
+test('普通参与者要求结束只退出本人，发起者结束才关闭整段群话题', async () => {
+  let calls = 0;
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { calls += 1; return 'must'; },
+    },
+    enabled: true,
+  });
+  const owner = groupPayload({ userId: 'u1' });
+  const participant = groupPayload({ userId: 'u2', text: '别再回复我了' });
+  decider.openEngagement(owner);
+
+  const participantEnd = await decider.shouldReply({ payload: participant, history: [] });
+
+  assert.deepEqual(participantEnd, {
+    reply: false,
+    reason: 'engagement-ended-explicitly',
+  });
+  assert.equal(decider.getEngagement(participant), null);
+  assert.notEqual(decider.getEngagement(owner), null);
+  const participantLater = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u2', text: '那我再说一句相关的' }),
+    history: [],
+  });
+  assert.deepEqual(participantLater, {
+    reply: false,
+    reason: 'engagement-user-muted',
+  });
+
+  const ownerEnd = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u1', text: '结束这个话题' }),
+    history: [],
+  });
+  assert.deepEqual(ownerEnd, { reply: false, reason: 'engagement-ended-explicitly' });
+  assert.equal(decider.getEngagement(owner), null);
+  assert.equal(calls, 0);
+});
+
+test('peer Bot 不会继承或续期真人群话题窗口', async () => {
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return 'may'; },
+    },
+    enabled: true,
+    candidateProbability: 0,
+    questionProbability: 0,
+    engagementReplyProbability: 1,
+  });
+  const owner = groupPayload({ userId: 'u1' });
+  decider.openEngagement(owner);
+  const peer = groupPayload({
+    userId: 'peer-bot',
+    isPeerBot: true,
+    text: '我也要继续聊这个话题',
+  });
+
+  const result = await decider.shouldReply({ payload: peer, history: [] });
+
+  assert.deepEqual(result, { reply: false, reason: 'probability' });
+  assert.equal(decider.getEngagement(peer), null);
+  assert.equal(decider.getEngagement(owner)?.replyCount, 0);
+});
+
+test('群话题窗口达到主动补充上限后保持静默，重新明确艾特可重置', async () => {
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return 'may'; },
+    },
+    enabled: true,
+    engagementReplyCooldownMs: 0,
+    engagementReplyProbability: 1,
+    engagementMaxReplies: 2,
+  });
+  const owner = groupPayload({ userId: 'u1' });
+  const participant = groupPayload({ userId: 'u2' });
+  decider.openEngagement(owner);
+
+  const first = await decider.shouldReply({ payload: participant, history: [] });
+  const second = await decider.shouldReply({ payload: participant, history: [] });
+  const limited = await decider.shouldReply({ payload: participant, history: [] });
+  decider.openEngagement(participant);
+
+  assert.equal(first.reply, true);
+  assert.equal(second.reply, true);
+  assert.deepEqual(limited, { reply: false, reason: 'engagement-reply-limit' });
+  assert.equal(decider.getEngagement(participant)?.replyCount, 0);
+  assert.equal(decider.getEngagement(participant)?.ownerUserId, 'u2');
 });
 
 test('明确结束指令由程序硬拦截，不依赖模型是否听话', async () => {

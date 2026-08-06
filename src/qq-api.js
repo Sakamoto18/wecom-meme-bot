@@ -351,6 +351,16 @@ export async function createQqRuntime() {
     engagementWindowMs: (parsePositiveNumber(
       process.env.LONGTU_QQ_ENGAGEMENT_WINDOW_SECONDS,
     ) ?? 100) * 1000,
+    engagementReplyCooldownMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_ENGAGEMENT_REPLY_COOLDOWN_SECONDS,
+    ) ?? 18) * 1000,
+    engagementReplyProbability: parseProbability(
+      process.env.LONGTU_QQ_ENGAGEMENT_REPLY_PROBABILITY,
+      0.6,
+    ),
+    engagementMaxReplies: parsePositiveInteger(
+      process.env.LONGTU_QQ_ENGAGEMENT_MAX_REPLIES,
+    ) ?? 4,
     personaPrompt: systemPrompt,
     logger: console,
   });
