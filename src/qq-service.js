@@ -14,6 +14,7 @@ import {
 } from './longtu-management.js';
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
 import { generateConversationReply } from './reply-engine.js';
+import { isExplicitEngagementEnd } from './active-reply.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -22,7 +23,7 @@ const MAX_NAME_CHARACTERS = 80;
 const MAX_IDENTIFIER_CHARACTERS = 128;
 const MAX_IMAGE_BASE64_CHARACTERS = 14 * 1024 * 1024;
 const DEFAULT_DEDUPE_TTL_MS = 10 * 60 * 1000;
-const DEFAULT_PEER_BOT_MAX_CONSECUTIVE_REPLIES = 4;
+const DEFAULT_PEER_BOT_MAX_CONSECUTIVE_REPLIES = 2;
 const DEFAULT_PEER_BOT_LOOP_WINDOW_MS = 5 * 60 * 1000;
 const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
 const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
@@ -393,12 +394,24 @@ export class QqBotService {
     this.processedMessageIds = new Set();
     this.managementTargets = new Map();
     this.peerBotReplyStates = new Map();
+    this.adminStoppedPeerGroups = new Map();
     this.groupProcessingQueues = new Map();
   }
 
   isPeerBotMessage(payload) {
     return payload.messageType === 'group'
       && this.peerBotUsers.has(payload.userId);
+  }
+
+  isDirectHumanEngagementTrigger(payload) {
+    if (payload.messageType !== 'group'
+      || this.isPeerBotMessage(payload)
+      || !payload.botUserId) {
+      return false;
+    }
+    return payload.pureBotMention
+      || payload.mentions.some((participant) => participant.userId === payload.botUserId)
+      || payload.quotedAuthor?.userId === payload.botUserId;
   }
 
   peerBotReplyKey(payload) {
@@ -417,6 +430,7 @@ export class QqBotService {
   }
 
   peerBotReplyLimitReached(payload) {
+    if (this.isPeerBotGroupSuppressed(payload.groupId)) return true;
     const state = this.getPeerBotReplyState(payload);
     return (state?.count ?? 0) >= this.peerBotMaxConsecutiveReplies;
   }
@@ -440,10 +454,37 @@ export class QqBotService {
   }
 
   resetPeerBotRepliesForGroup(groupId) {
+    if (this.isPeerBotGroupSuppressed(groupId)) return;
     const prefix = `${groupId}:`;
     for (const key of this.peerBotReplyStates.keys()) {
       if (key.startsWith(prefix)) this.peerBotReplyStates.delete(key);
     }
+  }
+
+  suppressPeerBotRepliesForGroup(groupId) {
+    const normalizedGroupId = String(groupId ?? '').trim();
+    if (!normalizedGroupId) return;
+    this.adminStoppedPeerGroups.set(
+      normalizedGroupId,
+      this.now() + this.peerBotLoopWindowMs,
+    );
+    for (const userId of this.peerBotUsers) {
+      this.peerBotReplyStates.set(`${normalizedGroupId}:${userId}`, {
+        count: this.peerBotMaxConsecutiveReplies,
+        lastReplyAt: this.now(),
+      });
+    }
+  }
+
+  isPeerBotGroupSuppressed(groupId) {
+    const normalizedGroupId = String(groupId ?? '').trim();
+    const expiresAt = this.adminStoppedPeerGroups.get(normalizedGroupId) ?? 0;
+    if (!expiresAt) return false;
+    if (expiresAt <= this.now()) {
+      this.adminStoppedPeerGroups.delete(normalizedGroupId);
+      return false;
+    }
+    return true;
   }
 
   async runGroupExclusive(groupId, task) {
@@ -1224,6 +1265,8 @@ export class QqBotService {
           this.activeReplyDecider?.recordBotReply?.(payload.groupId);
           if (this.isPeerBotMessage(payload)) {
             this.recordPeerBotReply(payload);
+          } else if (this.isDirectHumanEngagementTrigger(payload)) {
+            this.activeReplyDecider?.openEngagement?.(payload);
           }
         }
         return result;
@@ -1247,6 +1290,21 @@ export class QqBotService {
     this.recordParticipants(payload);
     this.recordMemberObservation(payload);
     this.inferPlainTextTargets(payload, message);
+    const explicitEngagementEnd = payload.messageType === 'group'
+      && isExplicitEngagementEnd(payload.text);
+    if (explicitEngagementEnd
+      && isLongtuAdministrator(payload.userId, this.adminUsers)) {
+      const closed = this.activeReplyDecider?.closeEngagementsForGroup?.(
+        payload.groupId,
+      ) ?? 0;
+      this.activeReplyDecider?.pauseGroup?.(payload.groupId);
+      this.suppressPeerBotRepliesForGroup(payload.groupId);
+      this.logger.log(
+        `QQ 超级管理员结束群内 Bot 对话：${payload.groupId}/${payload.userId}`
+        + `，关闭真人窗口 ${closed} 个并熔断 peer Bot`,
+      );
+      return this.observeMessage(payload, message);
+    }
     if (payload.messageType === 'group' && !this.isPeerBotMessage(payload)) {
       this.resetPeerBotRepliesForGroup(payload.groupId);
     } else if (this.peerBotReplyLimitReached(payload)) {
@@ -1274,6 +1332,13 @@ export class QqBotService {
         );
         return this.observeMessage(payload, message);
       }
+    }
+    if (explicitEngagementEnd
+      && !this.isPeerBotMessage(payload)
+    ) {
+      this.activeReplyDecider?.closeEngagement?.(payload);
+      this.logger.log(`QQ 真人主动结束连续对话：${payload.groupId}/${payload.userId}`);
+      return this.observeMessage(payload, message);
     }
     if (payload.observeOnly) {
       return this.handleObservedMessage(payload, message, conversationContent);

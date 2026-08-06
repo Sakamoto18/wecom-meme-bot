@@ -87,28 +87,33 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 LONGTU_QQ_ACTIVE_REPLY_ENABLED=true
 LONGTU_QQ_ACTIVE_REPLY_GROUPS=
 LONGTU_QQ_ACTIVE_REPLY_NAMES=龙玉涛
-LONGTU_QQ_ACTIVE_REPLY_PROBABILITY=0.15
-LONGTU_QQ_ACTIVE_REPLY_COOLDOWN_SECONDS=300
-LONGTU_QQ_ACTIVE_REPLY_MAX_PER_HOUR=3
+LONGTU_QQ_ACTIVE_REPLY_PROBABILITY=0.30
+LONGTU_QQ_ACTIVE_REPLY_QUESTION_PROBABILITY=0.60
+LONGTU_QQ_ACTIVE_REPLY_COOLDOWN_SECONDS=120
+LONGTU_QQ_ACTIVE_REPLY_MAX_PER_HOUR=6
 LONGTU_QQ_ACTIVE_REPLY_CONTEXT_MESSAGES=12
 LONGTU_QQ_ACTIVE_REPLY_DECISION_TIMEOUT_SECONDS=15
 LONGTU_QQ_ACTIVE_REPLY_BUSY_WINDOW_SECONDS=20
 LONGTU_QQ_ACTIVE_REPLY_BUSY_MESSAGE_COUNT=4
 LONGTU_QQ_ACTIVE_REPLY_BUSY_SENDER_COUNT=2
 LONGTU_QQ_ACTIVE_REPLY_DISENGAGE_AFTER_MESSAGES=3
+LONGTU_QQ_ACTIVE_REPLY_DISENGAGE_SECONDS=600
+LONGTU_QQ_ENGAGEMENT_WINDOW_SECONDS=100
 LONGTU_QQ_PEER_BOT_USERS=
 LONGTU_QQ_PEER_BOT_CONTEXT_GATE_ENABLED=true
 LONGTU_QQ_PEER_BOT_CONTEXT_MESSAGES=12
 LONGTU_QQ_PEER_BOT_DECISION_TIMEOUT_SECONDS=10
-LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES=4
+LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES=2
 LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 ```
 
-`LONGTU_QQ_ACTIVE_REPLY_GROUPS` 留空时沿用 Bridge 的 `LONGTU_QQ_ALLOWED_GROUPS` 范围。判定器先输出 `must/may/no`：只有明确点名/引用机器人、紧迫风险和可能造成现实损失的关键纠错属于 `must`，会绕过可选插话限制；普通公开提问/求助、话题延续和有趣话题都属于 `may`，需要继续通过概率、群聊热度、冷却和小时上限。默认候选概率为 0.15、同群冷却 300 秒、每群每小时最多 3 次。20 秒内至少 4 条消息且涉及 2 名发送者时判断为群聊正热；机器人发言后连续 3 条消息没人接它时，`may` 主动退场，直到直接点名或引用再次把它拉回。判定器仍会忽略明确发给其他成员的 `@`/引用、图片、斜杠指令和机器人自身消息。判定模型故障时，只有点名或引用机器人按 `must` 放行，普通公开问句默认沉默，不影响原有明确 `@机器人` 的被动回复。
+`LONGTU_QQ_ACTIVE_REPLY_GROUPS` 留空时沿用 Bridge 的 `LONGTU_QQ_ALLOWED_GROUPS` 范围。判定器先输出 `must/may/no`：只有明确点名/引用机器人、紧迫风险和可能造成现实损失的关键纠错属于 `must`，会绕过可选插话限制；普通公开提问/求助、话题延续和有趣话题都属于 `may`。普通 `may` 默认使用 0.30 候选概率，公开问句使用 0.60；同群冷却 120 秒，每群每小时最多 6 次。20 秒内至少 4 条消息且涉及 2 名发送者时只抑制普通趣味插话，不压掉公开问句。机器人发言后连续 3 条消息没人接它时，`may` 暂停 600 秒，超时后可参与新话题，不再永久退场。判定器仍会忽略明确发给其他成员的 `@`/引用、图片、斜杠指令和机器人自身消息。判定模型故障时，只有点名或引用机器人按 `must` 放行，普通公开问句默认沉默，不影响原有明确 `@机器人` 的被动回复。
+
+真人明确 `@` 或引用机器人并收到回复后，会按“群号 + 真人 QQ 号”开启默认 100 秒的连续对话窗口。同一真人在窗口内继续发送相关追问时无需重复 `@`，且不受随机概率、主动插话冷却和小时上限影响；每次有效追问会重新计算 100 秒。明确说“别再回复了”“停止回复”“结束这个话题”“到此为止”等时由程序先于模型立即关闭窗口并保持静默；其他道谢、话题结束、转向他人或无关消息再由语义判定关闭。登记在 `LONGTU_QQ_PEER_BOT_USERS` 中的 Bot 永远不能开启真人连续对话窗口。`LONGTU_QQ_ADMIN_USERS` 中的超级管理员拥有群级最高优先级：无论机器人正在和谁聊，超管发出明确结束指令都会关闭该群所有真人窗口、暂停该群普通主动回复 100 秒，并把所有已登记 peer Bot 直接压到硬上限，在 5 分钟循环窗口到期前不再续聊；新的真人明确 `@` 仍可开启一段全新对话。
 
 主动回复还会使用自适应长度：`may` 作为群友插话，默认只生成一句 15～70 字的短评，超过安全长度会触发压缩重写；`must` 的简单问题保持 1～3 句，只有方案、排障、比较或需要证据的问题才开启详细回答。该长度策略只改变表达密度，不关闭既有人格、记忆或联网检索。
 
-两个 Bot 同群时，把对方的 QQ 号填入 `LONGTU_QQ_PEER_BOT_USERS`（多个用英文逗号分隔）。首轮明确 `@` 正常回复；从第二轮起，续聊阀门会结合最近群聊判断对方是否提出了尚未回答的新问题、新指令、新事实或有效纠错。重复 `@`、复读、客套寒暄、客服套话、挑衅和没有新增信息的 Bot 发言会提前静默；判定失败同样按静默处理。程序仍按“群号 + 对方 Bot QQ 号”保留默认 4 次的绝对硬上限，防止模型误判后形成永动循环。真人群友插话会立即清空该群计数，`LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS` 到期也会自动恢复。
+两个 Bot 同群时，把对方的 QQ 号填入 `LONGTU_QQ_PEER_BOT_USERS`（多个用英文逗号分隔）。首轮明确 `@` 正常回复；第二轮只有对方提出尚未回答的新问题、新指令、新事实或有效纠错时才继续。重复 `@`、复读、客套寒暄、客服套话、挑衅和没有新增信息的 Bot 发言会提前静默；判定失败同样按静默处理。程序按“群号 + 对方 Bot QQ 号”保留默认 2 次的绝对硬上限，防止模型误判后形成永动循环。真人群友插话会立即清空该群计数，`LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS` 到期也会自动恢复。
 
 ### 群角色认知
 
