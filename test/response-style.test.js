@@ -194,6 +194,12 @@ test('主动 may 插话要求单句短评，过长草稿会被风格复核拦截
   });
   assert.ok(reviewed.issues.includes('too-long-for-active'));
 
+  const boundaryDraft = `蠢${'字'.repeat(70)}`;
+  assert.ok(reviewNormalReply(boundaryDraft, {
+    activeReply: true,
+    activeReplyPriority: 'may',
+  }).issues.includes('too-long-for-active'));
+
   const retryPrompt = buildNormalReplyRetryPrompt(
     '这个玩具挺有意思',
     longDraft,

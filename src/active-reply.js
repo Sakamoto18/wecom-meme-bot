@@ -10,6 +10,8 @@ const DEFAULT_MAX_ENGAGEMENTS = 1_000;
 const EXPLICIT_ENGAGEMENT_END_CLAUSE_PATTERN = /^(?:(?:请|麻烦)(?:你)?|你|机器人|龙玉涛)?(?:现在)?(?:别(?:再)?(?:回(?:复)?|说话)(?:我)?了?|不要(?:再)?(?:回(?:复)?|说话)(?:我)?了?|不用(?:再)?回(?:复)?(?:我)?了?|无需(?:再)?回(?:复)?|停止(?:回(?:复)?|对话|聊天)|结束(?:这个|这段|本次)?(?:话题|对话|聊天)|到此为止|不(?:聊|说)了|闭嘴)[吧啊呀哦了~～\s]*$/i;
 const STANDALONE_ENGAGEMENT_END_PATTERN = /^(?:停|停止|结束|行了|可以了|够了|没事了|不用了|算了|撤了|散了)[吧啊呀哦。！!~～\s]*$/i;
 const END_COURTESY_CLAUSE_PATTERN = /^(?:好(?:的|了)?|行了|可以了|够了|谢谢|谢了)[吧啊呀哦~～\s]*$/i;
+const LOW_INFORMATION_ACTIVE_PATTERN = /^(?:能(?:的)?|可以(?:的)?|行(?:的)?|好(?:的|吧|嘞|滴)?|嗯+|哦+|噢+|啊+|对(?:的)?|是(?:的)?|确实(?:如此)?|没错|收到|明白(?:了)?|懂(?:了)?|知道(?:了)?|没问题|都行|随便|还行|原来如此|也是|谢谢(?:你)?|谢了|哈哈+|呵呵+|嘿嘿+|笑死(?:我了)?|草|艹|牛逼|牛|绝了|6+|\+1|ok(?:ay)?|yes|nope)$/i;
+const EMOJI_ONLY_ACTIVE_PATTERN = /^(?:[\p{Extended_Pictographic}\p{Emoji_Component}\uFE0F])+$/u;
 
 const DECISION_SYSTEM_PROMPT = [
   '你是 QQ 群聊里的“读空气”优先级判定器。你的任务只是判断机器人是否应接入当前对话，不是生成回复。',
@@ -48,6 +50,17 @@ function parseDecision(value) {
   const tail = withoutThinking.match(/(?:^|\n)\s*(must|may|yes|no)\s*[.!。！]?\s*$/i);
   const decision = tail?.[1]?.toLowerCase() ?? '';
   return decision === 'yes' ? 'may' : decision;
+}
+
+function isLowInformationActiveMessage(value) {
+  const normalized = String(value ?? '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/[，,。.!！?？；;、~～…]+$/g, '');
+  if (!normalized) return true;
+  return LOW_INFORMATION_ACTIVE_PATTERN.test(normalized)
+    || EMOJI_ONLY_ACTIVE_PATTERN.test(normalized);
 }
 
 export function isExplicitEngagementEnd(value) {
@@ -559,6 +572,13 @@ export class ActiveReplyDecider {
     }
 
     const signals = this.mustSignals(payload);
+    if (isLowInformationActiveMessage(payload.text)
+      && !signals.quotedBot
+      && !signals.namedBot
+      && !signals.explicitQuestion
+      && !this.isDirectMention(payload)) {
+      return { reply: false, reason: 'low-information-message' };
+    }
     const signalSummary = [
       signals.quotedBot ? '当前消息引用了机器人之前的发言。' : '',
       signals.namedBot ? `当前消息点名了机器人（已配置名称：${this.botNames.join('、')}）。` : '',

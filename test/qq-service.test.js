@@ -381,6 +381,37 @@ test('QQ 普通群消息只进入观察记忆，不调用模型也不回复', as
   assert.equal(members.length, 2);
 });
 
+test('“能的”等低信息群消息不会误触发主动回复或联网链路', async () => {
+  let calls = 0;
+  const chatClient = {
+    isConfigured: true,
+    async complete() {
+      calls += 1;
+      return 'may';
+    },
+  };
+  const activeReplyDecider = new ActiveReplyDecider({
+    chatClient,
+    enabled: true,
+    candidateProbability: 1,
+    questionProbability: 1,
+  });
+  const { service } = createService({ chatClient, activeReplyDecider });
+
+  const result = await service.handleMessage({
+    message_id: 'low-information-active-1',
+    message_type: 'group',
+    group_id: 'g-low-information',
+    user_id: 'u-low-information',
+    sender_name: '群友甲',
+    text: '能的',
+    observe_only: true,
+  });
+
+  assert.deepEqual(result, { mode: 'observed', messages: [] });
+  assert.equal(calls, 0);
+});
+
 test('普通群消息经读空气判定命中后复用现有人格回复引擎', async () => {
   const decisions = [];
   const recordedBotReplies = [];

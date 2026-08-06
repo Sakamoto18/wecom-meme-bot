@@ -356,6 +356,47 @@ test('群话题中的无关消息保持静默但不替其他参与者关闭话�
   assert.notEqual(decider.getEngagement(owner), null);
 });
 
+test('低信息附和和表情由程序直接静默，明确点名或真实问句仍放行', async () => {
+  let calls = 0;
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { calls += 1; return 'may'; },
+    },
+    enabled: true,
+    candidateProbability: 1,
+    questionProbability: 1,
+    engagementReplyCooldownMs: 0,
+    engagementReplyProbability: 1,
+  });
+  const owner = groupPayload({ userId: 'u1', text: '先聊这个方案' });
+  decider.openEngagement(owner);
+
+  for (const text of ['能的', '好的', '确实', '哈哈哈', '收到', '👍']) {
+    const result = await decider.shouldReply({
+      payload: groupPayload({ userId: 'u2', text }),
+      history: [],
+    });
+    assert.deepEqual(result, { reply: false, reason: 'low-information-message' });
+  }
+  const named = await decider.shouldReply({
+    payload: groupPayload({
+      userId: 'u2',
+      text: '@龙玉涛 能的',
+      mentions: [{ userId: 'bot', name: '龙玉涛' }],
+    }),
+    history: [],
+  });
+  const question = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u1', text: '能不能继续讲？' }),
+    history: [],
+  });
+
+  assert.deepEqual(named, { reply: true, reason: 'engagement-must' });
+  assert.equal(question.reply, true);
+  assert.equal(calls, 2);
+});
+
 test('群级话题窗口按群共享，群级结束不影响其他群', () => {
   const decider = new ActiveReplyDecider({
     chatClient: { isConfigured: true },
