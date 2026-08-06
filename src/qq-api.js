@@ -354,6 +354,9 @@ export async function createQqRuntime() {
     engagementReplyCooldownMs: (parsePositiveNumber(
       process.env.LONGTU_QQ_ENGAGEMENT_REPLY_COOLDOWN_SECONDS,
     ) ?? 18) * 1000,
+    engagementMentionCooldownMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_ENGAGEMENT_MENTION_COOLDOWN_SECONDS,
+    ) ?? 5) * 1000,
     engagementReplyProbability: parseProbability(
       process.env.LONGTU_QQ_ENGAGEMENT_REPLY_PROBABILITY,
       0.6,
