@@ -8,6 +8,7 @@ import {
   buildQqCompatibleMessage,
   normalizeQqPayload,
 } from '../src/qq-service.js';
+import { ActiveReplyDecider } from '../src/active-reply.js';
 
 function createMeme(filename = 'longtu.png') {
   return {
@@ -411,6 +412,207 @@ test('普通群消息经读空气判定命中后复用现有人格回复引擎',
   assert.equal(result.active_reply_priority, 'must');
   assert.deepEqual(result.messages.map((message) => message.type), ['text', 'image']);
   assert.deepEqual(recordedBotReplies, ['g-active']);
+});
+
+test('真人艾特后开启 100 秒接管窗口，相关追问必回且明确结束立即静默', async () => {
+  let currentTime = 10_000;
+  const replyCalls = [];
+  const chatClient = {
+    isConfigured: true,
+    async complete(history, modelInput, options) {
+      if (options?.maxTokens === 8) return 'may';
+      replyCalls.push({ history, modelInput, options });
+      return '具体做法我给你说明白，省得你又把简单事折腾成事故现场。';
+    },
+  };
+  const activeReplyDecider = new ActiveReplyDecider({
+    chatClient,
+    enabled: true,
+    candidateProbability: 0,
+    questionProbability: 0,
+    cooldownMs: 60_000,
+    engagementWindowMs: 100_000,
+    now: () => currentTime,
+  });
+  const { service } = createService({
+    chatClient,
+    activeReplyDecider,
+    now: () => currentTime,
+  });
+  const directMention = {
+    message_id: 'engagement-direct-1',
+    message_type: 'group',
+    group_id: 'g-engagement',
+    user_id: 'human',
+    sender_name: '真人',
+    text: '@龙玉涛 先说说这个方案',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  };
+
+  const first = await service.handleMessage(directMention);
+  currentTime += 99_000;
+  const followup = await service.handleMessage({
+    message_id: 'engagement-followup-1',
+    message_type: 'group',
+    group_id: 'g-engagement',
+    user_id: 'human',
+    sender_name: '真人',
+    text: '那具体应该怎么落地？',
+    bot_user_id: 'longtu-bot',
+    observe_only: true,
+  });
+  const callsBeforeEnd = replyCalls.length;
+  const ended = await service.handleMessage({
+    message_id: 'engagement-end-1',
+    message_type: 'group',
+    group_id: 'g-engagement',
+    user_id: 'human',
+    sender_name: '真人',
+    text: '@龙玉涛 不用回复了，结束这个话题',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  });
+  const afterEnd = await service.handleMessage({
+    message_id: 'engagement-after-end-1',
+    message_type: 'group',
+    group_id: 'g-engagement',
+    user_id: 'human',
+    sender_name: '真人',
+    text: '那再问一句？',
+    bot_user_id: 'longtu-bot',
+    observe_only: true,
+  });
+
+  assert.equal(first.messages.length > 0, true);
+  assert.equal(followup.active_reply, true);
+  assert.equal(followup.active_reply_priority, 'must');
+  assert.deepEqual(ended, { mode: 'observed', messages: [] });
+  assert.deepEqual(afterEnd, { mode: 'observed', messages: [] });
+  assert.equal(replyCalls.length, callsBeforeEnd);
+  assert.equal(activeReplyDecider.getEngagement({
+    messageType: 'group',
+    groupId: 'g-engagement',
+    userId: 'human',
+  }), null);
+});
+
+test('peer Bot 明确艾特不会开启真人接管窗口', async () => {
+  let engagementOpens = 0;
+  const { service } = createService({
+    peerBotUsers: new Set(['peer-bot']),
+    activeReplyDecider: {
+      recordBotReply() {},
+      openEngagement() { engagementOpens += 1; },
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'peer-no-engagement-1',
+    message_type: 'group',
+    group_id: 'g-peer-no-engagement',
+    user_id: 'peer-bot',
+    sender_name: '另一个机器人',
+    text: '@龙玉涛 继续聊',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  });
+
+  assert.equal(result.messages.length > 0, true);
+  assert.equal(engagementOpens, 0);
+});
+
+test('超级管理员结束指令优先关闭全群真人窗口并熔断所有 peer Bot', async () => {
+  const activeReplyDecider = new ActiveReplyDecider({
+    chatClient: { isConfigured: true },
+    enabled: true,
+  });
+  const firstHuman = {
+    messageType: 'group', groupId: 'g-admin-stop', userId: 'human-1',
+  };
+  const secondHuman = {
+    messageType: 'group', groupId: 'g-admin-stop', userId: 'human-2',
+  };
+  activeReplyDecider.openEngagement(firstHuman);
+  activeReplyDecider.openEngagement(secondHuman);
+  const { service, calls } = createService({
+    activeReplyDecider,
+    adminUsers: new Set(['admin']),
+    peerBotUsers: new Set(['peer-a', 'peer-b']),
+    peerBotMaxConsecutiveReplies: 2,
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'admin-stop-all-1',
+    message_type: 'group',
+    group_id: 'g-admin-stop',
+    user_id: 'admin',
+    sender_name: '超级管理员',
+    text: '@龙玉涛 结束这个话题',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  });
+
+  assert.deepEqual(result, { mode: 'observed', messages: [] });
+  assert.equal(calls.length, 0);
+  assert.equal(activeReplyDecider.getEngagement(firstHuman), null);
+  assert.equal(activeReplyDecider.getEngagement(secondHuman), null);
+  const paused = await activeReplyDecider.shouldReply({
+    payload: {
+      messageType: 'group',
+      groupId: 'g-admin-stop',
+      userId: 'human-1',
+      senderName: '真人',
+      text: '那还继续说吗？',
+      forwardedText: '',
+      botUserId: 'longtu-bot',
+      mentions: [],
+      quotedAuthor: null,
+      hasImage: false,
+      pureBotMention: false,
+    },
+    history: [],
+  });
+  assert.deepEqual(paused, { reply: false, reason: 'admin-paused' });
+  for (const userId of ['peer-a', 'peer-b']) {
+    assert.equal(service.peerBotReplyLimitReached({
+      messageType: 'group', groupId: 'g-admin-stop', userId,
+    }), true);
+  }
+  service.resetPeerBotRepliesForGroup('g-admin-stop');
+  assert.equal(service.peerBotReplyLimitReached({
+    messageType: 'group', groupId: 'g-admin-stop', userId: 'peer-a',
+  }), true);
+
+  await service.handleMessage({
+    message_id: 'admin-stop-human-observation-1',
+    message_type: 'group',
+    group_id: 'g-admin-stop',
+    user_id: 'human-3',
+    sender_name: '真人三号',
+    text: '我先说一句普通群聊',
+    bot_user_id: 'longtu-bot',
+    observe_only: true,
+  });
+  assert.equal(service.peerBotReplyLimitReached({
+    messageType: 'group', groupId: 'g-admin-stop', userId: 'peer-b',
+  }), true);
+
+  const restarted = await service.handleMessage({
+    message_id: 'admin-stop-new-engagement-1',
+    message_type: 'group',
+    group_id: 'g-admin-stop',
+    user_id: 'human-3',
+    sender_name: '真人三号',
+    text: '@龙玉涛 开个新话题',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
+  });
+  assert.equal(restarted.messages.length > 0, true);
+  assert.notEqual(activeReplyDecider.getEngagement({
+    messageType: 'group', groupId: 'g-admin-stop', userId: 'human-3',
+  }), null);
+  assert.equal(activeReplyDecider.isGroupPaused('g-admin-stop'), false);
 });
 
 test('同群 peer Bot 最多连续回复两次，真人插话后解除静默', async () => {

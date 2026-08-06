@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ActiveReplyDecider } from '../src/active-reply.js';
+import {
+  ActiveReplyDecider,
+  isExplicitEngagementEnd,
+} from '../src/active-reply.js';
 
 function groupPayload(overrides = {}) {
   return {
@@ -82,6 +85,7 @@ test('must 绕过可选插话的概率、群聊热度、无人接话、冷却和
     },
     enabled: true,
     candidateProbability: 1,
+    questionProbability: 1,
     cooldownMs: HOUR_FOR_TEST,
     maxRepliesPerHour: 1,
     busyWindowMs: 20_000,
@@ -174,8 +178,13 @@ test('群聊在 20 秒内由多人连续发言时阻止 may 抢话', async () =>
     payload: groupPayload({ userId: 'u2' }),
     history: [],
   });
+  const publicQuestion = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u1', text: '这个问题到底怎么解决？' }),
+    history: [],
+  });
 
   assert.deepEqual(result, { reply: false, reason: 'busy-group' });
+  assert.deepEqual(publicQuestion, { reply: true, reason: 'ai-may' });
 });
 
 test('机器人发言后连续三条没人接话，may 进入主动静默', async () => {
@@ -206,6 +215,161 @@ test('机器人发言后连续三条没人接话，may 进入主动静默', asyn
   const result = await decider.shouldReply({ payload: groupPayload(), history: [] });
 
   assert.deepEqual(result, { reply: false, reason: 'disengaged' });
+});
+
+test('无人接话退场只暂停一段时间，不会永久关闭主动回复', async () => {
+  let currentTime = 10_000;
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return 'may'; },
+    },
+    enabled: true,
+    candidateProbability: 1,
+    busyMessageCount: 99,
+    cooldownMs: 0,
+    disengageAfterMessages: 3,
+    disengageMs: 10_000,
+    now: () => currentTime,
+  });
+  decider.recordBotReply('g1');
+
+  for (let index = 0; index < 3; index += 1) {
+    currentTime += 1_000;
+    await decider.shouldReply({
+      payload: groupPayload({
+        mentions: [{ userId: 'u2', name: '群友乙' }],
+      }),
+      history: [],
+    });
+  }
+  const disengaged = await decider.shouldReply({ payload: groupPayload(), history: [] });
+  currentTime = 20_001;
+  const resumed = await decider.shouldReply({ payload: groupPayload(), history: [] });
+
+  assert.deepEqual(disengaged, { reply: false, reason: 'disengaged' });
+  assert.deepEqual(resumed, { reply: true, reason: 'ai-may' });
+});
+
+test('公开问句使用更高候选概率，普通趣味消息仍使用基础概率', async () => {
+  const randomValues = [0.5, 0.5];
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return 'may'; },
+    },
+    enabled: true,
+    candidateProbability: 0.3,
+    questionProbability: 0.6,
+    cooldownMs: 0,
+    busyMessageCount: 99,
+    disengageAfterMessages: 99,
+    random: () => randomValues.shift(),
+  });
+
+  const interesting = await decider.shouldReply({ payload: groupPayload(), history: [] });
+  const question = await decider.shouldReply({
+    payload: groupPayload({ text: '这个东西具体怎么用？' }),
+    history: [],
+  });
+
+  assert.deepEqual(interesting, { reply: false, reason: 'probability' });
+  assert.deepEqual(question, { reply: true, reason: 'ai-may' });
+});
+
+test('真人被点名后 100 秒内的相关追问绕过概率和冷却，超时后恢复普通判定', async () => {
+  let currentTime = 10_000;
+  const decisionOutputs = ['may', 'may'];
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return decisionOutputs.shift(); },
+    },
+    enabled: true,
+    candidateProbability: 0,
+    questionProbability: 0,
+    cooldownMs: 60_000,
+    engagementWindowMs: 100_000,
+    now: () => currentTime,
+  });
+  const payload = groupPayload({ text: '那具体应该怎么做？' });
+  decider.openEngagement(payload);
+
+  currentTime += 99_999;
+  const engaged = await decider.shouldReply({ payload, history: [] });
+  currentTime += 100_001;
+  const expired = await decider.shouldReply({ payload, history: [] });
+
+  assert.deepEqual(engaged, { reply: true, reason: 'engagement-must' });
+  assert.deepEqual(expired, { reply: false, reason: 'probability' });
+});
+
+test('接管窗口内语义判定为 no 会直接结束，后续消息不再绕过概率', async () => {
+  const decisions = ['no', 'may'];
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return decisions.shift(); },
+    },
+    enabled: true,
+    candidateProbability: 0,
+    questionProbability: 0,
+    engagementWindowMs: 100_000,
+  });
+  const payload = groupPayload({ text: '好的，就这样吧' });
+  decider.openEngagement(payload);
+
+  const ended = await decider.shouldReply({ payload, history: [] });
+  const later = await decider.shouldReply({
+    payload: groupPayload({ text: '那再问一句？' }),
+    history: [],
+  });
+
+  assert.deepEqual(ended, { reply: false, reason: 'engagement-ended-by-context' });
+  assert.deepEqual(later, { reply: false, reason: 'probability' });
+});
+
+test('群级结束会关闭该群所有真人接管窗口，不影响其他群', () => {
+  const decider = new ActiveReplyDecider({
+    chatClient: { isConfigured: true },
+    enabled: true,
+  });
+  const first = groupPayload({ groupId: 'g1', userId: 'u1' });
+  const second = groupPayload({ groupId: 'g1', userId: 'u2' });
+  const otherGroup = groupPayload({ groupId: 'g2', userId: 'u1' });
+  decider.openEngagement(first);
+  decider.openEngagement(second);
+  decider.openEngagement(otherGroup);
+
+  const closed = decider.closeEngagementsForGroup('g1');
+
+  assert.equal(closed, 2);
+  assert.equal(decider.getEngagement(first), null);
+  assert.equal(decider.getEngagement(second), null);
+  assert.notEqual(decider.getEngagement(otherGroup), null);
+});
+
+test('明确结束指令由程序硬拦截，不依赖模型是否听话', async () => {
+  assert.equal(isExplicitEngagementEnd('别再回复我了'), true);
+  assert.equal(isExplicitEngagementEnd('不用回复了，结束这个话题'), true);
+  assert.equal(isExplicitEngagementEnd('到此为止'), true);
+  assert.equal(isExplicitEngagementEnd('如何实现“停止回复”这个功能？'), false);
+
+  let calls = 0;
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { calls += 1; return 'must'; },
+    },
+    enabled: true,
+  });
+  const payload = groupPayload({ text: '别再回复我了' });
+  decider.openEngagement(payload);
+  const result = await decider.shouldReply({ payload, history: [] });
+
+  assert.deepEqual(result, { reply: false, reason: 'engagement-ended-explicitly' });
+  assert.equal(calls, 0);
+  assert.equal(decider.getEngagement(payload), null);
 });
 
 test('点名和引用机器人在判定模型故障时按 must 放行，普通问句保持沉默', async () => {
@@ -266,6 +430,7 @@ test('普通公开问句属于可选插话，必须经过概率与频率限制',
     },
     enabled: true,
     candidateProbability: 0,
+    questionProbability: 0,
     now: () => 10_000,
   });
 

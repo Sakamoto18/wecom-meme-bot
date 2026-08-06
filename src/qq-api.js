@@ -309,14 +309,18 @@ export async function createQqRuntime() {
     enabled: parseBoolean(process.env.LONGTU_QQ_ACTIVE_REPLY_ENABLED, true),
     candidateProbability: parseProbability(
       process.env.LONGTU_QQ_ACTIVE_REPLY_PROBABILITY,
-      0.15,
+      0.3,
+    ),
+    questionProbability: parseProbability(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_QUESTION_PROBABILITY,
+      0.6,
     ),
     cooldownMs: (parsePositiveNumber(
       process.env.LONGTU_QQ_ACTIVE_REPLY_COOLDOWN_SECONDS,
-    ) ?? 300) * 1000,
+    ) ?? 120) * 1000,
     maxRepliesPerHour: parsePositiveInteger(
       process.env.LONGTU_QQ_ACTIVE_REPLY_MAX_PER_HOUR,
-    ) ?? 3,
+    ) ?? 6,
     contextMessages: parsePositiveInteger(
       process.env.LONGTU_QQ_ACTIVE_REPLY_CONTEXT_MESSAGES,
     ) ?? 12,
@@ -341,6 +345,12 @@ export async function createQqRuntime() {
     disengageAfterMessages: parsePositiveInteger(
       process.env.LONGTU_QQ_ACTIVE_REPLY_DISENGAGE_AFTER_MESSAGES,
     ) ?? 3,
+    disengageMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_DISENGAGE_SECONDS,
+    ) ?? 600) * 1000,
+    engagementWindowMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_ENGAGEMENT_WINDOW_SECONDS,
+    ) ?? 100) * 1000,
     personaPrompt: systemPrompt,
     logger: console,
   });
@@ -374,7 +384,7 @@ export async function createQqRuntime() {
     peerBotUsers: parseIdentifierSet(process.env.LONGTU_QQ_PEER_BOT_USERS),
     peerBotMaxConsecutiveReplies: parsePositiveInteger(
       process.env.LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES,
-    ) ?? 4,
+    ) ?? 2,
     peerBotLoopWindowMs: (parsePositiveNumber(
       process.env.LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS,
     ) ?? 300) * 1000,
