@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   LongtuWebSearch,
   parseBaiduSearchHtml,
+  parseExaSearchJson,
   parseSoSearchHtml,
   parseSearchRss,
   selectCurrentSearchQuery,
@@ -52,6 +53,23 @@ const SAMPLE_SO = `
   </li>
 </ul></body></html>`;
 
+const SAMPLE_EXA = {
+  results: [
+    {
+      title: '玄武之声近期话题整理',
+      url: 'https://news.example.com/xuanwu',
+      publishedDate: '2026-08-06T08:00:00.000Z',
+      author: '测试编辑',
+      text: '原文直接说明了该话题的起因与传播过程，这是从网页正文中提取的内容。',
+    },
+    {
+      title: '无关结果',
+      url: 'https://example.com/other',
+      text: '与当前查询完全无关。',
+    },
+  ],
+};
+
 test('解析搜索 RSS 时只保留龙图相关摘要', () => {
   const results = parseSearchRss(SAMPLE_RSS, 5);
   assert.equal(results.length, 2);
@@ -70,6 +88,82 @@ test('解析百度公开搜索摘要并保留可核验原句', () => {
   assert.equal(results.length, 2);
   assert.match(results[0].description, /难说\s*,毕竟你不配/);
   assert.match(results[1].description, /杀妈/);
+});
+
+test('解析 Exa 搜索结果时保留网页正文、作者和发布时间', () => {
+  const results = parseExaSearchJson(SAMPLE_EXA, 6, {
+    mode: 'general',
+    relevanceTerms: ['玄武之声'],
+    maxContentCharacters: 1_200,
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].contentSource, 'exa-extracted-text');
+  assert.equal(results[0].author, '测试编辑');
+  assert.match(results[0].publishedDate, /2026-08-06/);
+  assert.match(results[0].description, /网页正文/);
+});
+
+test('Exa 使用官方 Search API 的语义检索和限长正文', async () => {
+  const calls = [];
+  const search = new LongtuWebSearch({
+    provider: 'exa',
+    exaApiKey: 'exa-test-key',
+    maxResults: 6,
+    exaMaxContentCharacters: 1_200,
+    fallbackEndpoint: null,
+    fetchImpl: async (url, options) => {
+      calls.push({ url: String(url), options });
+      return new Response(JSON.stringify({ results: [SAMPLE_EXA.results[0]] }), { status: 200 });
+    },
+  });
+
+  const result = await search.search('玄武之声是什么', { mode: 'general' });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.exa.ai/search');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.headers['x-api-key'], 'exa-test-key');
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    query: '玄武之声是什么',
+    numResults: 6,
+    type: 'auto',
+    contents: { text: { maxCharacters: 1_200 } },
+  });
+  assert.equal(result.endpoint, 'https://api.exa.ai/search');
+  assert.equal(result.resultCount, 1);
+  assert.match(result.context, /Exa 搜索并提取公开网页正文/);
+  assert.match(result.context, /只有单一来源时必须明说/);
+  assert.match(result.context, /news\.example\.com/);
+});
+
+test('Exa 首轮没有有效结果时才按复合主题回退检索', async () => {
+  const queries = [];
+  const search = new LongtuWebSearch({
+    provider: 'exa',
+    exaApiKey: 'exa-test-key',
+    fallbackEndpoint: null,
+    fetchImpl: async (_url, options) => {
+      const query = JSON.parse(options.body).query;
+      queries.push(query);
+      const results = query === '竹知了和玄武之声到底是什么梗'
+        ? []
+        : [{
+          title: `${query}相关资料`,
+          url: `https://example.com/${queries.length}`,
+          text: `${query}的网页正文。`,
+        }];
+      return new Response(JSON.stringify({ results }), { status: 200 });
+    },
+  });
+
+  const result = await search.search('竹知了和玄武之声到底是什么梗', { mode: 'general' });
+
+  assert.deepEqual(queries, [
+    '竹知了和玄武之声到底是什么梗',
+    '竹知了',
+    '玄武之声',
+  ]);
+  assert.equal(result.resultCount, 2);
 });
 
 test('解析 360 搜索结果时使用原始目标链接并过滤无关梗结果', () => {
