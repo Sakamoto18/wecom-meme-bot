@@ -260,6 +260,26 @@ test('受保护账号询问身份时模型不遵守也由程序保证钢印结�
   assert.equal(result.review.valid, true);
 });
 
+test('受保护头衔语义复核继续串线时由程序删除显式错误归属', async () => {
+  const result = await generateConversationReply({
+    content: '谁是龙王，哪有龙王',
+    modelInput: '当前发言人：【群最鶸】韩潇玟\n当前消息：谁是龙王，哪有龙王',
+    history: [],
+    protectedIdentityContext: '成员-owner = 至高无上的真龙王',
+    speakerForbiddenProtectedRoleTerms: ['至高无上的真龙王', '真龙王', '龙王'],
+    interactionContext: { speakerLabel: '【群最鶸】韩潇玟' },
+    chatClient: {
+      isConfigured: true,
+      complete: async () => '你就是至高无上的真龙王，还装什么失忆，你这脑子真够破的。',
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.equal(result.protectedRoleSanitized, true);
+  assert.doesNotMatch(result.answer, /你(?:就|才)?是.*龙王/);
+  assert.match(result.answer, /不是你/);
+});
+
 test('纯艾特强制快速人格模式，客服式草稿回退为角色招呼', async () => {
   const calls = [];
   const result = await generateConversationReply({

@@ -66,7 +66,7 @@ flowchart LR
     F -.特定知识问题.-> I[网页检索适配器<br/>web-search]
 
     H --> L[OpenAI 兼容 LLM]
-    I --> S[360 搜索 / Bing RSS]
+    I --> S[Bing RSS]
     E <--> P[(data/conversation-memory.json)]
     D <--> M[(memes/longtu + manifest)]
     D --> A
@@ -369,7 +369,7 @@ await chatClient.complete(history, currentMessage, options);
 4. 把结果标注为“不可信外部资料”后加入模型上下文；
 5. 按查询缓存 30 分钟。
 
-当前主端点默认是 `https://www.so.com/s`，解析结果中的 `data-mdurl` 原始目标地址；主源报错或没有相关摘要时降级到 Bing RSS。`WEB_SEARCH_ENDPOINT` 可以覆盖主端点。搜索 HTML/RSS 结构仍可能变化，因此运行日志会记录检索模式、结果数和来源域名，方便发现解析失效。
+当前默认只请求 Bing RSS（`https://www.bing.com/search?format=rss`），不再自动降级到 360。`WEB_SEARCH_ENDPOINT` 可以覆盖主端点。搜索 RSS 结构仍可能变化，因此运行日志会记录检索模式、结果数和来源域名，方便发现解析失效。
 
 ### 8.4 图片发送
 
@@ -741,7 +741,7 @@ npm run dev
 | `LONGTU_LIMIT` | 否 | 800 |
 | `LONGTU_MAX_SCORE` | 否 | 0.6 |
 | `WEB_SEARCH_ENABLED` | 否 | `true` |
-| `WEB_SEARCH_ENDPOINT` | 否 | `https://www.so.com/s` |
+| `WEB_SEARCH_ENDPOINT` | 否 | `https://www.bing.com/search` |
 | `WEB_SEARCH_TIMEOUT_MS` | 否 | 6000 |
 | `WEB_SEARCH_CACHE_TTL_MS` | 否 | 1800000 |
 | `CONVERSATION_MEMORY_MESSAGES` | 否 | 200，环境配置至少为 4 |
@@ -782,7 +782,7 @@ npm run dev
 - 会话内容以明文写到本机 JSON，需要明确数据保留和磁盘权限；
 - 去重、媒体缓存和搜索缓存重启后丢失，也无法跨进程共享；
 - 网页 HTML/RSS 用正则解析，页面结构变化时容易失效；
-- 默认 360/Bing 搜索依赖第三方 HTML/RSS 结构和可用性；
+- 默认 Bing RSS 搜索依赖第三方 RSS 结构和可用性；
 - manifest 文件完全缺失时会扫描仓库图片目录，没有做到严格的失败关闭；
 - 日志主要是字符串，没有请求耗时、token 使用量和结构化指标；
 - 没有对企业微信 frame 做正式 schema 校验；
