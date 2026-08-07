@@ -57,6 +57,28 @@ test('对线语境中的追问仍使用直接攻击模式', async () => {
   assert.equal(result.review.valid, true);
 });
 
+test('模型复述群聊历史的内部回复标签时只保留答案正文', async () => {
+  const result = await generateConversationReply({
+    content: '上班时间打个蛋的游戏',
+    modelInput: '上班时间打个蛋的游戏',
+    chatClient: {
+      isConfigured: true,
+      complete: async () => [
+        '【机器人群聊回复记录】',
+        '本轮回复对象：码头寻找薯条的大执法官',
+        '机器人回复：上班摸鱼打游戏还说得理直气壮，你这废物摸鱼都比别人低一个档次。',
+      ].join('\n'),
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.equal(
+    result.answer,
+    '上班摸鱼打游戏还说得理直气壮，你这废物摸鱼都比别人低一个档次。',
+  );
+  assert.doesNotMatch(result.answer, /机器人群聊回复记录|本轮回复对象|机器人回复：/);
+});
+
 test('孤立 ma 或与历史高度重复会触发一次模型重写', async () => {
   const drafts = [
     '你🐎的 ma 还在坟头笑呢。',
