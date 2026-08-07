@@ -1,5 +1,5 @@
-const DEFAULT_ENDPOINT = 'https://www.so.com/s';
-const DEFAULT_FALLBACK_ENDPOINT = 'https://www.bing.com/search';
+const DEFAULT_ENDPOINT = 'https://www.bing.com/search';
+const DEFAULT_FALLBACK_ENDPOINT = '';
 const DEFAULT_TIMEOUT_MS = 6_000;
 const DEFAULT_CACHE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_RESULTS = 4;

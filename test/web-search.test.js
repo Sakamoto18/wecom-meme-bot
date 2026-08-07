@@ -107,21 +107,18 @@ test('搜索只发送固定白名单查询，不泄露群聊原文，并缓存�
   assert.match(first.context, /不可信外部资料/);
 });
 
-test('360 没有结果时自动降级到 Bing RSS', async () => {
+test('Bing RSS 没有结果时直接返回空结果且不请求 360', async () => {
   const requestedHosts = [];
   const search = new LongtuWebSearch({
     fetchImpl: async (url) => {
       requestedHosts.push(new URL(url).hostname);
-      if (requestedHosts.length === 1) {
-        return new Response('<title>空搜索结果</title>', { status: 200 });
-      }
-      return new Response(SAMPLE_RSS, { status: 200 });
+      return new Response('<rss><channel></channel></rss>', { status: 200 });
     },
   });
 
-  const result = await search.search('你真是司马了');
-  assert.deepEqual(requestedHosts, ['www.so.com', 'www.bing.com']);
-  assert.equal(result.resultCount, 2);
+  const result = await search.search('曼波是什么意思', { mode: 'meme' });
+  assert.deepEqual(requestedHosts, ['www.bing.com']);
+  assert.equal(result.resultCount, 0);
   assert.match(result.endpoint, /bing\.com/);
 });
 

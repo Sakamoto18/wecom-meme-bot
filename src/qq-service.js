@@ -349,12 +349,22 @@ function scopedProtectedRoles(protectedRoles, message) {
   )));
 }
 
-function forbiddenProtectedRoleTerms(protectedRoles, allowedRoles, referenceText = '') {
+function referencedProtectedRoles(protectedRoles, referenceText = '') {
+  return new Map([...(protectedRoles ?? [])].filter(([, role]) => (
+    textContainsProtectedRole(referenceText, protectedRoleReferenceTerms(role))
+  )));
+}
+
+function mergeProtectedRoles(...roleMaps) {
+  return new Map(roleMaps.flatMap((roles) => [...(roles ?? [])]));
+}
+
+function forbiddenProtectedRoleTerms(protectedRoles, allowedRoles) {
   const allowedUserIds = new Set([...(allowedRoles ?? [])].map(([userId]) => String(userId)));
   return [...new Set([...(protectedRoles ?? [])]
     .filter(([userId, role]) => (
       !allowedUserIds.has(String(userId))
-      && !textContainsProtectedRole(referenceText, protectedRoleReferenceTerms(role))
+      && String(role ?? '').trim()
     ))
     .flatMap(([, role]) => protectedRoleReferenceTerms(role)))];
 }
@@ -717,14 +727,25 @@ export class QqBotService {
       recordedAliases,
       this.protectedRoles,
     );
-    const turnProtectedRoles = scopedProtectedRoles(
+    const directlyRelatedProtectedRoles = scopedProtectedRoles(
       this.protectedRoles,
       message,
+    );
+    const protectedRoleReferenceText = [
+      content,
+      extractMessageText(message?.quote),
+    ].filter(Boolean).join('\n');
+    const turnProtectedRoles = mergeProtectedRoles(
+      directlyRelatedProtectedRoles,
+      referencedProtectedRoles(this.protectedRoles, protectedRoleReferenceText),
     );
     const forbiddenRoleTerms = forbiddenProtectedRoleTerms(
       this.protectedRoles,
       turnProtectedRoles,
-      [content, extractMessageText(message?.quote)].filter(Boolean).join('\n'),
+    );
+    const forbiddenHistoryRoleTerms = forbiddenProtectedRoleTerms(
+      this.protectedRoles,
+      directlyRelatedProtectedRoles,
     );
     const rawMemberMemories = message.chattype === 'group'
       ? this.conversationStore.getGroupMemberMemories?.(
@@ -746,7 +767,10 @@ export class QqBotService {
       : [];
     const memberHistory = rawMemberHistory.map((entry) => ({
       ...entry,
-      content: removeLinesContainingProtectedRoles(entry.content, forbiddenRoleTerms),
+      content: removeLinesContainingProtectedRoles(
+        entry.content,
+        forbiddenHistoryRoleTerms,
+      ),
     })).filter((entry) => entry.content);
     const modelInput = [
       buildPersistentMemberMemoryContext(message, memberMemories),
@@ -755,6 +779,11 @@ export class QqBotService {
     ].filter(Boolean).join('\n\n');
     const interactionContext = getGroupInteractionContext(message, aliases);
     const speakerUserId = String(message?.from?.userid ?? '').trim();
+    const speakerForbiddenProtectedRoleTerms = [...new Set(
+      [...turnProtectedRoles]
+        .filter(([ownerUserId]) => String(ownerUserId) !== speakerUserId)
+        .flatMap(([, role]) => protectedRoleReferenceTerms(role)),
+    )];
     const requiredIdentityRole = PROTECTED_SELF_IDENTITY_PATTERN.test(content)
       ? String(this.protectedRoles.get(speakerUserId) ?? '').trim()
       : '';
@@ -766,11 +795,11 @@ export class QqBotService {
     return this.conversationStore.runExclusive(conversationId, async () => {
       const history = sanitizeConversationHistory(
         this.conversationStore.get(conversationId),
-        forbiddenRoleTerms,
+        forbiddenHistoryRoleTerms,
       );
       const memorySummary = removeLinesContainingProtectedRoles(
         this.conversationStore.getSummary?.(conversationId) ?? '',
-        forbiddenRoleTerms,
+        forbiddenHistoryRoleTerms,
       );
       const generated = await generateConversationReply({
         content,
@@ -780,6 +809,7 @@ export class QqBotService {
         interactionContext,
         protectedIdentityContext: turnIdentityContext,
         forbiddenProtectedRoleTerms: forbiddenRoleTerms,
+        speakerForbiddenProtectedRoleTerms,
         requiredIdentityRole,
         chatClient: this.chatClient,
         webSearch: this.webSearch,

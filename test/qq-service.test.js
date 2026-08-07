@@ -439,6 +439,64 @@ test('模型仍把受保护头衔安给无关成员时会强制纠错', async ()
   assert.match(result.messages[0].text, /重新登录原账号/);
 });
 
+test('非所有者主动提到受保护头衔时仍隔离旧串线并注入真正归属', async () => {
+  const calls = [];
+  const conversationStore = {
+    recordGroupMember() {},
+    getGroupMembers: () => [],
+    getGroupMemberAliases: () => ({}),
+    appendMemberObservation: () => false,
+    getGroupMemberMemories: () => [{
+      userId: 'u-han',
+      speakerId: 'abc123',
+      name: '【群最鶸】韩潇玟',
+      memory: '- 自称“龙王”，群内地位高。\n- 平时玩原神。',
+    }],
+    getGroupMemberHistory: () => [],
+    runExclusive: (_conversationId, task) => task(),
+    get: () => [
+      { role: 'assistant', content: '你就是至高无上的真龙王。' },
+      { role: 'user', content: '当前发言人：别的群友（成员-deadbe）\n当前消息：上一句话' },
+    ],
+    getSummary: () => '- 韩潇玟自称龙王。\n- 群里最近在讨论原神。',
+    appendExchange() {},
+    scheduleSummary: () => Promise.resolve(false),
+  };
+  const chatClient = {
+    isConfigured: true,
+    async complete(history, modelInput, options) {
+      calls.push({ history, modelInput, options });
+      if (/受保护头衔语义复核/.test(options.additionalSystemPrompt ?? '')) {
+        return '你不是龙王，那是另一位固定群成员的头衔。连人都能认串，你这脑回路真够破的。';
+      }
+      return '你就是至高无上的真龙王，还搁这装失忆，你这脑子真够破的。';
+    },
+  };
+  const { service } = createService({
+    chatClient,
+    conversationStore,
+    protectedRoles: new Map([['u-owner', '至高无上的真龙王']]),
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'protected-role-mentioned-by-non-owner-1',
+    message_type: 'group',
+    group_id: 'g-role-scope',
+    user_id: 'u-han',
+    sender_name: '【群最鶸】韩潇玟',
+    text: '谁是龙王，哪有龙王',
+  });
+
+  assert.doesNotMatch(calls[0].modelInput, /自称.*龙王/);
+  assert.doesNotMatch(calls[0].history.map((entry) => entry.content).join('\n'), /龙王/);
+  assert.match(calls[0].options.additionalSystemPrompt, /成员-.*至高无上的真龙王/);
+  assert.ok(calls.some((call) => (
+    /受保护头衔语义复核/.test(call.options.additionalSystemPrompt ?? '')
+  )));
+  assert.doesNotMatch(result.messages[0].text, /你(?:就|才)?是.*龙王/);
+  assert.match(result.messages[0].text, /你不是龙王/);
+});
+
 test('成员画像观察保留提及对象且非所有者不会继承受保护头衔', async () => {
   const observations = [];
   const summaryCalls = [];
