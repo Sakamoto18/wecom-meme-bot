@@ -532,14 +532,23 @@ export class LongtuWebSearch {
             relevanceTerms,
           });
           resultSets.push(fetched.results);
-          // The original query is authoritative when it already filled the
-          // result budget. Exa's semantic query is also authoritative as soon
-          // as it returns an effective result; split-term fallbacks are only
-          // needed after an empty Exa response so they do not waste credits.
-          if (resultSets.length === 1
-            && (fetched.results.length >= this.maxResults
-              || (usesExa && fetched.results.length > 0))) {
-            break;
+          if (resultSets.length === 1) {
+            if (usesExa && fallbackQueries.length > 0) {
+              const missingQueries = fallbackQueries.filter((term) => !fetched.results.some(
+                (result) => isResultRelevant(
+                  `${result.title} ${result.description} ${result.url}`,
+                  [term],
+                ),
+              ));
+              // Exa usually resolves a semantic compound query in one call.
+              // Only query coordinated subjects that are absent from the
+              // first result set, avoiding both blind extra spend and partial
+              // answers that cover only the first subject.
+              queries.splice(1, queries.length - 1, ...missingQueries);
+              if (missingQueries.length === 0) break;
+            } else if (fetched.results.length >= this.maxResults) {
+              break;
+            }
           }
         }
         const collected = [];

@@ -166,6 +166,40 @@ test('Exa 首轮没有有效结果时才按复合主题回退检索', async () =
   assert.equal(result.resultCount, 2);
 });
 
+test('Exa 复合查询只补搜首轮缺失的主题并交错合并结果', async () => {
+  const queries = [];
+  const search = new LongtuWebSearch({
+    provider: 'exa',
+    exaApiKey: 'exa-test-key',
+    maxResults: 4,
+    fallbackEndpoint: null,
+    fetchImpl: async (_url, options) => {
+      const query = JSON.parse(options.body).query;
+      queries.push(query);
+      const subject = query === '玄武之声' ? '玄武之声' : '竹知了';
+      return new Response(JSON.stringify({
+        results: [1, 2, 3].map((index) => ({
+          title: `${subject}资料${index}`,
+          url: `https://example.com/${subject}/${index}`,
+          text: `${subject}的网页正文。`,
+        })),
+      }), { status: 200 });
+    },
+  });
+
+  const result = await search.search('竹知了和玄武之声到底是什么梗', { mode: 'general' });
+
+  assert.deepEqual(queries, [
+    '竹知了和玄武之声到底是什么梗',
+    '玄武之声',
+  ]);
+  assert.equal(result.resultCount, 4);
+  assert.deepEqual(
+    result.results.map((item) => item.title),
+    ['竹知了资料1', '玄武之声资料1', '竹知了资料2', '玄武之声资料2'],
+  );
+});
+
 test('解析 360 搜索结果时使用原始目标链接并过滤无关梗结果', () => {
   const results = parseSoSearchHtml(SAMPLE_SO, 5, {
     mode: 'meme',
