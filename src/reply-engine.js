@@ -26,6 +26,24 @@ import {
 
 const PURE_MENTION_FALLBACK = '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。';
 
+function removeInternalReplyMetadata(value) {
+  return String(value ?? '')
+    .replace(
+      /(^|\n)\s*(?:>\s*)?(?:[-*]\s*)?【机器人群聊回复记录】\s*(?=\n|$)/gu,
+      '$1',
+    )
+    .replace(
+      /(^|\n)\s*(?:>\s*)?(?:[-*]\s*)?本轮回复对象\s*[：:][^\n]*(?=\n|$)/gu,
+      '$1',
+    )
+    .replace(
+      /(^|\n)\s*(?:>\s*)?(?:[-*]\s*)?机器人回复\s*[：:]\s*/gu,
+      '$1',
+    )
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function emptySearchResult() {
   return {
     context: '',
@@ -199,7 +217,7 @@ export async function generateConversationReply(options) {
       thinking: { type: 'disabled' },
     });
     const guardedDraft = removeForbiddenProtectedRoleSentences(
-      draft,
+      removeInternalReplyMetadata(draft),
       forbiddenProtectedRoleTerms,
     );
     const pureMentionFallback = isInvalidPureMentionReply(guardedDraft);
@@ -277,7 +295,7 @@ export async function generateConversationReply(options) {
     }
 
     answer = removeForbiddenProtectedRoleSentences(
-      removeInternalParticipantIds(removeLiteralLatinMa(answer)),
+      removeInternalReplyMetadata(removeInternalParticipantIds(removeLiteralLatinMa(answer))),
       forbiddenProtectedRoleTerms,
     ) || buildNormalVenomFallback(content, {
       interactionContext,
@@ -542,6 +560,10 @@ export async function generateConversationReply(options) {
     ) || '这个头衔属于固定的另一位群成员，不是你。连谁是谁都能串，你这脑子别拿群摘要当洗牌器。';
     protectedRoleSanitized = true;
   }
+  answer = removeInternalReplyMetadata(answer) || buildNormalVenomFallback(content, {
+    interactionContext,
+    compact: compactActiveReply,
+  });
   review = reviewNormalReply(answer, {
     thinkingEnabled,
     requirePersonaBite,
