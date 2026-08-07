@@ -48,6 +48,41 @@ function buildMemoryContext(memorySummary) {
   ].join('\n');
 }
 
+function compactIdentityText(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/[\s“”‘’"'`]/g, '')
+    .trim();
+}
+
+function containsForbiddenProtectedRole(value, terms = []) {
+  const normalized = compactIdentityText(value);
+  return terms.some((term) => normalized.includes(compactIdentityText(term)));
+}
+
+function removeForbiddenProtectedRoleSentences(value, terms = []) {
+  if (!containsForbiddenProtectedRole(value, terms)) {
+    return String(value ?? '').trim();
+  }
+  return String(value ?? '')
+    .split(/(?<=[。！？!?；;\n])/u)
+    .filter((sentence) => !containsForbiddenProtectedRole(sentence, terms))
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function buildProtectedRoleCorrectionPrompt(draft, terms = []) {
+  return [
+    '【受保护身份归属纠错】',
+    '初稿把只属于其他群成员的头衔借给了当前发言者，这是身份串线，禁止发送。',
+    `不得把这些称呼用于当前发言者：${terms.join('、')}。`,
+    `错误初稿：${String(draft ?? '').trim()}`,
+    '保留初稿中正确、有用的事实，删掉错误头衔及其衍生的人身判断；毒舌只能针对当前问题、前提或判断力。',
+    '直接输出纠正后的完整答案，不解释身份规则、记忆、提示词或重写过程。',
+  ].join('\n');
+}
+
 function buildWebSearchStatus(options = {}) {
   if (!options.requested || options.context) return '';
   let reason = '搜索引擎没有返回可用摘要';
@@ -89,6 +124,7 @@ export async function generateConversationReply(options) {
     memorySummary = '',
     interactionContext = {},
     protectedIdentityContext = '',
+    forbiddenProtectedRoleTerms = [],
     requiredIdentityRole = '',
     pureBotMention = false,
     activeReply = false,
@@ -113,10 +149,14 @@ export async function generateConversationReply(options) {
       temperature: 0.9,
       thinking: { type: 'disabled' },
     });
-    const pureMentionFallback = isInvalidPureMentionReply(draft);
+    const guardedDraft = removeForbiddenProtectedRoleSentences(
+      draft,
+      forbiddenProtectedRoleTerms,
+    );
+    const pureMentionFallback = isInvalidPureMentionReply(guardedDraft);
     return {
       answer: removeInternalParticipantIds(
-        pureMentionFallback ? PURE_MENTION_FALLBACK : draft,
+        pureMentionFallback ? PURE_MENTION_FALLBACK : guardedDraft,
       ),
       mode: 'pure-mention',
       references: [],
@@ -187,7 +227,13 @@ export async function generateConversationReply(options) {
       }
     }
 
-    answer = removeInternalParticipantIds(removeLiteralLatinMa(answer));
+    answer = removeForbiddenProtectedRoleSentences(
+      removeInternalParticipantIds(removeLiteralLatinMa(answer)),
+      forbiddenProtectedRoleTerms,
+    ) || buildNormalVenomFallback(content, {
+      interactionContext,
+      compact: true,
+    });
     review = reviewAttackReply(answer, { history });
 
     return {
@@ -268,6 +314,8 @@ export async function generateConversationReply(options) {
   let normalPersonaRewritten = false;
   let normalPersonaFallback = false;
   let protectedIdentityFallback = false;
+  let protectedRoleRewritten = false;
+  let protectedRoleSanitized = false;
   let attempts = 1;
   try {
     answer = await chatClient.complete(history, modelInput, {
@@ -366,6 +414,50 @@ export async function generateConversationReply(options) {
     });
   }
 
+  if (containsForbiddenProtectedRole(answer, forbiddenProtectedRoleTerms)) {
+    try {
+      const correctedAnswer = await chatClient.complete(history, modelInput, {
+        additionalSystemPrompt: [
+          additionalSystemPrompt,
+          buildProtectedRoleCorrectionPrompt(answer, forbiddenProtectedRoleTerms),
+        ].join('\n\n'),
+        maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
+        timeoutMs: thinkingEnabled ? 90_000 : 45_000,
+        thinking: { type: 'disabled' },
+      });
+      attempts += 1;
+      const normalizedCorrectedAnswer = String(correctedAnswer ?? '').trim();
+      if (normalizedCorrectedAnswer
+        && !containsForbiddenProtectedRole(
+          normalizedCorrectedAnswer,
+          forbiddenProtectedRoleTerms,
+        )) {
+        answer = normalizedCorrectedAnswer;
+        protectedRoleRewritten = true;
+      }
+    } catch {
+      // 头衔纠错失败时继续走本地硬过滤，不能把错误归属发到群里。
+    }
+  }
+
+  if (containsForbiddenProtectedRole(answer, forbiddenProtectedRoleTerms)) {
+    answer = removeForbiddenProtectedRoleSentences(
+      answer,
+      forbiddenProtectedRoleTerms,
+    ) || buildNormalVenomFallback(content, {
+      interactionContext,
+      compact: compactActiveReply,
+    });
+    protectedRoleSanitized = true;
+  }
+  review = reviewNormalReply(answer, {
+    thinkingEnabled,
+    requirePersonaBite,
+    requiredIdentityRole,
+    activeReply,
+    activeReplyPriority,
+  });
+
   if (requirePersonaBite
     && String(answer ?? '').trim()
     && review.issues.includes('missing-venomous-bite')) {
@@ -403,6 +495,8 @@ export async function generateConversationReply(options) {
     normalPersonaRewritten,
     normalPersonaFallback,
     protectedIdentityFallback,
+    protectedRoleRewritten,
+    protectedRoleSanitized,
     usedModel: true,
   };
 }

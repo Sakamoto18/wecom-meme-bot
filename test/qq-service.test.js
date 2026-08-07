@@ -343,6 +343,159 @@ test('相关成员画像和越过近期窗口的历史原文会按需注入回�
   assert.match(calls[0].modelInput, /当前消息：你还记得我之前说过什么吗/);
 });
 
+test('无关成员回复隔离其他人的受保护头衔并记录机器人当轮回复对象', async () => {
+  const calls = [];
+  const exchanges = [];
+  const memberObservations = [];
+  const conversationStore = {
+    recordGroupMember() {},
+    getGroupMembers: () => [],
+    getGroupMemberAliases: () => ({}),
+    appendMemberObservation(groupId, userId, content) {
+      memberObservations.push({ groupId, userId, content });
+      return false;
+    },
+    getGroupMemberMemories: () => [{
+      userId: 'u-han',
+      speakerId: 'abc123',
+      name: '【群最鶸】韩潇玟',
+      memory: '- 自称“龙王”，群内地位高。\n- 平时玩原神。',
+    }],
+    getGroupMemberHistory: () => [],
+    runExclusive: (_conversationId, task) => task(),
+    get: () => [
+      { role: 'assistant', content: '你是至高无上的真龙王。' },
+      { role: 'user', content: '当前发言人：别的群友（成员-deadbe）\n当前消息：上一句话' },
+    ],
+    getSummary: () => '- 韩潇玟自称龙王。\n- 群里最近在讨论原神。',
+    appendExchange(...args) {
+      exchanges.push(args);
+    },
+    scheduleSummary: () => Promise.resolve(false),
+  };
+  const chatClient = {
+    isConfigured: true,
+    async complete(history, modelInput, options) {
+      calls.push({ history, modelInput, options });
+      return '账号数据在服务器，重新登录原账号即可恢复。连云存档都分不清，你这脑子真是摆设。';
+    },
+  };
+  const { service } = createService({
+    chatClient,
+    conversationStore,
+    protectedRoles: new Map([['u-owner', '至高无上的真龙王']]),
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'protected-scope-unrelated-1',
+    message_type: 'group',
+    group_id: 'g-role-scope',
+    user_id: 'u-han',
+    sender_name: '【群最鶸】韩潇玟',
+    text: '卸载原神被贡献清零了怎么办',
+  });
+
+  assert.doesNotMatch(calls[0].modelInput, /龙王/);
+  assert.match(calls[0].modelInput, /平时玩原神/);
+  assert.doesNotMatch(calls[0].history.map((entry) => entry.content).join('\n'), /龙王/);
+  assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /真龙王/);
+  assert.match(calls[0].options.additionalSystemPrompt, /群聊历史中属于其他成员/);
+  assert.match(memberObservations[0].content, /当前发言人：【群最鶸】韩潇玟/);
+  assert.match(exchanges[0][2], /本轮回复对象：【群最鶸】韩潇玟/);
+  assert.doesNotMatch(result.messages[0].text, /龙王/);
+});
+
+test('模型仍把受保护头衔安给无关成员时会强制纠错', async () => {
+  const calls = [];
+  const chatClient = {
+    isConfigured: true,
+    async complete(history, modelInput, options) {
+      calls.push({ history, modelInput, options });
+      if (/受保护身份归属纠错/.test(options.additionalSystemPrompt ?? '')) {
+        return '原神账号数据在服务器，重装后重新登录原账号即可。连云存档都分不清，你这脑子真是摆设。';
+      }
+      return '原神账号数据在服务器，重装后重新登录就行。顶着“龙王”头衔问这种问题，你脑子真是摆设。';
+    },
+  };
+  const { service } = createService({
+    chatClient,
+    protectedRoles: new Map([['u-owner', '至高无上的真龙王']]),
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'protected-role-rewrite-1',
+    message_type: 'group',
+    group_id: 'g-role-scope',
+    user_id: 'u-han',
+    sender_name: '【群最鶸】韩潇玟',
+    text: '卸载原神被贡献清零了怎么办',
+  });
+
+  assert.ok(calls.length >= 2);
+  assert.ok(calls.some((call) => (
+    /受保护身份归属纠错/.test(call.options.additionalSystemPrompt ?? '')
+  )));
+  assert.doesNotMatch(result.messages[0].text, /龙王/);
+  assert.match(result.messages[0].text, /重新登录原账号/);
+});
+
+test('成员画像观察保留提及对象且非所有者不会继承受保护头衔', async () => {
+  const observations = [];
+  const summaryCalls = [];
+  let memberSummarizer;
+  const conversationStore = {
+    recordGroupMember() {},
+    getGroupMembers: () => [],
+    getGroupMemberAliases: () => ({}),
+    appendMemberObservation(groupId, userId, content) {
+      observations.push({ groupId, userId, content });
+      return true;
+    },
+    scheduleMemberMemory(_groupId, _userId, summarizer) {
+      memberSummarizer = summarizer;
+      return Promise.resolve(false);
+    },
+    appendObservation() {},
+    scheduleSummary: () => Promise.resolve(false),
+  };
+  const chatClient = {
+    isConfigured: true,
+    async complete(history, modelInput, options) {
+      summaryCalls.push({ history, modelInput, options });
+      return '- 平时玩原神。';
+    },
+  };
+  const { service } = createService({
+    chatClient,
+    conversationStore,
+    protectedRoles: new Map([['u-owner', '至高无上的真龙王']]),
+  });
+
+  await service.handleMessage({
+    message_id: 'member-role-observation-1',
+    message_type: 'group',
+    group_id: 'g-role-scope',
+    user_id: 'u-han',
+    sender_name: '【群最鶸】韩潇玟',
+    text: '龙王说可以关人吗',
+    mentions: [{ user_id: 'u-owner', name: '真正的龙玉涛' }],
+    observe_only: true,
+  });
+
+  assert.match(observations[0].content, /当前发言人：【群最鶸】韩潇玟/);
+  assert.match(observations[0].content, /本条消息指向或提到的群成员：至高无上的真龙王/);
+  assert.equal(typeof memberSummarizer, 'function');
+  await memberSummarizer({
+    userId: 'u-han',
+    speakerId: 'abc123',
+    currentName: '【群最鶸】韩潇玟',
+    previousMemory: '- 自称“龙王”，群内地位高。',
+    observations: [observations[0].content],
+  });
+  assert.match(summaryCalls[0].options.systemPrompt, /当前整理对象不是这些受保护头衔的所有者/);
+  assert.match(summaryCalls[0].options.systemPrompt, /若已有画像存在这种错误归属，本轮必须删除/);
+});
+
 test('QQ 普通群消息只进入观察记忆，不调用模型也不回复', async () => {
   const observations = [];
   const members = [];
