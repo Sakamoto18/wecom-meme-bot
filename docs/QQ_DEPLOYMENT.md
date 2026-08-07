@@ -143,6 +143,35 @@ QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称�
 
 Bridge 会识别 QQ 的“合并转发聊天记录”卡片，并通过 NapCat OneBot v11 的 `get_forward_msg` 读取卡片内实际转发的内容。单独转发到允许群时只静默补充语境；引用该卡片并 `@机器人` 提问时，记录中的发言人和文字会进入本次模型上下文。该能力不会读取未发给 Bot 的群历史，且限制为最多 30 个节点、8000 个字符、2 层嵌套；图片、语音、视频和文件只转换成占位说明。所有转发内容均视为非可信引用，不能覆盖系统规则、管理员权限或受保护身份钢印。
 
+### Exa 检索增强
+
+Longtu Bridge 会停止 AstrBot 默认 LLM 链路，所以只在 AstrBot 后台选择 Exa 不会影响本项目的实际回复。QQ Bot 后端直接使用与 AstrBot 4.26.8 内置 `web_search_exa` 同源的 Exa Search API，保留现有人格、长期记忆、主动回复和龙图链路。
+
+1. 打开 <https://dashboard.exa.ai> 并注册账号。
+2. 在 Dashboard 的 API Keys 页创建密钥并复制保存。密钥不要发到 QQ 群，也不要提交到 Git。
+3. 首次可先使用官方免费额度验证。截至 2026-08-07，Exa 官方定价页显示注册赠送 20 美元，免费层每月 10 美元；Search 为 7 美元/千次，Contents 为 1 美元/千页/内容类型。定价可能变动，付费前以 <https://exa.ai/pricing> 当日页面为准。
+4. 在服务器 `/opt/longtu-qq-bot/.env.qq` 中填写：
+
+```dotenv
+WEB_SEARCH_ENABLED=true
+WEB_SEARCH_PROVIDER=exa
+WEB_SEARCH_EXA_API_KEY=你的_Exa_Key
+WEB_SEARCH_EXA_ENDPOINT=https://api.exa.ai/search
+WEB_SEARCH_EXA_TYPE=auto
+WEB_SEARCH_MAX_RESULTS=6
+WEB_SEARCH_EXA_MAX_CONTENT_CHARACTERS=1200
+WEB_SEARCH_TIMEOUT_MS=12000
+```
+
+5. 只重建 QQ Bot，不需要重启 AstrBot 或 NapCat：
+
+```bash
+cd /opt/longtu-qq-bot
+sudo docker compose --env-file .env.qq -f docker-compose.server.yml up -d --build qq-bot
+```
+
+6. 请求健康检查后，`web_search_provider` 应为 `exa`。日志中只记录 `api.exa.ai`，不会记录 API Key。
+
 ### 聊天管理龙图库
 
 只有 `LONGTU_QQ_ADMIN_USERS` 中的 QQ 账号可以使用：

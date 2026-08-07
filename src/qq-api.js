@@ -271,12 +271,20 @@ export async function createQqRuntime() {
   );
   const webSearch = new LongtuWebSearch({
     enabled: webSearchEnabled,
+    provider: process.env.WEB_SEARCH_PROVIDER,
     endpoint: process.env.WEB_SEARCH_ENDPOINT ?? process.env.LONGTU_WEB_SEARCH_ENDPOINT,
+    exaApiKey: process.env.WEB_SEARCH_EXA_API_KEY ?? process.env.EXA_API_KEY,
+    exaEndpoint: process.env.WEB_SEARCH_EXA_ENDPOINT,
+    exaSearchType: process.env.WEB_SEARCH_EXA_TYPE,
     timeoutMs: parsePositiveInteger(
       process.env.WEB_SEARCH_TIMEOUT_MS ?? process.env.LONGTU_WEB_SEARCH_TIMEOUT_MS,
     ),
     cacheTtlMs: parsePositiveInteger(
       process.env.WEB_SEARCH_CACHE_TTL_MS ?? process.env.LONGTU_WEB_SEARCH_CACHE_TTL_MS,
+    ),
+    maxResults: parsePositiveInteger(process.env.WEB_SEARCH_MAX_RESULTS),
+    exaMaxContentCharacters: parsePositiveInteger(
+      process.env.WEB_SEARCH_EXA_MAX_CONTENT_CHARACTERS,
     ),
   });
 
@@ -413,6 +421,7 @@ export async function createQqRuntime() {
     memeStore,
     longtuLibrary,
     memberAliases,
+    webSearch,
     webSearchEnabled,
     activeReplyEnabled: activeReplyDecider.enabled && chatClient.isConfigured,
     peerBotContextGateEnabled: peerBotContinuationDecider.enabled
@@ -450,6 +459,7 @@ export async function startQqApi() {
         platform: 'qq',
         model_configured: runtime.chatClient.isConfigured,
         web_search_enabled: runtime.webSearchEnabled,
+        web_search_provider: runtime.webSearch.provider,
         active_reply_enabled: runtime.activeReplyEnabled,
         peer_bot_context_gate_enabled: runtime.peerBotContextGateEnabled,
         image_count: currentStats.longtuImageCount,
@@ -471,7 +481,7 @@ export async function startQqApi() {
     ? `QQ 普通对话已启用：${runtime.chatClient.model}`
     : 'QQ 普通对话未启用：缺少大模型配置');
   console.log(runtime.webSearchEnabled
-    ? 'QQ 联网检索已启用：普通模型回复默认先检索，其余查询走 general 模式'
+    ? `QQ 联网检索已启用：${runtime.webSearch.provider}；普通模型回复默认先检索，其余查询走 general 模式`
     : 'QQ 联网检索已关闭');
   console.log(runtime.activeReplyEnabled
     ? 'QQ 群主动回复已启用：must/may/no 优先级 + 热度与退场判定，回复仍走现有 Node 引擎'
