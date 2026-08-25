@@ -441,7 +441,15 @@ test('主动 may 插话强制快速短回复，过长草稿会压缩重写', asy
     { type: 'disabled' },
   ]);
   assert.deepEqual(calls.map((call) => call.options.maxTokens), [280, 280]);
-  assert.match(calls[0].options.additionalSystemPrompt, /最终只发 1 句/);
+  assert.match(calls[0].options.stableSystemPrompt, /本轮模式：普通对话/);
+  assert.match(calls[0].options.stableSystemPrompt, /历史中属于其他成员/);
+  assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /本轮模式：普通对话/);
+  assert.match(calls[0].options.stableSystemPrompt, /最终只发 1 句/);
+  assert.equal(
+    calls[1].options.additionalSystemPrompt,
+    calls[0].options.additionalSystemPrompt,
+  );
+  assert.match(calls[1].options.revisionSystemPrompt, /主动插话的压缩重写/);
   assert.equal(result.answer, '闭着眼都知道是个破竹子玩具，你这白痴还想听论文？');
   assert.equal(result.review.valid, true);
 });
@@ -472,7 +480,7 @@ test('主动 must 遇到复杂技术问题仍允许详细回答', async () => {
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].options.thinking, { type: 'enabled' });
   assert.equal(calls[0].options.maxTokens, 20_000);
-  assert.match(calls[0].options.additionalSystemPrompt, /确实需要方案、步骤或证据时才详细展开/);
+  assert.match(calls[0].options.stableSystemPrompt, /确实需要方案、步骤或证据时才详细展开/);
   assert.equal(result.answer, answer);
   assert.equal(result.review.valid, true);
 });
@@ -508,7 +516,11 @@ test('正经答案过短时再次开启思考做完整性复核', async () => {
   ]);
   assert.equal(calls[1].options.maxTokens, 20_000);
   assert.equal(calls[1].options.timeoutMs, 180_000);
-  assert.match(calls[1].options.additionalSystemPrompt, /正经问答质量复核/);
+  assert.equal(
+    calls[1].options.additionalSystemPrompt,
+    calls[0].options.additionalSystemPrompt,
+  );
+  assert.match(calls[1].options.revisionSystemPrompt, /正经问答质量复核/);
   assert.equal(result.answer, longAnswer);
   assert.equal(result.attempts, 2);
   assert.equal(result.seriousAnswerExpanded, true);

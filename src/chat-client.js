@@ -38,10 +38,16 @@ export class OpenAICompatibleChatClient {
             ...((options.systemPrompt ?? this.systemPrompt)
               ? [{ role: 'system', content: options.systemPrompt ?? this.systemPrompt }]
               : []),
+            ...(options.stableSystemPrompt
+              ? [{ role: 'system', content: options.stableSystemPrompt }]
+              : []),
             ...(options.additionalSystemPrompt
               ? [{ role: 'system', content: options.additionalSystemPrompt }]
               : []),
             ...history,
+            ...(options.revisionSystemPrompt
+              ? [{ role: 'system', content: options.revisionSystemPrompt }]
+              : []),
             { role: 'user', content: userContent },
           ],
           temperature: options.temperature ?? this.temperature,

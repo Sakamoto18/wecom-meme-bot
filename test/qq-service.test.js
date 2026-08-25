@@ -497,7 +497,7 @@ test('模型仍把受保护头衔安给无关成员时会强制纠错', async ()
     isConfigured: true,
     async complete(history, modelInput, options) {
       calls.push({ history, modelInput, options });
-      if (/受保护身份归属纠错/.test(options.additionalSystemPrompt ?? '')) {
+      if (/受保护身份归属纠错/.test(options.revisionSystemPrompt ?? '')) {
         return '原神账号数据在服务器，重装后重新登录原账号即可。连云存档都分不清，你这脑子真是摆设。';
       }
       return '原神账号数据在服务器，重装后重新登录就行。顶着“龙王”头衔问这种问题，你脑子真是摆设。';
@@ -519,7 +519,7 @@ test('模型仍把受保护头衔安给无关成员时会强制纠错', async ()
 
   assert.ok(calls.length >= 2);
   assert.ok(calls.some((call) => (
-    /受保护身份归属纠错/.test(call.options.additionalSystemPrompt ?? '')
+    /受保护身份归属纠错/.test(call.options.revisionSystemPrompt ?? '')
   )));
   assert.doesNotMatch(result.messages[0].text, /龙王/);
   assert.match(result.messages[0].text, /重新登录原账号/);
@@ -552,7 +552,7 @@ test('非所有者主动提到受保护头衔时仍隔离旧串线并注入真�
     isConfigured: true,
     async complete(history, modelInput, options) {
       calls.push({ history, modelInput, options });
-      if (/受保护头衔语义复核/.test(options.additionalSystemPrompt ?? '')) {
+      if (/受保护头衔语义复核/.test(options.revisionSystemPrompt ?? '')) {
         return '你不是龙王，那是另一位固定群成员的头衔。连人都能认串，你这脑回路真够破的。';
       }
       return '你就是至高无上的真龙王，还搁这装失忆，你这脑子真够破的。';
@@ -577,7 +577,7 @@ test('非所有者主动提到受保护头衔时仍隔离旧串线并注入真�
   assert.doesNotMatch(calls[0].history.map((entry) => entry.content).join('\n'), /龙王/);
   assert.match(calls[0].options.additionalSystemPrompt, /成员-.*至高无上的真龙王/);
   assert.ok(calls.some((call) => (
-    /受保护头衔语义复核/.test(call.options.additionalSystemPrompt ?? '')
+    /受保护头衔语义复核/.test(call.options.revisionSystemPrompt ?? '')
   )));
   assert.doesNotMatch(result.messages[0].text, /你(?:就|才)?是.*龙王/);
   assert.match(result.messages[0].text, /你不是龙王/);

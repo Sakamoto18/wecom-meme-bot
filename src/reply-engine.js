@@ -1,7 +1,8 @@
 import {
   buildAttackPrompt,
   buildAttackRetryPrompt,
-  buildNormalReplyPrompt,
+  buildNormalReplyContextPrompt,
+  buildNormalReplyStablePrompt,
   buildNormalReplyRetryPrompt,
   buildNormalVenomFallback,
   buildProtectedIdentityFallback,
@@ -365,16 +366,18 @@ export async function generateConversationReply(options) {
     error: searchError,
     context: searchResult.context,
   });
+  const normalPromptOptions = {
+    thinkingEnabled,
+    requirePersonaBite,
+    interactionContext,
+    activeReply,
+    activeReplyPriority,
+  };
+  const stableSystemPrompt = buildNormalReplyStablePrompt(normalPromptOptions);
   const additionalSystemPrompt = [
     protectedIdentityContext,
     memoryContext,
-    buildNormalReplyPrompt({
-      thinkingEnabled,
-      requirePersonaBite,
-      interactionContext,
-      activeReply,
-      activeReplyPriority,
-    }),
+    buildNormalReplyContextPrompt(normalPromptOptions),
     buildProtectedSelfIdentityPrompt(requiredIdentityRole),
     useLongtuKnowledge ? knowledgeContext : '',
     webSearchStatus,
@@ -392,6 +395,7 @@ export async function generateConversationReply(options) {
   let attempts = 1;
   try {
     answer = await chatClient.complete(history, modelInput, {
+      stableSystemPrompt,
       additionalSystemPrompt,
       maxTokens: thinkingEnabled ? 20_000 : (compactActiveReply ? 280 : 1_200),
       usageSource: activeReply ? 'active-reply' : 'conversation-reply',
@@ -403,6 +407,7 @@ export async function generateConversationReply(options) {
     thinkingFallback = true;
     attempts += 1;
     answer = await chatClient.complete(history, modelInput, {
+      stableSystemPrompt,
       additionalSystemPrompt,
       maxTokens: 8_000,
       usageSource: activeReply ? 'active-reply-thinking-fallback' : 'conversation-thinking-fallback',
@@ -414,10 +419,9 @@ export async function generateConversationReply(options) {
   if (thinkingEnabled && !thinkingFallback && isThinSeriousReply(answer)) {
     try {
       const expandedAnswer = await chatClient.complete(history, modelInput, {
-        additionalSystemPrompt: [
-          additionalSystemPrompt,
-          buildSeriousReplyRetryPrompt(content, answer),
-        ].join('\n\n'),
+        stableSystemPrompt,
+        additionalSystemPrompt,
+        revisionSystemPrompt: buildSeriousReplyRetryPrompt(content, answer),
         maxTokens: 20_000,
         usageSource: 'serious-reply-expansion',
         timeoutMs: 180_000,
@@ -461,18 +465,17 @@ export async function generateConversationReply(options) {
     } else {
       try {
         const rewrittenAnswer = await chatClient.complete(history, modelInput, {
-          additionalSystemPrompt: [
-            additionalSystemPrompt,
-            needsSeriousExpansion
-              ? buildSeriousReplyRetryPrompt(content, answer)
-              : buildNormalReplyRetryPrompt(content, answer, review.issues, {
-                thinkingEnabled,
-                interactionContext,
-                requiredIdentityRole,
-                activeReply,
-                activeReplyPriority,
-              }),
-          ].join('\n\n'),
+          stableSystemPrompt,
+          additionalSystemPrompt,
+          revisionSystemPrompt: needsSeriousExpansion
+            ? buildSeriousReplyRetryPrompt(content, answer)
+            : buildNormalReplyRetryPrompt(content, answer, review.issues, {
+              thinkingEnabled,
+              interactionContext,
+              requiredIdentityRole,
+              activeReply,
+              activeReplyPriority,
+            }),
           maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
           usageSource: reviewSource,
           timeoutMs: thinkingEnabled ? 90_000 : 45_000,
@@ -512,10 +515,12 @@ export async function generateConversationReply(options) {
   if (containsForbiddenProtectedRole(answer, forbiddenProtectedRoleTerms)) {
     try {
       const correctedAnswer = await chatClient.complete(history, modelInput, {
-        additionalSystemPrompt: [
-          additionalSystemPrompt,
-          buildProtectedRoleCorrectionPrompt(answer, forbiddenProtectedRoleTerms),
-        ].join('\n\n'),
+        stableSystemPrompt,
+        additionalSystemPrompt,
+        revisionSystemPrompt: buildProtectedRoleCorrectionPrompt(
+          answer,
+          forbiddenProtectedRoleTerms,
+        ),
         maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
         usageSource: 'protected-role-correction',
         timeoutMs: thinkingEnabled ? 90_000 : 45_000,
@@ -550,13 +555,12 @@ export async function generateConversationReply(options) {
   if (containsForbiddenProtectedRole(answer, speakerForbiddenProtectedRoleTerms)) {
     try {
       const semanticallyReviewedAnswer = await chatClient.complete(history, modelInput, {
-        additionalSystemPrompt: [
-          additionalSystemPrompt,
-          buildProtectedRoleSemanticReviewPrompt(
-            answer,
-            speakerForbiddenProtectedRoleTerms,
-          ),
-        ].join('\n\n'),
+        stableSystemPrompt,
+        additionalSystemPrompt,
+        revisionSystemPrompt: buildProtectedRoleSemanticReviewPrompt(
+          answer,
+          speakerForbiddenProtectedRoleTerms,
+        ),
         maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
         usageSource: 'protected-role-review',
         timeoutMs: thinkingEnabled ? 90_000 : 45_000,
