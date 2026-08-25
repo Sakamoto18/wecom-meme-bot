@@ -1,7 +1,10 @@
 import asyncio
+import contextlib
+from datetime import datetime, time as datetime_time, timedelta
 import os
 import re
 import time
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
@@ -17,7 +20,10 @@ MAX_FORWARD_NODE_CHARACTERS = 600
 MAX_FORWARD_DEPTH = 2
 FORWARD_CACHE_TTL_SECONDS = 60 * 60
 FORWARD_CACHE_MAX_ENTRIES = 128
-ALLOWED_BRIDGE_SLASH_COMMANDS = {"/add", "/tag", "/del", "/stop"}
+REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
+ALLOWED_BRIDGE_SLASH_COMMANDS = {
+    "/add", "/tag", "/del", "/stop", "/usage-report",
+}
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
 
@@ -25,7 +31,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.8.4",
+    "1.9.0",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -33,6 +39,8 @@ class LongtuQqBridge(Star):
         self.config = config
         self.session: aiohttp.ClientSession | None = None
         self.forward_cache: dict[str, tuple[float, str]] = {}
+        self.report_task: asyncio.Task | None = None
+        self.report_stop = asyncio.Event()
 
     async def initialize(self):
         timeout_seconds = max(
@@ -42,6 +50,11 @@ class LongtuQqBridge(Star):
         self.session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=timeout_seconds),
         )
+        if self._daily_report_enabled():
+            self.report_task = asyncio.create_task(
+                self._daily_usage_report_loop(),
+                name="longtu-daily-usage-report",
+            )
 
     def _api_url(self) -> str:
         return (
@@ -56,6 +69,356 @@ class LongtuQqBridge(Star):
             or self.config.get("api_token")
             or ""
         ).strip()
+
+    def _usage_api_url(self) -> str:
+        api_url = self._api_url().rstrip("/")
+        if api_url.endswith("/v1/qq/message"):
+            return api_url.removesuffix("/v1/qq/message") + "/v1/qq/usage"
+        return api_url + "/v1/qq/usage"
+
+    def _daily_report_enabled(self) -> bool:
+        return self._enabled(self.config.get("daily_usage_report_enabled", True), True)
+
+    def _daily_report_time(self) -> datetime_time:
+        hour = min(23, max(0, int(self.config.get("daily_usage_report_hour", 9))))
+        minute = min(59, max(0, int(self.config.get("daily_usage_report_minute", 0))))
+        return datetime_time(hour=hour, minute=minute, tzinfo=REPORT_TIMEZONE)
+
+    def _qq_platform(self):
+        platform_manager = getattr(self.context, "platform_manager", None)
+        for platform in getattr(platform_manager, "platform_insts", []):
+            try:
+                if platform.meta().name == "aiocqhttp":
+                    return platform
+            except Exception:
+                continue
+        return None
+
+    async def _fetch_usage_report(self, start_at: int, end_at: int) -> dict:
+        if not self.session or self.session.closed:
+            raise RuntimeError("HTTP 客户端尚未初始化")
+        token = self._api_token()
+        if not token:
+            raise RuntimeError("插件缺少 api_token / LONGTU_QQ_API_TOKEN")
+        async with self.session.get(
+            self._usage_api_url(),
+            params={"start_at": start_at, "end_at": end_at, "limit": 100},
+            headers={"Authorization": f"Bearer {token}"},
+        ) as response:
+            if response.status != 200:
+                detail = (await response.text())[:300]
+                raise RuntimeError(
+                    f"QQ Bot 用量 API 返回 HTTP {response.status}: {detail}",
+                )
+            body = await response.json(content_type=None)
+            if not body.get("ok") or not isinstance(body.get("report"), dict):
+                raise RuntimeError("QQ Bot 用量 API 返回格式无效")
+            return body
+
+    async def _group_catalog(self) -> dict[str, str]:
+        platform = self._qq_platform()
+        bot = getattr(platform, "bot", None)
+        if not bot:
+            return {}
+        try:
+            groups = await asyncio.wait_for(
+                bot.get_group_list(no_cache=False),
+                timeout=15,
+            )
+        except Exception as error:
+            logger.warning(f"用量日报无法读取 QQ 群列表：{error}")
+            return {}
+        allowed_groups = self._allowed_groups()
+        catalog = {}
+        for group in groups or []:
+            group_id = str((group or {}).get("group_id") or "").strip()
+            if not group_id or (allowed_groups and group_id not in allowed_groups):
+                continue
+            catalog[group_id] = str((group or {}).get("group_name") or "").strip()
+        return catalog
+
+    async def _group_names(self, group_ids: list[str]) -> dict[str, str]:
+        platform = self._qq_platform()
+        bot = getattr(platform, "bot", None)
+        if not bot:
+            return {}
+        names = {}
+        for group_id in group_ids[:20]:
+            if not str(group_id).isdigit():
+                continue
+            try:
+                info = await asyncio.wait_for(
+                    bot.get_group_info(group_id=int(group_id), no_cache=False),
+                    timeout=8,
+                )
+                name = str((info or {}).get("group_name") or "").strip()
+                if name:
+                    names[str(group_id)] = name
+            except Exception:
+                continue
+        return names
+
+    @staticmethod
+    def _number(value) -> str:
+        return f"{max(0, int(value or 0)):,}"
+
+    async def _format_usage_report(
+        self,
+        body: dict,
+        report_date,
+        header_suffix: str = "",
+    ) -> str:
+        report = body["report"]
+        totals = report.get("totals") or {}
+        groups = report.get("groups") or []
+        sources = report.get("sources") or []
+        catalog = await self._group_catalog()
+        group_ids = [str(group.get("groupId") or "") for group in groups]
+        missing_name_ids = [group_id for group_id in group_ids if group_id not in catalog]
+        names = {
+            **catalog,
+            **(await self._group_names(missing_name_ids)),
+        }
+        total_tokens = max(0, int(totals.get("totalTokens") or 0))
+        input_tokens = max(0, int(totals.get("inputTokens") or 0))
+        cached_input_tokens = max(0, int(totals.get("cachedInputTokens") or 0))
+        cache_rate = (
+            cached_input_tokens / input_tokens * 100 if input_tokens else 0
+        )
+        lines = [
+            f"【龙玉涛 Bot 用量日报｜{report_date:%Y-%m-%d}{header_suffix}】",
+            (
+                f"群消息 {self._number(totals.get('requests'))} 条；"
+                f"LLM {self._number(totals.get('llmCalls'))} 次，"
+                f"Token {self._number(total_tokens)} "
+                f"（输入 {self._number(totals.get('inputTokens'))} / "
+                f"输出 {self._number(totals.get('outputTokens'))}）；"
+                f"联网搜索 {self._number(totals.get('searchCalls'))} 次。"
+            ),
+            (
+                f"LLM 输入缓存命中 {self._number(cached_input_tokens)} token"
+                f"（{cache_rate:.1f}%）；折算配额用量 "
+                f"{self._number(totals.get('quotaTokens'))} token。"
+            ),
+        ]
+        data_available_from = int(report.get("dataAvailableFrom") or 0)
+        report_start = int(report.get("startAt") or 0)
+        if data_available_from and report_start and data_available_from > report_start:
+            available_at = datetime.fromtimestamp(
+                data_available_from / 1000,
+                tz=REPORT_TIMEZONE,
+            )
+            lines.append(
+                f"统计说明：用量数据库从 {available_at:%Y-%m-%d %H:%M} 开始记录；"
+                "更早的消息与 Token 无法补录，本期不是完整自然日。",
+            )
+        blocked = int(totals.get("blockedLlmCalls") or 0)
+        normal_limit = report.get("groupLlmLimitPerHour")
+        large_limit = report.get("largeGroupLlmLimitPerHour")
+        normal_token_limit = report.get("groupLlmTokenLimitPerDay")
+        large_token_limit = report.get("largeGroupLlmTokenLimitPerDay")
+        normal_search_limit = report.get("groupSearchLimitPerDay")
+        large_search_limit = report.get("largeGroupSearchLimitPerDay")
+        if normal_limit or large_limit or normal_token_limit or large_token_limit:
+            adaptive_note = ""
+            if report.get("adaptiveLimitsEnabled"):
+                percentages = report.get("activityLimitPercentages") or []
+                adaptive_note = (
+                    f"；近 {self._number(report.get('activityLookbackDays'))} 日"
+                    f"活跃分档按硬上限的 "
+                    f"{'/'.join(str(value) + '%' for value in percentages)} 执行"
+                )
+            lines.append(
+                "群级硬上限：普通/大型群每小时 "
+                f"{normal_limit or '不限'}/{large_limit or '不限'} 次调用，"
+                "每日折算 Token "
+                f"{self._number(normal_token_limit) if normal_token_limit else '不限'}/"
+                f"{self._number(large_token_limit) if large_token_limit else '不限'}；"
+                "每日搜索 "
+                f"{self._number(normal_search_limit) if normal_search_limit else '不限'}/"
+                f"{self._number(large_search_limit) if large_search_limit else '不限'}"
+                f"{adaptive_note}；"
+                f"统计期拦截 LLM {blocked} 次、搜索 "
+                f"{self._number(totals.get('blockedSearchCalls'))} 次。",
+            )
+
+        if groups:
+            lines.append("群用量排行：")
+            for index, group in enumerate(groups[:10], 1):
+                group_id = str(group.get("groupId") or "未知")
+                label = names.get(group_id)
+                display = f"{label}（{group_id}）" if label else group_id
+                tokens = int(group.get("totalTokens") or 0)
+                share = (tokens / total_tokens * 100) if total_tokens else 0
+                search_calls = int(group.get("searchCalls") or 0)
+                search_hits = int(group.get("searchCacheHits") or 0)
+                search_total = search_calls + search_hits
+                search_hit_rate = search_hits / search_total * 100 if search_total else 0
+                activity_labels = {
+                    "quiet": "低活跃",
+                    "light": "轻活跃",
+                    "normal": "常规",
+                    "active": "活跃",
+                    "hot": "高活跃",
+                    "fixed": "固定",
+                }
+                activity_tier = str(group.get("activityTier") or "fixed")
+                activity = activity_labels.get(activity_tier, activity_tier)
+                activity_days = self._number(group.get("activityLookbackDays"))
+                activity_messages = float(group.get("activityMessagesPerDay") or 0)
+                activity_users = float(group.get("activityUsersPerDay") or 0)
+                quota_limit = group.get("llmTokenLimitPerDay")
+                quota_status = (
+                    f"{self._number(group.get('quotaTokens'))}/"
+                    f"{self._number(quota_limit)}"
+                    if quota_limit else f"{self._number(group.get('quotaTokens'))}/不限"
+                )
+                lines.append(
+                    f"{index}. {display}：{self._number(tokens)} token"
+                    f"（{share:.1f}%），LLM {self._number(group.get('llmCalls'))} 次，"
+                    f"搜索 {self._number(search_calls)} 次"
+                    f"/缓存命中 {search_hit_rate:.0f}%，"
+                    f"消息 {self._number(group.get('requests'))} 条；"
+                    f"近 {activity_days} 日{activity} "
+                    f"({activity_messages:.1f} 条/{activity_users:.1f} 人/日，"
+                    f"系数 {self._number(group.get('activityLimitPercent'))}%)，"
+                    f"折算配额 {quota_status}",
+                )
+            top_tokens = int(groups[0].get("totalTokens") or 0)
+            top_share = (top_tokens / total_tokens * 100) if total_tokens else 0
+            if top_share >= 50:
+                lines.append(
+                    f"提醒：第一名群占全天 Token 的 {top_share:.1f}%，用量较集中。",
+                )
+        else:
+            lines.append("昨日没有记录到群聊上游调用。")
+
+        if catalog:
+            tracked_ids = {
+                str(group.get("groupId") or "").strip()
+                for group in groups
+                if str(group.get("groupId") or "").strip() in catalog
+            }
+            inactive_ids = sorted(set(catalog) - tracked_ids)
+            lines.append(
+                f"覆盖检查：机器人当前可用 {len(catalog)} 个群；"
+                f"本期有消息 {len(tracked_ids)} 个、零消息 {len(inactive_ids)} 个。",
+            )
+            if inactive_ids:
+                inactive_labels = []
+                for group_id in inactive_ids[:10]:
+                    group_name = catalog.get(group_id)
+                    inactive_labels.append(
+                        f"{group_name}（{group_id}）" if group_name else group_id,
+                    )
+                suffix = "等" if len(inactive_ids) > len(inactive_labels) else ""
+                lines.append(f"本期零消息群：{'、'.join(inactive_labels)}{suffix}。")
+
+        active_sources = [source for source in sources if source.get("llmCalls")]
+        if active_sources:
+            labels = {
+                "active-reply-decision": "主动回复判定",
+                "active-value-gate": "主动回复复核",
+                "active-reply": "主动回复生成",
+                "conversation-reply": "普通回复生成",
+                "conversation-reply-review": "普通回复复核",
+                "conversation-summary": "会话摘要",
+                "member-memory-summary": "成员画像摘要",
+                "peer-bot-gate": "Bot 续聊判定",
+                "pure-mention-reply": "纯艾特回复",
+            }
+            summary = "；".join(
+                f"{labels.get(str(item.get('source')), item.get('source'))} "
+                f"{self._number(item.get('llmCalls'))} 次/"
+                f"{self._number(item.get('totalTokens'))} token"
+                for item in active_sources[:6]
+            )
+            lines.append(f"主要消耗环节：{summary}。")
+        return "\n".join(lines)
+
+    async def _send_daily_usage_report(
+        self,
+        report_date,
+        *,
+        end_at: datetime | None = None,
+        requested_by: str = "",
+    ) -> int:
+        start = datetime.combine(
+            report_date,
+            datetime_time.min,
+            tzinfo=REPORT_TIMEZONE,
+        )
+        end = end_at or (start + timedelta(days=1))
+        body = await self._fetch_usage_report(
+            int(start.timestamp() * 1000),
+            int(end.timestamp() * 1000),
+        )
+        admins = {
+            str(user_id).strip()
+            for user_id in body.get("admin_user_ids", [])
+            if str(user_id).strip().isdigit()
+        }
+        normalized_requester = str(requested_by or "").strip()
+        if normalized_requester and normalized_requester not in admins:
+            raise PermissionError("只有 LONGTU_QQ_ADMIN_USERS 中的超管可以测试日报")
+        recipients = [
+            str(user_id).strip()
+            for user_id in body.get("report_user_ids", [])
+            if str(user_id).strip().isdigit()
+        ]
+        if not recipients:
+            logger.warning("每日用量日报未发送：LONGTU_QQ_USAGE_REPORT_USERS 为空")
+            return 0
+        platform = self._qq_platform()
+        if not platform:
+            raise RuntimeError("未找到已启用的 aiocqhttp 平台")
+        header_suffix = ""
+        if end_at:
+            header_suffix = f"｜截至 {end_at.astimezone(REPORT_TIMEZONE):%H:%M}"
+        report_text = await self._format_usage_report(
+            body,
+            report_date,
+            header_suffix,
+        )
+        platform_id = platform.meta().id
+        for recipient_id in recipients:
+            sent = await self.context.send_message(
+                f"{platform_id}:FriendMessage:{recipient_id}",
+                MessageChain(chain=[Comp.Plain(report_text)]),
+            )
+            if not sent:
+                logger.warning(f"每日用量日报发送失败：{recipient_id}")
+        logger.info(f"每日用量日报已推送给 {len(recipients)} 个收件账号")
+        return len(recipients)
+
+    async def _send_current_usage_report(self, requested_by: str) -> int:
+        now = datetime.now(REPORT_TIMEZONE)
+        return await self._send_daily_usage_report(
+            now.date(),
+            end_at=now + timedelta(milliseconds=1),
+            requested_by=requested_by,
+        )
+
+    async def _daily_usage_report_loop(self) -> None:
+        while not self.report_stop.is_set():
+            now = datetime.now(REPORT_TIMEZONE)
+            target = datetime.combine(now.date(), self._daily_report_time())
+            if target <= now:
+                target += timedelta(days=1)
+            try:
+                await asyncio.wait_for(
+                    self.report_stop.wait(),
+                    timeout=max(1, (target - now).total_seconds()),
+                )
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await self._send_daily_usage_report(target.date() - timedelta(days=1))
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.error(f"每日用量日报生成或发送失败：{error}")
 
     def _allowed_groups(self) -> set[str]:
         configured = (
@@ -153,6 +516,11 @@ class LongtuQqBridge(Star):
         raw_text = (cls._raw_text(event) or event.message_str or "").strip()
         matched = re.match(r"^/([a-z][a-z0-9_-]*)\b", raw_text, re.IGNORECASE)
         return bool(matched and f"/{matched.group(1).lower()}" in ALLOWED_BRIDGE_SLASH_COMMANDS)
+
+    @classmethod
+    def _is_usage_report_command(cls, event: AstrMessageEvent) -> bool:
+        raw_text = (cls._raw_text(event) or event.message_str or "").strip()
+        return bool(re.match(r"^/usage-report\s*$", raw_text, re.IGNORECASE))
 
     def _ignore_slash_commands(self) -> bool:
         configured = (
@@ -692,6 +1060,22 @@ class LongtuQqBridge(Star):
                 # 停止，避免 /w、/help 等内置命令或其他插件被误触发。
                 if not self._is_allowed_bridge_slash_command(event):
                     return
+                if self._is_usage_report_command(event):
+                    try:
+                        recipient_count = await self._send_current_usage_report(
+                            str(event.get_sender_id() or ""),
+                        )
+                    except PermissionError:
+                        yield event.plain_result("只有超级管理员可以测试用量日报。")
+                    except Exception as error:
+                        logger.error(f"手动测试用量日报失败：{error}")
+                        yield event.plain_result("用量日报测试失败，请检查服务日志。")
+                    else:
+                        logger.info(
+                            f"手动用量日报测试完成：已发送给 "
+                            f"{recipient_count} 个收件账号",
+                        )
+                    return
             should_reply = self._should_reply(event)
             observe_only = not should_reply and self._should_observe(event)
             if not should_reply and not observe_only:
@@ -810,5 +1194,10 @@ class LongtuQqBridge(Star):
             event.stop_event()
 
     async def terminate(self):
+        self.report_stop.set()
+        if self.report_task:
+            self.report_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.report_task
         if self.session and not self.session.closed:
             await self.session.close()

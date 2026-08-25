@@ -37,6 +37,10 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(source, /getattr\(component, "text", ""\)/);
   assert.match(handler, /PURE_BOT_MENTION_TEXT\s+if pure_bot_mention/);
   assert.match(source, /ALLOWED_BRIDGE_SLASH_COMMANDS\s*=\s*\{[^}]*"\/stop"/);
+  assert.match(source, /"\/usage-report"/);
+  assert.match(handler, /self\._send_current_usage_report/);
+  assert.match(source, /bot\.get_group_list\(no_cache=False\)/);
+  assert.match(source, /report\.get\("dataAvailableFrom"\)/);
   assert.match(handler, /self\._is_allowed_bridge_slash_command\(event\)/);
   assert.doesNotMatch(handler, /and not str\(text or ""\)\.strip\(\)/);
 });

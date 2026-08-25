@@ -11,6 +11,7 @@ import { LongtuLibrary } from './longtu-library.js';
 import { parseAdminUsers, parseProtectedRoles } from './longtu-management.js';
 import { QqMemoryStore } from './qq-memory-store.js';
 import { QqBotService } from './qq-service.js';
+import { QqUsageTracker } from './qq-usage-tracker.js';
 import { LongtuWebSearch } from './web-search.js';
 
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
@@ -28,6 +29,11 @@ class HttpError extends Error {
 function parsePositiveInteger(value) {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseNonnegativeInteger(value, defaultValue = 0) {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : defaultValue;
 }
 
 function parsePositiveNumber(value) {
@@ -53,6 +59,28 @@ function parseIdentifierSet(value) {
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean));
+}
+
+function parseIdentifierNumberMap(value) {
+  const result = new Map();
+  for (const entry of String(value ?? '').split(',')) {
+    const separator = entry.lastIndexOf('=');
+    if (separator <= 0) continue;
+    const identifier = entry.slice(0, separator).trim();
+    const limit = parseNonnegativeInteger(entry.slice(separator + 1), -1);
+    if (identifier && limit >= 0) result.set(identifier, limit);
+  }
+  return result;
+}
+
+function parseNonnegativeIntegerList(value) {
+  const entries = String(value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (entries.length === 0) return undefined;
+  const parsed = entries.map((entry) => parseNonnegativeInteger(entry, -1));
+  return parsed.some((entry) => entry < 0) ? undefined : parsed;
 }
 
 async function readOptionalConfig(filePath, label) {
@@ -131,12 +159,40 @@ function isAuthorized(request, expectedToken) {
 export function createQqApiServer(options) {
   const { service, apiToken } = options;
   const health = options.health ?? (() => ({ ok: true }));
+  const usageTracker = options.usageTracker;
+  const adminUsers = options.adminUsers ?? new Set();
+  const usageReportUsers = options.usageReportUsers ?? adminUsers;
 
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       if (request.method === 'GET' && url.pathname === '/healthz') {
         sendJson(response, 200, await health());
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/v1/qq/usage') {
+        if (!isAuthorized(request, apiToken)) {
+          sendJson(response, 401, { ok: false, error: '认证失败' });
+          return;
+        }
+        if (!usageTracker) {
+          sendJson(response, 503, { ok: false, error: '用量统计尚未启用' });
+          return;
+        }
+        const startAt = Number(url.searchParams.get('start_at'));
+        const endAt = Number(url.searchParams.get('end_at'));
+        const limit = Number(url.searchParams.get('limit'));
+        sendJson(response, 200, {
+          ok: true,
+          admin_user_ids: [...adminUsers],
+          report_user_ids: [...usageReportUsers],
+          report: usageTracker.getReport({
+            startAt: Number.isFinite(startAt) && startAt > 0 ? startAt : undefined,
+            endAt: Number.isFinite(endAt) && endAt > 0 ? endAt : undefined,
+            limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+          }),
+        });
         return;
       }
 
@@ -266,6 +322,70 @@ export async function createQqRuntime() {
     },
   });
 
+  const usageTracker = new QqUsageTracker({
+    databaseFilePath: path.resolve(
+      projectRoot,
+      process.env.QQ_USAGE_DATABASE_FILE?.trim() || 'data/qq-usage.sqlite',
+    ),
+    maxGroupLlmCallsPerHour: parseNonnegativeInteger(
+      process.env.QQ_USAGE_GROUP_MAX_LLM_CALLS_PER_HOUR,
+      120,
+    ),
+    maxLargeGroupLlmCallsPerHour: parseNonnegativeInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_MAX_LLM_CALLS_PER_HOUR,
+      60,
+    ),
+    maxGroupLlmTokensPerDay: parseNonnegativeInteger(
+      process.env.QQ_USAGE_GROUP_MAX_LLM_TOKENS_PER_DAY,
+      2_000_000,
+    ),
+    maxLargeGroupLlmTokensPerDay: parseNonnegativeInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_MAX_LLM_TOKENS_PER_DAY,
+      800_000,
+    ),
+    groupLlmLimits: parseIdentifierNumberMap(
+      process.env.QQ_USAGE_GROUP_LLM_LIMITS,
+    ),
+    groupLlmTokenLimits: parseIdentifierNumberMap(
+      process.env.QQ_USAGE_GROUP_LLM_DAILY_TOKEN_LIMITS,
+    ),
+    cachedTokenWeightPercent: parseNonnegativeInteger(
+      process.env.QQ_USAGE_CACHED_TOKEN_WEIGHT_PERCENT,
+      10,
+    ),
+    passiveTokenBudgetPercent: parseNonnegativeInteger(
+      process.env.QQ_USAGE_PASSIVE_TOKEN_BUDGET_PERCENT,
+      70,
+    ),
+    adaptiveLimitsEnabled: parseBoolean(
+      process.env.QQ_USAGE_ADAPTIVE_LIMITS_ENABLED,
+      true,
+    ),
+    activityLookbackDays: parsePositiveInteger(
+      process.env.QQ_USAGE_ACTIVITY_LOOKBACK_DAYS,
+    ) ?? 7,
+    activityMessageThresholds: parseNonnegativeIntegerList(
+      process.env.QQ_USAGE_ACTIVITY_MESSAGE_THRESHOLDS,
+    ),
+    activityUserThresholds: parseNonnegativeIntegerList(
+      process.env.QQ_USAGE_ACTIVITY_USER_THRESHOLDS,
+    ),
+    activityLimitPercentages: parseNonnegativeIntegerList(
+      process.env.QQ_USAGE_ACTIVITY_LIMIT_PERCENTAGES,
+    ),
+    maxGroupSearchCallsPerDay: parseNonnegativeInteger(
+      process.env.QQ_USAGE_GROUP_MAX_SEARCH_CALLS_PER_DAY,
+      200,
+    ),
+    maxLargeGroupSearchCallsPerDay: parseNonnegativeInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_MAX_SEARCH_CALLS_PER_DAY,
+      100,
+    ),
+    groupSearchLimits: parseIdentifierNumberMap(
+      process.env.QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS,
+    ),
+  });
+
   const webSearchEnabled = !/^(?:0|false|off)$/i.test(
     (process.env.WEB_SEARCH_ENABLED ?? process.env.LONGTU_WEB_SEARCH_ENABLED)?.trim() || 'true',
   );
@@ -282,6 +402,18 @@ export async function createQqRuntime() {
     cacheTtlMs: parsePositiveInteger(
       process.env.WEB_SEARCH_CACHE_TTL_MS ?? process.env.LONGTU_WEB_SEARCH_CACHE_TTL_MS,
     ),
+    currentCacheTtlMs: parsePositiveInteger(
+      process.env.WEB_SEARCH_CURRENT_CACHE_TTL_MS,
+    ) ?? 15 * 60 * 1000,
+    generalCacheTtlMs: parsePositiveInteger(
+      process.env.WEB_SEARCH_GENERAL_CACHE_TTL_MS,
+    ) ?? 6 * 60 * 60 * 1000,
+    memeCacheTtlMs: parsePositiveInteger(
+      process.env.WEB_SEARCH_MEME_CACHE_TTL_MS,
+    ) ?? 12 * 60 * 60 * 1000,
+    longtuCacheTtlMs: parsePositiveInteger(
+      process.env.WEB_SEARCH_LONGTU_CACHE_TTL_MS,
+    ) ?? 24 * 60 * 60 * 1000,
     maxResults: parsePositiveInteger(process.env.WEB_SEARCH_MAX_RESULTS),
     exaMaxContentCharacters: parsePositiveInteger(
       process.env.WEB_SEARCH_EXA_MAX_CONTENT_CHARACTERS,
@@ -306,12 +438,12 @@ export async function createQqRuntime() {
     readMemberAliases(aliasesPath),
   ]);
 
-  const chatClient = new OpenAICompatibleChatClient({
+  const chatClient = usageTracker.wrapChatClient(new OpenAICompatibleChatClient({
     apiKey: process.env.LLM_API_KEY,
     baseUrl: process.env.LLM_BASE_URL || 'https://api.deepseek.com',
     model: process.env.LLM_MODEL || 'deepseek-chat',
     systemPrompt,
-  });
+  }));
   const activeReplyDecider = new ActiveReplyDecider({
     chatClient,
     enabled: parseBoolean(process.env.LONGTU_QQ_ACTIVE_REPLY_ENABLED, true),
@@ -392,16 +524,23 @@ export async function createQqRuntime() {
     ) ?? 10) * 1000,
     logger: console,
   });
+  const adminUsers = parseAdminUsers(process.env.LONGTU_QQ_ADMIN_USERS);
+  const configuredUsageReportUsers = parseAdminUsers(
+    process.env.LONGTU_QQ_USAGE_REPORT_USERS,
+  );
+  const usageReportUsers = configuredUsageReportUsers.size > 0
+    ? configuredUsageReportUsers
+    : new Set(adminUsers);
   const service = new QqBotService({
     chatClient,
     conversationStore,
     memeStore,
-    webSearch,
+    webSearch: usageTracker.wrapWebSearch(webSearch),
     webSearchEnabled,
     knowledgeContext,
     memberAliases,
     longtuLibrary,
-    adminUsers: parseAdminUsers(process.env.LONGTU_QQ_ADMIN_USERS),
+    adminUsers,
     protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
     activeReplyDecider,
     peerBotContinuationDecider,
@@ -412,6 +551,24 @@ export async function createQqRuntime() {
     peerBotLoopWindowMs: (parsePositiveNumber(
       process.env.LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS,
     ) ?? 300) * 1000,
+    usageTracker,
+    largeGroupIds: parseIdentifierSet(process.env.QQ_USAGE_LARGE_GROUPS),
+    largeGroupMemberThreshold: parsePositiveInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_MEMBER_THRESHOLD,
+    ) ?? 40,
+    largeGroupPassiveDecisionCooldownMs: (parsePositiveNumber(
+      process.env.QQ_USAGE_LARGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS,
+    ) ?? 180) * 1000,
+    largeGroupHistoryMessages: parsePositiveInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_HISTORY_MESSAGES,
+    ) ?? 20,
+    largeGroupHistoryCharacters: parsePositiveInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_HISTORY_CHARACTERS,
+    ) ?? 8_000,
+    largeGroupBackgroundSummariesEnabled: parseBoolean(
+      process.env.QQ_USAGE_LARGE_GROUP_BACKGROUND_SUMMARIES_ENABLED,
+      false,
+    ),
   });
 
   return {
@@ -422,6 +579,9 @@ export async function createQqRuntime() {
     longtuLibrary,
     memberAliases,
     webSearch,
+    usageTracker,
+    adminUsers,
+    usageReportUsers,
     webSearchEnabled,
     activeReplyEnabled: activeReplyDecider.enabled && chatClient.isConfigured,
     peerBotContextGateEnabled: peerBotContinuationDecider.enabled
@@ -452,6 +612,9 @@ export async function startQqApi() {
   const server = createQqApiServer({
     service: runtime.service,
     apiToken,
+    usageTracker: runtime.usageTracker,
+    adminUsers: runtime.adminUsers,
+    usageReportUsers: runtime.usageReportUsers,
     health: async () => {
       const currentStats = await runtime.memeStore.getStats();
       return {
@@ -500,6 +663,7 @@ export async function startQqApi() {
     await runtime.conversationStore.flush();
     runtime.conversationStore.close();
     runtime.longtuLibrary.close();
+    runtime.usageTracker.close();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));

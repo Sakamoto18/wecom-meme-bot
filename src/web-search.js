@@ -3,6 +3,7 @@ const DEFAULT_EXA_ENDPOINT = 'https://api.exa.ai/search';
 const DEFAULT_FALLBACK_ENDPOINT = '';
 const DEFAULT_TIMEOUT_MS = 6_000;
 const DEFAULT_CACHE_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_CACHE_MAX_ENTRIES = 512;
 const DEFAULT_MAX_RESULTS = 4;
 const DEFAULT_EXA_MAX_CONTENT_CHARACTERS = 1_200;
 
@@ -400,6 +401,13 @@ export class LongtuWebSearch {
       : (options.fallbackEndpoint?.trim() || DEFAULT_FALLBACK_ENDPOINT);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+    this.cacheTtlMsByMode = {
+      current: options.currentCacheTtlMs ?? this.cacheTtlMs,
+      general: options.generalCacheTtlMs ?? this.cacheTtlMs,
+      meme: options.memeCacheTtlMs ?? this.cacheTtlMs,
+      longtu: options.longtuCacheTtlMs ?? this.cacheTtlMs,
+    };
+    this.cacheMaxEntries = options.cacheMaxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
     this.maxResults = options.maxResults ?? DEFAULT_MAX_RESULTS;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.cache = new Map();
@@ -422,10 +430,19 @@ export class LongtuWebSearch {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     timeout.unref();
 
+    let succeeded = false;
+    let resultCount = 0;
+    let upstreamStarted = false;
     try {
       if (usesExa && !this.exaApiKey) {
         throw new Error('Exa API Key 尚未配置');
       }
+      options.onBeforeUpstreamRequest?.({
+        endpoint,
+        provider: usesExa ? 'exa' : 'web',
+        query,
+      });
+      upstreamStarted = true;
       const response = await this.fetchImpl(url, usesExa
         ? {
           method: 'POST',
@@ -458,18 +475,21 @@ export class LongtuWebSearch {
       }
 
       const responseBody = await response.text();
+      const results = usesExa
+        ? parseExaSearchJson(JSON.parse(responseBody), this.maxResults, {
+          ...options,
+          maxContentCharacters: this.exaMaxContentCharacters,
+        })
+        : (usesRss
+          ? parseSearchRss(responseBody, this.maxResults, options)
+          : (usesSo
+            ? parseSoSearchHtml(responseBody, this.maxResults, options)
+            : parseBaiduSearchHtml(responseBody, this.maxResults, options)));
+      succeeded = true;
+      resultCount = results.length;
       return {
         endpoint,
-        results: usesExa
-          ? parseExaSearchJson(JSON.parse(responseBody), this.maxResults, {
-            ...options,
-            maxContentCharacters: this.exaMaxContentCharacters,
-          })
-          : (usesRss
-            ? parseSearchRss(responseBody, this.maxResults, options)
-            : (usesSo
-              ? parseSoSearchHtml(responseBody, this.maxResults, options)
-              : parseBaiduSearchHtml(responseBody, this.maxResults, options))),
+        results,
       };
     } catch (error) {
       if (error.name === 'AbortError') {
@@ -478,6 +498,15 @@ export class LongtuWebSearch {
       throw error;
     } finally {
       clearTimeout(timeout);
+      if (upstreamStarted) {
+        options.onUpstreamRequest?.({
+          endpoint,
+          provider: usesExa ? 'exa' : 'web',
+          query,
+          resultCount,
+          succeeded,
+        });
+      }
     }
   }
 
@@ -504,7 +533,13 @@ export class LongtuWebSearch {
     const fallbackQueries = mode === 'general'
       ? selectGeneralFallbackQueries(relevanceTerms)
       : [];
-    const cacheKey = `${this.provider}:${mode}:${query}`;
+    const normalizedCacheQuery = query
+      .normalize('NFKC')
+      .toLowerCase()
+      .replace(/[?？!！。，,;；:：]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const cacheKey = `${this.provider}:${mode}:${normalizedCacheQuery}`;
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return { ...cached.value, fromCache: true };
@@ -530,6 +565,8 @@ export class LongtuWebSearch {
           const fetched = await this.fetchResults(endpoint, candidateQuery, {
             mode,
             relevanceTerms,
+            onBeforeUpstreamRequest: options.onBeforeUpstreamRequest,
+            onUpstreamRequest: options.onUpstreamRequest,
           });
           resultSets.push(fetched.results);
           if (resultSets.length === 1) {
@@ -571,6 +608,7 @@ export class LongtuWebSearch {
           break;
         }
       } catch (error) {
+        if (error?.name === 'QqUsageLimitError') throw error;
         lastError = error;
       }
     }
@@ -586,8 +624,15 @@ export class LongtuWebSearch {
       results,
       endpoint: resolvedEndpoint,
     };
+    const now = Date.now();
+    for (const [key, entry] of this.cache) {
+      if (entry.expiresAt <= now) this.cache.delete(key);
+    }
+    while (this.cache.size >= this.cacheMaxEntries) {
+      this.cache.delete(this.cache.keys().next().value);
+    }
     this.cache.set(cacheKey, {
-      expiresAt: Date.now() + this.cacheTtlMs,
+      expiresAt: now + this.cacheTtlMsByMode[mode],
       value,
     });
     return { ...value, fromCache: false };

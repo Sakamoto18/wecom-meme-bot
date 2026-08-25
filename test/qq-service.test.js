@@ -45,6 +45,13 @@ function createService(options = {}) {
     peerBotUsers: options.peerBotUsers,
     peerBotMaxConsecutiveReplies: options.peerBotMaxConsecutiveReplies,
     peerBotLoopWindowMs: options.peerBotLoopWindowMs,
+    usageTracker: options.usageTracker,
+    largeGroupIds: options.largeGroupIds,
+    largeGroupMemberThreshold: options.largeGroupMemberThreshold,
+    largeGroupPassiveDecisionCooldownMs: options.largeGroupPassiveDecisionCooldownMs,
+    largeGroupHistoryMessages: options.largeGroupHistoryMessages,
+    largeGroupHistoryCharacters: options.largeGroupHistoryCharacters,
+    largeGroupBackgroundSummariesEnabled: options.largeGroupBackgroundSummariesEnabled,
     now: options.now,
     logger: { log() {}, warn() {} },
   });
@@ -71,6 +78,85 @@ test('QQ 请求字段会映射到现有消息模型且私聊无需 group_id', ()
     () => normalizeQqPayload({ message_type: 'group', user_id: '20' }),
     /group_id/,
   );
+});
+
+test('大型群按群号标记并把大型群上下文传给用量追踪器', async () => {
+  let capturedContext;
+  const usageTracker = {
+    runWithContext(context, task) {
+      capturedContext = context;
+      return task();
+    },
+    recordRequest() {},
+  };
+  const { service } = createService({
+    usageTracker,
+    largeGroupIds: new Set(['large-group-id']),
+  });
+
+  await service.handleMessage({
+    message_id: 'large-group-context',
+    message_type: 'group',
+    group_id: 'large-group-id',
+    user_id: 'user-1',
+    text: '来张龙图',
+  });
+
+  assert.equal(capturedContext.groupId, 'large-group-id');
+  assert.equal(capturedContext.largeGroup, true);
+});
+
+test('大型群限制被动判定频率，但明确请求仍正常处理', async () => {
+  let decisionCalls = 0;
+  const { service } = createService({
+    largeGroupIds: new Set(['large-group-id']),
+    largeGroupPassiveDecisionCooldownMs: 180_000,
+    now: () => 1_000_000,
+    activeReplyDecider: {
+      async shouldReply() {
+        decisionCalls += 1;
+        return { reply: false, reason: 'test' };
+      },
+    },
+  });
+  const observed = {
+    message_type: 'group',
+    group_id: 'large-group-id',
+    user_id: 'user-1',
+    sender_name: '群友',
+    text: '群聊里的普通消息',
+    observe_only: true,
+  };
+
+  await service.handleMessage({ ...observed, message_id: 'passive-1' });
+  await service.handleMessage({ ...observed, message_id: 'passive-2' });
+  const direct = await service.handleMessage({
+    ...observed,
+    message_id: 'direct-1',
+    text: '来张龙图',
+    observe_only: false,
+  });
+
+  assert.equal(decisionCalls, 1);
+  assert.equal(direct.mode, 'longtu');
+});
+
+test('大型群只向模型发送最近的有限上下文', () => {
+  const { service } = createService({
+    largeGroupIds: new Set(['large-group-id']),
+    largeGroupHistoryMessages: 20,
+    largeGroupHistoryCharacters: 8_000,
+  });
+  const history = Array.from({ length: 30 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    content: `${index}:`.padEnd(500, '字'),
+  }));
+
+  const fitted = service.historyForGroup('large-group-id', history);
+
+  assert.ok(fitted.length <= 20);
+  assert.ok(fitted.reduce((sum, message) => sum + message.content.length, 0) <= 8_000);
+  assert.match(fitted.at(-1).content, /^29:/);
 });
 
 test('Bridge 显示出来的纯 At 昵称仍走短回复并拦截客服话术', async () => {
@@ -1861,8 +1947,17 @@ test('纯文字提到唯一历史昵称时也会识别第三方目标，无需�
 
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
   const received = [];
+  const usageRequests = [];
   const server = createQqApiServer({
     apiToken: 'test-token',
+    adminUsers: new Set(['admin-1']),
+    usageReportUsers: new Set(['recipient-1', 'recipient-2']),
+    usageTracker: {
+      getReport(options) {
+        usageRequests.push(options);
+        return { totals: { totalTokens: 12 }, groups: [] };
+      },
+    },
     service: {
       async handleMessage(payload) {
         received.push(payload);
@@ -1886,6 +1981,21 @@ test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
       body: JSON.stringify({ text: '你好' }),
     });
     assert.equal(unauthorized.status, 401);
+
+    const unauthorizedUsage = await fetch(`${baseUrl}/v1/qq/usage`);
+    assert.equal(unauthorizedUsage.status, 401);
+
+    const usage = await fetch(`${baseUrl}/v1/qq/usage?start_at=10&end_at=20&limit=5`, {
+      headers: { Authorization: 'Bearer test-token' },
+    });
+    assert.equal(usage.status, 200);
+    assert.deepEqual(await usage.json(), {
+      ok: true,
+      admin_user_ids: ['admin-1'],
+      report_user_ids: ['recipient-1', 'recipient-2'],
+      report: { totals: { totalTokens: 12 }, groups: [] },
+    });
+    assert.deepEqual(usageRequests, [{ startAt: 10, endAt: 20, limit: 5 }]);
 
     const authorized = await fetch(`${baseUrl}/v1/qq/message`, {
       method: 'POST',

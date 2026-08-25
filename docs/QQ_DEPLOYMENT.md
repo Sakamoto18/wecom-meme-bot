@@ -129,6 +129,70 @@ LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 
 两个 Bot 同群时，把对方的 QQ 号填入 `LONGTU_QQ_PEER_BOT_USERS`（多个用英文逗号分隔）。首轮明确 `@` 正常回复；第二轮只有对方提出尚未回答的新问题、新指令、新事实或有效纠错时才继续。重复 `@`、复读、客套寒暄、客服套话、挑衅和没有新增信息的 Bot 发言会提前静默；判定失败同样按静默处理。程序按“群号 + 对方 Bot QQ 号”保留默认 2 次的绝对硬上限，防止模型误判后形成永动循环。真人群友插话会立即清空该群计数，`LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS` 到期也会自动恢复。
 
+### 群级用量、缓存与日报
+
+QQ 后端把每次真实上游 LLM 调用、返回的输入/输出 Token、模型缓存命中 Token、真实联网请求和本地搜索缓存命中写入独立的 `data/qq-usage.sqlite`，默认保留约 35 天。记录以不可变的 QQ `group_id` 归属；日报再通过 OneBot 动态解析当前群名，因此改群名不会让限额失效。一次 Exa 复合查询如果实际请求两次，会准确记为两次；命中本地缓存不会冒充上游调用。
+
+所有群默认启用动态配额。程序按固定群号统计近 7 日的日均群消息数和日均活跃发言人数，取两项中较高的活跃档，把群级硬上限依次折算为 60%、75%、85%、95% 或 100%。额度随正常活跃度上升，但最高不会超过普通/大型群上限或单群覆盖值，因而不会随消息量无限放大；五分钟刷新一次档位，避免瞬时刷屏立刻抬高额度。日报会显示每个群当前档位、日均消息/人数、折算系数和实际动态额度。
+
+已知成员不少于 40 人的群仍自动视为大型群；也可以用 `QQ_USAGE_LARGE_GROUPS` 按群号直接指定。大型群使用更低的硬上限，只向模型发送最近 20 条、最多 8000 字上下文；普通消息最多每 180 秒进行一次“是否主动接话”的模型判断，明确 `@机器人` 和直接提问不受这条冷却影响。大型群默认不自动生成会话摘要或成员画像，避免高消息量触发后台 LLM 消耗。动态配额与大型群策略会叠加：先确定该群的硬上限，再乘当前活跃档系数。
+
+```dotenv
+QQ_USAGE_DATABASE_FILE=data/qq-usage.sqlite
+QQ_USAGE_GROUP_MAX_LLM_CALLS_PER_HOUR=120
+QQ_USAGE_LARGE_GROUP_MAX_LLM_CALLS_PER_HOUR=60
+QQ_USAGE_GROUP_MAX_LLM_TOKENS_PER_DAY=2000000
+QQ_USAGE_LARGE_GROUP_MAX_LLM_TOKENS_PER_DAY=800000
+QQ_USAGE_GROUP_LLM_LIMITS=
+QQ_USAGE_GROUP_LLM_DAILY_TOKEN_LIMITS=
+QQ_USAGE_GROUP_MAX_SEARCH_CALLS_PER_DAY=200
+QQ_USAGE_LARGE_GROUP_MAX_SEARCH_CALLS_PER_DAY=100
+QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS=
+QQ_USAGE_LARGE_GROUPS=
+QQ_USAGE_LARGE_GROUP_MEMBER_THRESHOLD=40
+QQ_USAGE_CACHED_TOKEN_WEIGHT_PERCENT=10
+QQ_USAGE_PASSIVE_TOKEN_BUDGET_PERCENT=70
+QQ_USAGE_ADAPTIVE_LIMITS_ENABLED=true
+QQ_USAGE_ACTIVITY_LOOKBACK_DAYS=7
+QQ_USAGE_ACTIVITY_MESSAGE_THRESHOLDS=20,60,150,400
+QQ_USAGE_ACTIVITY_USER_THRESHOLDS=3,8,20,40
+QQ_USAGE_ACTIVITY_LIMIT_PERCENTAGES=60,75,85,95,100
+QQ_USAGE_LARGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS=180
+QQ_USAGE_LARGE_GROUP_HISTORY_MESSAGES=20
+QQ_USAGE_LARGE_GROUP_HISTORY_CHARACTERS=8000
+QQ_USAGE_LARGE_GROUP_BACKGROUND_SUMMARIES_ENABLED=false
+```
+
+活跃档阈值从低到高对应“轻活跃、常规、活跃、高活跃”的起点。例如默认达到日均 20 条消息或 3 名发言者就进入第二档；达到日均 400 条或 40 名发言者就使用 100% 硬上限。任一指标达到阈值就升级，避免人数少但发言密集、或人数多但每人只说少量消息的群被低估。刚开始统计的第一天按当天已观察到的活动计算，之后逐渐扩展到 7 日窗口。
+
+`QQ_USAGE_GROUP_LLM_LIMITS`、`QQ_USAGE_GROUP_LLM_DAILY_TOKEN_LIMITS` 和 `QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS` 都使用 `群号=数值`，多个群用英文逗号分隔，`0` 表示该群不限。这些数值是不会突破的硬上限，启用动态配额后还会乘当前活跃档系数。例如当前“赛尔号乔碧萝战队群”的固定群号是 `298818522`：
+
+```dotenv
+QQ_USAGE_LARGE_GROUPS=298818522
+QQ_USAGE_GROUP_LLM_LIMITS=298818522=60
+QQ_USAGE_GROUP_LLM_DAILY_TOKEN_LIMITS=298818522=800000
+QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS=298818522=100
+```
+
+每日 Token 限额使用“折算配额 Token”：未缓存输入和输出按 100% 计算，供应商明确返回的缓存命中输入默认按 10% 计算；日报仍同时展示完整原始 Token 和缓存率。后台摘要、读空气判定、主动插话最多使用动态日配额的 70%，剩余 30% 留给明确请求。达到联网搜索日上限时只跳过新的上游检索，模型仍可在没有新搜索结果的情况下回答；达到后台预留线时后台调用静默停止；只有触及总 LLM 上限时明确请求才会收到限额提示。
+
+搜索结果按公开查询内容跨群安全复用。时效查询默认缓存 15 分钟，通用查询 6 小时，网络梗 12 小时，龙图资料 24 小时：
+
+```dotenv
+WEB_SEARCH_CURRENT_CACHE_TTL_MS=900000
+WEB_SEARCH_GENERAL_CACHE_TTL_MS=21600000
+WEB_SEARCH_MEME_CACHE_TTL_MS=43200000
+WEB_SEARCH_LONGTU_CACHE_TTL_MS=86400000
+```
+
+Bridge 插件默认在北京时间每天 09:00，把上一自然日的群用量排行私聊发送给 `.env.qq` 中的 `LONGTU_QQ_USAGE_REPORT_USERS`。日报收件人和超管权限完全分离：加入收件人列表不会获得图库管理、`/stop` 或手动触发日报的权限。日报包含群名和群号、原始/折算 Token、LLM 输入缓存率、真实搜索与缓存命中率、主要消耗环节和拦截次数。发送时间可在 AstrBot 的“龙图 QQ Bridge”插件配置中调整；Node 的 `GET /v1/qq/usage` 接口使用与消息接口相同的 Bearer Token，不对公网开放。
+
+任一超管可以在 QQ 私聊或群聊中发送 `/usage-report`，立即把“今天截至当前”的测试日报私聊推送给所有日报收件人。非超管不能触发。以后增加收件人时，只修改独立收件人配置并重启 `qq-bot`，不需要也不应该把收件人加入超管列表：
+
+```dotenv
+LONGTU_QQ_USAGE_REPORT_USERS=第一个QQ号,第二个QQ号
+```
+
 ### 群角色认知
 
 QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称、历史昵称、发言次数和最近出现时间。成员本人发言后才会确认身份与昵称；别人 `@` 某人时只登记目标 QQ 号为待确认成员，不会替目标确认别名。已确认且在当前群唯一的历史昵称可在纯文字里锁定第三方目标，重名、短昵称冲突或未确认昵称不会猜测。模型输入和成员画像观察都会分别标明当前发言人、被 `@` 的成员、纯文字命中的已确认成员和引用消息作者；机器人回复写入历史时也会记录当轮回复对象，避免群聊换人后继承上一人的称呼或头衔。
