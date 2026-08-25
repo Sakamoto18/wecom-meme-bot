@@ -13,6 +13,23 @@ const DEFAULT_ACTIVITY_MESSAGE_THRESHOLDS = [20, 60, 150, 400];
 const DEFAULT_ACTIVITY_USER_THRESHOLDS = [3, 8, 20, 40];
 const DEFAULT_ACTIVITY_LIMIT_PERCENTAGES = [60, 75, 85, 95, 100];
 const ACTIVITY_TIER_NAMES = ['quiet', 'light', 'normal', 'active', 'hot'];
+const PRICE_UNIT_TOKENS = 1_000_000;
+const DEEPSEEK_PRICING_SOURCE = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/';
+const DEEPSEEK_PRICING_CHECKED_AT = '2026-08-25';
+const DEEPSEEK_PRICES_CNY = new Map([
+  ['deepseek-v4-flash', {
+    offPeak: { cachedInput: 0.05, uncachedInput: 1.5, output: 4.5 },
+    peak: { cachedInput: 0.10, uncachedInput: 3.0, output: 9.0 },
+  }],
+  ['deepseek-v4-pro', {
+    offPeak: { cachedInput: 0.15, uncachedInput: 4.5, output: 13.5 },
+    peak: { cachedInput: 0.30, uncachedInput: 9.0, output: 27.0 },
+  }],
+  ['deepseek-v4-flash-vision-exp', {
+    offPeak: { cachedInput: 0.05, uncachedInput: 1.5, output: 4.5 },
+    peak: { cachedInput: 0.10, uncachedInput: 3.0, output: 9.0 },
+  }],
+]);
 
 export class QqUsageLimitError extends Error {
   constructor(groupId, limit, metric = 'llm-calls') {
@@ -79,6 +96,103 @@ function normalizeContext(context = {}) {
 function startOfShanghaiDay(timestamp) {
   return Math.floor((timestamp + SHANGHAI_OFFSET_MS) / DAY_MS) * DAY_MS
     - SHANGHAI_OFFSET_MS;
+}
+
+function isDeepSeekPeakTime(timestamp) {
+  const shanghai = new Date(timestamp + SHANGHAI_OFFSET_MS);
+  const weekday = shanghai.getUTCDay();
+  if (weekday < 1 || weekday > 5) return false;
+  const minutes = shanghai.getUTCHours() * 60 + shanghai.getUTCMinutes();
+  return (minutes >= 9 * 60 && minutes < 12 * 60)
+    || (minutes >= 14 * 60 && minutes < 18 * 60);
+}
+
+function emptyCostSummary() {
+  return {
+    estimatedCostCny: 0,
+    cachedInputCostCny: 0,
+    uncachedInputCostCny: 0,
+    outputCostCny: 0,
+    peakCostCny: 0,
+    offPeakCostCny: 0,
+    pricedCalls: 0,
+    unpricedCalls: 0,
+    unpricedTokens: 0,
+    models: new Set(),
+  };
+}
+
+function addCost(target, field, value) {
+  target[field] += Number(value || 0);
+}
+
+function serializeCostSummary(summary) {
+  const money = (value) => Math.round(Number(value || 0) * 1_000_000_000) / 1_000_000_000;
+  return {
+    estimatedCostCny: money(summary.estimatedCostCny),
+    cachedInputCostCny: money(summary.cachedInputCostCny),
+    uncachedInputCostCny: money(summary.uncachedInputCostCny),
+    outputCostCny: money(summary.outputCostCny),
+    peakCostCny: money(summary.peakCostCny),
+    offPeakCostCny: money(summary.offPeakCostCny),
+    pricedCalls: summary.pricedCalls,
+    unpricedCalls: summary.unpricedCalls,
+    unpricedTokens: summary.unpricedTokens,
+    models: [...summary.models].sort(),
+  };
+}
+
+function calculateDeepSeekCosts(rows) {
+  const total = emptyCostSummary();
+  const byGroup = new Map();
+  for (const row of rows) {
+    const groupId = String(row.groupId ?? '').trim();
+    const group = byGroup.get(groupId) ?? emptyCostSummary();
+    byGroup.set(groupId, group);
+    const model = String(row.model ?? '').trim();
+    const inputTokens = usageNumber(row.inputTokens);
+    const cachedInputTokens = Math.min(
+      inputTokens,
+      usageNumber(row.cachedInputTokens),
+    );
+    const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+    const outputTokens = usageNumber(row.outputTokens);
+    const totalTokens = inputTokens + outputTokens;
+    const modelPrices = DEEPSEEK_PRICES_CNY.get(model);
+    if (!modelPrices) {
+      for (const target of [total, group]) {
+        target.unpricedCalls += 1;
+        target.unpricedTokens += totalTokens;
+        if (model) target.models.add(model);
+      }
+      continue;
+    }
+    const peak = isDeepSeekPeakTime(Number(row.createdAt));
+    const prices = peak ? modelPrices.peak : modelPrices.offPeak;
+    const cachedInputCostCny = cachedInputTokens / PRICE_UNIT_TOKENS
+      * prices.cachedInput;
+    const uncachedInputCostCny = uncachedInputTokens / PRICE_UNIT_TOKENS
+      * prices.uncachedInput;
+    const outputCostCny = outputTokens / PRICE_UNIT_TOKENS * prices.output;
+    const estimatedCostCny = cachedInputCostCny
+      + uncachedInputCostCny
+      + outputCostCny;
+    for (const target of [total, group]) {
+      target.models.add(model);
+      target.pricedCalls += 1;
+      addCost(target, 'estimatedCostCny', estimatedCostCny);
+      addCost(target, 'cachedInputCostCny', cachedInputCostCny);
+      addCost(target, 'uncachedInputCostCny', uncachedInputCostCny);
+      addCost(target, 'outputCostCny', outputCostCny);
+      addCost(target, peak ? 'peakCostCny' : 'offPeakCostCny', estimatedCostCny);
+    }
+  }
+  return {
+    total: serializeCostSummary(total),
+    byGroup: new Map([...byGroup].map(([groupId, summary]) => (
+      [groupId, serializeCostSummary(summary)]
+    ))),
+  };
 }
 
 export class UsageTrackedChatClient {
@@ -718,6 +832,19 @@ export class QqUsageTracker {
       SELECT MIN(created_at) AS firstAt
       FROM qq_usage_events
     `).get();
+    const costRows = database.prepare(`
+      SELECT
+        group_id AS groupId,
+        created_at AS createdAt,
+        model,
+        input_tokens AS inputTokens,
+        cached_input_tokens AS cachedInputTokens,
+        output_tokens AS outputTokens
+      FROM qq_usage_events
+      WHERE kind = 'llm' AND allowed = 1 AND group_id <> ''
+        AND created_at >= ? AND created_at < ?
+    `).all(start, end);
+    const costs = calculateDeepSeekCosts(costRows);
     const groups = database.prepare(`
       SELECT
         group_id AS groupId,
@@ -746,8 +873,12 @@ export class QqUsageTracker {
         largeGroup: Boolean(row.largeGroup),
       };
       const activity = this.getGroupActivityProfile(row.groupId, now);
+      const cost = costs.byGroup.get(row.groupId) ?? serializeCostSummary(
+        emptyCostSummary(),
+      );
       return {
         ...groupContext,
+        ...cost,
         activityTier: activity.tier,
         activityLimitPercent: activity.limitPercent,
         activityMessagesPerDay: activity.messagesPerDay,
@@ -773,7 +904,12 @@ export class QqUsageTracker {
         searchCacheHits: Number(row.searchCacheHits || 0),
         lastAt: Number(row.lastAt || 0),
       };
-    });
+    }).sort((left, right) => (
+      right.estimatedCostCny - left.estimatedCostCny
+      || right.totalTokens - left.totalTokens
+      || right.llmCalls - left.llmCalls
+      || left.groupId.localeCompare(right.groupId)
+    ));
     const totals = database.prepare(`
       SELECT
         SUM(CASE WHEN kind = 'request' THEN 1 ELSE 0 END) AS requests,
@@ -813,6 +949,16 @@ export class QqUsageTracker {
       dataAvailableFrom: availability.firstAt === null
         ? null
         : Number(availability.firstAt),
+      pricing: {
+        provider: 'deepseek',
+        currency: 'CNY',
+        priceUnitTokens: PRICE_UNIT_TOKENS,
+        sourceUrl: DEEPSEEK_PRICING_SOURCE,
+        checkedAt: DEEPSEEK_PRICING_CHECKED_AT,
+        peakTimezone: 'Asia/Shanghai',
+        peakPeriods: '工作日 09:00-12:00、14:00-18:00',
+        ...costs.total,
+      },
       adaptiveLimitsEnabled: this.adaptiveLimitsEnabled,
       activityLookbackDays: this.activityLookbackDays,
       activityMessageThresholds: this.activityMessageThresholds,

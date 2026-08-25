@@ -41,6 +41,8 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(handler, /self\._send_current_usage_report/);
   assert.match(source, /bot\.get_group_list\(no_cache=False\)/);
   assert.match(source, /report\.get\("dataAvailableFrom"\)/);
+  assert.match(source, /DeepSeek 费用估算/);
+  assert.match(source, /不含 Exa 联网搜索费用/);
   assert.match(handler, /self\._is_allowed_bridge_slash_command\(event\)/);
   assert.doesNotMatch(handler, /and not str\(text or ""\)\.strip\(\)/);
 });

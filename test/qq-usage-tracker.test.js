@@ -145,6 +145,53 @@ test('所有群按近期开口人数和消息活跃度动态获得配额', async
   }
 });
 
+test('DeepSeek V4 Flash 按调用发生时间分别计算高峰与空闲费用', async () => {
+  let now = Date.UTC(2026, 7, 25, 2); // 北京时间周二 10:00，高峰。
+  const fixture = createTracker({ now: () => now });
+  const client = fixture.tracker.wrapChatClient({
+    model: 'deepseek-v4-flash',
+    isConfigured: true,
+    async complete(_history, _content, options) {
+      options.onUsage({
+        usage: {
+          prompt_tokens: 1_000_000,
+          completion_tokens: 100_000,
+          prompt_cache_hit_tokens: 200_000,
+        },
+      });
+      return 'ok';
+    },
+  });
+
+  try {
+    await fixture.tracker.runWithContext({ groupId: 'peak-group' }, () => (
+      client.complete([], 'peak')
+    ));
+    now = Date.UTC(2026, 7, 25, 5); // 北京时间周二 13:00，空闲。
+    await fixture.tracker.runWithContext({ groupId: 'off-peak-group' }, () => (
+      client.complete([], 'off peak')
+    ));
+    const report = fixture.tracker.getReport();
+    const peak = report.groups.find((group) => group.groupId === 'peak-group');
+    const offPeak = report.groups.find((group) => (
+      group.groupId === 'off-peak-group'
+    ));
+
+    assert.equal(peak.estimatedCostCny, 3.32);
+    assert.equal(peak.peakCostCny, 3.32);
+    assert.equal(offPeak.estimatedCostCny, 1.66);
+    assert.equal(offPeak.offPeakCostCny, 1.66);
+    assert.equal(report.pricing.estimatedCostCny, 4.98);
+    assert.equal(report.pricing.cachedInputCostCny, 0.03);
+    assert.equal(report.pricing.uncachedInputCostCny, 3.6);
+    assert.equal(report.pricing.outputCostCny, 1.35);
+    assert.deepEqual(report.pricing.models, ['deepseek-v4-flash']);
+    assert.equal(report.pricing.unpricedCalls, 0);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('大型群和单群覆盖会在每次真实 LLM 调用前执行', async () => {
   const fixture = createTracker({
     maxGroupLlmCallsPerHour: 3,
