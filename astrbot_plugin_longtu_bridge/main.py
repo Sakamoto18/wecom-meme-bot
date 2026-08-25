@@ -31,7 +31,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.9.0",
+    "1.9.1",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -162,6 +162,15 @@ class LongtuQqBridge(Star):
     def _number(value) -> str:
         return f"{max(0, int(value or 0)):,}"
 
+    @staticmethod
+    def _money(value) -> str:
+        amount = max(0.0, float(value or 0))
+        if amount >= 1:
+            return f"¥{amount:,.2f}"
+        if amount >= 0.01:
+            return f"¥{amount:,.4f}"
+        return f"¥{amount:,.6f}"
+
     async def _format_usage_report(
         self,
         body: dict,
@@ -172,6 +181,7 @@ class LongtuQqBridge(Star):
         totals = report.get("totals") or {}
         groups = report.get("groups") or []
         sources = report.get("sources") or []
+        pricing = report.get("pricing") or {}
         catalog = await self._group_catalog()
         group_ids = [str(group.get("groupId") or "") for group in groups]
         missing_name_ids = [group_id for group_id in group_ids if group_id not in catalog]
@@ -185,6 +195,7 @@ class LongtuQqBridge(Star):
         cache_rate = (
             cached_input_tokens / input_tokens * 100 if input_tokens else 0
         )
+        total_cost = float(pricing.get("estimatedCostCny") or 0)
         lines = [
             f"【龙玉涛 Bot 用量日报｜{report_date:%Y-%m-%d}{header_suffix}】",
             (
@@ -201,6 +212,28 @@ class LongtuQqBridge(Star):
                 f"{self._number(totals.get('quotaTokens'))} token。"
             ),
         ]
+        if pricing.get("provider") == "deepseek":
+            models = "、".join(str(model) for model in pricing.get("models") or [])
+            model_label = models or "DeepSeek"
+            lines.append(
+                f"DeepSeek 费用估算（{model_label}）：{self._money(total_cost)}；"
+                f"缓存命中输入 {self._money(pricing.get('cachedInputCostCny'))}，"
+                f"未命中输入 {self._money(pricing.get('uncachedInputCostCny'))}，"
+                f"输出 {self._money(pricing.get('outputCostCny'))}；"
+                f"高峰 {self._money(pricing.get('peakCostCny'))} / "
+                f"空闲 {self._money(pricing.get('offPeakCostCny'))}。",
+            )
+            lines.append(
+                f"计费口径：按 DeepSeek 官网 {pricing.get('checkedAt') or ''} "
+                f"分时单价逐次计算（{pricing.get('peakPeriods') or '北京时间'}）；"
+                "金额为人民币估算，不含 Exa 联网搜索费用。",
+            )
+            if int(pricing.get("unpricedCalls") or 0) > 0:
+                lines.append(
+                    f"费用提醒：另有 {self._number(pricing.get('unpricedCalls'))} 次调用"
+                    f"（{self._number(pricing.get('unpricedTokens'))} token）"
+                    "未匹配已知 DeepSeek 型号，未计入上述金额。",
+                )
         data_available_from = int(report.get("dataAvailableFrom") or 0)
         report_start = int(report.get("startAt") or 0)
         if data_available_from and report_start and data_available_from > report_start:
@@ -250,6 +283,8 @@ class LongtuQqBridge(Star):
                 display = f"{label}（{group_id}）" if label else group_id
                 tokens = int(group.get("totalTokens") or 0)
                 share = (tokens / total_tokens * 100) if total_tokens else 0
+                group_cost = float(group.get("estimatedCostCny") or 0)
+                cost_share = (group_cost / total_cost * 100) if total_cost else 0
                 search_calls = int(group.get("searchCalls") or 0)
                 search_hits = int(group.get("searchCacheHits") or 0)
                 search_total = search_calls + search_hits
@@ -274,8 +309,9 @@ class LongtuQqBridge(Star):
                     if quota_limit else f"{self._number(group.get('quotaTokens'))}/不限"
                 )
                 lines.append(
-                    f"{index}. {display}：{self._number(tokens)} token"
-                    f"（{share:.1f}%），LLM {self._number(group.get('llmCalls'))} 次，"
+                    f"{index}. {display}：约 {self._money(group_cost)}"
+                    f"（费用 {cost_share:.1f}%），{self._number(tokens)} token"
+                    f"（Token {share:.1f}%），LLM {self._number(group.get('llmCalls'))} 次，"
                     f"搜索 {self._number(search_calls)} 次"
                     f"/缓存命中 {search_hit_rate:.0f}%，"
                     f"消息 {self._number(group.get('requests'))} 条；"
@@ -284,11 +320,18 @@ class LongtuQqBridge(Star):
                     f"系数 {self._number(group.get('activityLimitPercent'))}%)，"
                     f"折算配额 {quota_status}",
                 )
+            top_cost = float(groups[0].get("estimatedCostCny") or 0)
             top_tokens = int(groups[0].get("totalTokens") or 0)
-            top_share = (top_tokens / total_tokens * 100) if total_tokens else 0
+            top_share = (
+                top_cost / total_cost * 100
+                if total_cost else (
+                    top_tokens / total_tokens * 100 if total_tokens else 0
+                )
+            )
             if top_share >= 50:
                 lines.append(
-                    f"提醒：第一名群占全天 Token 的 {top_share:.1f}%，用量较集中。",
+                    f"提醒：第一名群占统计期 DeepSeek 费用的 "
+                    f"{top_share:.1f}%，用量较集中。",
                 )
         else:
             lines.append("昨日没有记录到群聊上游调用。")
@@ -320,6 +363,8 @@ class LongtuQqBridge(Star):
                 "active-reply-decision": "主动回复判定",
                 "active-value-gate": "主动回复复核",
                 "active-reply": "主动回复生成",
+                "attack-reply": "对线回复生成",
+                "attack-reply-retry": "对线回复重试",
                 "conversation-reply": "普通回复生成",
                 "conversation-reply-review": "普通回复复核",
                 "conversation-summary": "会话摘要",
