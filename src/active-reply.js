@@ -536,6 +536,7 @@ export class ActiveReplyDecider {
       const answer = await this.chatClient.complete([], decisionInput, {
         systemPrompt: OPTIONAL_VALUE_SYSTEM_PROMPT,
         maxTokens: 4,
+        usageSource: 'active-value-gate',
         timeoutMs: this.timeoutMs,
         temperature: 0,
         thinking: { type: 'disabled' },
@@ -638,6 +639,7 @@ export class ActiveReplyDecider {
       const answer = await this.chatClient.complete([], decisionInput, {
         systemPrompt: DECISION_SYSTEM_PROMPT,
         maxTokens: 8,
+        usageSource: 'active-reply-decision',
         timeoutMs: this.timeoutMs,
         temperature: 0,
         thinking: { type: 'disabled' },

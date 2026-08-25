@@ -14,6 +14,7 @@ import {
   parseLongtuManagementCommand,
 } from './longtu-management.js';
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
+import { QqUsageLimitError } from './qq-usage-tracker.js';
 import { generateConversationReply } from './reply-engine.js';
 import {
   isAdminStopCommand,
@@ -481,6 +482,26 @@ function compactParticipantName(value) {
     .trim();
 }
 
+function fitUsageHistory(history, maxMessages, maxCharacters) {
+  let fitted = (Array.isArray(history) ? history : [])
+    .slice(-maxMessages)
+    .map((message) => ({
+      ...message,
+      content: String(message?.content ?? ''),
+    }));
+  const characterCount = () => fitted.reduce(
+    (total, message) => total + message.content.length,
+    0,
+  );
+  while (fitted.length > 1 && characterCount() > maxCharacters) {
+    fitted = fitted.slice(1);
+  }
+  if (fitted.length === 1 && fitted[0].content.length > maxCharacters) {
+    fitted[0].content = fitted[0].content.slice(-maxCharacters);
+  }
+  return fitted;
+}
+
 export class QqBotService {
   constructor(options) {
     this.chatClient = options.chatClient;
@@ -495,6 +516,26 @@ export class QqBotService {
     this.protectedRoles = options.protectedRoles ?? new Map();
     this.activeReplyDecider = options.activeReplyDecider ?? null;
     this.peerBotContinuationDecider = options.peerBotContinuationDecider ?? null;
+    this.usageTracker = options.usageTracker ?? null;
+    this.largeGroupIds = new Set(options.largeGroupIds ?? []);
+    this.largeGroupMemberThreshold = Math.max(
+      1,
+      Number(options.largeGroupMemberThreshold ?? 40),
+    );
+    this.largeGroupPassiveDecisionCooldownMs = Math.max(
+      0,
+      Number(options.largeGroupPassiveDecisionCooldownMs ?? 180_000),
+    );
+    this.largeGroupHistoryMessages = Math.max(
+      2,
+      Number(options.largeGroupHistoryMessages ?? 20),
+    );
+    this.largeGroupHistoryCharacters = Math.max(
+      1_000,
+      Number(options.largeGroupHistoryCharacters ?? 8_000),
+    );
+    this.largeGroupBackgroundSummariesEnabled = options
+      .largeGroupBackgroundSummariesEnabled === true;
     this.peerBotUsers = new Set(
       [...(options.peerBotUsers ?? [])]
         .map((userId) => String(userId ?? '').trim())
@@ -523,6 +564,52 @@ export class QqBotService {
     this.adminStoppedPeerGroups = new Map();
     this.groupStopRevisions = new Map();
     this.groupProcessingQueues = new Map();
+    this.lastLargeGroupPassiveDecisionAt = new Map();
+  }
+
+  isLargeGroup(groupId) {
+    const normalizedGroupId = String(groupId ?? '').trim();
+    if (!normalizedGroupId) return false;
+    if (this.largeGroupIds.has(normalizedGroupId)) return true;
+    const members = this.conversationStore.getGroupMembers?.(
+      normalizedGroupId,
+      this.largeGroupMemberThreshold,
+    ) ?? [];
+    if (members.length >= this.largeGroupMemberThreshold) {
+      this.largeGroupIds.add(normalizedGroupId);
+      this.logger.log(
+        `QQ 大型群策略已启用：${normalizedGroupId}`
+        + `（已识别成员不少于 ${this.largeGroupMemberThreshold} 人）`,
+      );
+      return true;
+    }
+    return false;
+  }
+
+  historyForGroup(groupId, history) {
+    return this.isLargeGroup(groupId)
+      ? fitUsageHistory(
+        history,
+        this.largeGroupHistoryMessages,
+        this.largeGroupHistoryCharacters,
+      )
+      : history;
+  }
+
+  shouldRunPassiveDecision(groupId) {
+    if (!this.isLargeGroup(groupId)) return true;
+    const now = this.now();
+    const lastAt = this.lastLargeGroupPassiveDecisionAt.get(groupId) ?? 0;
+    if (lastAt && now - lastAt < this.largeGroupPassiveDecisionCooldownMs) {
+      return false;
+    }
+    this.lastLargeGroupPassiveDecisionAt.set(groupId, now);
+    return true;
+  }
+
+  backgroundSummariesEnabled(groupId) {
+    return !this.isLargeGroup(groupId)
+      || this.largeGroupBackgroundSummariesEnabled;
   }
 
   isPeerBotMessage(payload) {
@@ -795,7 +882,10 @@ export class QqBotService {
 
     return this.conversationStore.runExclusive(conversationId, async () => {
       const history = sanitizeConversationHistory(
-        this.conversationStore.get(conversationId),
+        this.historyForGroup(
+          message.chattype === 'group' ? message.chatid : '',
+          this.conversationStore.get(conversationId),
+        ),
         forbiddenHistoryRoleTerms,
       );
       const memorySummary = removeLinesContainingProtectedRoles(
@@ -854,7 +944,11 @@ export class QqBotService {
         modelInput,
         buildStoredAssistantReply(message, interactionContext, answer),
       );
-      this.scheduleMemorySummary(conversationId);
+      if (this.backgroundSummariesEnabled(
+        message.chattype === 'group' ? message.chatid : '',
+      )) {
+        this.scheduleMemorySummary(conversationId);
+      }
       const messages = [{ type: 'text', text: answer }];
 
       try {
@@ -925,6 +1019,7 @@ export class QqBotService {
             this.protectedIdentityContext,
           ].filter(Boolean).join('\n\n'),
           maxTokens: 1_800,
+          usageSource: 'conversation-summary',
           timeoutMs: 60_000,
           temperature: 0.1,
           thinking: { type: 'disabled' },
@@ -951,6 +1046,7 @@ export class QqBotService {
             buildMemberIdentityConstraint(this.protectedRoles, snapshot.userId),
           ].filter(Boolean).join('\n\n'),
           maxTokens: 900,
+          usageSource: 'member-memory-summary',
           timeoutMs: 60_000,
           temperature: 0.1,
           thinking: { type: 'disabled' },
@@ -989,7 +1085,7 @@ export class QqBotService {
       payload.userId,
       observation,
     );
-    if (appended) {
+    if (appended && this.backgroundSummariesEnabled(payload.groupId)) {
       this.scheduleMemberMemorySummary(payload.groupId, payload.userId);
     }
   }
@@ -1083,13 +1179,18 @@ export class QqBotService {
       buildModelInput(message, observationContent, aliases),
     ].join('\n');
     this.conversationStore.appendObservation?.(conversationId, modelInput);
-    this.scheduleMemorySummary(conversationId);
+    if (this.backgroundSummariesEnabled(payload.groupId)) {
+      this.scheduleMemorySummary(conversationId);
+    }
     return { mode: 'observed', messages: [] };
   }
 
   async handleObservedMessage(payload, message, conversationContent) {
     const conversationId = getConversationId(message);
     if (!this.activeReplyDecider) {
+      return this.observeMessage(payload, message);
+    }
+    if (!this.shouldRunPassiveDecision(payload.groupId)) {
       return this.observeMessage(payload, message);
     }
 
@@ -1104,7 +1205,10 @@ export class QqBotService {
     const decision = await this.activeReplyDecider.shouldReply({
       payload: decisionPayload,
       currentContent: conversationContent,
-      history: this.conversationStore.get(conversationId),
+      history: this.historyForGroup(
+        payload.groupId,
+        this.conversationStore.get(conversationId),
+      ),
     });
     if (!decision.reply) {
       return this.observeMessage(payload, message);
@@ -1473,6 +1577,24 @@ export class QqBotService {
 
   async handleMessage(input) {
     const payload = normalizeQqPayload(input);
+    if (this.usageTracker) {
+      const usageContext = {
+        groupId: payload.messageType === 'group' ? payload.groupId : '',
+        userId: payload.userId,
+        messageType: payload.messageType,
+        largeGroup: payload.messageType === 'group'
+          && this.isLargeGroup(payload.groupId),
+        source: payload.observeOnly ? 'observed-message' : 'direct-message',
+      };
+      return this.usageTracker.runWithContext(
+        usageContext,
+        () => this.handleUsageTrackedMessage(payload),
+      );
+    }
+    return this.handleUsageTrackedMessage(payload);
+  }
+
+  async handleUsageTrackedMessage(payload) {
     const conversationTarget = payload.messageType === 'group'
       ? payload.groupId
       : payload.userId;
@@ -1488,6 +1610,12 @@ export class QqBotService {
         this.processedMessageIds.delete(dedupeKey);
       }, this.dedupeTtlMs).unref();
     }
+    this.usageTracker?.recordRequest({
+      groupId: payload.messageType === 'group' ? payload.groupId : '',
+      userId: payload.userId,
+      messageType: payload.messageType,
+      source: payload.observeOnly ? 'observed-message' : 'direct-message',
+    });
 
     const preemptiveAdminStop = payload.messageType === 'group'
       && isLongtuAdministrator(payload.userId, this.adminUsers)
@@ -1528,6 +1656,29 @@ export class QqBotService {
         : await processMessage();
     } catch (error) {
       if (dedupeKey) this.processedMessageIds.delete(dedupeKey);
+      if (error instanceof QqUsageLimitError) {
+        const isDailyTokenLimit = error.metric === 'llm-tokens';
+        const isPassiveLimit = error.metric === 'llm-passive-tokens';
+        this.logger.warn(
+          `QQ 群用量上限已触发：${payload.groupId}/${payload.userId}`
+          + (isPassiveLimit
+            ? `，后台/主动插话预留线 ${error.limit} Token`
+            : (isDailyTokenLimit
+            ? `，每日最多 ${error.limit} Token`
+            : `，每小时最多 ${error.limit} 次大模型调用`)),
+        );
+        return payload.observeOnly || isPassiveLimit
+          ? { mode: 'usage-limited', messages: [] }
+          : {
+            mode: 'usage-limited',
+            messages: [{
+              type: 'text',
+              text: isDailyTokenLimit
+                ? '这个群今天的大模型 Token 用量已达到上限，明天再试。'
+                : '这个群本小时的大模型调用已达到上限，请稍后再试。',
+            }],
+          };
+      }
       throw error;
     }
   }
@@ -1578,7 +1729,10 @@ export class QqBotService {
       const decision = await this.peerBotContinuationDecider.shouldContinue({
         payload,
         currentContent: conversationContent,
-        history: this.conversationStore.get(getConversationId(message)),
+        history: this.historyForGroup(
+          payload.groupId,
+          this.conversationStore.get(getConversationId(message)),
+        ),
         replyCount,
       });
       if (!decision.continue) {

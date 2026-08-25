@@ -212,6 +212,7 @@ export async function generateConversationReply(options) {
         buildPureMentionReplyPrompt(),
       ].filter(Boolean).join('\n\n'),
       maxTokens: 120,
+      usageSource: 'pure-mention-reply',
       timeoutMs: 30_000,
       temperature: 0.9,
       thinking: { type: 'disabled' },
@@ -255,6 +256,7 @@ export async function generateConversationReply(options) {
         }),
       ].filter(Boolean).join('\n\n'),
       maxTokens: activeReply ? 160 : 220,
+      usageSource: activeReply ? 'active-reply' : 'attack-reply',
       thinking: { type: 'disabled' },
     });
     const firstReview = reviewAttackReply(firstDraft, { history });
@@ -283,6 +285,7 @@ export async function generateConversationReply(options) {
           ),
         ].filter(Boolean).join('\n\n'),
         maxTokens: activeReply ? 160 : 220,
+        usageSource: activeReply ? 'active-reply-retry' : 'attack-reply-retry',
         thinking: { type: 'disabled' },
       });
       const secondReview = reviewAttackReply(secondDraft, { history });
@@ -343,6 +346,7 @@ export async function generateConversationReply(options) {
     try {
       searchResult = await webSearch.search(content, {
         mode: searchMode,
+        usageSource: `web-search-${searchMode}`,
       });
     } catch (error) {
       searchError = error;
@@ -388,6 +392,7 @@ export async function generateConversationReply(options) {
     answer = await chatClient.complete(history, modelInput, {
       additionalSystemPrompt,
       maxTokens: thinkingEnabled ? 20_000 : (compactActiveReply ? 280 : 1_200),
+      usageSource: activeReply ? 'active-reply' : 'conversation-reply',
       timeoutMs: thinkingEnabled ? 120_000 : 60_000,
       thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
     });
@@ -398,6 +403,7 @@ export async function generateConversationReply(options) {
     answer = await chatClient.complete(history, modelInput, {
       additionalSystemPrompt,
       maxTokens: 8_000,
+      usageSource: activeReply ? 'active-reply-thinking-fallback' : 'conversation-thinking-fallback',
       timeoutMs: 60_000,
       thinking: { type: 'disabled' },
     });
@@ -411,6 +417,7 @@ export async function generateConversationReply(options) {
           buildSeriousReplyRetryPrompt(content, answer),
         ].join('\n\n'),
         maxTokens: 20_000,
+        usageSource: 'serious-reply-expansion',
         timeoutMs: 180_000,
         thinking: { type: 'enabled' },
       });
@@ -448,6 +455,7 @@ export async function generateConversationReply(options) {
             }),
         ].join('\n\n'),
         maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
+        usageSource: activeReply ? 'active-reply-review' : 'conversation-reply-review',
         timeoutMs: thinkingEnabled ? 90_000 : 45_000,
         thinking: { type: 'disabled' },
       });
@@ -489,6 +497,7 @@ export async function generateConversationReply(options) {
           buildProtectedRoleCorrectionPrompt(answer, forbiddenProtectedRoleTerms),
         ].join('\n\n'),
         maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
+        usageSource: 'protected-role-correction',
         timeoutMs: thinkingEnabled ? 90_000 : 45_000,
         thinking: { type: 'disabled' },
       });
@@ -529,6 +538,7 @@ export async function generateConversationReply(options) {
           ),
         ].join('\n\n'),
         maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
+        usageSource: 'protected-role-review',
         timeoutMs: thinkingEnabled ? 90_000 : 45_000,
         thinking: { type: 'disabled' },
       });

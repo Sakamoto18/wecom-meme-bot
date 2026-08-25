@@ -64,6 +64,10 @@ export class OpenAICompatibleChatClient {
       }
 
       const body = await response.json();
+      options.onUsage?.({
+        model: body?.model ?? this.model,
+        usage: body?.usage ?? {},
+      });
       const content = body?.choices?.[0]?.message?.content?.trim();
       if (!content) {
         throw new Error('大模型返回了空内容');

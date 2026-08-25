@@ -76,6 +76,7 @@ export class PeerBotContinuationDecider {
       const answer = await this.chatClient.complete([], decisionInput, {
         systemPrompt: PEER_BOT_CONTINUATION_SYSTEM_PROMPT,
         maxTokens: 8,
+        usageSource: 'peer-bot-gate',
         timeoutMs: this.timeoutMs,
         temperature: 0,
         thinking: { type: 'disabled' },
