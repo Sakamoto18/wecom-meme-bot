@@ -195,6 +195,12 @@ class LongtuQqBridge(Star):
         cache_rate = (
             cached_input_tokens / input_tokens * 100 if input_tokens else 0
         )
+        search_calls = max(0, int(totals.get("searchCalls") or 0))
+        search_cache_hits = max(0, int(totals.get("searchCacheHits") or 0))
+        search_total = search_calls + search_cache_hits
+        search_cache_rate = (
+            search_cache_hits / search_total * 100 if search_total else 0
+        )
         total_cost = float(pricing.get("estimatedCostCny") or 0)
         primary_reply_calls = int(totals.get("primaryReplyCalls") or 0)
         secondary_review_calls = int(totals.get("secondaryReviewCalls") or 0)
@@ -210,12 +216,17 @@ class LongtuQqBridge(Star):
                 f"Token {self._number(total_tokens)} "
                 f"（输入 {self._number(totals.get('inputTokens'))} / "
                 f"输出 {self._number(totals.get('outputTokens'))}）；"
-                f"联网搜索 {self._number(totals.get('searchCalls'))} 次。"
+                f"联网搜索 API {self._number(search_calls)} 次。"
             ),
             (
                 f"LLM 输入缓存命中 {self._number(cached_input_tokens)} token"
                 f"（{cache_rate:.1f}%）；折算配额用量 "
                 f"{self._number(totals.get('quotaTokens'))} token。"
+            ),
+            (
+                f"搜索结果缓存命中 {self._number(search_cache_hits)}/"
+                f"{self._number(search_total)} 次（{search_cache_rate:.1f}%）；"
+                "与上面的 DeepSeek 输入缓存是两套独立缓存。"
             ),
             (
                 f"无感节流：首次回复 {self._number(primary_reply_calls)} 次，"
@@ -303,6 +314,12 @@ class LongtuQqBridge(Star):
                 search_hits = int(group.get("searchCacheHits") or 0)
                 search_total = search_calls + search_hits
                 search_hit_rate = search_hits / search_total * 100 if search_total else 0
+                group_input_tokens = int(group.get("inputTokens") or 0)
+                group_cached_input_tokens = int(group.get("cachedInputTokens") or 0)
+                group_llm_cache_rate = (
+                    group_cached_input_tokens / group_input_tokens * 100
+                    if group_input_tokens else 0
+                )
                 activity_labels = {
                     "quiet": "低活跃",
                     "light": "轻活跃",
@@ -326,13 +343,19 @@ class LongtuQqBridge(Star):
                     f"{index}. {display}：约 {self._money(group_cost)}"
                     f"（费用 {cost_share:.1f}%），{self._number(tokens)} token"
                     f"（Token {share:.1f}%），LLM {self._number(group.get('llmCalls'))} 次，"
-                    f"搜索 {self._number(search_calls)} 次"
-                    f"/缓存命中 {search_hit_rate:.0f}%，"
                     f"消息 {self._number(group.get('requests'))} 条；"
                     f"近 {activity_days} 日{activity} "
                     f"({activity_messages:.1f} 条/{activity_users:.1f} 人/日，"
                     f"系数 {self._number(group.get('activityLimitPercent'))}%)，"
                     f"折算配额 {quota_status}",
+                )
+                lines.append(
+                    f"   LLM 输入缓存 {self._number(group_cached_input_tokens)}/"
+                    f"{self._number(group_input_tokens)} token"
+                    f"（{group_llm_cache_rate:.1f}%）；搜索 API "
+                    f"{self._number(search_calls)} 次，结果缓存命中 "
+                    f"{self._number(search_hits)}/{self._number(search_total)} 次"
+                    f"（{search_hit_rate:.1f}%）。",
                 )
                 group_primary_calls = int(group.get("primaryReplyCalls") or 0)
                 group_review_calls = int(group.get("secondaryReviewCalls") or 0)
@@ -402,12 +425,21 @@ class LongtuQqBridge(Star):
                 "peer-bot-gate": "Bot 续聊判定",
                 "pure-mention-reply": "纯艾特回复",
             }
-            summary = "；".join(
-                f"{labels.get(str(item.get('source')), item.get('source'))} "
-                f"{self._number(item.get('llmCalls'))} 次/"
-                f"{self._number(item.get('totalTokens'))} token"
-                for item in active_sources[:6]
-            )
+            source_summaries = []
+            for item in active_sources[:6]:
+                source_input_tokens = int(item.get("inputTokens") or 0)
+                source_cached_tokens = int(item.get("cachedInputTokens") or 0)
+                source_cache_rate = (
+                    source_cached_tokens / source_input_tokens * 100
+                    if source_input_tokens else 0
+                )
+                source_summaries.append(
+                    f"{labels.get(str(item.get('source')), item.get('source'))} "
+                    f"{self._number(item.get('llmCalls'))} 次/"
+                    f"{self._number(item.get('totalTokens'))} token/"
+                    f"LLM 缓存 {source_cache_rate:.1f}%"
+                )
+            summary = "；".join(source_summaries)
             lines.append(f"主要消耗环节：{summary}。")
         return "\n".join(lines)
 

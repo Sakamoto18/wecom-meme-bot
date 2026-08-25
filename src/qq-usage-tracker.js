@@ -1069,6 +1069,10 @@ export class QqUsageTracker {
       SELECT
         source,
         SUM(CASE WHEN kind = 'llm' AND allowed = 1 THEN 1 ELSE 0 END) AS llmCalls,
+        COALESCE(SUM(CASE WHEN kind = 'llm' THEN input_tokens ELSE 0 END), 0)
+          AS inputTokens,
+        COALESCE(SUM(CASE WHEN kind = 'llm' THEN cached_input_tokens ELSE 0 END), 0)
+          AS cachedInputTokens,
         COALESCE(SUM(CASE WHEN kind = 'llm' THEN total_tokens ELSE 0 END), 0) AS totalTokens,
         SUM(CASE WHEN kind = 'search' AND allowed = 1 AND search_cache = 0 THEN 1 ELSE 0 END) AS searchCalls
       FROM qq_usage_events
@@ -1079,6 +1083,8 @@ export class QqUsageTracker {
     `).all(start, end).map((row) => ({
       source: row.source,
       llmCalls: Number(row.llmCalls || 0),
+      inputTokens: Number(row.inputTokens || 0),
+      cachedInputTokens: Number(row.cachedInputTokens || 0),
       totalTokens: Number(row.totalTokens || 0),
       searchCalls: Number(row.searchCalls || 0),
     }));

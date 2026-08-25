@@ -23,7 +23,9 @@ test('OpenAI 兼容客户端携带角色、历史与当前消息', async () => {
     { role: 'user', content: '上一问' },
     { role: 'assistant', content: '上一答' },
   ], '这一问', {
+    stableSystemPrompt: '稳定回复规则',
     additionalSystemPrompt: '本轮联网摘要',
+    revisionSystemPrompt: '根据复核结果重写',
     thinking: { type: 'disabled' },
   });
   const body = JSON.parse(capturedOptions.body);
@@ -34,9 +36,11 @@ test('OpenAI 兼容客户端携带角色、历史与当前消息', async () => {
   assert.equal(body.model, 'test-model');
   assert.deepEqual(body.thinking, { type: 'disabled' });
   assert.deepEqual(body.messages.map((message) => message.role), [
-    'system', 'system', 'user', 'assistant', 'user',
+    'system', 'system', 'system', 'user', 'assistant', 'system', 'user',
   ]);
-  assert.equal(body.messages[1].content, '本轮联网摘要');
+  assert.equal(body.messages[1].content, '稳定回复规则');
+  assert.equal(body.messages[2].content, '本轮联网摘要');
+  assert.equal(body.messages.at(-2).content, '根据复核结果重写');
   assert.equal(body.messages.at(-1).content, '这一问');
 });
 

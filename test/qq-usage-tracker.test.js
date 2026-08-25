@@ -61,6 +61,8 @@ test('按群记录真实 LLM Token、缓存命中和折算配额', async () => {
     assert.equal(report.groups[0].cachedInputTokens, 800);
     assert.equal(report.groups[0].quotaTokens, 380);
     assert.equal(report.sources[0].source, 'conversation-reply');
+    assert.equal(report.sources[0].inputTokens, 1_000);
+    assert.equal(report.sources[0].cachedInputTokens, 800);
     assert.equal(report.dataAvailableFrom, Date.UTC(2026, 7, 25, 4));
   } finally {
     fixture.close();

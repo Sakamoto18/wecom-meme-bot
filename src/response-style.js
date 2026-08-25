@@ -191,11 +191,10 @@ export function buildAttackPrompt(userContent, options = {}) {
   ].join('\n');
 }
 
-export function buildNormalReplyPrompt(options = {}) {
+export function buildNormalReplyStablePrompt(options = {}) {
   const requirePersonaBite = options.requirePersonaBite !== false;
   const compactActiveReply = options.activeReply
     && options.activeReplyPriority !== 'must';
-  const interaction = options.interactionContext ?? {};
   const lines = [
     '【本轮模式：普通对话】',
     '先准确回答用户真正的问题，不确定就明说不确定。',
@@ -210,9 +209,6 @@ export function buildNormalReplyPrompt(options = {}) {
       '回答问题和毒舌是两个都必须完成的目标：先把答案讲对，再至少写一句明确、针对性强、足够恶毒的损人话。',
       '毒舌要咬住本轮问题、错误前提、糟糕方案、当前发言者的判断力，或明确的被评价对象；允许直接使用“蠢货、白痴、废物、脑子是摆设、也配”等群友措辞。',
       '只写“有点离谱、什么破玩意、注意别弄错”之类温和吐槽不算完成；自嘲、骂机器人自己、泛泛骂环境也不能充数。不要为了攻击牺牲答案准确性。',
-      ...(interaction.targetLabels?.length > 0
-        ? [`本轮明确被谈论或评价的目标是：${interaction.targetLabels.join('、')}。毒舌落在这些目标或其言行上，不得误伤发言者 ${interaction.speakerLabel || '当前用户'}。`]
-        : [`当前没有明确第三方目标；可以直接损发言者 ${interaction.speakerLabel || '当前用户'} 的问题、前提、判断或执行能力，不要凭空攻击无关群员。`]),
     );
   } else {
     lines.push(
@@ -250,6 +246,21 @@ export function buildNormalReplyPrompt(options = {}) {
     );
   }
   return lines.join('\n');
+}
+
+export function buildNormalReplyContextPrompt(options = {}) {
+  if (options.requirePersonaBite === false) return '';
+  const interaction = options.interactionContext ?? {};
+  return interaction.targetLabels?.length > 0
+    ? `本轮明确被谈论或评价的目标是：${interaction.targetLabels.join('、')}。毒舌落在这些目标或其言行上，不得误伤发言者 ${interaction.speakerLabel || '当前用户'}。`
+    : `当前没有明确第三方目标；可以直接损发言者 ${interaction.speakerLabel || '当前用户'} 的问题、前提、判断或执行能力，不要凭空攻击无关群员。`;
+}
+
+export function buildNormalReplyPrompt(options = {}) {
+  return [
+    buildNormalReplyStablePrompt(options),
+    buildNormalReplyContextPrompt(options),
+  ].filter(Boolean).join('\n');
 }
 
 export function buildProtectedSelfIdentityPrompt(role) {
