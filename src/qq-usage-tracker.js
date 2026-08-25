@@ -13,6 +13,14 @@ const DEFAULT_ACTIVITY_MESSAGE_THRESHOLDS = [20, 60, 150, 400];
 const DEFAULT_ACTIVITY_USER_THRESHOLDS = [3, 8, 20, 40];
 const DEFAULT_ACTIVITY_LIMIT_PERCENTAGES = [60, 75, 85, 95, 100];
 const ACTIVITY_TIER_NAMES = ['quiet', 'light', 'normal', 'active', 'hot'];
+const DEFAULT_LARGE_GROUP_SECONDARY_REVIEW_PERCENT = 20;
+const SECONDARY_REVIEW_SOURCES = new Map([
+  ['conversation-reply-review', 'conversation-reply'],
+  ['active-reply-review', 'active-reply'],
+]);
+const LOCALLY_REPAIRABLE_REVIEW_ISSUES = new Set([
+  'missing-venomous-bite',
+]);
 const PRICE_UNIT_TOKENS = 1_000_000;
 const DEEPSEEK_PRICING_SOURCE = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/';
 const DEEPSEEK_PRICING_CHECKED_AT = '2026-08-25';
@@ -320,6 +328,10 @@ export class QqUsageTracker {
       options.passiveTokenBudgetPercent,
       70,
     );
+    this.largeGroupSecondaryReviewPercent = percentage(
+      options.largeGroupSecondaryReviewPercent,
+      DEFAULT_LARGE_GROUP_SECONDARY_REVIEW_PERCENT,
+    );
     this.adaptiveLimitsEnabled = options.adaptiveLimitsEnabled !== false;
     this.activityLookbackDays = positiveInteger(
       options.activityLookbackDays,
@@ -598,6 +610,95 @@ export class QqUsageTracker {
       || /(?:decision|gate|summary)/.test(normalizedSource);
   }
 
+  shouldRunSecondaryReview({ source, issues = [], model } = {}) {
+    const normalizedSource = String(source ?? '').trim();
+    const primarySource = SECONDARY_REVIEW_SOURCES.get(normalizedSource);
+    const normalizedIssues = [...new Set(
+      (Array.isArray(issues) ? issues : [])
+        .map((issue) => String(issue ?? '').trim())
+        .filter(Boolean),
+    )];
+    if (!primarySource
+      || normalizedIssues.length === 0
+      || normalizedIssues.some((issue) => !LOCALLY_REPAIRABLE_REVIEW_ISSUES.has(issue))) {
+      return true;
+    }
+
+    const context = this.currentContext();
+    const limitPercent = context.largeGroup
+      ? this.largeGroupSecondaryReviewPercent
+      : 100;
+    if (!context.groupId || limitPercent >= 100) return true;
+
+    const now = this.now();
+    const dayStart = startOfShanghaiDay(now);
+    const database = this.ensureOpen();
+    const primaryCalls = Number(database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM qq_usage_events
+      WHERE kind = 'llm' AND allowed = 1
+        AND group_id = ? AND source = ?
+        AND created_at >= ? AND created_at < ?
+    `).get(context.groupId, primarySource, dayStart, dayStart + DAY_MS).count);
+    const reviewLimit = Math.ceil(primaryCalls * limitPercent / 100);
+    const reviewCalls = Number(database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM qq_usage_events
+      WHERE kind = 'llm' AND allowed = 1
+        AND group_id = ? AND source = ?
+        AND created_at >= ? AND created_at < ?
+    `).get(context.groupId, normalizedSource, dayStart, dayStart + DAY_MS).count);
+    if (reviewCalls < reviewLimit) return true;
+
+    const estimate = database.prepare(`
+      SELECT
+        ROUND(AVG(input_tokens)) AS inputTokens,
+        ROUND(AVG(output_tokens)) AS outputTokens,
+        ROUND(AVG(cached_input_tokens)) AS cachedInputTokens
+      FROM (
+        SELECT input_tokens, output_tokens, cached_input_tokens
+        FROM qq_usage_events
+        WHERE kind = 'llm' AND allowed = 1 AND succeeded = 1
+          AND group_id = ? AND source = ?
+          AND total_tokens > 0 AND created_at >= ?
+        ORDER BY created_at DESC
+        LIMIT 20
+      )
+    `).get(context.groupId, normalizedSource, now - 7 * DAY_MS);
+    const inputTokens = usageNumber(estimate.inputTokens);
+    const outputTokens = usageNumber(estimate.outputTokens);
+    const cachedInputTokens = Math.min(
+      inputTokens,
+      usageNumber(estimate.cachedInputTokens),
+    );
+    const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+    const quotaTokens = uncachedInputTokens
+      + outputTokens
+      + Math.ceil(cachedInputTokens * this.cachedTokenWeightPercent / 100);
+    database.prepare(`
+      INSERT INTO qq_usage_events(
+        created_at, group_id, user_id, message_type, kind, source, model,
+        allowed, succeeded, input_tokens, output_tokens, total_tokens,
+        cached_input_tokens, quota_tokens, large_group, limit_reason
+      ) VALUES (?, ?, ?, ?, 'saving', ?, ?, 0, 1, ?, ?, ?, ?, ?, ?,
+        'secondary-review-budget')
+    `).run(
+      now,
+      context.groupId,
+      context.userId,
+      context.messageType,
+      normalizedSource,
+      String(model ?? '').trim(),
+      inputTokens,
+      outputTokens,
+      inputTokens + outputTokens,
+      cachedInputTokens,
+      quotaTokens,
+      context.largeGroup ? 1 : 0,
+    );
+    return false;
+  }
+
   recordBlockedLlmCall(database, context, now, source, model, reason) {
     database.prepare(`
       INSERT INTO qq_usage_events(
@@ -845,6 +946,19 @@ export class QqUsageTracker {
         AND created_at >= ? AND created_at < ?
     `).all(start, end);
     const costs = calculateDeepSeekCosts(costRows);
+    const savingCostRows = database.prepare(`
+      SELECT
+        group_id AS groupId,
+        created_at AS createdAt,
+        model,
+        input_tokens AS inputTokens,
+        cached_input_tokens AS cachedInputTokens,
+        output_tokens AS outputTokens
+      FROM qq_usage_events
+      WHERE kind = 'saving' AND group_id <> ''
+        AND created_at >= ? AND created_at < ?
+    `).all(start, end);
+    const savingCosts = calculateDeepSeekCosts(savingCostRows);
     const groups = database.prepare(`
       SELECT
         group_id AS groupId,
@@ -853,6 +967,15 @@ export class QqUsageTracker {
         SUM(CASE WHEN kind = 'llm' AND allowed = 0 THEN 1 ELSE 0 END) AS blockedLlmCalls,
         SUM(CASE WHEN kind = 'llm' AND allowed = 1 THEN 1 ELSE 0 END) AS llmCalls,
         SUM(CASE WHEN kind = 'llm' AND allowed = 1 AND succeeded = 0 THEN 1 ELSE 0 END) AS llmErrors,
+        SUM(CASE WHEN kind = 'llm' AND allowed = 1 AND source IN
+          ('conversation-reply', 'active-reply') THEN 1 ELSE 0 END) AS primaryReplyCalls,
+        SUM(CASE WHEN kind = 'llm' AND allowed = 1 AND source IN
+          ('conversation-reply-review', 'active-reply-review') THEN 1 ELSE 0 END)
+          AS secondaryReviewCalls,
+        SUM(CASE WHEN kind = 'saving' AND limit_reason =
+          'secondary-review-budget' THEN 1 ELSE 0 END) AS skippedSecondaryReviews,
+        COALESCE(SUM(CASE WHEN kind = 'saving' THEN total_tokens ELSE 0 END), 0)
+          AS estimatedSavedTokens,
         COALESCE(SUM(CASE WHEN kind = 'llm' THEN input_tokens ELSE 0 END), 0) AS inputTokens,
         COALESCE(SUM(CASE WHEN kind = 'llm' THEN output_tokens ELSE 0 END), 0) AS outputTokens,
         COALESCE(SUM(CASE WHEN kind = 'llm' THEN total_tokens ELSE 0 END), 0) AS totalTokens,
@@ -876,9 +999,12 @@ export class QqUsageTracker {
       const cost = costs.byGroup.get(row.groupId) ?? serializeCostSummary(
         emptyCostSummary(),
       );
+      const savingCost = savingCosts.byGroup.get(row.groupId)
+        ?? serializeCostSummary(emptyCostSummary());
       return {
         ...groupContext,
         ...cost,
+        estimatedSavedCostCny: savingCost.estimatedCostCny,
         activityTier: activity.tier,
         activityLimitPercent: activity.limitPercent,
         activityMessagesPerDay: activity.messagesPerDay,
@@ -892,6 +1018,10 @@ export class QqUsageTracker {
         blockedLlmCalls: Number(row.blockedLlmCalls || 0),
         llmCalls: Number(row.llmCalls || 0),
         llmErrors: Number(row.llmErrors || 0),
+        primaryReplyCalls: Number(row.primaryReplyCalls || 0),
+        secondaryReviewCalls: Number(row.secondaryReviewCalls || 0),
+        skippedSecondaryReviews: Number(row.skippedSecondaryReviews || 0),
+        estimatedSavedTokens: Number(row.estimatedSavedTokens || 0),
         inputTokens: Number(row.inputTokens || 0),
         outputTokens: Number(row.outputTokens || 0),
         totalTokens: Number(row.totalTokens || 0),
@@ -915,6 +1045,15 @@ export class QqUsageTracker {
         SUM(CASE WHEN kind = 'request' THEN 1 ELSE 0 END) AS requests,
         SUM(CASE WHEN kind = 'llm' AND allowed = 0 THEN 1 ELSE 0 END) AS blockedLlmCalls,
         SUM(CASE WHEN kind = 'llm' AND allowed = 1 THEN 1 ELSE 0 END) AS llmCalls,
+        SUM(CASE WHEN kind = 'llm' AND allowed = 1 AND source IN
+          ('conversation-reply', 'active-reply') THEN 1 ELSE 0 END) AS primaryReplyCalls,
+        SUM(CASE WHEN kind = 'llm' AND allowed = 1 AND source IN
+          ('conversation-reply-review', 'active-reply-review') THEN 1 ELSE 0 END)
+          AS secondaryReviewCalls,
+        SUM(CASE WHEN kind = 'saving' AND limit_reason =
+          'secondary-review-budget' THEN 1 ELSE 0 END) AS skippedSecondaryReviews,
+        COALESCE(SUM(CASE WHEN kind = 'saving' THEN total_tokens ELSE 0 END), 0)
+          AS estimatedSavedTokens,
         COALESCE(SUM(CASE WHEN kind = 'llm' THEN input_tokens ELSE 0 END), 0) AS inputTokens,
         COALESCE(SUM(CASE WHEN kind = 'llm' THEN output_tokens ELSE 0 END), 0) AS outputTokens,
         COALESCE(SUM(CASE WHEN kind = 'llm' THEN total_tokens ELSE 0 END), 0) AS totalTokens,
@@ -970,6 +1109,7 @@ export class QqUsageTracker {
       largeGroupLlmTokenLimitPerDay: this.maxLargeGroupLlmTokensPerDay || null,
       cachedTokenWeightPercent: this.cachedTokenWeightPercent,
       passiveTokenBudgetPercent: this.passiveTokenBudgetPercent,
+      largeGroupSecondaryReviewPercent: this.largeGroupSecondaryReviewPercent,
       groupSearchLimitPerDay: this.maxGroupSearchCallsPerDay || null,
       largeGroupSearchLimitPerDay: this.maxLargeGroupSearchCallsPerDay || null,
       groups,
@@ -978,6 +1118,11 @@ export class QqUsageTracker {
         requests: Number(totals.requests || 0),
         blockedLlmCalls: Number(totals.blockedLlmCalls || 0),
         llmCalls: Number(totals.llmCalls || 0),
+        primaryReplyCalls: Number(totals.primaryReplyCalls || 0),
+        secondaryReviewCalls: Number(totals.secondaryReviewCalls || 0),
+        skippedSecondaryReviews: Number(totals.skippedSecondaryReviews || 0),
+        estimatedSavedTokens: Number(totals.estimatedSavedTokens || 0),
+        estimatedSavedCostCny: savingCosts.total.estimatedCostCny,
         inputTokens: Number(totals.inputTokens || 0),
         outputTokens: Number(totals.outputTokens || 0),
         totalTokens: Number(totals.totalTokens || 0),

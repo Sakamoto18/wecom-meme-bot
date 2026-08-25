@@ -237,6 +237,38 @@ test('普通模型连续输出软话时由程序补上恶毒收尾', async () =>
   assert.equal(result.review.valid, true);
 });
 
+test('大型群节流二次风格复核时保留初稿并由本地补人格收尾', async () => {
+  const decisions = [];
+  let modelCalls = 0;
+  const result = await generateConversationReply({
+    content: '这个设置怎么保存',
+    modelInput: '这个设置怎么保存',
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        modelCalls += 1;
+        return '点击保存按钮即可。';
+      },
+    },
+    webSearchEnabled: false,
+    secondaryReviewDecider: async (decision) => {
+      decisions.push(decision);
+      return false;
+    },
+  });
+
+  assert.equal(modelCalls, 1);
+  assert.deepEqual(decisions, [{
+    source: 'conversation-reply-review',
+    issues: ['missing-venomous-bite'],
+  }]);
+  assert.equal(result.normalPersonaReviewSkipped, true);
+  assert.equal(result.normalPersonaRewritten, false);
+  assert.equal(result.normalPersonaFallback, true);
+  assert.match(result.answer, /^点击保存按钮即可。/);
+  assert.equal(result.review.valid, true);
+});
+
 test('真实痛苦场景不强制攻击性人格或触发重写', async () => {
   let modelCalls = 0;
   const result = await generateConversationReply({

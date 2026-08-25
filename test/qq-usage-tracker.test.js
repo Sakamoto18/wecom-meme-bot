@@ -145,6 +145,76 @@ test('所有群按近期开口人数和消息活跃度动态获得配额', async
   }
 });
 
+test('大型群只给二次风格复核保留百分比预算并估算节省', async () => {
+  const fixture = createTracker({
+    largeGroupSecondaryReviewPercent: 20,
+  });
+  const client = fixture.tracker.wrapChatClient({
+    model: 'deepseek-v4-flash',
+    isConfigured: true,
+    async complete(_history, _content, options) {
+      options.onUsage({
+        usage: {
+          prompt_tokens: 1_000,
+          completion_tokens: 100,
+          total_tokens: 1_100,
+          prompt_cache_hit_tokens: 800,
+        },
+      });
+      return 'ok';
+    },
+  });
+
+  try {
+    const decisions = [];
+    await fixture.tracker.runWithContext({
+      groupId: 'large-review-group',
+      userId: 'user-1',
+      messageType: 'group',
+      largeGroup: true,
+    }, async () => {
+      for (let index = 0; index < 5; index += 1) {
+        await client.complete([], 'first draft', {
+          usageSource: 'conversation-reply',
+        });
+        const allowed = fixture.tracker.shouldRunSecondaryReview({
+          source: 'conversation-reply-review',
+          issues: ['missing-venomous-bite'],
+          model: 'deepseek-v4-flash',
+        });
+        decisions.push(allowed);
+        if (allowed) {
+          await client.complete([], 'rewrite', {
+            usageSource: 'conversation-reply-review',
+          });
+        }
+      }
+      assert.equal(fixture.tracker.shouldRunSecondaryReview({
+        source: 'conversation-reply-review',
+        issues: ['customer-service', 'missing-venomous-bite'],
+        model: 'deepseek-v4-flash',
+      }), true);
+    });
+
+    assert.deepEqual(decisions, [true, false, false, false, false]);
+    const report = fixture.tracker.getReport();
+    const group = report.groups[0];
+    assert.equal(group.primaryReplyCalls, 5);
+    assert.equal(group.secondaryReviewCalls, 1);
+    assert.equal(group.skippedSecondaryReviews, 4);
+    assert.equal(group.estimatedSavedTokens, 4_400);
+    assert.equal(group.estimatedSavedCostCny, 0.00316);
+    assert.equal(report.totals.primaryReplyCalls, 5);
+    assert.equal(report.totals.secondaryReviewCalls, 1);
+    assert.equal(report.totals.skippedSecondaryReviews, 4);
+    assert.equal(report.totals.estimatedSavedTokens, 4_400);
+    assert.equal(report.totals.estimatedSavedCostCny, 0.00316);
+    assert.equal(report.largeGroupSecondaryReviewPercent, 20);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('DeepSeek V4 Flash 按调用发生时间分别计算高峰与空闲费用', async () => {
   let now = Date.UTC(2026, 7, 25, 2); // 北京时间周二 10:00，高峰。
   const fixture = createTracker({ now: () => now });
