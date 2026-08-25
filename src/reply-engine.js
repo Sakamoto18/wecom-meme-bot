@@ -196,6 +196,7 @@ export async function generateConversationReply(options) {
     pureBotMention = false,
     activeReply = false,
     activeReplyPriority = '',
+    secondaryReviewDecider,
   } = options;
 
   const memoryContext = buildMemoryContext(memorySummary);
@@ -383,6 +384,7 @@ export async function generateConversationReply(options) {
   let thinkingFallback = false;
   let seriousAnswerExpanded = false;
   let normalPersonaRewritten = false;
+  let normalPersonaReviewSkipped = false;
   let normalPersonaFallback = false;
   let protectedIdentityFallback = false;
   let protectedRoleRewritten = false;
@@ -439,41 +441,59 @@ export async function generateConversationReply(options) {
     activeReplyPriority,
   });
   if (!review.valid && attempts < 2) {
-    try {
-      const needsSeriousExpansion = review.issues.includes('too-thin-for-serious');
-      const rewrittenAnswer = await chatClient.complete(history, modelInput, {
-        additionalSystemPrompt: [
-          additionalSystemPrompt,
-          needsSeriousExpansion
-            ? buildSeriousReplyRetryPrompt(content, answer)
-            : buildNormalReplyRetryPrompt(content, answer, review.issues, {
-              thinkingEnabled,
-              interactionContext,
-              requiredIdentityRole,
-              activeReply,
-              activeReplyPriority,
-            }),
-        ].join('\n\n'),
-        maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
-        usageSource: activeReply ? 'active-reply-review' : 'conversation-reply-review',
-        timeoutMs: thinkingEnabled ? 90_000 : 45_000,
-        thinking: { type: 'disabled' },
-      });
-      const rewrittenReview = reviewNormalReply(rewrittenAnswer, {
-        thinkingEnabled,
-        requirePersonaBite,
-        requiredIdentityRole,
-        activeReply,
-        activeReplyPriority,
-      });
-      attempts += 1;
-      normalPersonaRewritten = !needsSeriousExpansion;
-      if (rewrittenReview.issues.length <= review.issues.length) {
-        answer = rewrittenAnswer;
-        review = rewrittenReview;
+    const needsSeriousExpansion = review.issues.includes('too-thin-for-serious');
+    const reviewSource = activeReply
+      ? 'active-reply-review'
+      : 'conversation-reply-review';
+    let secondaryReviewAllowed = true;
+    if (typeof secondaryReviewDecider === 'function') {
+      try {
+        secondaryReviewAllowed = await secondaryReviewDecider({
+          source: reviewSource,
+          issues: [...review.issues],
+        }) !== false;
+      } catch {
+        // 节流策略自身异常时优先保留原有质量修复链路。
       }
-    } catch {
-      // 风格复核失败时保留已有答案，避免整轮对话无回复。
+    }
+    if (!secondaryReviewAllowed) {
+      normalPersonaReviewSkipped = true;
+    } else {
+      try {
+        const rewrittenAnswer = await chatClient.complete(history, modelInput, {
+          additionalSystemPrompt: [
+            additionalSystemPrompt,
+            needsSeriousExpansion
+              ? buildSeriousReplyRetryPrompt(content, answer)
+              : buildNormalReplyRetryPrompt(content, answer, review.issues, {
+                thinkingEnabled,
+                interactionContext,
+                requiredIdentityRole,
+                activeReply,
+                activeReplyPriority,
+              }),
+          ].join('\n\n'),
+          maxTokens: thinkingEnabled ? 8_000 : (compactActiveReply ? 280 : 1_200),
+          usageSource: reviewSource,
+          timeoutMs: thinkingEnabled ? 90_000 : 45_000,
+          thinking: { type: 'disabled' },
+        });
+        const rewrittenReview = reviewNormalReply(rewrittenAnswer, {
+          thinkingEnabled,
+          requirePersonaBite,
+          requiredIdentityRole,
+          activeReply,
+          activeReplyPriority,
+        });
+        attempts += 1;
+        normalPersonaRewritten = !needsSeriousExpansion;
+        if (rewrittenReview.issues.length <= review.issues.length) {
+          answer = rewrittenAnswer;
+          review = rewrittenReview;
+        }
+      } catch {
+        // 风格复核失败时保留已有答案，避免整轮对话无回复。
+      }
     }
   }
 
@@ -617,6 +637,7 @@ export async function generateConversationReply(options) {
     thinkingFallback,
     seriousAnswerExpanded,
     normalPersonaRewritten,
+    normalPersonaReviewSkipped,
     normalPersonaFallback,
     protectedIdentityFallback,
     protectedRoleRewritten,

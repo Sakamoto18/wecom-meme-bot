@@ -909,6 +909,13 @@ export class QqBotService {
         pureBotMention: options.pureBotMention === true,
         activeReply: options.activeReply === true,
         activeReplyPriority: options.activeReplyPriority,
+        secondaryReviewDecider: typeof this.usageTracker?.shouldRunSecondaryReview === 'function'
+          ? ({ source, issues }) => this.usageTracker.shouldRunSecondaryReview({
+            source,
+            issues,
+            model: this.chatClient.model,
+          })
+          : undefined,
       });
 
       if (generated.searchError) {

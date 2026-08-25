@@ -31,7 +31,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.9.1",
+    "1.9.2",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -196,6 +196,12 @@ class LongtuQqBridge(Star):
             cached_input_tokens / input_tokens * 100 if input_tokens else 0
         )
         total_cost = float(pricing.get("estimatedCostCny") or 0)
+        primary_reply_calls = int(totals.get("primaryReplyCalls") or 0)
+        secondary_review_calls = int(totals.get("secondaryReviewCalls") or 0)
+        review_rate = (
+            secondary_review_calls / primary_reply_calls * 100
+            if primary_reply_calls else 0
+        )
         lines = [
             f"【龙玉涛 Bot 用量日报｜{report_date:%Y-%m-%d}{header_suffix}】",
             (
@@ -210,6 +216,14 @@ class LongtuQqBridge(Star):
                 f"LLM 输入缓存命中 {self._number(cached_input_tokens)} token"
                 f"（{cache_rate:.1f}%）；折算配额用量 "
                 f"{self._number(totals.get('quotaTokens'))} token。"
+            ),
+            (
+                f"无感节流：首次回复 {self._number(primary_reply_calls)} 次，"
+                f"二次风格复核 {self._number(secondary_review_calls)} 次"
+                f"（放大率 {review_rate:.1f}%）；已跳过 "
+                f"{self._number(totals.get('skippedSecondaryReviews'))} 次，"
+                f"估算少用 {self._number(totals.get('estimatedSavedTokens'))} token / "
+                f"{self._money(totals.get('estimatedSavedCostCny'))}。"
             ),
         ]
         if pricing.get("provider") == "deepseek":
@@ -320,6 +334,22 @@ class LongtuQqBridge(Star):
                     f"系数 {self._number(group.get('activityLimitPercent'))}%)，"
                     f"折算配额 {quota_status}",
                 )
+                group_primary_calls = int(group.get("primaryReplyCalls") or 0)
+                group_review_calls = int(group.get("secondaryReviewCalls") or 0)
+                group_skipped_reviews = int(group.get("skippedSecondaryReviews") or 0)
+                if group_review_calls or group_skipped_reviews:
+                    group_review_rate = (
+                        group_review_calls / group_primary_calls * 100
+                        if group_primary_calls else 0
+                    )
+                    lines.append(
+                        f"   复核 {self._number(group_review_calls)}/"
+                        f"{self._number(group_primary_calls)}"
+                        f"（{group_review_rate:.1f}%），节流跳过 "
+                        f"{self._number(group_skipped_reviews)} 次，约省 "
+                        f"{self._number(group.get('estimatedSavedTokens'))} token / "
+                        f"{self._money(group.get('estimatedSavedCostCny'))}。",
+                    )
             top_cost = float(groups[0].get("estimatedCostCny") or 0)
             top_tokens = int(groups[0].get("totalTokens") or 0)
             top_share = (

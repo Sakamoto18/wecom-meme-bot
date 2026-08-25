@@ -357,6 +357,10 @@ export async function createQqRuntime() {
       process.env.QQ_USAGE_PASSIVE_TOKEN_BUDGET_PERCENT,
       70,
     ),
+    largeGroupSecondaryReviewPercent: parseNonnegativeInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_SECONDARY_REVIEW_PERCENT,
+      20,
+    ),
     adaptiveLimitsEnabled: parseBoolean(
       process.env.QQ_USAGE_ADAPTIVE_LIMITS_ENABLED,
       true,
