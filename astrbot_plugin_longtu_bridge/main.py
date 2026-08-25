@@ -31,7 +31,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.9.2",
+    "1.9.3",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -202,56 +202,35 @@ class LongtuQqBridge(Star):
             search_cache_hits / search_total * 100 if search_total else 0
         )
         total_cost = float(pricing.get("estimatedCostCny") or 0)
-        primary_reply_calls = int(totals.get("primaryReplyCalls") or 0)
-        secondary_review_calls = int(totals.get("secondaryReviewCalls") or 0)
-        review_rate = (
-            secondary_review_calls / primary_reply_calls * 100
-            if primary_reply_calls else 0
-        )
         lines = [
-            f"【龙玉涛 Bot 用量日报｜{report_date:%Y-%m-%d}{header_suffix}】",
+            f"【龙玉涛 Bot 日报｜{report_date:%Y-%m-%d}{header_suffix}】",
             (
-                f"群消息 {self._number(totals.get('requests'))} 条；"
-                f"LLM {self._number(totals.get('llmCalls'))} 次，"
-                f"Token {self._number(total_tokens)} "
-                f"（输入 {self._number(totals.get('inputTokens'))} / "
-                f"输出 {self._number(totals.get('outputTokens'))}）；"
-                f"联网搜索 API {self._number(search_calls)} 次。"
+                f"约 {self._money(total_cost)}｜消息 "
+                f"{self._number(totals.get('requests'))}｜LLM "
+                f"{self._number(totals.get('llmCalls'))} 次｜Token "
+                f"{self._number(total_tokens)}"
             ),
             (
-                f"LLM 输入缓存命中 {self._number(cached_input_tokens)} token"
-                f"（{cache_rate:.1f}%）；折算配额用量 "
-                f"{self._number(totals.get('quotaTokens'))} token。"
-            ),
-            (
-                f"搜索结果缓存命中 {self._number(search_cache_hits)}/"
-                f"{self._number(search_total)} 次（{search_cache_rate:.1f}%）；"
-                "与上面的 DeepSeek 输入缓存是两套独立缓存。"
-            ),
-            (
-                f"无感节流：首次回复 {self._number(primary_reply_calls)} 次，"
-                f"二次风格复核 {self._number(secondary_review_calls)} 次"
-                f"（放大率 {review_rate:.1f}%）；已跳过 "
-                f"{self._number(totals.get('skippedSecondaryReviews'))} 次，"
-                f"估算少用 {self._number(totals.get('estimatedSavedTokens'))} token / "
-                f"{self._money(totals.get('estimatedSavedCostCny'))}。"
+                f"LLM 输入缓存 {cache_rate:.1f}% "
+                f"（{self._number(cached_input_tokens)}/"
+                f"{self._number(input_tokens)}）；搜索 API "
+                f"{self._number(search_calls)} 次"
+                f"（结果缓存 {search_cache_rate:.1f}%）"
             ),
         ]
-        if pricing.get("provider") == "deepseek":
-            models = "、".join(str(model) for model in pricing.get("models") or [])
-            model_label = models or "DeepSeek"
+        skipped_reviews = int(totals.get("skippedSecondaryReviews") or 0)
+        if skipped_reviews:
             lines.append(
-                f"DeepSeek 费用估算（{model_label}）：{self._money(total_cost)}；"
-                f"缓存命中输入 {self._money(pricing.get('cachedInputCostCny'))}，"
-                f"未命中输入 {self._money(pricing.get('uncachedInputCostCny'))}，"
-                f"输出 {self._money(pricing.get('outputCostCny'))}；"
-                f"高峰 {self._money(pricing.get('peakCostCny'))} / "
-                f"空闲 {self._money(pricing.get('offPeakCostCny'))}。",
+                f"节流跳过复核 {self._number(skipped_reviews)} 次，约省 "
+                f"{self._number(totals.get('estimatedSavedTokens'))} token / "
+                f"{self._money(totals.get('estimatedSavedCostCny'))}。",
             )
+        if pricing.get("provider") == "deepseek":
             lines.append(
-                f"计费口径：按 DeepSeek 官网 {pricing.get('checkedAt') or ''} "
-                f"分时单价逐次计算（{pricing.get('peakPeriods') or '北京时间'}）；"
-                "金额为人民币估算，不含 Exa 联网搜索费用。",
+                "费用：未缓存输入 "
+                f"{self._money(pricing.get('uncachedInputCostCny'))}｜缓存输入 "
+                f"{self._money(pricing.get('cachedInputCostCny'))}｜输出 "
+                f"{self._money(pricing.get('outputCostCny'))}（搜索费另计）",
             )
             if int(pricing.get("unpricedCalls") or 0) > 0:
                 lines.append(
@@ -271,108 +250,36 @@ class LongtuQqBridge(Star):
                 "更早的消息与 Token 无法补录，本期不是完整自然日。",
             )
         blocked = int(totals.get("blockedLlmCalls") or 0)
-        normal_limit = report.get("groupLlmLimitPerHour")
-        large_limit = report.get("largeGroupLlmLimitPerHour")
-        normal_token_limit = report.get("groupLlmTokenLimitPerDay")
-        large_token_limit = report.get("largeGroupLlmTokenLimitPerDay")
-        normal_search_limit = report.get("groupSearchLimitPerDay")
-        large_search_limit = report.get("largeGroupSearchLimitPerDay")
-        if normal_limit or large_limit or normal_token_limit or large_token_limit:
-            adaptive_note = ""
-            if report.get("adaptiveLimitsEnabled"):
-                percentages = report.get("activityLimitPercentages") or []
-                adaptive_note = (
-                    f"；近 {self._number(report.get('activityLookbackDays'))} 日"
-                    f"活跃分档按硬上限的 "
-                    f"{'/'.join(str(value) + '%' for value in percentages)} 执行"
-                )
+        blocked_search = int(totals.get("blockedSearchCalls") or 0)
+        if blocked or blocked_search:
             lines.append(
-                "群级硬上限：普通/大型群每小时 "
-                f"{normal_limit or '不限'}/{large_limit or '不限'} 次调用，"
-                "每日折算 Token "
-                f"{self._number(normal_token_limit) if normal_token_limit else '不限'}/"
-                f"{self._number(large_token_limit) if large_token_limit else '不限'}；"
-                "每日搜索 "
-                f"{self._number(normal_search_limit) if normal_search_limit else '不限'}/"
-                f"{self._number(large_search_limit) if large_search_limit else '不限'}"
-                f"{adaptive_note}；"
-                f"统计期拦截 LLM {blocked} 次、搜索 "
-                f"{self._number(totals.get('blockedSearchCalls'))} 次。",
+                f"限额拦截：LLM {self._number(blocked)} 次｜搜索 "
+                f"{self._number(blocked_search)} 次。",
             )
 
         if groups:
-            lines.append("群用量排行：")
+            lines.append("群排行：")
             for index, group in enumerate(groups[:10], 1):
                 group_id = str(group.get("groupId") or "未知")
                 label = names.get(group_id)
                 display = f"{label}（{group_id}）" if label else group_id
                 tokens = int(group.get("totalTokens") or 0)
-                share = (tokens / total_tokens * 100) if total_tokens else 0
                 group_cost = float(group.get("estimatedCostCny") or 0)
                 cost_share = (group_cost / total_cost * 100) if total_cost else 0
                 search_calls = int(group.get("searchCalls") or 0)
-                search_hits = int(group.get("searchCacheHits") or 0)
-                search_total = search_calls + search_hits
-                search_hit_rate = search_hits / search_total * 100 if search_total else 0
                 group_input_tokens = int(group.get("inputTokens") or 0)
                 group_cached_input_tokens = int(group.get("cachedInputTokens") or 0)
                 group_llm_cache_rate = (
                     group_cached_input_tokens / group_input_tokens * 100
                     if group_input_tokens else 0
                 )
-                activity_labels = {
-                    "quiet": "低活跃",
-                    "light": "轻活跃",
-                    "normal": "常规",
-                    "active": "活跃",
-                    "hot": "高活跃",
-                    "fixed": "固定",
-                }
-                activity_tier = str(group.get("activityTier") or "fixed")
-                activity = activity_labels.get(activity_tier, activity_tier)
-                activity_days = self._number(group.get("activityLookbackDays"))
-                activity_messages = float(group.get("activityMessagesPerDay") or 0)
-                activity_users = float(group.get("activityUsersPerDay") or 0)
-                quota_limit = group.get("llmTokenLimitPerDay")
-                quota_status = (
-                    f"{self._number(group.get('quotaTokens'))}/"
-                    f"{self._number(quota_limit)}"
-                    if quota_limit else f"{self._number(group.get('quotaTokens'))}/不限"
-                )
                 lines.append(
-                    f"{index}. {display}：约 {self._money(group_cost)}"
-                    f"（费用 {cost_share:.1f}%），{self._number(tokens)} token"
-                    f"（Token {share:.1f}%），LLM {self._number(group.get('llmCalls'))} 次，"
-                    f"消息 {self._number(group.get('requests'))} 条；"
-                    f"近 {activity_days} 日{activity} "
-                    f"({activity_messages:.1f} 条/{activity_users:.1f} 人/日，"
-                    f"系数 {self._number(group.get('activityLimitPercent'))}%)，"
-                    f"折算配额 {quota_status}",
+                    f"{index}. {display}｜{self._money(group_cost)} "
+                    f"({cost_share:.1f}%)｜消息 {self._number(group.get('requests'))}｜"
+                    f"LLM {self._number(group.get('llmCalls'))}｜"
+                    f"Token {self._number(tokens)}｜缓存 {group_llm_cache_rate:.1f}%｜"
+                    f"搜索 {self._number(search_calls)}",
                 )
-                lines.append(
-                    f"   LLM 输入缓存 {self._number(group_cached_input_tokens)}/"
-                    f"{self._number(group_input_tokens)} token"
-                    f"（{group_llm_cache_rate:.1f}%）；搜索 API "
-                    f"{self._number(search_calls)} 次，结果缓存命中 "
-                    f"{self._number(search_hits)}/{self._number(search_total)} 次"
-                    f"（{search_hit_rate:.1f}%）。",
-                )
-                group_primary_calls = int(group.get("primaryReplyCalls") or 0)
-                group_review_calls = int(group.get("secondaryReviewCalls") or 0)
-                group_skipped_reviews = int(group.get("skippedSecondaryReviews") or 0)
-                if group_review_calls or group_skipped_reviews:
-                    group_review_rate = (
-                        group_review_calls / group_primary_calls * 100
-                        if group_primary_calls else 0
-                    )
-                    lines.append(
-                        f"   复核 {self._number(group_review_calls)}/"
-                        f"{self._number(group_primary_calls)}"
-                        f"（{group_review_rate:.1f}%），节流跳过 "
-                        f"{self._number(group_skipped_reviews)} 次，约省 "
-                        f"{self._number(group.get('estimatedSavedTokens'))} token / "
-                        f"{self._money(group.get('estimatedSavedCostCny'))}。",
-                    )
             top_cost = float(groups[0].get("estimatedCostCny") or 0)
             top_tokens = int(groups[0].get("totalTokens") or 0)
             top_share = (
@@ -387,7 +294,7 @@ class LongtuQqBridge(Star):
                     f"{top_share:.1f}%，用量较集中。",
                 )
         else:
-            lines.append("昨日没有记录到群聊上游调用。")
+            lines.append("本期没有群聊上游调用。")
 
         if catalog:
             tracked_ids = {
@@ -397,36 +304,27 @@ class LongtuQqBridge(Star):
             }
             inactive_ids = sorted(set(catalog) - tracked_ids)
             lines.append(
-                f"覆盖检查：机器人当前可用 {len(catalog)} 个群；"
-                f"本期有消息 {len(tracked_ids)} 个、零消息 {len(inactive_ids)} 个。",
+                f"群覆盖：本期活跃 {len(tracked_ids)}/{len(catalog)} 个"
+                f"（零消息 {len(inactive_ids)} 个）。",
             )
-            if inactive_ids:
-                inactive_labels = []
-                for group_id in inactive_ids[:10]:
-                    group_name = catalog.get(group_id)
-                    inactive_labels.append(
-                        f"{group_name}（{group_id}）" if group_name else group_id,
-                    )
-                suffix = "等" if len(inactive_ids) > len(inactive_labels) else ""
-                lines.append(f"本期零消息群：{'、'.join(inactive_labels)}{suffix}。")
 
         active_sources = [source for source in sources if source.get("llmCalls")]
         if active_sources:
             labels = {
-                "active-reply-decision": "主动回复判定",
-                "active-value-gate": "主动回复复核",
-                "active-reply": "主动回复生成",
-                "attack-reply": "对线回复生成",
-                "attack-reply-retry": "对线回复重试",
-                "conversation-reply": "普通回复生成",
-                "conversation-reply-review": "普通回复复核",
+                "active-reply-decision": "主动判定",
+                "active-value-gate": "主动复核",
+                "active-reply": "主动回复",
+                "attack-reply": "对线回复",
+                "attack-reply-retry": "对线重试",
+                "conversation-reply": "普通回复",
+                "conversation-reply-review": "回复复核",
                 "conversation-summary": "会话摘要",
-                "member-memory-summary": "成员画像摘要",
-                "peer-bot-gate": "Bot 续聊判定",
-                "pure-mention-reply": "纯艾特回复",
+                "member-memory-summary": "成员摘要",
+                "peer-bot-gate": "Bot判定",
+                "pure-mention-reply": "纯艾特",
             }
             source_summaries = []
-            for item in active_sources[:6]:
+            for item in active_sources[:3]:
                 source_input_tokens = int(item.get("inputTokens") or 0)
                 source_cached_tokens = int(item.get("cachedInputTokens") or 0)
                 source_cache_rate = (
@@ -435,12 +333,12 @@ class LongtuQqBridge(Star):
                 )
                 source_summaries.append(
                     f"{labels.get(str(item.get('source')), item.get('source'))} "
-                    f"{self._number(item.get('llmCalls'))} 次/"
-                    f"{self._number(item.get('totalTokens'))} token/"
-                    f"LLM 缓存 {source_cache_rate:.1f}%"
+                    f"{self._number(item.get('llmCalls'))}次/"
+                    f"{self._number(item.get('totalTokens'))}t/"
+                    f"缓存{source_cache_rate:.1f}%"
                 )
-            summary = "；".join(source_summaries)
-            lines.append(f"主要消耗环节：{summary}。")
+            summary = "｜".join(source_summaries)
+            lines.append(f"主要调用：{summary}")
         return "\n".join(lines)
 
     async def _send_daily_usage_report(
