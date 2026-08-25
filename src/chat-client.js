@@ -41,10 +41,10 @@ export class OpenAICompatibleChatClient {
             ...(options.stableSystemPrompt
               ? [{ role: 'system', content: options.stableSystemPrompt }]
               : []),
+            ...history,
             ...(options.additionalSystemPrompt
               ? [{ role: 'system', content: options.additionalSystemPrompt }]
               : []),
-            ...history,
             ...(options.revisionSystemPrompt
               ? [{ role: 'system', content: options.revisionSystemPrompt }]
               : []),
