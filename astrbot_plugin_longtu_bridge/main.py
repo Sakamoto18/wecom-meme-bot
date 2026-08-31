@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import contextlib
 from datetime import datetime, time as datetime_time, timedelta
 import os
@@ -17,9 +18,11 @@ from astrbot.api.star import Context, Star, register
 MAX_FORWARD_NODES = 30
 MAX_FORWARD_CHARACTERS = 8000
 MAX_FORWARD_NODE_CHARACTERS = 600
-MAX_FORWARD_DEPTH = 2
+MAX_FORWARD_DEPTH = 3
 FORWARD_CACHE_TTL_SECONDS = 60 * 60
 FORWARD_CACHE_MAX_ENTRIES = 128
+MAX_IMAGE_COMPONENTS = 12
+MAX_FORWARD_IMAGE_BYTES = 32 * 1024 * 1024
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/stop", "/usage-report",
@@ -39,6 +42,7 @@ class LongtuQqBridge(Star):
         self.config = config
         self.session: aiohttp.ClientSession | None = None
         self.forward_cache: dict[str, tuple[float, str]] = {}
+        self.forward_nodes_cache: dict[str, tuple[float, list]] = {}
         self.report_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
 
@@ -902,23 +906,119 @@ class LongtuQqBridge(Star):
             formatted += "\n（转发内容过长，已截断）"
         return formatted
 
-    async def _fetch_forward_text(
+    @staticmethod
+    def _normalize_forward_image_base64(value: object) -> str:
+        normalized = str(value or "").strip()
+        if normalized.startswith("base64://"):
+            normalized = normalized.removeprefix("base64://")
+        match = re.match(
+            r"^data:image/[a-z0-9.+-]+;base64,(.+)$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if match:
+            normalized = match.group(1)
+        if len(normalized) > (MAX_FORWARD_IMAGE_BYTES * 4 // 3 + 4):
+            return ""
+        return normalized if re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", normalized) else ""
+
+    async def _download_forward_image(self, value: object) -> str:
+        reference = str(value or "").strip()
+        if not reference:
+            return ""
+        inline = self._normalize_forward_image_base64(reference)
+        if inline:
+            return inline
+        if reference.startswith(("http://", "https://")):
+            if not self.session or self.session.closed:
+                return ""
+            try:
+                async with self.session.get(
+                    reference,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as response:
+                    if response.status != 200:
+                        return ""
+                    body = await response.content.read(MAX_FORWARD_IMAGE_BYTES + 1)
+                    if len(body) > MAX_FORWARD_IMAGE_BYTES:
+                        logger.warning("合并转发图片超过 32 MiB，已跳过")
+                        return ""
+                    return base64.b64encode(body).decode("ascii")
+            except Exception as error:
+                logger.warning(f"合并转发图片下载失败：{type(error).__name__}")
+                return ""
+        if not os.path.isfile(reference):
+            return ""
+
+        def read_local_file() -> bytes:
+            with open(reference, "rb") as stream:
+                return stream.read(MAX_FORWARD_IMAGE_BYTES + 1)
+
+        try:
+            body = await asyncio.to_thread(read_local_file)
+        except Exception:
+            return ""
+        if len(body) > MAX_FORWARD_IMAGE_BYTES:
+            logger.warning("合并转发图片超过 32 MiB，已跳过")
+            return ""
+        return base64.b64encode(body).decode("ascii")
+
+    async def _forward_image_base64(
+        self,
+        event: AstrMessageEvent,
+        data: dict,
+    ) -> str:
+        # NapCat/OneBot 可能直接给 URL、base64，也可能只给 file/file_id。
+        for key in ("url", "file", "file_id"):
+            image = await self._download_forward_image(data.get(key))
+            if image:
+                return image
+
+        file_ref = str(data.get("file") or data.get("file_id") or "").strip()
+        bot = getattr(event, "bot", None)
+        if not file_ref or not bot or not callable(getattr(bot, "call_action", None)):
+            return ""
+        routing_params = {}
+        self_id = str(getattr(event.message_obj, "self_id", "") or "").strip()
+        if self_id:
+            routing_params["self_id"] = self_id
+        try:
+            result = await asyncio.wait_for(
+                bot.call_action(
+                    action="get_image",
+                    file=file_ref,
+                    **routing_params,
+                ),
+                timeout=20,
+            )
+        except Exception as error:
+            logger.warning(f"合并转发图片读取失败：{type(error).__name__}")
+            return ""
+        if not isinstance(result, dict):
+            return ""
+        for key in ("base64", "file", "url"):
+            image = await self._download_forward_image(result.get(key))
+            if image:
+                return image
+        return ""
+
+    async def _fetch_forward_nodes(
         self,
         event: AstrMessageEvent,
         forward_id: str,
-    ) -> str:
+    ) -> list:
         normalized_id = str(forward_id or "").strip()
         if not normalized_id:
-            return ""
+            return []
         now = time.monotonic()
-        cached = self.forward_cache.get(normalized_id)
+        cached = self.forward_nodes_cache.get(normalized_id)
         if cached and now - cached[0] <= FORWARD_CACHE_TTL_SECONDS:
             return cached[1]
 
         bot = getattr(event, "bot", None)
         if not bot or not callable(getattr(bot, "call_action", None)):
             logger.warning("当前 QQ 事件没有可用的 OneBot API 客户端，无法展开合并转发")
-            return ""
+            return []
         routing_params = {}
         self_id = str(getattr(event.message_obj, "self_id", "") or "").strip()
         if self_id:
@@ -934,14 +1034,120 @@ class LongtuQqBridge(Star):
             )
         except Exception as error:
             logger.warning(f"合并转发内容展开失败：{type(error).__name__}")
-            return ""
+            return []
 
         nodes = result.get("messages") if isinstance(result, dict) else None
-        formatted = self._format_forward_nodes(nodes)
-        if not formatted:
+        if not isinstance(nodes, list):
             logger.warning("合并转发 API 未返回可解析的消息节点")
-            return ""
+            return []
+        self.forward_nodes_cache[normalized_id] = (now, nodes)
+        if len(self.forward_nodes_cache) > FORWARD_CACHE_MAX_ENTRIES:
+            oldest_id = min(
+                self.forward_nodes_cache,
+                key=lambda key: self.forward_nodes_cache[key][0],
+            )
+            self.forward_nodes_cache.pop(oldest_id, None)
+        return nodes
 
+    async def _collect_forward_images(
+        self,
+        event: AstrMessageEvent,
+        nodes: list,
+        depth: int = 0,
+        budget: dict | None = None,
+        seen_forward_ids: set | None = None,
+    ) -> list[str]:
+        if not isinstance(nodes, list) or depth > MAX_FORWARD_DEPTH:
+            return []
+        budget = budget or {"images": 0}
+        seen_forward_ids = seen_forward_ids or set()
+        images = []
+        for node in nodes:
+            if budget["images"] >= MAX_IMAGE_COMPONENTS or not isinstance(node, dict):
+                break
+            node_data = node.get("data") if isinstance(node.get("data"), dict) else {}
+            segments = (
+                node_data.get("message")
+                or node_data.get("content")
+                or node.get("message")
+                or node.get("content")
+                or []
+            )
+            if not isinstance(segments, list):
+                segments = []
+            for segment in segments:
+                if budget["images"] >= MAX_IMAGE_COMPONENTS or not isinstance(segment, dict):
+                    break
+                segment_type = str(segment.get("type") or "").lower()
+                data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
+                if segment_type == "image":
+                    image = await self._forward_image_base64(event, data)
+                    if image:
+                        images.append(image)
+                        budget["images"] += 1
+                elif segment_type in {"node", "nodes"}:
+                    nested = data.get("content") or data.get("message") or data.get("messages")
+                    images.extend(await self._collect_forward_images(
+                        event,
+                        nested if isinstance(nested, list) else [],
+                        depth + 1,
+                        budget,
+                        seen_forward_ids,
+                    ))
+                elif segment_type == "forward":
+                    nested = data.get("content")
+                    nested_id = str(data.get("id") or data.get("message_id") or "").strip()
+                    if isinstance(nested, list):
+                        images.extend(await self._collect_forward_images(
+                            event,
+                            nested,
+                            depth + 1,
+                            budget,
+                            seen_forward_ids,
+                        ))
+                    elif nested_id and depth < MAX_FORWARD_DEPTH and nested_id not in seen_forward_ids:
+                        seen_forward_ids.add(nested_id)
+                        nested_nodes = await self._fetch_forward_nodes(event, nested_id)
+                        images.extend(await self._collect_forward_images(
+                            event,
+                            nested_nodes,
+                            depth + 1,
+                            budget,
+                            seen_forward_ids,
+                        ))
+        return images[:MAX_IMAGE_COMPONENTS]
+
+    async def _fetch_forward_content(
+        self,
+        event: AstrMessageEvent,
+        forward_id: str,
+        include_images: bool = True,
+    ) -> tuple[str, list[str]]:
+        normalized_id = str(forward_id or "").strip()
+        if not normalized_id:
+            return "", []
+        cached = self.forward_cache.get(normalized_id)
+        now = time.monotonic()
+        if cached and now - cached[0] <= FORWARD_CACHE_TTL_SECONDS:
+            nodes = await self._fetch_forward_nodes(event, normalized_id)
+            images = await self._collect_forward_images(
+                event,
+                nodes,
+                seen_forward_ids={normalized_id},
+            ) if include_images else []
+            return cached[1], images
+        nodes = await self._fetch_forward_nodes(event, normalized_id)
+        if not nodes:
+            return "", []
+        formatted = self._format_forward_nodes(nodes)
+        images = await self._collect_forward_images(
+            event,
+            nodes,
+            seen_forward_ids={normalized_id},
+        ) if include_images else []
+        if not formatted and not images:
+            logger.warning("合并转发 API 未返回可解析的消息节点")
+            return "", []
         self.forward_cache[normalized_id] = (now, formatted)
         if len(self.forward_cache) > FORWARD_CACHE_MAX_ENTRIES:
             oldest_id = min(
@@ -949,25 +1155,53 @@ class LongtuQqBridge(Star):
                 key=lambda key: self.forward_cache[key][0],
             )
             self.forward_cache.pop(oldest_id, None)
-        logger.info(f"已展开合并转发内容，共 {formatted.count(chr(10)) + 1} 行")
-        return formatted
+        logger.info(
+            f"已展开合并转发内容，共 {formatted.count(chr(10)) + 1 if formatted else 0} 行，"
+            f"读取图片 {len(images)} 张",
+        )
+        return formatted, images
 
-    async def _forwarded_text(
+    async def _fetch_forward_text(
+        self,
+        event: AstrMessageEvent,
+        forward_id: str,
+    ) -> str:
+        text, _ = await self._fetch_forward_content(
+            event,
+            forward_id,
+            include_images=False,
+        )
+        return text
+
+    async def _forwarded_content(
         self,
         event: AstrMessageEvent,
         components: list,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         texts = []
+        images = []
         seen = set()
         for component in self._forward_components(components):
             forward_id = str(getattr(component, "id", "") or "").strip()
             if not forward_id or forward_id in seen:
                 continue
             seen.add(forward_id)
-            text = await self._fetch_forward_text(event, forward_id)
+            text, nested_images = await self._fetch_forward_content(event, forward_id)
             if text:
                 texts.append(text)
-        return "\n\n".join(texts)[:MAX_FORWARD_CHARACTERS]
+            for image in nested_images:
+                if len(images) >= MAX_IMAGE_COMPONENTS:
+                    break
+                images.append(image)
+        return "\n\n".join(texts)[:MAX_FORWARD_CHARACTERS], images
+
+    async def _forwarded_text(
+        self,
+        event: AstrMessageEvent,
+        components: list,
+    ) -> str:
+        text, _ = await self._forwarded_content(event, components)
+        return text
 
     @staticmethod
     def _quoted_author(reply_component) -> tuple[str, str]:
@@ -990,25 +1224,38 @@ class LongtuQqBridge(Star):
         if not image_component:
             return ""
         converted = await image_component.convert_to_base64()
-        if isinstance(converted, str):
-            return converted.removeprefix("base64://")
-        for attribute in ("base64", "file"):
-            value = str(getattr(converted, attribute, "") or "")
-            if value.startswith("base64://"):
-                return value.removeprefix("base64://")
+        candidates = [converted] if isinstance(converted, str) else []
+        candidates.extend(
+            str(getattr(converted, attribute, "") or "")
+            for attribute in ("base64", "file")
+        )
+        for value in candidates:
+            normalized = str(value or "").strip()
+            if normalized.startswith("base64://"):
+                normalized = normalized.removeprefix("base64://")
+            match = re.match(r"^data:image/[a-z0-9.+-]+;base64,(.+)$", normalized, re.IGNORECASE)
+            if match:
+                normalized = match.group(1)
+            if normalized and re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", normalized):
+                return normalized
         return ""
 
     @classmethod
-    async def _first_image_base64(cls, components: list) -> str:
+    async def _image_base64s(cls, components: list, limit: int = MAX_IMAGE_COMPONENTS) -> list[str]:
+        images = []
         for component in components:
             if isinstance(component, Comp.Image):
-                return await cls._image_base64(component)
-        return ""
+                image = await cls._image_base64(component)
+                if image:
+                    images.append(image)
+                if len(images) >= limit:
+                    break
+        return images
 
     @classmethod
-    async def _quoted_image_base64(cls, reply_component) -> str:
+    async def _quoted_image_base64s(cls, reply_component) -> list[str]:
         chain = getattr(reply_component, "chain", None) or []
-        return await cls._first_image_base64(chain)
+        return await cls._image_base64s(chain)
 
     @staticmethod
     def _is_image_management_text(text: str) -> bool:
@@ -1088,6 +1335,8 @@ class LongtuQqBridge(Star):
             "pure_bot_mention": True,
             "image_base64": "",
             "quoted_image_base64": "",
+            "forward_image_base64s": [],
+            "quoted_forward_image_base64s": [],
             "observe_only": False,
         }
 
@@ -1229,16 +1478,28 @@ class LongtuQqBridge(Star):
                 yield event.plain_result("正在翻龙图小本本……")
 
             quoted_user_id, quoted_sender_name = self._quoted_author(reply_component)
-            forwarded_text = await self._forwarded_text(event, components)
-            quoted_forwarded_text = await self._forwarded_text(event, quoted_chain)
-            image_base64 = ""
-            quoted_image_base64 = ""
+            if should_reply:
+                forwarded_text, forward_image_base64s = await self._forwarded_content(
+                    event,
+                    components,
+                )
+                quoted_forwarded_text, quoted_forward_image_base64s = await self._forwarded_content(
+                    event,
+                    quoted_chain,
+                )
+            else:
+                forwarded_text = await self._forwarded_text(event, components)
+                quoted_forwarded_text = await self._forwarded_text(event, quoted_chain)
+                forward_image_base64s = []
+                quoted_forward_image_base64s = []
+            image_base64s = []
+            quoted_image_base64s = []
             # 被动旁观消息只记录文字占位，不把大体积 Base64 上传到 Node；
             # 真正唤醒机器人（私聊、@机器人或图库管理）时才读取图片内容。
             if has_image and should_reply:
                 try:
-                    image_base64 = await self._first_image_base64(components)
-                    quoted_image_base64 = await self._quoted_image_base64(
+                    image_base64s = await self._image_base64s(components)
+                    quoted_image_base64s = await self._quoted_image_base64s(
                         reply_component,
                     )
                 except Exception as error:
@@ -1262,8 +1523,13 @@ class LongtuQqBridge(Star):
                 "bot_user_id": bot_user_id,
                 "has_image": has_image,
                 "pure_bot_mention": pure_bot_mention,
-                "image_base64": image_base64,
-                "quoted_image_base64": quoted_image_base64,
+                "image_base64s": image_base64s,
+                "quoted_image_base64s": quoted_image_base64s,
+                "forward_image_base64s": forward_image_base64s,
+                "quoted_forward_image_base64s": quoted_forward_image_base64s,
+                # 保留旧字段，便于旧版 Node 服务平滑升级。
+                "image_base64": image_base64s[0] if image_base64s else "",
+                "quoted_image_base64": quoted_image_base64s[0] if quoted_image_base64s else "",
                 "observe_only": observe_only,
             }
 

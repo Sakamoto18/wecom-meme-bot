@@ -53,6 +53,10 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(source, /estimatedSavedCostCny/);
   assert.match(source, /privateUsage/);
   assert.match(source, /私聊用量：约/);
+  assert.match(source, /MAX_FORWARD_DEPTH\s*=\s*3/);
+  assert.match(source, /_forwarded_content/);
+  assert.match(handler, /"forward_image_base64s": forward_image_base64s/);
+  assert.match(handler, /"quoted_forward_image_base64s": quoted_forward_image_base64s/);
   assert.match(handler, /self\._is_allowed_bridge_slash_command\(event\)/);
   assert.doesNotMatch(handler, /and not str\(text or ""\)\.strip\(\)/);
 });

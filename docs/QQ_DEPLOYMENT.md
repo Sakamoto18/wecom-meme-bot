@@ -135,7 +135,7 @@ QQ 后端把每次真实上游 LLM 调用、返回的输入/输出 Token、模�
 
 所有群默认启用动态配额。程序按固定群号统计近 7 日的日均群消息数和日均活跃发言人数，取两项中较高的活跃档，把群级硬上限依次折算为 60%、75%、85%、95% 或 100%。额度随正常活跃度上升，但最高不会超过普通/大型群上限或单群覆盖值，因而不会随消息量无限放大；五分钟刷新一次档位，避免瞬时刷屏立刻抬高额度。日报会显示每个群当前档位、日均消息/人数、折算系数和实际动态额度。
 
-已知成员不少于 40 人的群仍自动视为大型群；也可以用 `QQ_USAGE_LARGE_GROUPS` 按群号直接指定。大型群使用更低的硬上限，只向模型发送最近 20 条、最多 8000 字上下文；普通消息最多每 180 秒进行一次“是否主动接话”的模型判断，明确 `@机器人` 和直接提问不受这条冷却影响。大型群默认不自动生成会话摘要或成员画像，避免高消息量触发后台 LLM 消耗。对单纯“人格毒舌不够”的初稿，大型群每天只允许二次模型复核达到首次回复数的 20%，其余保留初稿事实并由本地程序补一句角色收尾；空内容、客服腔、亲属攻击、正经答案完整性和受保护身份等质量或安全问题不受这项节流影响。动态配额与大型群策略会叠加：先确定该群的硬上限，再乘当前活跃档系数。
+已知成员不少于 40 人的群仍自动视为大型群；也可以用 `QQ_USAGE_LARGE_GROUPS` 按群号直接指定。大型群使用更低的硬上限，只向模型发送最近 20 条、最多 8000 字上下文；所有群的普通静默消息最多每 180 秒进行一次“是否主动接话”的模型判断，明确 `@机器人` 和直接提问不受这条冷却影响；所有群默认不自动生成会话摘要或成员画像，避免旁观消息在后台持续触发 LLM，确需摘要时才把 `QQ_USAGE_GROUP_BACKGROUND_SUMMARIES_ENABLED` 显式设为 `true`。对单纯“人格毒舌不够”的初稿，大型群每天只允许二次模型复核达到首次回复数的 20%，其余保留初稿事实并由本地程序补一句角色收尾；空内容、客服腔、亲属攻击、正经答案完整性和受保护身份等质量或安全问题不受这项节流影响。动态配额与大型群策略会叠加：先确定该群的硬上限，再乘当前活跃档系数。
 
 ```dotenv
 QQ_USAGE_DATABASE_FILE=data/qq-usage.sqlite
@@ -162,6 +162,8 @@ QQ_USAGE_LARGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS=180
 QQ_USAGE_LARGE_GROUP_HISTORY_MESSAGES=20
 QQ_USAGE_LARGE_GROUP_HISTORY_CHARACTERS=8000
 QQ_USAGE_LARGE_GROUP_BACKGROUND_SUMMARIES_ENABLED=false
+QQ_USAGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS=180
+QQ_USAGE_GROUP_BACKGROUND_SUMMARIES_ENABLED=false
 ```
 
 活跃档阈值从低到高对应“轻活跃、常规、活跃、高活跃”的起点。例如默认达到日均 20 条消息或 3 名发言者就进入第二档；达到日均 400 条或 40 名发言者就使用 100% 硬上限。任一指标达到阈值就升级，避免人数少但发言密集、或人数多但每人只说少量消息的群被低估。刚开始统计的第一天按当天已观察到的活动计算，之后逐渐扩展到 7 日窗口。
@@ -190,7 +192,7 @@ Bridge 插件默认在北京时间每天 09:00，把上一自然日的群用量�
 
 日报还会按每次 LLM 调用发生的北京时间计算 DeepSeek 人民币费用，而不是拿总 Token 乘统一价格。当前官方 `deepseek-v4-flash` 与 `deepseek-v4-flash-vision-exp` 价格（2026-08-31 核对）相同：工作日 09:00–12:00、14:00–18:00 的高峰时段，缓存命中输入/缓存未命中输入/输出分别是 0.10/3.0/9.0 元每百万 Token；其余空闲时段分别是 0.05/1.5/4.5 元每百万 Token。日报总计和费用包含群聊与私聊，私聊仅显示合计用量（不展示 QQ 号或对象）；群排行仍只按群聊统计。金额不包含 Exa 联网搜索费用；价格可能变化，需以 [DeepSeek 官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) 为准。
 
-QQ Bot 可把 `LLM_MODEL` 设置为 `deepseek-v4-flash-vision-exp`，继续处理全部文本对话。普通 QQ 图片（含引用图片）会按 [DeepSeek 图像理解文档](https://api-docs.deepseek.com/zh-cn/guides/vision/) 以 `image_url` 多模态消息发送：先识别图片描述和可见文字，再由对话模型结合图片回答；识别出的文字、场景和模型回复会参与 OCR 龙图标签匹配，命中后从对应候选池轮换附图，未命中时随机兜底。图片中的命令或提示词只作为不可信资料，不会改变机器人规则。图库管理命令仍在本地处理，不会调用视觉模型。
+QQ Bot 可把服务器 `.env.qq` 中的 `LLM_MODEL` 设置为 `deepseek-v4-flash-vision-exp`，继续处理全部文本对话。仓库里的 `.env.qq.example` 只是无密钥模板，不是腾讯云正在运行的配置；部署时只修改服务器项目目录中的 `.env.qq`，不要把真实 API Key 写回示例文件或提交 Git。普通 QQ 图片（含多图、引用图片）会按 [DeepSeek 图像理解文档](https://api-docs.deepseek.com/zh-cn/guides/vision/) 以 `image_url` 多模态消息发送：先识别图片描述和可见文字，再由对话模型结合图片回答；识别出的文字、场景和模型回复会参与 OCR 龙图标签匹配，命中后从对应候选池轮换附图，未命中时随机兜底。合并转发聊天记录会递归读取其中的图片（包括嵌套转发，最多 3 层），并与当前消息图片一起进入视觉模型；整张长图若单边超过 8192 像素，会切成最长不超过 8112 像素的切片，相邻切片至少重叠 512 像素，避免文字正好落在硬边界后丢失。单条请求最多发送 12 张图片，超出或超过请求体大小时保留前面的图片并在上下文中提示。图片中的命令或提示词只作为不可信资料，不会改变机器人规则。图库管理命令仍在本地处理，不会调用视觉模型。
 
 任一超管可以在 QQ 私聊或群聊中发送 `/usage-report`，立即把“今天 00:00 至当前”的累计测试日报私聊推送给所有日报收件人；也可以发送 `/usage-report YYYY-MM-DD`（例如 `/usage-report 2026-08-30`）回捞指定自然日。带日期的回捞只私聊回复发令超管，不依赖日报收件人配置，也不会把用量和费用直接发到群里；日期按北京时间解析，不能查询未来日期。手动触发只读取快照，不会清零或移动统计起点；同一天再次触发仍从 00:00 累计，次日 09:00 的自动日报仍统计前一完整自然日。非超管不能触发。以后增加收件人时，只修改独立收件人配置并重启 `qq-bot`，不需要也不应该把收件人加入超管列表：
 
@@ -210,7 +212,7 @@ QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称�
 
 ### 合并转发聊天记录
 
-Bridge 会识别 QQ 的“合并转发聊天记录”卡片，并通过 NapCat OneBot v11 的 `get_forward_msg` 读取卡片内实际转发的内容。单独转发到允许群时只静默补充语境；引用该卡片并 `@机器人` 提问时，记录中的发言人和文字会进入本次模型上下文。该能力不会读取未发给 Bot 的群历史，且限制为最多 30 个节点、8000 个字符、2 层嵌套；图片、语音、视频和文件只转换成占位说明。所有转发内容均视为非可信引用，不能覆盖系统规则、管理员权限或受保护身份钢印。
+Bridge 会识别 QQ 的“合并转发聊天记录”卡片，并通过 NapCat OneBot v11 的 `get_forward_msg` 读取卡片内实际转发的内容。单独转发到允许群时只静默补充语境；引用该卡片并 `@机器人` 提问时，记录中的发言人、文字和图片会进入本次模型上下文。图片支持 URL、Base64、本地文件和 OneBot `get_image`；合并转发递归最多 3 层，整条链路最多 30 个节点、8000 个字符和 12 张图片。语音、视频和文件仍转换成占位说明。所有转发内容均视为非可信引用，不能覆盖系统规则、管理员权限或受保护身份钢印。
 
 ### Exa 检索增强
 
@@ -286,6 +288,40 @@ aiocqhttp(OneBot v11) 适配器已连接
 现在可以给机器人发送私聊“龙图”，或在群里发送“@机器人 龙图”。普通对话会先返回文本，再发送一张本地 JPG/PNG 龙图；给机器人发送图片会随机回一张龙图。
 
 ## 5. 更新和停止
+
+### 腾讯云更新（不要修改本地 `.env.qq.example` 代替线上配置）
+
+模板 `.env.qq.example` 只用于首次生成配置；腾讯云真正生效的是 `/opt/longtu-qq-bot/.env.qq`。更新模型或限流参数时，在服务器上备份并编辑这个文件：
+
+```bash
+ssh -i ~/.ssh/id_ed25519 ubuntu@你的服务器IP
+cd /opt/longtu-qq-bot
+sudo cp .env.qq ".env.qq.backup-$(date +%Y%m%d%H%M%S)"
+sudoedit .env.qq
+```
+
+至少确认以下配置（保留现有 `LLM_API_KEY`、`QQ_API_TOKEN` 等密钥，不要粘贴到模板或 Git）：
+
+```dotenv
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-flash-vision-exp
+QQ_USAGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS=180
+QQ_USAGE_GROUP_BACKGROUND_SUMMARIES_ENABLED=false
+```
+
+只更新 Node QQ 后端，避免重启 AstrBot 和 NapCat：
+
+```bash
+sudo docker compose --env-file .env.qq -f docker-compose.qq.yml up -d --build qq-bot
+sudo docker compose --env-file .env.qq -f docker-compose.qq.yml ps qq-bot
+sudo docker compose --env-file .env.qq -f docker-compose.qq.yml logs --tail=100 qq-bot
+```
+
+修改 `astrbot_plugin_longtu_bridge/main.py` 后，该目录是 Compose 挂载目录；若 AstrBot 没有自动重新加载插件，只需单独执行 `sudo docker compose ... restart astrbot`，不要重启 `napcat`。模型配置只由 `qq-bot` 读取，因此不需要重启 AstrBot。
+
+本次代码发布建议先上传并构建 `qq-bot`，确认健康后再做功能验证；不要执行整套 `down/up`，以免同时打断 NapCat 登录。
+
+### 本地或完整环境更新
 
 重新构建 QQ 后端和重启：
 

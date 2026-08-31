@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { Jimp } from 'jimp';
 import { createQqApiServer } from '../src/qq-api.js';
 import { ConversationStore } from '../src/conversation-store.js';
 import {
+  calculateImageTileRegions,
+  IMAGE_TILE_CORE_SIZE,
+  IMAGE_TILE_OVERLAP,
+  MAX_IMAGE_SIDE_PIXELS,
+  prepareImageBlocks,
   QqBotService,
   buildQqCompatibleMessage,
   normalizeQqPayload,
@@ -16,6 +22,10 @@ function createMeme(filename = 'longtu.png') {
     extension: filename.endsWith('.gif') ? '.gif' : '.png',
     buffer: Buffer.from('fake-image'),
   };
+}
+
+async function createPng(width = 32, height = 32, color = 0xffffffff) {
+  return new Jimp({ width, height, color }).getBuffer('image/png');
 }
 
 function createService(options = {}) {
@@ -48,7 +58,9 @@ function createService(options = {}) {
     usageTracker: options.usageTracker,
     largeGroupIds: options.largeGroupIds,
     largeGroupMemberThreshold: options.largeGroupMemberThreshold,
+    groupPassiveDecisionCooldownMs: options.groupPassiveDecisionCooldownMs,
     largeGroupPassiveDecisionCooldownMs: options.largeGroupPassiveDecisionCooldownMs,
+    groupBackgroundSummariesEnabled: options.groupBackgroundSummariesEnabled,
     largeGroupHistoryMessages: options.largeGroupHistoryMessages,
     largeGroupHistoryCharacters: options.largeGroupHistoryCharacters,
     largeGroupBackgroundSummariesEnabled: options.largeGroupBackgroundSummariesEnabled,
@@ -139,6 +151,58 @@ test('大型群限制被动判定频率，但明确请求仍正常处理', async
 
   assert.equal(decisionCalls, 1);
   assert.equal(direct.mode, 'longtu');
+});
+
+test('所有群的静默观察共享被动判定冷却并默认不调度后台摘要', async () => {
+  let now = 1_000_000;
+  let decisionCalls = 0;
+  let summaryCalls = 0;
+  const conversationStore = {
+    recordGroupMember() {},
+    getGroupMemberAliases: () => ({}),
+    appendObservation() {},
+    appendMemberObservation: () => true,
+    scheduleSummary: () => {
+      summaryCalls += 1;
+      return Promise.resolve(false);
+    },
+    scheduleMemberMemory: () => {
+      summaryCalls += 1;
+      return Promise.resolve(false);
+    },
+    get: () => [],
+  };
+  const { service } = createService({
+    conversationStore,
+    now: () => now,
+    groupPassiveDecisionCooldownMs: 180_000,
+    activeReplyDecider: {
+      async shouldReply() {
+        decisionCalls += 1;
+        return { reply: false, reason: 'test' };
+      },
+    },
+  });
+  const observed = {
+    message_type: 'group',
+    group_id: 'normal-group-id',
+    user_id: 'user-1',
+    sender_name: '群友',
+    text: '普通群消息',
+    observe_only: true,
+  };
+
+  await service.handleMessage({ ...observed, message_id: 'normal-passive-1' });
+  await service.handleMessage({ ...observed, message_id: 'normal-passive-2' });
+  now += 180_001;
+  await service.handleMessage({ ...observed, message_id: 'normal-passive-3' });
+
+  assert.equal(decisionCalls, 2);
+  assert.equal(summaryCalls, 0);
+  assert.equal(
+    service.backgroundSummariesEnabled('normal-group-id', { passive: true }),
+    false,
+  );
 });
 
 test('大型群只向模型发送最近的有限上下文', () => {
@@ -307,14 +371,16 @@ test('仅发送合并转发卡片也能进入群聊旁观记忆', async () => {
   assert.match(observations[0].content, /合并转发记录结束/);
 });
 
-test('QQ 图片消息优先走随机龙图回复', async () => {
+test('QQ 只有图片标记但没有图片数据时不会伪造随机龙图', async () => {
+  let callCount = 0;
   const chatClient = {
     isConfigured: true,
     async complete() {
-      throw new Error('图片消息不应调用模型');
+      callCount += 1;
+      return '没有收到可读取的图片，我只能先根据文字回答。';
     },
   };
-  const { service } = createService({ chatClient });
+  const { service, calls } = createService({ chatClient });
   const result = await service.handleMessage({
     message_id: 'm4',
     message_type: 'private',
@@ -323,8 +389,69 @@ test('QQ 图片消息优先走随机龙图回复', async () => {
     has_image: true,
   });
 
-  assert.equal(result.mode, 'longtu');
-  assert.deepEqual(result.messages.map((message) => message.type), ['image']);
+  assert.equal(result.mode, 'model');
+  assert.ok(callCount >= 1);
+  assert.equal(result.messages[0].type, 'text');
+  assert.match(result.messages[0].text, /没有收到/);
+});
+
+test('长图切片尺寸受模型限制且相邻切片保留重叠内容', async () => {
+  const width = 96;
+  const height = IMAGE_TILE_CORE_SIZE * 2 + 900;
+  const regions = calculateImageTileRegions(width, height);
+
+  assert.equal(regions.length, 3);
+  assert.ok(regions.every((region) => (
+    region.width <= MAX_IMAGE_SIDE_PIXELS
+      && region.height <= MAX_IMAGE_SIDE_PIXELS
+  )));
+  for (let index = 1; index < regions.length; index += 1) {
+    const previous = regions[index - 1];
+    const current = regions[index];
+    const overlap = previous.y + previous.height - current.y;
+    assert.ok(
+      overlap >= IMAGE_TILE_OVERLAP,
+      `第 ${index}、${index + 1} 片重叠仅 ${overlap}px`,
+    );
+  }
+
+  const source = new Jimp({ width, height, color: 0xffffffff });
+  // Put conspicuous text-like bands inside each overlap.  If a future change
+  // reverts to hard cuts, at least one neighboring tile will lose the band.
+  for (const region of regions.slice(1)) {
+    const y = region.y + Math.floor(IMAGE_TILE_OVERLAP / 2);
+    for (let row = y; row < y + 24; row += 1) {
+      for (let x = 0; x < width; x += 1) source.setPixelColor(0x000000ff, x, row);
+    }
+  }
+  const prepared = await prepareImageBlocks({
+    imageBase64s: [(await source.getBuffer('image/png')).toString('base64')],
+  });
+  const imageBlocks = prepared.blocks.filter((block) => block.type === 'image_url');
+  const labels = prepared.blocks
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text);
+
+  assert.equal(imageBlocks.length, regions.length);
+  assert.deepEqual(labels, [
+    '当前消息图片 1（长图切片 1/3）',
+    '当前消息图片 1（长图切片 2/3）',
+    '当前消息图片 1（长图切片 3/3）',
+  ]);
+  const decodedTiles = [];
+  for (const [index, block] of imageBlocks.entries()) {
+    const tile = await Jimp.read(Buffer.from(block.image_url.url.split(',')[1], 'base64'));
+    assert.equal(tile.bitmap.width, regions[index].width);
+    assert.equal(tile.bitmap.height, regions[index].height);
+    decodedTiles.push(tile);
+  }
+  for (let index = 1; index < regions.length; index += 1) {
+    const globalY = regions[index].y + Math.floor(IMAGE_TILE_OVERLAP / 2) + 8;
+    const previousY = globalY - regions[index - 1].y;
+    const currentY = globalY - regions[index].y;
+    assert.ok(decodedTiles[index - 1].getPixelColor(8, previousY) < 0x404040ff);
+    assert.ok(decodedTiles[index].getPixelColor(8, currentY) < 0x404040ff);
+  }
 });
 
 test('QQ 图片会以视觉消息进入模型，并用 OCR 结果选择契合龙图', async () => {
@@ -377,6 +504,32 @@ test('QQ 图片会以视觉消息进入模型，并用 OCR 结果选择契合龙
   assert.equal(calls[1].modelInput.find((part) => part.type === 'image_url')
     ?.image_url.url, `data:image/png;base64,${png}`);
   assert.deepEqual(result.messages.map((message) => message.type), ['text', 'image']);
+});
+
+test('合并转发图片会和普通图片一起进入视觉链路', async () => {
+  const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+  const payload = normalizeQqPayload({
+    message_type: 'private',
+    user_id: 'forward-image-user',
+    text: '读一下转发里的图',
+    image_base64s: [png],
+    forward_image_base64s: [png],
+    quoted_forward_image_base64s: [png],
+  });
+
+  assert.equal(payload.hasImage, true);
+  assert.equal(payload.imageBase64s.length, 1);
+  assert.equal(payload.forwardImageBase64s.length, 1);
+  assert.equal(payload.quotedForwardImageBase64s.length, 1);
+  const prepared = await prepareImageBlocks(payload);
+  assert.deepEqual(
+    prepared.blocks.filter((block) => block.type === 'text').map((block) => block.text),
+    ['当前消息图片 1', '合并转发图片 1', '引用合并转发图片 1'],
+  );
+  assert.equal(
+    prepared.blocks.filter((block) => block.type === 'image_url').length,
+    3,
+  );
 });
 
 test('QQ 重复消息 ID 不会重复调用模型或发图', async () => {
@@ -520,6 +673,7 @@ test('无关成员回复隔离其他人的受保护头衔并记录机器人当�
   };
   const { service } = createService({
     chatClient,
+    groupBackgroundSummariesEnabled: true,
     conversationStore,
     protectedRoles: new Map([['u-owner', '至高无上的真龙王']]),
   });
@@ -664,6 +818,7 @@ test('成员画像观察保留提及对象且非所有者不会继承受保护�
   const { service } = createService({
     chatClient,
     conversationStore,
+    groupBackgroundSummariesEnabled: true,
     protectedRoles: new Map([['u-owner', '至高无上的真龙王']]),
   });
 
