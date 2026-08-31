@@ -39,6 +39,11 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(source, /ALLOWED_BRIDGE_SLASH_COMMANDS\s*=\s*\{[^}]*"\/stop"/);
   assert.match(source, /"\/usage-report"/);
   assert.match(handler, /self\._send_current_usage_report/);
+  assert.match(handler, /self\._send_requested_usage_report/);
+  assert.match(source, /_usage_report_period/);
+  assert.match(source, /YYYY-MM-DD/);
+  assert.match(source, /不能查询未来日期/);
+  assert.match(source, /FriendMessage:\{recipient_id\}/);
   assert.match(source, /bot\.get_group_list\(no_cache=False\)/);
   assert.match(source, /report\.get\("dataAvailableFrom"\)/);
   assert.match(source, /龙玉涛 Bot 日报/);
@@ -46,6 +51,8 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(source, /搜索费另计/);
   assert.match(source, /节流跳过复核/);
   assert.match(source, /estimatedSavedCostCny/);
+  assert.match(source, /privateUsage/);
+  assert.match(source, /私聊用量：约/);
   assert.match(handler, /self\._is_allowed_bridge_slash_command\(event\)/);
   assert.doesNotMatch(handler, /and not str\(text or ""\)\.strip\(\)/);
 });

@@ -327,6 +327,58 @@ test('QQ 图片消息优先走随机龙图回复', async () => {
   assert.deepEqual(result.messages.map((message) => message.type), ['image']);
 });
 
+test('QQ 图片会以视觉消息进入模型，并用 OCR 结果选择契合龙图', async () => {
+  const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+  const calls = [];
+  const matchedSha = 'f'.repeat(64);
+  const chatClient = {
+    isConfigured: true,
+    model: 'deepseek-v4-flash-vision-exp',
+    async complete(history, modelInput, options) {
+      calls.push({ history, modelInput, options });
+      return calls.length === 1
+        ? '{"description":"一张吐槽截图","visible_text":["原神"],"keywords":["原神"],"scene":"吐槽"}'
+        : '图片里是原神梗，确实抽象得像你。';
+    },
+  };
+  const picked = [];
+  const { service } = createService({
+    chatClient,
+    longtuLibrary: {
+      listAliases: () => [{ alias: '原神', sha256: matchedSha, source: 'ocr' }],
+    },
+    memeStore: {
+      async pickBySha(sha256) {
+        picked.push(sha256);
+        return createMeme('yuan-shen-vision.png');
+      },
+      async pick() {
+        throw new Error('OCR 命中时不应回退随机龙图');
+      },
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'vision-image-1',
+    message_type: 'private',
+    user_id: 'vision-user',
+    text: '看看这张图',
+    image_base64: png,
+  });
+
+  assert.equal(result.mode, 'model');
+  assert.deepEqual(picked, [matchedSha]);
+  assert.ok(Array.isArray(calls[0].modelInput));
+  assert.equal(calls[0].modelInput.find((part) => part.type === 'image_url')
+    ?.image_url.detail, 'original');
+  assert.equal(calls[0].options.usageSource, 'image-understanding');
+  assert.ok(Array.isArray(calls[1].modelInput));
+  assert.match(calls[1].modelInput[0].text, /图片可见文字：原神/);
+  assert.equal(calls[1].modelInput.find((part) => part.type === 'image_url')
+    ?.image_url.url, `data:image/png;base64,${png}`);
+  assert.deepEqual(result.messages.map((message) => message.type), ['text', 'image']);
+});
+
 test('QQ 重复消息 ID 不会重复调用模型或发图', async () => {
   const { service, calls } = createService();
   const input = {
