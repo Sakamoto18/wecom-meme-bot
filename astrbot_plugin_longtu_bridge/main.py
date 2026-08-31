@@ -31,7 +31,7 @@ PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
     "把 AstrBot 的 QQ 消息转发给本项目的独立 QQ Bot 服务",
-    "1.9.3",
+    "1.9.4",
 )
 class LongtuQqBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -179,6 +179,7 @@ class LongtuQqBridge(Star):
     ) -> str:
         report = body["report"]
         totals = report.get("totals") or {}
+        private_usage = report.get("privateUsage") or {}
         groups = report.get("groups") or []
         sources = report.get("sources") or []
         pricing = report.get("pricing") or {}
@@ -218,6 +219,15 @@ class LongtuQqBridge(Star):
                 f"（结果缓存 {search_cache_rate:.1f}%）"
             ),
         ]
+        private_cost = float(private_usage.get("estimatedCostCny") or 0)
+        private_llm_calls = int(private_usage.get("llmCalls") or 0)
+        private_total_tokens = int(private_usage.get("totalTokens") or 0)
+        if private_cost or private_llm_calls or private_total_tokens:
+            lines.append(
+                f"私聊用量：约 {self._money(private_cost)}｜LLM "
+                f"{self._number(private_llm_calls)} 次｜Token "
+                f"{self._number(private_total_tokens)}",
+            )
         skipped_reviews = int(totals.get("skippedSecondaryReviews") or 0)
         if skipped_reviews:
             lines.append(
@@ -348,6 +358,28 @@ class LongtuQqBridge(Star):
         end_at: datetime | None = None,
         requested_by: str = "",
     ) -> int:
+        body, report_text = await self._prepare_usage_report(
+            report_date,
+            end_at=end_at,
+            requested_by=requested_by,
+        )
+        recipients = [
+            str(user_id).strip()
+            for user_id in body.get("report_user_ids", [])
+            if str(user_id).strip().isdigit()
+        ]
+        if not recipients:
+            logger.warning("每日用量日报未发送：LONGTU_QQ_USAGE_REPORT_USERS 为空")
+            return 0
+        return await self._send_usage_report_text(report_text, recipients)
+
+    async def _prepare_usage_report(
+        self,
+        report_date,
+        *,
+        end_at: datetime | None = None,
+        requested_by: str = "",
+    ) -> tuple[dict, str]:
         start = datetime.combine(
             report_date,
             datetime_time.min,
@@ -365,18 +397,7 @@ class LongtuQqBridge(Star):
         }
         normalized_requester = str(requested_by or "").strip()
         if normalized_requester and normalized_requester not in admins:
-            raise PermissionError("只有 LONGTU_QQ_ADMIN_USERS 中的超管可以测试日报")
-        recipients = [
-            str(user_id).strip()
-            for user_id in body.get("report_user_ids", [])
-            if str(user_id).strip().isdigit()
-        ]
-        if not recipients:
-            logger.warning("每日用量日报未发送：LONGTU_QQ_USAGE_REPORT_USERS 为空")
-            return 0
-        platform = self._qq_platform()
-        if not platform:
-            raise RuntimeError("未找到已启用的 aiocqhttp 平台")
+            raise PermissionError("只有超级管理员可以查询用量日报")
         header_suffix = ""
         if end_at:
             header_suffix = f"｜截至 {end_at.astimezone(REPORT_TIMEZONE):%H:%M}"
@@ -385,6 +406,16 @@ class LongtuQqBridge(Star):
             report_date,
             header_suffix,
         )
+        return body, report_text
+
+    async def _send_usage_report_text(
+        self,
+        report_text: str,
+        recipients: list[str],
+    ) -> int:
+        platform = self._qq_platform()
+        if not platform:
+            raise RuntimeError("未找到已启用的 aiocqhttp 平台")
         platform_id = platform.meta().id
         for recipient_id in recipients:
             sent = await self.context.send_message(
@@ -395,6 +426,25 @@ class LongtuQqBridge(Star):
                 logger.warning(f"每日用量日报发送失败：{recipient_id}")
         logger.info(f"每日用量日报已推送给 {len(recipients)} 个收件账号")
         return len(recipients)
+
+    async def _send_requested_usage_report(
+        self,
+        report_date,
+        requested_by: str,
+        *,
+        end_at: datetime | None = None,
+    ) -> int:
+        _body, report_text = await self._prepare_usage_report(
+            report_date,
+            end_at=end_at,
+            requested_by=requested_by,
+        )
+        # 指定日期的回捞只发给发令超管，不把群用量和费用暴露给当前群成员，
+        # 也不依赖日报收件人列表是否配置。
+        return await self._send_usage_report_text(
+            report_text,
+            [str(requested_by).strip()],
+        )
 
     async def _send_current_usage_report(self, requested_by: str) -> int:
         now = datetime.now(REPORT_TIMEZONE)
@@ -524,8 +574,40 @@ class LongtuQqBridge(Star):
 
     @classmethod
     def _is_usage_report_command(cls, event: AstrMessageEvent) -> bool:
+        return cls._usage_report_command_argument(event) is not None
+
+    @classmethod
+    def _usage_report_command_argument(cls, event: AstrMessageEvent) -> str | None:
         raw_text = (cls._raw_text(event) or event.message_str or "").strip()
-        return bool(re.match(r"^/usage-report\s*$", raw_text, re.IGNORECASE))
+        matched = re.fullmatch(
+            r"/usage-report(?:\s+(.*?))?\s*",
+            raw_text,
+            re.IGNORECASE,
+        )
+        return None if not matched else str(matched.group(1) or "").strip()
+
+    @staticmethod
+    def _usage_report_period(argument: str, now: datetime | None = None):
+        current = now or datetime.now(REPORT_TIMEZONE)
+        normalized = str(argument or "").strip()
+        if not normalized:
+            return current.date(), current + timedelta(milliseconds=1)
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized):
+            raise ValueError(
+                "日期格式无效，请使用 /usage-report YYYY-MM-DD（例如 /usage-report 2026-08-30）。",
+            )
+        try:
+            report_date = datetime.strptime(normalized, "%Y-%m-%d").date()
+        except ValueError as error:
+            raise ValueError("日期无效，请检查月份和日期。") from error
+        if report_date > current.date():
+            raise ValueError("不能查询未来日期。")
+        end_at = (
+            current + timedelta(milliseconds=1)
+            if report_date == current.date()
+            else None
+        )
+        return report_date, end_at
 
     def _ignore_slash_commands(self) -> bool:
         configured = (
@@ -1065,19 +1147,33 @@ class LongtuQqBridge(Star):
                 # 停止，避免 /w、/help 等内置命令或其他插件被误触发。
                 if not self._is_allowed_bridge_slash_command(event):
                     return
-                if self._is_usage_report_command(event):
+                usage_report_argument = self._usage_report_command_argument(event)
+                if usage_report_argument is not None:
+                    requested_by = str(event.get_sender_id() or "")
                     try:
-                        recipient_count = await self._send_current_usage_report(
-                            str(event.get_sender_id() or ""),
-                        )
+                        if usage_report_argument:
+                            report_date, end_at = self._usage_report_period(
+                                usage_report_argument,
+                            )
+                            recipient_count = await self._send_requested_usage_report(
+                                report_date,
+                                requested_by,
+                                end_at=end_at,
+                            )
+                        else:
+                            recipient_count = await self._send_current_usage_report(
+                                requested_by,
+                            )
                     except PermissionError:
-                        yield event.plain_result("只有超级管理员可以测试用量日报。")
+                        yield event.plain_result("只有超级管理员可以查询用量日报。")
+                    except ValueError as error:
+                        yield event.plain_result(str(error))
                     except Exception as error:
-                        logger.error(f"手动测试用量日报失败：{error}")
-                        yield event.plain_result("用量日报测试失败，请检查服务日志。")
+                        logger.error(f"手动查询用量日报失败：{error}")
+                        yield event.plain_result("用量日报查询失败，请检查服务日志。")
                     else:
                         logger.info(
-                            f"手动用量日报测试完成：已发送给 "
+                            f"手动用量日报查询完成：已发送给 "
                             f"{recipient_count} 个收件账号",
                         )
                     return
@@ -1093,12 +1189,15 @@ class LongtuQqBridge(Star):
                 if self._is_allowed_bridge_slash_command(event) and raw_text
                 else event.message_str.strip()
             )
+            reply_component = self._reply_component(components)
+            quoted_chain = getattr(reply_component, "chain", None) or []
             has_image = any(
                 isinstance(component, Comp.Image)
                 for component in components
+            ) or any(
+                isinstance(component, Comp.Image)
+                for component in quoted_chain
             )
-            reply_component = self._reply_component(components)
-            quoted_chain = getattr(reply_component, "chain", None) or []
             has_forward = bool(
                 self._forward_components(components)
                 or self._forward_components(quoted_chain)
@@ -1134,7 +1233,9 @@ class LongtuQqBridge(Star):
             quoted_forwarded_text = await self._forwarded_text(event, quoted_chain)
             image_base64 = ""
             quoted_image_base64 = ""
-            if should_reply and self._is_image_management_text(text):
+            # 被动旁观消息只记录文字占位，不把大体积 Base64 上传到 Node；
+            # 真正唤醒机器人（私聊、@机器人或图库管理）时才读取图片内容。
+            if has_image and should_reply:
                 try:
                     image_base64 = await self._first_image_base64(components)
                     quoted_image_base64 = await self._quoted_image_base64(

@@ -69,6 +69,47 @@ test('按群记录真实 LLM Token、缓存命中和折算配额', async () => {
   }
 });
 
+test('日报总计包含私聊用量，但群排行只展示群聊聚合', async () => {
+  const fixture = createTracker();
+  const client = fixture.tracker.wrapChatClient({
+    model: 'deepseek-v4-flash',
+    isConfigured: true,
+    async complete(_history, _content, options) {
+      options.onUsage({
+        usage: {
+          prompt_tokens: 200,
+          completion_tokens: 20,
+          total_tokens: 220,
+        },
+      });
+      return 'ok';
+    },
+  });
+
+  try {
+    await fixture.tracker.runWithContext({
+      groupId: 'group-1',
+      userId: 'group-user',
+      messageType: 'group',
+    }, () => client.complete([], '群聊'));
+    await fixture.tracker.runWithContext({
+      groupId: '',
+      userId: 'private-user',
+      messageType: 'private',
+    }, () => client.complete([], '私聊'));
+
+    const report = fixture.tracker.getReport();
+    assert.deepEqual(report.groups.map((group) => group.groupId), ['group-1']);
+    assert.equal(report.totals.llmCalls, 2);
+    assert.equal(report.totals.totalTokens, 440);
+    assert.equal(report.privateUsage.llmCalls, 1);
+    assert.equal(report.privateUsage.totalTokens, 220);
+    assert.equal(report.privateUsage.estimatedCostCny, 0.00039);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('所有群按近期开口人数和消息活跃度动态获得配额', async () => {
   let now = Date.UTC(2026, 7, 25, 4);
   const fixture = createTracker({

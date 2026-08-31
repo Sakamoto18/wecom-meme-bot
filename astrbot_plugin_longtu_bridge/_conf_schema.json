@@ -61,7 +61,7 @@
     "description": "每天私聊日报收件人推送上一自然日的群聊用量日报",
     "type": "bool",
     "default": true,
-    "hint": "收件人来自 LONGTU_QQ_USAGE_REPORT_USERS，可配置多个 QQ 且不获得超管权限；时区固定为 Asia/Shanghai"
+    "hint": "收件人来自 LONGTU_QQ_USAGE_REPORT_USERS，可配置多个 QQ 且不获得超管权限；超管可用 /usage-report YYYY-MM-DD 回捞指定日期并私聊自己；时区固定为 Asia/Shanghai"
   },
   "daily_usage_report_hour": {
     "description": "用量日报发送小时（北京时间）",

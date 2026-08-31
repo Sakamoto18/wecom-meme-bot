@@ -942,7 +942,7 @@ export class QqUsageTracker {
         cached_input_tokens AS cachedInputTokens,
         output_tokens AS outputTokens
       FROM qq_usage_events
-      WHERE kind = 'llm' AND allowed = 1 AND group_id <> ''
+      WHERE kind = 'llm' AND allowed = 1
         AND created_at >= ? AND created_at < ?
     `).all(start, end);
     const costs = calculateDeepSeekCosts(costRows);
@@ -955,10 +955,61 @@ export class QqUsageTracker {
         cached_input_tokens AS cachedInputTokens,
         output_tokens AS outputTokens
       FROM qq_usage_events
-      WHERE kind = 'saving' AND group_id <> ''
+      WHERE kind = 'saving'
         AND created_at >= ? AND created_at < ?
     `).all(start, end);
     const savingCosts = calculateDeepSeekCosts(savingCostRows);
+    const privateUsageRow = database.prepare(`
+      SELECT
+        SUM(CASE WHEN kind = 'request' THEN 1 ELSE 0 END) AS requests,
+        SUM(CASE WHEN kind = 'llm' AND allowed = 0 THEN 1 ELSE 0 END) AS blockedLlmCalls,
+        SUM(CASE WHEN kind = 'llm' AND allowed = 1 THEN 1 ELSE 0 END) AS llmCalls,
+        SUM(CASE WHEN kind = 'llm' AND allowed = 1 AND succeeded = 0 THEN 1 ELSE 0 END) AS llmErrors,
+        SUM(CASE WHEN kind = 'llm' AND allowed = 1 AND source IN
+          ('conversation-reply', 'active-reply') THEN 1 ELSE 0 END) AS primaryReplyCalls,
+        SUM(CASE WHEN kind = 'llm' AND allowed = 1 AND source IN
+          ('conversation-reply-review', 'active-reply-review') THEN 1 ELSE 0 END)
+          AS secondaryReviewCalls,
+        SUM(CASE WHEN kind = 'saving' AND limit_reason =
+          'secondary-review-budget' THEN 1 ELSE 0 END) AS skippedSecondaryReviews,
+        COALESCE(SUM(CASE WHEN kind = 'saving' THEN total_tokens ELSE 0 END), 0)
+          AS estimatedSavedTokens,
+        COALESCE(SUM(CASE WHEN kind = 'llm' THEN input_tokens ELSE 0 END), 0) AS inputTokens,
+        COALESCE(SUM(CASE WHEN kind = 'llm' THEN output_tokens ELSE 0 END), 0) AS outputTokens,
+        COALESCE(SUM(CASE WHEN kind = 'llm' THEN total_tokens ELSE 0 END), 0) AS totalTokens,
+        COALESCE(SUM(CASE WHEN kind = 'llm' THEN cached_input_tokens ELSE 0 END), 0)
+          AS cachedInputTokens,
+        COALESCE(SUM(CASE WHEN kind = 'llm' THEN quota_tokens ELSE 0 END), 0) AS quotaTokens,
+        SUM(CASE WHEN kind = 'search' AND allowed = 0 THEN 1 ELSE 0 END) AS blockedSearchCalls,
+        SUM(CASE WHEN kind = 'search' AND allowed = 1 AND search_cache = 0 THEN 1 ELSE 0 END)
+          AS searchCalls,
+        SUM(CASE WHEN kind = 'search' AND search_cache = 1 THEN 1 ELSE 0 END) AS searchCacheHits
+      FROM qq_usage_events
+      WHERE group_id = '' AND created_at >= ? AND created_at < ?
+    `).get(start, end);
+    const privateCost = costs.byGroup.get('') ?? serializeCostSummary(
+      emptyCostSummary(),
+    );
+    const privateUsage = {
+      ...privateCost,
+      estimatedSavedCostCny: savingCosts.byGroup.get('')?.estimatedCostCny ?? 0,
+      requests: Number(privateUsageRow.requests || 0),
+      blockedLlmCalls: Number(privateUsageRow.blockedLlmCalls || 0),
+      llmCalls: Number(privateUsageRow.llmCalls || 0),
+      llmErrors: Number(privateUsageRow.llmErrors || 0),
+      primaryReplyCalls: Number(privateUsageRow.primaryReplyCalls || 0),
+      secondaryReviewCalls: Number(privateUsageRow.secondaryReviewCalls || 0),
+      skippedSecondaryReviews: Number(privateUsageRow.skippedSecondaryReviews || 0),
+      estimatedSavedTokens: Number(privateUsageRow.estimatedSavedTokens || 0),
+      inputTokens: Number(privateUsageRow.inputTokens || 0),
+      outputTokens: Number(privateUsageRow.outputTokens || 0),
+      totalTokens: Number(privateUsageRow.totalTokens || 0),
+      cachedInputTokens: Number(privateUsageRow.cachedInputTokens || 0),
+      quotaTokens: Number(privateUsageRow.quotaTokens || 0),
+      blockedSearchCalls: Number(privateUsageRow.blockedSearchCalls || 0),
+      searchCalls: Number(privateUsageRow.searchCalls || 0),
+      searchCacheHits: Number(privateUsageRow.searchCacheHits || 0),
+    };
     const groups = database.prepare(`
       SELECT
         group_id AS groupId,
@@ -1063,7 +1114,7 @@ export class QqUsageTracker {
         SUM(CASE WHEN kind = 'search' AND allowed = 1 AND search_cache = 0 THEN 1 ELSE 0 END) AS searchCalls,
         SUM(CASE WHEN kind = 'search' AND search_cache = 1 THEN 1 ELSE 0 END) AS searchCacheHits
       FROM qq_usage_events
-      WHERE group_id <> '' AND created_at >= ? AND created_at < ?
+      WHERE created_at >= ? AND created_at < ?
     `).get(start, end);
     const sources = database.prepare(`
       SELECT
@@ -1076,7 +1127,7 @@ export class QqUsageTracker {
         COALESCE(SUM(CASE WHEN kind = 'llm' THEN total_tokens ELSE 0 END), 0) AS totalTokens,
         SUM(CASE WHEN kind = 'search' AND allowed = 1 AND search_cache = 0 THEN 1 ELSE 0 END) AS searchCalls
       FROM qq_usage_events
-      WHERE group_id <> '' AND created_at >= ? AND created_at < ?
+      WHERE created_at >= ? AND created_at < ?
         AND kind IN ('llm', 'search')
       GROUP BY source
       ORDER BY totalTokens DESC, llmCalls DESC, searchCalls DESC, source ASC
@@ -1119,6 +1170,7 @@ export class QqUsageTracker {
       groupSearchLimitPerDay: this.maxGroupSearchCallsPerDay || null,
       largeGroupSearchLimitPerDay: this.maxLargeGroupSearchCallsPerDay || null,
       groups,
+      privateUsage,
       sources,
       totals: {
         requests: Number(totals.requests || 0),
