@@ -14,7 +14,9 @@ import { QqBotService } from './qq-service.js';
 import { QqUsageTracker } from './qq-usage-tracker.js';
 import { LongtuWebSearch } from './web-search.js';
 
-const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
+// DeepSeek Vision's inline request limit is 48 MiB. Keep the bridge/API
+// aligned with that limit so multi-image payloads are not rejected locally.
+const MAX_REQUEST_BYTES = 48 * 1024 * 1024;
 const currentFile = fileURLToPath(import.meta.url);
 const currentDirectory = path.dirname(currentFile);
 const projectRoot = path.resolve(currentDirectory, '..');
@@ -560,8 +562,9 @@ export async function createQqRuntime() {
     largeGroupMemberThreshold: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_MEMBER_THRESHOLD,
     ) ?? 40,
-    largeGroupPassiveDecisionCooldownMs: (parsePositiveNumber(
-      process.env.QQ_USAGE_LARGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS,
+    groupPassiveDecisionCooldownMs: (parsePositiveNumber(
+      process.env.QQ_USAGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS
+        ?? process.env.QQ_USAGE_LARGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS,
     ) ?? 180) * 1000,
     largeGroupHistoryMessages: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_HISTORY_MESSAGES,
@@ -569,8 +572,9 @@ export async function createQqRuntime() {
     largeGroupHistoryCharacters: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_HISTORY_CHARACTERS,
     ) ?? 8_000,
-    largeGroupBackgroundSummariesEnabled: parseBoolean(
-      process.env.QQ_USAGE_LARGE_GROUP_BACKGROUND_SUMMARIES_ENABLED,
+    groupBackgroundSummariesEnabled: parseBoolean(
+      process.env.QQ_USAGE_GROUP_BACKGROUND_SUMMARIES_ENABLED
+        ?? process.env.QQ_USAGE_LARGE_GROUP_BACKGROUND_SUMMARIES_ENABLED,
       false,
     ),
   });
