@@ -1164,6 +1164,13 @@ class LongtuQqBridge(Star):
         self_id = str(getattr(event.message_obj, "self_id", "") or "").strip()
         if self_id:
             routing_params["self_id"] = self_id
+        candidates = []
+
+        async def collect(value: object) -> None:
+            image = await self._download_forward_image(value)
+            if image:
+                candidates.append(image)
+
         if (file_ref
                 and not file_ref.startswith(("http://", "https://", "base64://", "data:"))
                 and bot
@@ -1182,16 +1189,14 @@ class LongtuQqBridge(Star):
             else:
                 if isinstance(result, dict):
                     for key in ("base64", "file", "url"):
-                        image = await self._download_forward_image(result.get(key))
-                        if image:
-                            return image
+                        await collect(result.get(key))
 
         # NapCat/OneBot 也可能直接给 URL 或内联 base64。
         for key in ("url", "file", "file_id"):
-            image = await self._download_forward_image(data.get(key))
-            if image:
-                return image
-        return ""
+            await collect(data.get(key))
+        # 同一图片可能同时提供缩略图 URL 和原图 file_id；选择体积最大的
+        # 候选，避免先命中的低清预览遮蔽后续原图。
+        return max(candidates, key=len, default="")
 
     async def _fetch_forward_nodes(
         self,
