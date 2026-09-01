@@ -1155,36 +1155,40 @@ class LongtuQqBridge(Star):
         event: AstrMessageEvent,
         data: dict,
     ) -> str:
-        # NapCat/OneBot 可能直接给 URL、base64，也可能只给 file/file_id。
-        for key in ("url", "file", "file_id"):
-            image = await self._download_forward_image(data.get(key))
-            if image:
-                return image
-
-        file_ref = str(data.get("file") or data.get("file_id") or "").strip()
+        # 合并转发里的 url/file 有时只是 QQ 生成的低清预览。只要存在
+        # file/file_id，优先调用 get_image 让 NapCat 返回原图；API 失败后
+        # 再回退到直接下载，兼容没有 file_id 的旧格式。
+        file_ref = str(data.get("file_id") or data.get("file") or "").strip()
         bot = getattr(event, "bot", None)
-        if not file_ref or not bot or not callable(getattr(bot, "call_action", None)):
-            return ""
         routing_params = {}
         self_id = str(getattr(event.message_obj, "self_id", "") or "").strip()
         if self_id:
             routing_params["self_id"] = self_id
-        try:
-            result = await asyncio.wait_for(
-                bot.call_action(
-                    action="get_image",
-                    file=file_ref,
-                    **routing_params,
-                ),
-                timeout=20,
-            )
-        except Exception as error:
-            logger.warning(f"合并转发图片读取失败：{type(error).__name__}")
-            return ""
-        if not isinstance(result, dict):
-            return ""
-        for key in ("base64", "file", "url"):
-            image = await self._download_forward_image(result.get(key))
+        if (file_ref
+                and not file_ref.startswith(("http://", "https://", "base64://", "data:"))
+                and bot
+                and callable(getattr(bot, "call_action", None))):
+            try:
+                result = await asyncio.wait_for(
+                    bot.call_action(
+                        action="get_image",
+                        file=file_ref,
+                        **routing_params,
+                    ),
+                    timeout=20,
+                )
+            except Exception as error:
+                logger.debug(f"合并转发原图 API 读取失败，回退直接下载：{type(error).__name__}")
+            else:
+                if isinstance(result, dict):
+                    for key in ("base64", "file", "url"):
+                        image = await self._download_forward_image(result.get(key))
+                        if image:
+                            return image
+
+        # NapCat/OneBot 也可能直接给 URL 或内联 base64。
+        for key in ("url", "file", "file_id"):
+            image = await self._download_forward_image(data.get(key))
             if image:
                 return image
         return ""
@@ -1272,6 +1276,10 @@ class LongtuQqBridge(Star):
                     if image:
                         images.append(image)
                         budget["images"] += 1
+                        logger.info(
+                            f"合并转发图片已读取：第 {budget['images']} 张，"
+                            f"约 {len(image) * 3 / 4 / 1024 / 1024:.2f} MiB",
+                        )
                 elif segment_type in {"node", "nodes"}:
                     nested = data.get("content") or data.get("message") or data.get("messages")
                     images.extend(await self._collect_forward_images(
