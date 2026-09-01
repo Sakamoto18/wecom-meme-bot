@@ -641,6 +641,46 @@ test('单张图片被上游拒绝时会隔离该图并继续读取其余图片',
   );
 });
 
+test('上游拒绝一张可解码图片时会先转成标准 JPEG 并保留整批图片', async () => {
+  const png = (await createPng()).toString('base64');
+  const calls = [];
+  const chatClient = {
+    isConfigured: true,
+    model: 'deepseek-v4-flash-vision-exp',
+    async complete(history, modelInput, options) {
+      calls.push({ history, modelInput, options });
+      const imageBlocks = Array.isArray(modelInput)
+        ? modelInput.filter((part) => part.type === 'image_url')
+        : [];
+      if (imageBlocks[1]?.image_url?.url.startsWith('data:image/png;')) {
+        throw new Error(
+          '大模型请求失败（HTTP 400）：.messages[1].image[1]: You have uploaded an unsupported image',
+        );
+      }
+      return '两张图片都读取成功。';
+    },
+  };
+  const { service } = createService({ chatClient });
+
+  const result = await service.handleMessage({
+    message_type: 'private',
+    user_id: 'vision-reencode-user',
+    text: '分别看看这两张图',
+    image_base64s: [png, png],
+  });
+
+  assert.equal(result.mode, 'model');
+  const successfulImageCall = calls.findLast((call) => (
+    Array.isArray(call.modelInput)
+    && call.modelInput.filter((part) => part.type === 'image_url').length === 2
+    && call.modelInput.some((part) => (
+      part.type === 'image_url'
+      && part.image_url.url.startsWith('data:image/jpeg;')
+    ))
+  ));
+  assert.ok(successfulImageCall);
+});
+
 test('QQ 重复消息 ID 不会重复调用模型或发图', async () => {
   const { service, calls } = createService();
   const input = {
