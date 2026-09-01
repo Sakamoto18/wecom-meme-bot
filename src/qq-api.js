@@ -562,6 +562,10 @@ export async function createQqRuntime() {
     largeGroupMemberThreshold: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_MEMBER_THRESHOLD,
     ) ?? 40,
+    largeGroupMemberLimitThreshold: parseNonnegativeInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_MEMBER_LIMIT_THRESHOLD,
+      120,
+    ),
     groupPassiveDecisionCooldownMs: (parsePositiveNumber(
       process.env.QQ_USAGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS
         ?? process.env.QQ_USAGE_LARGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS,

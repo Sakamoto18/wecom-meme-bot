@@ -58,6 +58,7 @@ function createService(options = {}) {
     usageTracker: options.usageTracker,
     largeGroupIds: options.largeGroupIds,
     largeGroupMemberThreshold: options.largeGroupMemberThreshold,
+    largeGroupMemberLimitThreshold: options.largeGroupMemberLimitThreshold,
     groupPassiveDecisionCooldownMs: options.groupPassiveDecisionCooldownMs,
     largeGroupPassiveDecisionCooldownMs: options.largeGroupPassiveDecisionCooldownMs,
     groupBackgroundSummariesEnabled: options.groupBackgroundSummariesEnabled,
@@ -83,12 +84,34 @@ test('QQ 请求字段会映射到现有消息模型且私聊无需 group_id', ()
 
   assert.equal(payload.text, '你好');
   assert.equal(payload.pureBotMention, true);
+  assert.equal(payload.groupMemberLimit, null);
   assert.equal(message.chattype, 'single');
   assert.equal(message.from.userid, '20');
   assert.equal(message.quote.text.content, '上一句');
   assert.throws(
     () => normalizeQqPayload({ message_type: 'group', user_id: '20' }),
     /group_id/,
+  );
+});
+
+test('QQ 群员统计字段会规范化并保留缺失值', () => {
+  const payload = normalizeQqPayload({
+    message_type: 'group',
+    group_id: 'group-with-limit',
+    user_id: 'member-1',
+    group_member_count: '88.9',
+    group_member_limit: 121.8,
+  });
+
+  assert.equal(payload.groupMemberCount, 88);
+  assert.equal(payload.groupMemberLimit, 121);
+  assert.equal(
+    normalizeQqPayload({
+      message_type: 'group',
+      group_id: 'group-without-limit',
+      user_id: 'member-1',
+    }).groupMemberLimit,
+    null,
   );
 });
 
@@ -116,6 +139,34 @@ test('大型群按群号标记并把大型群上下文传给用量追踪器', as
 
   assert.equal(capturedContext.groupId, 'large-group-id');
   assert.equal(capturedContext.largeGroup, true);
+});
+
+test('大型群自动判定必须同时满足群员上限超过 120 和活跃成员门槛', () => {
+  const conversationStore = {
+    getGroupMembers: () => Array.from({ length: 40 }, (_, index) => ({
+      userId: `user-${index}`,
+    })),
+  };
+  const { service } = createService({ conversationStore });
+
+  assert.equal(service.isLargeGroup('limit-120', { groupMemberLimit: 120 }), false);
+  assert.equal(service.isLargeGroup('limit-121', { groupMemberLimit: 121 }), true);
+  assert.equal(service.isLargeGroup('missing-limit'), false);
+});
+
+test('群员上限满足时仍需达到活跃成员门槛，显式大型群可强制覆盖', () => {
+  const conversationStore = {
+    getGroupMembers: () => Array.from({ length: 10 }, (_, index) => ({
+      userId: `user-${index}`,
+    })),
+  };
+  const { service } = createService({
+    conversationStore,
+    largeGroupIds: new Set(['forced-group']),
+  });
+
+  assert.equal(service.isLargeGroup('quiet-large', { groupMemberLimit: 200 }), false);
+  assert.equal(service.isLargeGroup('forced-group'), true);
 });
 
 test('大型群限制被动判定频率，但明确请求仍正常处理', async () => {
