@@ -21,6 +21,8 @@ MAX_FORWARD_NODE_CHARACTERS = 600
 MAX_FORWARD_DEPTH = 3
 FORWARD_CACHE_TTL_SECONDS = 60 * 60
 FORWARD_CACHE_MAX_ENTRIES = 128
+GROUP_INFO_CACHE_TTL_SECONDS = 10 * 60
+GROUP_INFO_CACHE_MAX_ENTRIES = 512
 MAX_IMAGE_COMPONENTS = 12
 MAX_FORWARD_IMAGE_BYTES = 32 * 1024 * 1024
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -43,6 +45,7 @@ class LongtuQqBridge(Star):
         self.session: aiohttp.ClientSession | None = None
         self.forward_cache: dict[str, tuple[float, str]] = {}
         self.forward_nodes_cache: dict[str, tuple[float, list]] = {}
+        self.group_info_cache: dict[str, tuple[float, dict[str, int]]] = {}
         self.report_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
 
@@ -161,6 +164,55 @@ class LongtuQqBridge(Star):
             except Exception:
                 continue
         return names
+
+    async def _group_info(self, group_id: str) -> dict[str, int]:
+        """读取并短暂缓存 QQ 群员上限，供大型群策略使用。"""
+        normalized_group_id = str(group_id or "").strip()
+        if not normalized_group_id.isdigit():
+            return {}
+        now = time.monotonic()
+        cached = self.group_info_cache.get(normalized_group_id)
+        if cached and now - cached[0] < GROUP_INFO_CACHE_TTL_SECONDS:
+            return dict(cached[1])
+
+        platform = self._qq_platform()
+        bot = getattr(platform, "bot", None) if platform else None
+        if not bot:
+            return {}
+        try:
+            info = await asyncio.wait_for(
+                bot.get_group_info(
+                    group_id=int(normalized_group_id),
+                    no_cache=False,
+                ),
+                timeout=8,
+            )
+        except Exception as error:
+            logger.debug(f"读取 QQ 群 {normalized_group_id} 群员上限失败：{error}")
+            return {}
+
+        def _nonnegative_int(value):
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if parsed >= 0 else None
+
+        result = {}
+        member_count = _nonnegative_int((info or {}).get("member_count"))
+        member_limit = _nonnegative_int((info or {}).get("max_member_count"))
+        if member_count is not None:
+            result["group_member_count"] = member_count
+        if member_limit is not None:
+            result["group_member_limit"] = member_limit
+        self.group_info_cache[normalized_group_id] = (now, result)
+        if len(self.group_info_cache) > GROUP_INFO_CACHE_MAX_ENTRIES:
+            oldest_group_id = min(
+                self.group_info_cache,
+                key=lambda key: self.group_info_cache[key][0],
+            )
+            self.group_info_cache.pop(oldest_group_id, None)
+        return dict(result)
 
     @staticmethod
     def _number(value) -> str:
@@ -1315,12 +1367,18 @@ class LongtuQqBridge(Star):
                 )
         return reply_chain
 
-    def _pure_mention_payload(self, event: AstrMessageEvent) -> dict:
+    def _pure_mention_payload(
+        self,
+        event: AstrMessageEvent,
+        group_info: dict[str, int] | None = None,
+    ) -> dict:
         components = event.get_messages()
         return {
             "message_id": str(event.message_obj.message_id or ""),
             "message_type": "private" if event.is_private_chat() else "group",
             "group_id": event.get_group_id(),
+            "group_member_count": (group_info or {}).get("group_member_count"),
+            "group_member_limit": (group_info or {}).get("group_member_limit"),
             "user_id": event.get_sender_id(),
             "sender_name": event.get_sender_name(),
             "text": PURE_BOT_MENTION_TEXT,
@@ -1359,8 +1417,9 @@ class LongtuQqBridge(Star):
 
         event.call_llm = True
         try:
+            group_info = await self._group_info(event.get_group_id())
             response = await self._request_backend(
-                self._pure_mention_payload(event),
+                self._pure_mention_payload(event, group_info),
             )
         except Exception as error:
             logger.error(f"纯 At 前置兜底请求失败，保持静默以避免默认客服回复：{error}")
@@ -1506,11 +1565,18 @@ class LongtuQqBridge(Star):
                     logger.warning(f"龙图库管理图片读取失败：{error}")
 
             bot_user_id = str(event.get_self_id() or "").strip()
+            group_info = (
+                await self._group_info(event.get_group_id())
+                if not event.is_private_chat()
+                else {}
+            )
 
             payload = {
                 "message_id": str(event.message_obj.message_id or ""),
                 "message_type": "private" if event.is_private_chat() else "group",
                 "group_id": event.get_group_id(),
+                "group_member_count": group_info.get("group_member_count"),
+                "group_member_limit": group_info.get("group_member_limit"),
                 "user_id": event.get_sender_id(),
                 "sender_name": event.get_sender_name(),
                 "text": text,

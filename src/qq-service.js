@@ -84,6 +84,12 @@ function normalizeString(value, maxCharacters) {
   return String(value ?? '').trim().slice(0, maxCharacters);
 }
 
+function normalizeOptionalNonnegativeInteger(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
+}
+
 function normalizeIdentifier(value, label, required = true) {
   const normalized = normalizeString(value, MAX_IDENTIFIER_CHARACTERS);
   if (required && !normalized) {
@@ -615,6 +621,10 @@ export function normalizeQqPayload(payload) {
       ? payload.mentions.map(normalizeParticipant).filter(Boolean).slice(0, 20)
       : [],
     botUserId: normalizeString(payload.bot_user_id, MAX_IDENTIFIER_CHARACTERS),
+    // OneBot 群信息用于大型群自动判定。缺失时不猜测，避免把普通群误套用
+    // 大型群的低额度策略；显式 QQ_USAGE_LARGE_GROUPS 仍然可以强制覆盖。
+    groupMemberCount: normalizeOptionalNonnegativeInteger(payload.group_member_count),
+    groupMemberLimit: normalizeOptionalNonnegativeInteger(payload.group_member_limit),
     imageBase64s: limitedImages.images,
     quotedImageBase64s: limitedImages.quotedImages,
     forwardImageBase64s: limitedImages.forwardImages,
@@ -976,6 +986,12 @@ export class QqBotService {
       1,
       Number(options.largeGroupMemberThreshold ?? 40),
     );
+    this.largeGroupMemberLimitThreshold = Math.max(
+      0,
+      Number(options.largeGroupMemberLimitThreshold ?? 120),
+    );
+    this.groupMemberLimits = new Map();
+    this.largeGroupDecisionLogged = new Set();
     // Passive “read the air” checks are intentionally throttled for every
     // group.  The legacy large-group option remains a fallback so existing
     // deployments keep their configured interval during migration.
@@ -1029,20 +1045,36 @@ export class QqBotService {
     this.lastGroupPassiveDecisionAt = new Map();
   }
 
-  isLargeGroup(groupId) {
+  isLargeGroup(groupId, metadata = {}) {
     const normalizedGroupId = String(groupId ?? '').trim();
     if (!normalizedGroupId) return false;
     if (this.largeGroupIds.has(normalizedGroupId)) return true;
+
+    const reportedMemberLimit = normalizeOptionalNonnegativeInteger(
+      metadata?.groupMemberLimit,
+    );
+    if (reportedMemberLimit !== null) {
+      this.groupMemberLimits.set(normalizedGroupId, reportedMemberLimit);
+    }
+    const memberLimit = this.groupMemberLimits.get(normalizedGroupId);
+    // 自动判定必须先确认 QQ 群员上限严格超过配置阈值。没有真实上限数据
+    // 时保持普通群，避免仅凭本地观察成员数误判。
+    if (memberLimit === undefined || memberLimit <= this.largeGroupMemberLimitThreshold) {
+      return false;
+    }
     const members = this.conversationStore.getGroupMembers?.(
       normalizedGroupId,
       this.largeGroupMemberThreshold,
     ) ?? [];
     if (members.length >= this.largeGroupMemberThreshold) {
-      this.largeGroupIds.add(normalizedGroupId);
-      this.logger.log(
-        `QQ 大型群策略已启用：${normalizedGroupId}`
-        + `（已识别成员不少于 ${this.largeGroupMemberThreshold} 人）`,
-      );
+      if (!this.largeGroupDecisionLogged.has(normalizedGroupId)) {
+        this.largeGroupDecisionLogged.add(normalizedGroupId);
+        this.logger.log(
+          `QQ 大型群策略已启用：${normalizedGroupId}`
+          + `（群员上限 ${memberLimit}，已识别成员不少于 `
+          + `${this.largeGroupMemberThreshold} 人）`,
+        );
+      }
       return true;
     }
     return false;
@@ -2137,7 +2169,7 @@ export class QqBotService {
         userId: payload.userId,
         messageType: payload.messageType,
         largeGroup: payload.messageType === 'group'
-          && this.isLargeGroup(payload.groupId),
+          && this.isLargeGroup(payload.groupId, payload),
         source: payload.observeOnly ? 'observed-message' : 'direct-message',
       };
       return this.usageTracker.runWithContext(
