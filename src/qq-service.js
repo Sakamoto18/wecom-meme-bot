@@ -1639,6 +1639,7 @@ export class QqBotService {
       const imageAnalysis = await this.analyzeImages(imageBlocks);
       const imageAnalysisContext = formatImageAnalysisContext(imageAnalysis);
       const imageCount = imageBlocks.filter((block) => block?.type === 'image_url').length;
+      const hasImageContext = imageCount > 0 || Boolean(imageAnalysis);
       // 多图已经逐张完成视觉识别，最终回复只使用带序号的文字结果，避免
       // 回复模型再次自行挑图或重排；单图仍保留原图以便处理细节问题。
       const replyImageBlocks = imageAnalysis && imageCount > 1 ? [] : imageBlocks;
@@ -1658,7 +1659,9 @@ export class QqBotService {
         requiredIdentityRole,
         chatClient: this.chatClient,
         webSearch: this.webSearch,
-        webSearchEnabled: this.webSearchEnabled,
+        // 图片总结应以视觉结果为准；联网检索会把无关网页摘要混入上下文，
+        // 对“这几张图在说什么”这类请求反而容易造成内容漂移。
+        webSearchEnabled: hasImageContext ? false : this.webSearchEnabled,
         knowledgeContext: this.knowledgeContext,
         pureBotMention: options.pureBotMention === true,
         activeReply: options.activeReply === true,
