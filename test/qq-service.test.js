@@ -46,7 +46,8 @@ function createService(options = {}) {
     chatClient,
     memeStore,
     conversationStore: options.conversationStore ?? new ConversationStore(),
-    webSearchEnabled: false,
+    webSearch: options.webSearch,
+    webSearchEnabled: options.webSearchEnabled ?? false,
     longtuLibrary: options.longtuLibrary,
     adminUsers: options.adminUsers,
     protectedRoles: options.protectedRoles,
@@ -624,6 +625,42 @@ test('多张图片视觉分析会保留逐图顺序并附带整体总结', async
     < finalModelInput.indexOf('第2张图片：'));
   assert.match(finalModelInput, /必须按照第 1 张到最后一张依次覆盖全部图片/);
   assert.equal(typeof calls[2].modelInput, 'string');
+});
+
+test('图片总结默认不联网，明确要求查背景时允许联网解释', async () => {
+  const png = (await createPng()).toString('base64');
+  let searchCalls = 0;
+  const webSearch = {
+    async search() {
+      searchCalls += 1;
+      return {
+        context: '联网背景资料',
+        query: '图片背景',
+        resultCount: 1,
+        results: [],
+        endpoint: 'https://example.com/search',
+      };
+    },
+  };
+  const first = createService({ webSearch, webSearchEnabled: true });
+  await first.service.handleMessage({
+    message_id: 'vision-no-search',
+    message_type: 'private',
+    user_id: 'vision-search-user',
+    text: '总结这张图片的内容',
+    image_base64s: [png],
+  });
+  assert.equal(searchCalls, 0);
+
+  const second = createService({ webSearch, webSearchEnabled: true });
+  await second.service.handleMessage({
+    message_id: 'vision-with-search',
+    message_type: 'private',
+    user_id: 'vision-search-user',
+    text: '先读图，再联网核实这是什么新闻并解释背景',
+    image_base64s: [png],
+  });
+  assert.equal(searchCalls, 1);
 });
 
 test('合并转发图片会和普通图片一起进入视觉链路', async () => {
