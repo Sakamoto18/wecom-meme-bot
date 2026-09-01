@@ -1678,6 +1678,8 @@ class LongtuQqBridge(Star):
                 yield event.plain_result("正在翻龙图小本本……")
 
             quoted_user_id, quoted_sender_name = self._quoted_author(reply_component)
+            observed_forward_images = []
+            observed_quoted_forward_images = []
             if should_reply:
                 forwarded_text, forward_image_base64s = await self._forwarded_content(
                     event,
@@ -1688,8 +1690,16 @@ class LongtuQqBridge(Star):
                     quoted_chain,
                 )
             else:
-                forwarded_text = await self._forwarded_text(event, components)
-                quoted_forwarded_text = await self._forwarded_text(event, quoted_chain)
+                # 旁观消息仍不把图片上传给 Node，但先提取并缓存合并转发中的
+                # 图片，方便下一条消息明确询问“上面的聊天记录/图片”。
+                forwarded_text, observed_forward_images = await self._forwarded_content(
+                    event,
+                    components,
+                )
+                quoted_forwarded_text, observed_quoted_forward_images = await self._forwarded_content(
+                    event,
+                    quoted_chain,
+                )
                 forward_image_base64s = []
                 quoted_forward_image_base64s = []
             image_base64s = []
@@ -1701,12 +1711,18 @@ class LongtuQqBridge(Star):
                 try:
                     image_base64s = await self._image_base64s(components)
                     quoted_image_base64s = await self._image_base64s(quoted_chain)
-                    self._cache_recent_images(
-                        event,
-                        [*image_base64s, *quoted_image_base64s],
-                    )
                 except Exception as error:
                     logger.warning(f"QQ 图片读取失败：{type(error).__name__}")
+
+            cached_images = [
+                *image_base64s,
+                *quoted_image_base64s,
+                *forward_image_base64s,
+                *quoted_forward_image_base64s,
+                *observed_forward_images,
+                *observed_quoted_forward_images,
+            ]
+            self._cache_recent_images(event, cached_images)
 
             # QQ 中常见的“上一条先发图，下一条再 @ 机器人”不会携带引用组件；
             # 用户明确指向上文图片时，把短时缓存的图片带入本轮视觉请求。
