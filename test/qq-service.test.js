@@ -575,6 +575,57 @@ test('QQ 图片会以视觉消息进入模型，并用 OCR 结果选择契合龙
   assert.deepEqual(result.messages.map((message) => message.type), ['text', 'image']);
 });
 
+test('多张图片视觉分析会保留逐图顺序并附带整体总结', async () => {
+  const png = (await createPng()).toString('base64');
+  const calls = [];
+  const chatClient = {
+    isConfigured: true,
+    model: 'deepseek-v4-flash-vision-exp',
+    async complete(history, modelInput, options) {
+      calls.push({ history, modelInput, options });
+      if (calls.length === 1) {
+        return JSON.stringify({
+          description: '第一张：甲',
+          visible_text: ['甲'],
+          keywords: ['一'],
+          scene: '上',
+        });
+      }
+      if (calls.length === 2) {
+        return JSON.stringify({
+          description: '第二张：乙',
+          visible_text: ['乙'],
+          keywords: ['二'],
+          scene: '下',
+        });
+      }
+      return '按顺序总结完成。';
+    },
+  };
+  const { service } = createService({ chatClient });
+
+  const result = await service.handleMessage({
+    message_id: 'vision-ordered-1',
+    message_type: 'private',
+    user_id: 'vision-ordered-user',
+    text: '按顺序总结这两张图',
+    image_base64s: [png, png],
+  });
+
+  assert.equal(result.mode, 'model');
+  assert.match(calls[0].modelInput[0].text, /第 1 张图片/);
+  assert.match(calls[1].modelInput[0].text, /第 2 张图片/);
+  assert.equal(calls[0].modelInput.filter((part) => part.type === 'image_url').length, 1);
+  assert.equal(calls[1].modelInput.filter((part) => part.type === 'image_url').length, 1);
+  const finalModelInput = String(calls[2].modelInput);
+  assert.match(finalModelInput, /第1张图片：/);
+  assert.match(finalModelInput, /第2张图片：/);
+  assert.ok(finalModelInput.indexOf('第1张图片：')
+    < finalModelInput.indexOf('第2张图片：'));
+  assert.match(finalModelInput, /必须按照第 1 张到最后一张依次覆盖全部图片/);
+  assert.equal(typeof calls[2].modelInput, 'string');
+});
+
 test('合并转发图片会和普通图片一起进入视觉链路', async () => {
   const png = (await createPng()).toString('base64');
   const payload = normalizeQqPayload({
@@ -652,12 +703,12 @@ test('上游拒绝一张可解码图片时会先转成标准 JPEG 并保留整�
       const imageBlocks = Array.isArray(modelInput)
         ? modelInput.filter((part) => part.type === 'image_url')
         : [];
-      if (imageBlocks[1]?.image_url?.url.startsWith('data:image/png;')) {
+      if (imageBlocks[0]?.image_url?.url.startsWith('data:image/png;')) {
         throw new Error(
-          '大模型请求失败（HTTP 400）：.messages[1].image[1]: You have uploaded an unsupported image',
+          '大模型请求失败（HTTP 400）：.messages[1].image[0]: You have uploaded an unsupported image',
         );
       }
-      return '两张图片都读取成功。';
+      return '图片读取成功。';
     },
   };
   const { service } = createService({ chatClient });
@@ -665,14 +716,14 @@ test('上游拒绝一张可解码图片时会先转成标准 JPEG 并保留整�
   const result = await service.handleMessage({
     message_type: 'private',
     user_id: 'vision-reencode-user',
-    text: '分别看看这两张图',
-    image_base64s: [png, png],
+    text: '看看这张图',
+    image_base64s: [png],
   });
 
   assert.equal(result.mode, 'model');
   const successfulImageCall = calls.findLast((call) => (
     Array.isArray(call.modelInput)
-    && call.modelInput.filter((part) => part.type === 'image_url').length === 2
+    && call.modelInput.filter((part) => part.type === 'image_url').length === 1
     && call.modelInput.some((part) => (
       part.type === 'image_url'
       && part.image_url.url.startsWith('data:image/jpeg;')
