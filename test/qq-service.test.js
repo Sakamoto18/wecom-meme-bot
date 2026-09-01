@@ -524,7 +524,7 @@ test('长图切片尺寸受模型限制且相邻切片保留重叠内容', async
 });
 
 test('QQ 图片会以视觉消息进入模型，并用 OCR 结果选择契合龙图', async () => {
-  const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+  const png = (await createPng()).toString('base64');
   const calls = [];
   const matchedSha = 'f'.repeat(64);
   const chatClient = {
@@ -576,7 +576,7 @@ test('QQ 图片会以视觉消息进入模型，并用 OCR 结果选择契合龙
 });
 
 test('合并转发图片会和普通图片一起进入视觉链路', async () => {
-  const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64');
+  const png = (await createPng()).toString('base64');
   const payload = normalizeQqPayload({
     message_type: 'private',
     user_id: 'forward-image-user',
@@ -598,6 +598,46 @@ test('合并转发图片会和普通图片一起进入视觉链路', async () =>
   assert.equal(
     prepared.blocks.filter((block) => block.type === 'image_url').length,
     3,
+  );
+});
+
+test('单张图片被上游拒绝时会隔离该图并继续读取其余图片', async () => {
+  const png = (await createPng()).toString('base64');
+  const calls = [];
+  const chatClient = {
+    isConfigured: true,
+    model: 'deepseek-v4-flash-vision-exp',
+    async complete(history, modelInput, options) {
+      calls.push({ history, modelInput, options });
+      const imageCount = Array.isArray(modelInput)
+        ? modelInput.filter((part) => part.type === 'image_url').length
+        : 0;
+      if (imageCount >= 2) {
+        throw new Error(
+          '大模型请求失败（HTTP 400）：.messages[1].image[1]: You have uploaded an unsupported image',
+        );
+      }
+      return '两张图里有一张无法解析，但剩下这张我看到了。';
+    },
+  };
+  const { service } = createService({ chatClient });
+
+  const result = await service.handleMessage({
+    message_type: 'private',
+    user_id: 'vision-retry-user',
+    text: '分别看看这两张图',
+    image_base64s: [png, png],
+  });
+
+  assert.equal(result.mode, 'model');
+  const successfulImageCall = calls.findLast((call) => (
+    Array.isArray(call.modelInput)
+    && call.modelInput.some((part) => part.type === 'image_url')
+  ));
+  assert.ok(successfulImageCall);
+  assert.equal(
+    successfulImageCall.modelInput.filter((part) => part.type === 'image_url').length,
+    1,
   );
 });
 
