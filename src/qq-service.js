@@ -537,6 +537,45 @@ function imageIndexFromRequestError(error) {
   return match ? Number(match[1]) : null;
 }
 
+function imageBlockAt(imageBlocks, imageIndex) {
+  if (!Array.isArray(imageBlocks) || !Number.isInteger(imageIndex) || imageIndex < 0) {
+    return null;
+  }
+  let currentImageIndex = 0;
+  for (const block of imageBlocks) {
+    if (block?.type !== 'image_url') continue;
+    if (currentImageIndex === imageIndex) return block;
+    currentImageIndex += 1;
+  }
+  return null;
+}
+
+async function reencodeImageBlockAt(imageBlocks, imageIndex) {
+  const rejectedBlock = imageBlockAt(imageBlocks, imageIndex);
+  const imageUrl = String(rejectedBlock?.image_url?.url ?? '');
+  const match = imageUrl.match(/^data:[^;,]+;base64,([\s\S]+)$/i);
+  if (!match) return null;
+
+  try {
+    const image = await Jimp.read(Buffer.from(match[1], 'base64'));
+    const encoded = await encodeJpeg(image);
+    if (!encoded || encoded.length > MAX_IMAGE_BYTES) return null;
+    const replacement = {
+      ...rejectedBlock,
+      image_url: {
+        ...rejectedBlock.image_url,
+        url: `data:image/jpeg;base64,${encoded.toString('base64')}`,
+      },
+    };
+    return {
+      blocks: imageBlocks.map((block) => (block === rejectedBlock ? replacement : block)),
+      replacement,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function removeImageBlockAt(imageBlocks, imageIndex) {
   if (!Array.isArray(imageBlocks) || !Number.isInteger(imageIndex) || imageIndex < 0) {
     return null;
@@ -1497,6 +1536,7 @@ export class QqBotService {
       let generated;
       let activeImageBlocks = imageBlocks;
       let imageRetryAttempts = 0;
+      const reencodedImageBlocks = new WeakSet();
       try {
         while (true) {
           try {
@@ -1509,6 +1549,21 @@ export class QqBotService {
               throw error;
             }
             const imageIndex = imageIndexFromRequestError(error);
+            const rejectedImageBlock = imageBlockAt(activeImageBlocks, imageIndex);
+            if (rejectedImageBlock && !reencodedImageBlocks.has(rejectedImageBlock)) {
+              const reencoded = await reencodeImageBlockAt(activeImageBlocks, imageIndex);
+              if (reencoded) {
+                imageRetryAttempts += 1;
+                reencodedImageBlocks.add(rejectedImageBlock);
+                reencodedImageBlocks.add(reencoded.replacement);
+                this.logger.warn(
+                  `QQ 视觉请求中的第 ${imageIndex + 1} 张图片不被上游接受，`
+                  + '已重新编码为标准 JPEG 并重试整批图片',
+                );
+                activeImageBlocks = reencoded.blocks;
+                continue;
+              }
+            }
             const nextBlocks = removeImageBlockAt(activeImageBlocks, imageIndex);
             if (!nextBlocks || nextBlocks.length >= activeImageBlocks.length) {
               throw error;
