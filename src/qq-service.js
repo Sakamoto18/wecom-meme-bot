@@ -50,6 +50,9 @@ const DEFAULT_PEER_BOT_LOOP_WINDOW_MS = 5 * 60 * 1000;
 const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
 const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
 const MEMBER_HISTORY_INTENT_PATTERN = /(?:之前|以前|历史|上次|上回|曾经|说过|提过|聊过|记得|原话|哪次|什么时候)/;
+// 图片默认只做内容识别；出现这些明确的背景/核实/来源意图时，才允许
+// 回复阶段追加联网检索，避免普通“总结这几张图”被搜索结果带偏。
+const IMAGE_WEB_SEARCH_INTENT_PATTERN = /(?:联网|上网|搜索|查(?:一下|下|查)?|查询|核实|验证|背景|出处|来源|新闻|事件|人物|政策|历史|科普|解释|分析|讲讲|什么梗|什么意思)/i;
 const PROTECTED_SELF_IDENTITY_PATTERN = /(?:我是谁|知道我是谁|还(?:认得|认识|记得)我|不认识(?:你的)?超管|认不出我)/i;
 const MEMORY_SUMMARIZER_SYSTEM_PROMPT = [
   '你是 QQ 对话长期记忆整理器。',
@@ -1640,6 +1643,7 @@ export class QqBotService {
       const imageAnalysisContext = formatImageAnalysisContext(imageAnalysis);
       const imageCount = imageBlocks.filter((block) => block?.type === 'image_url').length;
       const hasImageContext = imageCount > 0 || Boolean(imageAnalysis);
+      const imageSearchRequested = IMAGE_WEB_SEARCH_INTENT_PATTERN.test(content);
       // 多图已经逐张完成视觉识别，最终回复只使用带序号的文字结果，避免
       // 回复模型再次自行挑图或重排；单图仍保留原图以便处理细节问题。
       const replyImageBlocks = imageAnalysis && imageCount > 1 ? [] : imageBlocks;
@@ -1661,7 +1665,9 @@ export class QqBotService {
         webSearch: this.webSearch,
         // 图片总结应以视觉结果为准；联网检索会把无关网页摘要混入上下文，
         // 对“这几张图在说什么”这类请求反而容易造成内容漂移。
-        webSearchEnabled: hasImageContext ? false : this.webSearchEnabled,
+        webSearchEnabled: hasImageContext
+          ? (imageSearchRequested && this.webSearchEnabled)
+          : this.webSearchEnabled,
         knowledgeContext: this.knowledgeContext,
         pureBotMention: options.pureBotMention === true,
         activeReply: options.activeReply === true,
