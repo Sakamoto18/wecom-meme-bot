@@ -25,6 +25,12 @@ GROUP_INFO_CACHE_TTL_SECONDS = 10 * 60
 GROUP_INFO_CACHE_MAX_ENTRIES = 512
 MAX_IMAGE_COMPONENTS = 12
 MAX_FORWARD_IMAGE_BYTES = 32 * 1024 * 1024
+RECENT_IMAGE_CACHE_TTL_SECONDS = 10 * 60
+RECENT_IMAGE_CACHE_MAX_ENTRIES = 256
+RECENT_IMAGE_CACHE_MAX_BASE64_CHARACTERS = 24 * 1024 * 1024 * 4 // 3
+RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
+    r"(?:上面|刚才|前面|上一张|前一张|这张(?:图|图片)|这个(?:图|图片)|图里|图片里)",
+)
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/stop", "/usage-report",
@@ -46,6 +52,9 @@ class LongtuQqBridge(Star):
         self.forward_cache: dict[str, tuple[float, str]] = {}
         self.forward_nodes_cache: dict[str, tuple[float, list]] = {}
         self.group_info_cache: dict[str, tuple[float, dict[str, int]]] = {}
+        # 静默观察不调用模型，但保留短时间内最近一批图片，支持用户先发图、
+        # 再单独 @ 机器人询问“上面这张图”的常见 QQ 使用方式。
+        self.recent_image_cache: dict[str, tuple[float, list[str]]] = {}
         self.report_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
 
@@ -819,6 +828,132 @@ class LongtuQqBridge(Star):
         ]
 
     @staticmethod
+    def _components_from_raw_message(segments) -> list:
+        """把 OneBot get_msg 返回的原始消息段转换成 AstrBot 组件。"""
+        if not isinstance(segments, list):
+            return []
+        components = []
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            segment_type = str(segment.get("type") or "").lower()
+            data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
+            if segment_type == "forward":
+                forward_id = str(
+                    data.get("id") or data.get("message_id") or "",
+                ).strip()
+                if forward_id:
+                    components.append(Comp.Forward(id=forward_id))
+            elif segment_type == "image":
+                reference = str(
+                    data.get("url") or data.get("file") or data.get("file_id") or "",
+                ).strip()
+                if reference:
+                    components.append(Comp.Image(file=reference))
+            elif segment_type == "text":
+                text = str(data.get("text") or "")
+                if text:
+                    components.append(Comp.Plain(text))
+        return components
+
+    async def _quoted_message_chain(
+        self,
+        event: AstrMessageEvent,
+        reply_component,
+        chain: list,
+    ) -> list:
+        """引用链被适配器压缩成占位符时，从 OneBot 回捞完整消息段。"""
+        current_chain = list(chain or [])
+        if any(
+            isinstance(component, (Comp.Forward, Comp.Image))
+            for component in current_chain
+        ):
+            return current_chain
+        reply_id = str(getattr(reply_component, "id", "") or "").strip()
+        bot = getattr(event, "bot", None)
+        if not reply_id or not bot or not callable(getattr(bot, "call_action", None)):
+            return current_chain
+        routing_params = {}
+        self_id = str(getattr(event.message_obj, "self_id", "") or "").strip()
+        if self_id:
+            routing_params["self_id"] = self_id
+        try:
+            result = await asyncio.wait_for(
+                bot.call_action(
+                    action="get_msg",
+                    message_id=reply_id,
+                    **routing_params,
+                ),
+                timeout=15,
+            )
+        except Exception as error:
+            logger.debug(f"引用消息 {reply_id} 回捞失败：{type(error).__name__}")
+            return current_chain
+        raw_segments = result.get("message") if isinstance(result, dict) else None
+        fetched_chain = self._components_from_raw_message(raw_segments)
+        if fetched_chain:
+            logger.info(
+                f"已从 OneBot 回捞引用消息 {reply_id} 的完整组件，"
+                f"其中图片 {sum(isinstance(item, Comp.Image) for item in fetched_chain)} 张、"
+                f"转发 {sum(isinstance(item, Comp.Forward) for item in fetched_chain)} 条",
+            )
+            return [*current_chain, *fetched_chain]
+        return current_chain
+
+    @staticmethod
+    def _recent_image_cache_key(event: AstrMessageEvent) -> str:
+        if event.is_private_chat():
+            return f"private:{event.get_sender_id()}"
+        return f"group:{event.get_group_id()}"
+
+    def _cache_recent_images(
+        self,
+        event: AstrMessageEvent,
+        images: list[str],
+    ) -> None:
+        if not images:
+            return
+        selected = []
+        total_characters = 0
+        for image in images:
+            normalized = str(image or "").strip()
+            if not normalized or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", normalized):
+                continue
+            if total_characters + len(normalized) > RECENT_IMAGE_CACHE_MAX_BASE64_CHARACTERS:
+                break
+            selected.append(normalized)
+            total_characters += len(normalized)
+            if len(selected) >= MAX_IMAGE_COMPONENTS:
+                break
+        if not selected:
+            return
+        key = self._recent_image_cache_key(event)
+        self.recent_image_cache[key] = (time.monotonic(), selected)
+        if len(self.recent_image_cache) > RECENT_IMAGE_CACHE_MAX_ENTRIES:
+            oldest_key = min(
+                self.recent_image_cache,
+                key=lambda cache_key: self.recent_image_cache[cache_key][0],
+            )
+            self.recent_image_cache.pop(oldest_key, None)
+
+    def _recent_images_for_reference(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+    ) -> list[str]:
+        if not RECENT_IMAGE_REFERENCE_PATTERN.search(str(text or "")):
+            return []
+        key = self._recent_image_cache_key(event)
+        cached = self.recent_image_cache.get(key)
+        if not cached:
+            return []
+        created_at, images = cached
+        if time.monotonic() - created_at > RECENT_IMAGE_CACHE_TTL_SECONDS:
+            self.recent_image_cache.pop(key, None)
+            return []
+        return list(images)
+
+    @staticmethod
     def _compact_forward_value(value, limit: int) -> str:
         return " ".join(str(value or "").split()).strip()[:limit]
 
@@ -1499,6 +1634,12 @@ class LongtuQqBridge(Star):
             )
             reply_component = self._reply_component(components)
             quoted_chain = getattr(reply_component, "chain", None) or []
+            if should_reply and reply_component:
+                quoted_chain = await self._quoted_message_chain(
+                    event,
+                    reply_component,
+                    quoted_chain,
+                )
             has_image = any(
                 isinstance(component, Comp.Image)
                 for component in components
@@ -1553,16 +1694,35 @@ class LongtuQqBridge(Star):
                 quoted_forward_image_base64s = []
             image_base64s = []
             quoted_image_base64s = []
-            # 被动旁观消息只记录文字占位，不把大体积 Base64 上传到 Node；
-            # 真正唤醒机器人（私聊、@机器人或图库管理）时才读取图片内容。
-            if has_image and should_reply:
+            # 被动旁观消息不调用 Node/模型，但把最近一批图片短暂缓存在
+            # AstrBot 插件内，支持“先发图、下一条再 @ 机器人评价”的消息习惯。
+            # 缓存有严格的群数、图片数、总字节和 TTL 上限，不会进入旁观用量统计。
+            if has_image:
                 try:
                     image_base64s = await self._image_base64s(components)
-                    quoted_image_base64s = await self._quoted_image_base64s(
-                        reply_component,
+                    quoted_image_base64s = await self._image_base64s(quoted_chain)
+                    self._cache_recent_images(
+                        event,
+                        [*image_base64s, *quoted_image_base64s],
                     )
                 except Exception as error:
-                    logger.warning(f"龙图库管理图片读取失败：{error}")
+                    logger.warning(f"QQ 图片读取失败：{type(error).__name__}")
+
+            # QQ 中常见的“上一条先发图，下一条再 @ 机器人”不会携带引用组件；
+            # 用户明确指向上文图片时，把短时缓存的图片带入本轮视觉请求。
+            if should_reply and not (
+                image_base64s
+                or quoted_image_base64s
+                or forward_image_base64s
+                or quoted_forward_image_base64s
+            ):
+                recent_images = self._recent_images_for_reference(event, text)
+                if recent_images:
+                    image_base64s = recent_images
+                    has_image = True
+                    logger.info(
+                        f"已将最近缓存的 {len(recent_images)} 张图片带入本轮 QQ 视觉请求",
+                    )
 
             bot_user_id = str(event.get_self_id() or "").strip()
             group_info = (
