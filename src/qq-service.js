@@ -33,6 +33,7 @@ const MAX_IDENTIFIER_CHARACTERS = 128;
 const MAX_IMAGE_BASE64_CHARACTERS = 44 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BASE64_CHARACTERS = 42 * 1024 * 1024;
 const MAX_IMAGE_COUNT = 12;
+const MAX_IMAGE_RETRY_ATTEMPTS = 4;
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 export const MAX_IMAGE_SIDE_PIXELS = 8_192;
 // Keep a generous overlap so a line/paragraph crossing a cut is present in
@@ -348,8 +349,10 @@ async function prepareSingleImage(base64, label, maxImages) {
   }
   // WebP variants without a VP8X dimension header can still be valid. Keep
   // them intact instead of asking Jimp (which may not include a WebP decoder)
-  // to re-encode them when no limit is known to be exceeded.
-  if (canSendOriginal && !dimensions) {
+  // to re-encode them when no limit is known to be exceeded. For PNG/JPEG/GIF,
+  // a missing dimension header usually means a truncated or malformed file;
+  // let Jimp validate those bytes before they reach the upstream model.
+  if (canSendOriginal && sourceMime === 'image/webp' && !dimensions) {
     return {
       images: [{ label, base64, mime: sourceMime }],
       notice: '',
@@ -526,6 +529,36 @@ function formatImageAnalysisContext(analysis) {
 function isImageRequestError(error) {
   const message = String(error?.message ?? error ?? '');
   return /unsupported image|invalid image|image_url|\.image\[|图片/.test(message);
+}
+
+function imageIndexFromRequestError(error) {
+  const message = String(error?.message ?? error ?? '');
+  const match = message.match(/\.image\[(\d+)\]/i);
+  return match ? Number(match[1]) : null;
+}
+
+function removeImageBlockAt(imageBlocks, imageIndex) {
+  if (!Array.isArray(imageBlocks) || !Number.isInteger(imageIndex) || imageIndex < 0) {
+    return null;
+  }
+  let currentImageIndex = 0;
+  const nextBlocks = [];
+  let removed = false;
+  for (const block of imageBlocks) {
+    if (block?.type === 'image_url') {
+      if (currentImageIndex === imageIndex) {
+        // Image labels are emitted immediately before their image block.
+        if (nextBlocks.at(-1)?.type === 'text') nextBlocks.pop();
+        removed = true;
+      } else {
+        nextBlocks.push(block);
+      }
+      currentImageIndex += 1;
+      continue;
+    }
+    nextBlocks.push(block);
+  }
+  return removed ? nextBlocks : null;
 }
 
 function isRenderedPureBotMention(payload) {
@@ -1462,8 +1495,32 @@ export class QqBotService {
           : undefined,
       });
       let generated;
+      let activeImageBlocks = imageBlocks;
+      let imageRetryAttempts = 0;
       try {
-        generated = await generateReply(modelInput, imageBlocks);
+        while (true) {
+          try {
+            generated = await generateReply(modelInput, activeImageBlocks);
+            break;
+          } catch (error) {
+            if (!isImageRequestError(error)
+              || activeImageBlocks.length === 0
+              || imageRetryAttempts >= MAX_IMAGE_RETRY_ATTEMPTS) {
+              throw error;
+            }
+            const imageIndex = imageIndexFromRequestError(error);
+            const nextBlocks = removeImageBlockAt(activeImageBlocks, imageIndex);
+            if (!nextBlocks || nextBlocks.length >= activeImageBlocks.length) {
+              throw error;
+            }
+            imageRetryAttempts += 1;
+            this.logger.warn(
+              `QQ 视觉请求中的第 ${imageIndex + 1} 张图片不被上游接受，`
+              + '已隔离该图片并重试其余图片',
+            );
+            activeImageBlocks = nextBlocks;
+          }
+        }
       } catch (error) {
         if (imageBlocks.length === 0 || !isImageRequestError(error)) throw error;
         this.logger.warn(
