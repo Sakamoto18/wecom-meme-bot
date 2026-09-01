@@ -57,6 +57,7 @@ function createService(options = {}) {
     peerBotLoopWindowMs: options.peerBotLoopWindowMs,
     usageTracker: options.usageTracker,
     largeGroupIds: options.largeGroupIds,
+    largeGroupExcludedIds: options.largeGroupExcludedIds,
     largeGroupMemberThreshold: options.largeGroupMemberThreshold,
     largeGroupMemberLimitThreshold: options.largeGroupMemberLimitThreshold,
     groupPassiveDecisionCooldownMs: options.groupPassiveDecisionCooldownMs,
@@ -167,6 +168,23 @@ test('群员上限满足时仍需达到活跃成员门槛，显式大型群可�
 
   assert.equal(service.isLargeGroup('quiet-large', { groupMemberLimit: 200 }), false);
   assert.equal(service.isLargeGroup('forced-group'), true);
+});
+
+test('大型群排除列表优先阻止自动判定', () => {
+  const conversationStore = {
+    getGroupMembers: () => Array.from({ length: 40 }, (_, index) => ({
+      userId: `user-${index}`,
+    })),
+  };
+  const { service } = createService({
+    conversationStore,
+    largeGroupExcludedIds: new Set(['excluded-group']),
+  });
+
+  assert.equal(
+    service.isLargeGroup('excluded-group', { groupMemberLimit: 500 }),
+    false,
+  );
 });
 
 test('大型群限制被动判定频率，但明确请求仍正常处理', async () => {

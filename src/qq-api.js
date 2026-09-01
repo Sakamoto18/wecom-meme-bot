@@ -559,6 +559,9 @@ export async function createQqRuntime() {
     ) ?? 300) * 1000,
     usageTracker,
     largeGroupIds: parseIdentifierSet(process.env.QQ_USAGE_LARGE_GROUPS),
+    largeGroupExcludedIds: parseIdentifierSet(
+      process.env.QQ_USAGE_LARGE_GROUP_EXCLUDES,
+    ),
     largeGroupMemberThreshold: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_MEMBER_THRESHOLD,
     ) ?? 40,

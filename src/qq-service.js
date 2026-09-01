@@ -982,6 +982,7 @@ export class QqBotService {
     this.peerBotContinuationDecider = options.peerBotContinuationDecider ?? null;
     this.usageTracker = options.usageTracker ?? null;
     this.largeGroupIds = new Set(options.largeGroupIds ?? []);
+    this.largeGroupExcludedIds = new Set(options.largeGroupExcludedIds ?? []);
     this.largeGroupMemberThreshold = Math.max(
       1,
       Number(options.largeGroupMemberThreshold ?? 40),
@@ -1048,6 +1049,7 @@ export class QqBotService {
   isLargeGroup(groupId, metadata = {}) {
     const normalizedGroupId = String(groupId ?? '').trim();
     if (!normalizedGroupId) return false;
+    if (this.largeGroupExcludedIds.has(normalizedGroupId)) return false;
     if (this.largeGroupIds.has(normalizedGroupId)) return true;
 
     const reportedMemberLimit = normalizeOptionalNonnegativeInteger(

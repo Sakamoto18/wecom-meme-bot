@@ -136,6 +136,7 @@ QQ 后端把每次真实上游 LLM 调用、返回的输入/输出 Token、模�
 所有群默认启用动态配额。程序按固定群号统计近 7 日的日均群消息数和日均活跃发言人数，取两项中较高的活跃档，把群级硬上限依次折算为 60%、75%、85%、95% 或 100%。额度随正常活跃度上升，但最高不会超过普通/大型群上限或单群覆盖值，因而不会随消息量无限放大；五分钟刷新一次档位，避免瞬时刷屏立刻抬高额度。日报会显示每个群当前档位、日均消息/人数、折算系数和实际动态额度。
 
 大型群自动判定会同时检查 QQ 群真实群员上限和活跃度：群员上限必须严格超过 120，且本地已观察到的活跃成员不少于 40 人；上限数据缺失时不会仅凭本地观察成员数误判。也可以用 `QQ_USAGE_LARGE_GROUPS` 按群号直接指定并强制覆盖。大型群使用更低的硬上限，只向模型发送最近 20 条、最多 8000 字上下文；所有群的普通静默消息最多每 180 秒进行一次“是否主动接话”的模型判断，明确 `@机器人` 和直接提问不受这条冷却影响；所有群默认不自动生成会话摘要或成员画像，避免旁观消息在后台持续触发 LLM，确需摘要时才把 `QQ_USAGE_GROUP_BACKGROUND_SUMMARIES_ENABLED` 显式设为 `true`。对单纯“人格毒舌不够”的初稿，大型群每天只允许二次模型复核达到首次回复数的 20%，其余保留初稿事实并由本地程序补一句角色收尾；空内容、客服腔、亲属攻击、正经答案完整性和受保护身份等质量或安全问题不受这项节流影响。动态配额与大型群策略会叠加：先确定该群的硬上限，再乘当前活跃档系数。
+如需让某个群保持普通群额度，可在 `QQ_USAGE_LARGE_GROUP_EXCLUDES` 中按群号排除；排除优先于自动判定和大型群强制列表。
 
 ```dotenv
 QQ_USAGE_DATABASE_FILE=data/qq-usage.sqlite
@@ -149,6 +150,8 @@ QQ_USAGE_GROUP_MAX_SEARCH_CALLS_PER_DAY=200
 QQ_USAGE_LARGE_GROUP_MAX_SEARCH_CALLS_PER_DAY=100
 QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS=
 QQ_USAGE_LARGE_GROUPS=
+# 按群号排除大型群自动判定，多个用英文逗号分隔。
+QQ_USAGE_LARGE_GROUP_EXCLUDES=
 QQ_USAGE_LARGE_GROUP_MEMBER_THRESHOLD=40
 # 自动判定大型群时，真实 QQ 群员上限必须严格大于该值。
 QQ_USAGE_LARGE_GROUP_MEMBER_LIMIT_THRESHOLD=120
