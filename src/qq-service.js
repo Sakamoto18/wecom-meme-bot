@@ -1479,17 +1479,25 @@ export class QqBotService {
         '看不清的文字不要猜测；没有文字时 visible_text 输出空数组。',
       ].join('\n');
       try {
-        const result = await this.chatClient.complete(
-          [],
-          [{ type: 'text', text: prompt }, entry.block],
-          {
-            maxTokens: 700,
-            usageSource: 'image-understanding',
-            timeoutMs: 60_000,
-            temperature: 0.1,
-            thinking: { type: 'disabled' },
-          },
-        );
+        const requestOptions = {
+          maxTokens: 700,
+          usageSource: 'image-understanding',
+          timeoutMs: 60_000,
+          temperature: 0.1,
+          thinking: { type: 'disabled' },
+        };
+        const requestBlocks = [{ type: 'text', text: prompt }, entry.block];
+        let result;
+        try {
+          result = await this.chatClient.complete([], requestBlocks, requestOptions);
+        } catch (error) {
+          // 某些图片格式会被上游拒绝；单张重编码后重试，不影响其他图片。
+          if (!isImageRequestError(error)) throw error;
+          const reencoded = await reencodeImageBlockAt(requestBlocks, 0);
+          if (!reencoded) throw error;
+          this.logger.warn(`QQ 第 ${index} 张图片被上游拒绝，已转 JPEG 后重试`);
+          result = await this.chatClient.complete([], reencoded.blocks, requestOptions);
+        }
         const parsed = parseImageAnalysis(result);
         const item = Array.isArray(parsed?.items) && parsed.items.length > 0
           ? parsed.items[0]
