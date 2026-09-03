@@ -19,6 +19,7 @@ MAX_FORWARD_NODES = 30
 MAX_FORWARD_CHARACTERS = 8000
 MAX_FORWARD_NODE_CHARACTERS = 600
 MAX_FORWARD_DEPTH = 3
+MAX_QUOTED_REPLY_DEPTH = 3
 FORWARD_CACHE_TTL_SECONDS = 60 * 60
 FORWARD_CACHE_MAX_ENTRIES = 128
 GROUP_INFO_CACHE_TTL_SECONDS = 10 * 60
@@ -746,10 +747,20 @@ class LongtuQqBridge(Star):
 
     @staticmethod
     def _quoted_text(components: list) -> str:
+        reply_parts = []
+        plain_parts = []
         for component in components:
             if isinstance(component, Comp.Reply):
-                return str(getattr(component, "message_str", "") or "").strip()
-        return ""
+                message_str = str(getattr(component, "message_str", "") or "").strip()
+                if message_str:
+                    reply_parts.append(message_str)
+            if isinstance(component, Comp.Plain):
+                text = str(getattr(component, "text", "") or "").strip()
+                if text:
+                    plain_parts.append(text)
+        # 回捞成功时 Plain 组件能保留每一层正文；适配器未提供 chain 时，
+        # 再退回 Reply.message_str，避免引用文本完全丢失。
+        return " ".join(plain_parts or reply_parts).strip()
 
     @staticmethod
     def _mentions(components: list) -> list[dict]:
@@ -844,6 +855,12 @@ class LongtuQqBridge(Star):
                 ).strip()
                 if forward_id:
                     components.append(Comp.Forward(id=forward_id))
+            elif segment_type == "reply":
+                reply_id = str(
+                    data.get("id") or data.get("message_id") or "",
+                ).strip()
+                if reply_id:
+                    components.append(Comp.Reply(id=reply_id))
             elif segment_type == "image":
                 reference = str(
                     data.get("url") or data.get("file") or data.get("file_id") or "",
@@ -861,17 +878,37 @@ class LongtuQqBridge(Star):
         event: AstrMessageEvent,
         reply_component,
         chain: list,
+        depth: int = 0,
     ) -> list:
         """引用链被适配器压缩成占位符时，从 OneBot 回捞完整消息段。"""
         current_chain = list(chain or [])
-        if any(
+        if depth >= MAX_QUOTED_REPLY_DEPTH:
+            return current_chain
+        expanded_current_chain = []
+        for component in current_chain:
+            if isinstance(component, Comp.Reply):
+                expanded_current_chain.extend(await self._quoted_message_chain(
+                    event,
+                    component,
+                    getattr(component, "chain", None) or [],
+                    depth + 1,
+                ))
+            else:
+                expanded_current_chain.append(component)
+        current_chain = expanded_current_chain
+        has_rich_content = any(
             isinstance(component, (Comp.Forward, Comp.Image))
             for component in current_chain
-        ):
-            return current_chain
+        )
+        existing_user_id, existing_name = self._quoted_author(reply_component)
         reply_id = str(getattr(reply_component, "id", "") or "").strip()
         bot = getattr(event, "bot", None)
-        if not reply_id or not bot or not callable(getattr(bot, "call_action", None)):
+        if (
+            not reply_id
+            or (has_rich_content and (existing_user_id or existing_name))
+            or not bot
+            or not callable(getattr(bot, "call_action", None))
+        ):
             return current_chain
         routing_params = {}
         self_id = str(getattr(event.message_obj, "self_id", "") or "").strip()
@@ -889,15 +926,58 @@ class LongtuQqBridge(Star):
         except Exception as error:
             logger.debug(f"引用消息 {reply_id} 回捞失败：{type(error).__name__}")
             return current_chain
-        raw_segments = result.get("message") if isinstance(result, dict) else None
+        action_data = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(action_data, dict):
+            action_data = result if isinstance(result, dict) else {}
+        sender = action_data.get("sender")
+        if isinstance(sender, dict):
+            fetched_user_id = str(
+                sender.get("user_id")
+                or sender.get("userid")
+                or sender.get("sender_id")
+                or ""
+            ).strip()
+            fetched_name = str(
+                sender.get("nickname")
+                or sender.get("name")
+                or sender.get("card")
+                or ""
+            ).strip()
+            # AstrBot 不同适配器版本暴露的 Reply 字段不一致；把 OneBot
+            # get_msg 回捞到的作者暂存到组件上，后续统一由 _quoted_author 读取。
+            for attribute, value in (
+                ("_longtu_quoted_user_id", fetched_user_id),
+                ("_longtu_quoted_sender_name", fetched_name),
+            ):
+                if value:
+                    try:
+                        setattr(reply_component, attribute, value)
+                    except Exception:
+                        pass
+        raw_segments = action_data.get("message")
         fetched_chain = self._components_from_raw_message(raw_segments)
         if fetched_chain:
+            expanded_chain = []
+            for component in fetched_chain:
+                if isinstance(component, Comp.Reply):
+                    nested_chain = await self._quoted_message_chain(
+                        event,
+                        component,
+                        getattr(component, "chain", None) or [],
+                        depth + 1,
+                    )
+                    expanded_chain.extend(nested_chain)
+                else:
+                    expanded_chain.append(component)
             logger.info(
                 f"已从 OneBot 回捞引用消息 {reply_id} 的完整组件，"
-                f"其中图片 {sum(isinstance(item, Comp.Image) for item in fetched_chain)} 张、"
-                f"转发 {sum(isinstance(item, Comp.Forward) for item in fetched_chain)} 条",
+                f"其中图片 {sum(isinstance(item, Comp.Image) for item in expanded_chain)} 张、"
+                f"转发 {sum(isinstance(item, Comp.Forward) for item in expanded_chain)} 条、"
+                f"引用深度不超过 {MAX_QUOTED_REPLY_DEPTH} 层",
             )
-            return [*current_chain, *fetched_chain]
+            # get_msg 是该层引用的权威消息体；不用适配器已有的精简 chain 与
+            # 回捞结果拼接，否则同一句正文或同一张图可能被重复送入模型。
+            return expanded_chain
         return current_chain
 
     @staticmethod
@@ -1407,14 +1487,34 @@ class LongtuQqBridge(Star):
     def _quoted_author(reply_component) -> tuple[str, str]:
         if not reply_component:
             return "", ""
+        sender = getattr(reply_component, "sender", None)
+
+        def sender_value(*keys):
+            for key in keys:
+                if isinstance(sender, dict):
+                    value = sender.get(key)
+                else:
+                    value = getattr(sender, key, None) if sender is not None else None
+                if value:
+                    return value
+            return ""
+
         user_id = str(
-            getattr(reply_component, "sender_id", "")
+            getattr(reply_component, "_longtu_quoted_user_id", "")
+            or getattr(reply_component, "sender_id", "")
             or getattr(reply_component, "user_id", "")
+            or getattr(reply_component, "userid", "")
+            or getattr(reply_component, "quoted_user_id", "")
+            or sender_value("user_id", "userid", "sender_id")
             or ""
         ).strip()
         name = str(
-            getattr(reply_component, "sender_nickname", "")
+            getattr(reply_component, "_longtu_quoted_sender_name", "")
+            or getattr(reply_component, "sender_nickname", "")
             or getattr(reply_component, "sender_name", "")
+            or getattr(reply_component, "nickname", "")
+            or getattr(reply_component, "name", "")
+            or sender_value("nickname", "name", "card")
             or ""
         ).strip()
         return user_id, name
@@ -1691,6 +1791,11 @@ class LongtuQqBridge(Star):
                 yield event.plain_result("正在翻龙图小本本……")
 
             quoted_user_id, quoted_sender_name = self._quoted_author(reply_component)
+            quoted_text = self._quoted_text(quoted_chain)
+            if not quoted_text and reply_component:
+                quoted_text = str(
+                    getattr(reply_component, "message_str", "") or "",
+                ).strip()
             observed_forward_images = []
             observed_quoted_forward_images = []
             if should_reply:
@@ -1769,7 +1874,7 @@ class LongtuQqBridge(Star):
                 "user_id": event.get_sender_id(),
                 "sender_name": event.get_sender_name(),
                 "text": text,
-                "quoted_text": self._quoted_text(components),
+                "quoted_text": quoted_text,
                 "forwarded_text": forwarded_text,
                 "quoted_forwarded_text": quoted_forwarded_text,
                 "quoted_user_id": quoted_user_id,
