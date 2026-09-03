@@ -52,6 +52,10 @@ function createService(options = {}) {
     adminUsers: options.adminUsers,
     protectedRoles: options.protectedRoles,
     activeReplyDecider: options.activeReplyDecider,
+    repeatDetector: options.repeatDetector,
+    repeatEnabled: options.repeatEnabled,
+    repeatWindowMs: options.repeatWindowMs,
+    repeatMaxTextCharacters: options.repeatMaxTextCharacters,
     peerBotContinuationDecider: options.peerBotContinuationDecider,
     peerBotUsers: options.peerBotUsers,
     peerBotMaxConsecutiveReplies: options.peerBotMaxConsecutiveReplies,
@@ -439,6 +443,62 @@ test('仅发送合并转发卡片也能进入群聊旁观记忆', async () => {
   assert.equal(result.mode, 'observed');
   assert.match(observations[0].content, /Arsenal：\[聊天记录\]/);
   assert.match(observations[0].content, /合并转发记录结束/);
+});
+
+test('群友连续复读时机器人只主动复读一次且不调用模型', async () => {
+  let callCount = 0;
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        callCount += 1;
+        return '不应调用模型';
+      },
+    },
+    activeReplyDecider: {
+      async shouldReply() {
+        callCount += 1;
+        return { reply: false, reason: 'test-skip' };
+      },
+    },
+  });
+
+  const base = {
+    message_type: 'group',
+    group_id: 'g-repeat',
+    sender_name: '群友',
+    observe_only: true,
+  };
+  const first = await service.handleMessage({
+    ...base,
+    message_id: 'repeat-1',
+    user_id: 'u1',
+    text: '  这也太巧了  ',
+  });
+  const second = await service.handleMessage({
+    ...base,
+    message_id: 'repeat-2',
+    user_id: 'u2',
+    text: '这也太巧了',
+  });
+  const third = await service.handleMessage({
+    ...base,
+    message_id: 'repeat-3',
+    user_id: 'u3',
+    text: '这也太巧了',
+  });
+
+  assert.deepEqual(first, { mode: 'observed', messages: [] });
+  assert.deepEqual(second, {
+    mode: 'repeat-reply',
+    messages: [{ type: 'text', text: '这也太巧了' }],
+    active_reply: true,
+    active_reply_priority: 'may',
+  });
+  assert.deepEqual(third, { mode: 'observed', messages: [] });
+  // Only the first message may enter the existing passive read-air gate;
+  // the actual repeat reply itself must not invoke the model.
+  assert.equal(callCount, 1);
 });
 
 test('QQ 只有图片标记但没有图片数据时不会伪造随机龙图', async () => {
