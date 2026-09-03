@@ -519,9 +519,6 @@ export async function createQqRuntime() {
   });
   const repeatDetector = new RepeatDetector({
     enabled: parseBoolean(process.env.LONGTU_QQ_REPEAT_ENABLED, true),
-    windowMs: (parsePositiveNumber(
-      process.env.LONGTU_QQ_REPEAT_WINDOW_SECONDS,
-    ) ?? 300) * 1000,
     maxTextCharacters: parsePositiveInteger(
       process.env.LONGTU_QQ_REPEAT_MAX_TEXT_CHARACTERS,
     ) ?? 500,
