@@ -30,6 +30,15 @@ test('同一群两位不同群友复读时只触发一次', () => {
   assert.equal(detector.detect(payload({ userId: 'u3' })), null);
 });
 
+test('两位群友相隔超过 30 秒但仍在五分钟内时立即复读', () => {
+  let now = 1_000;
+  const detector = new RepeatDetector({ now: () => now });
+
+  assert.equal(detector.detect(payload({ userId: 'u1' })), null);
+  now += 2 * 60 * 1000;
+  assert.equal(detector.detect(payload({ userId: 'u2' }))?.userCount, 2);
+});
+
 test('换内容或超出窗口后重新开始复读检测', () => {
   let now = 1_000;
   const detector = new RepeatDetector({ now: () => now, windowMs: 1_000 });
@@ -49,4 +58,3 @@ test('同一用户连续发送不会被当成群体复读，格式空白会归�
   assert.equal(detector.detect(payload({ userId: 'u1', text: 'Hello' })), null);
   assert.equal(detector.detect(payload({ userId: 'u2', text: 'Hello' })).reason, 'cross-user-repeat');
 });
-
