@@ -350,6 +350,25 @@ test('有第三方目标时攻击提示不会默认攻击指令发送者', () =>
   assert.equal(shouldUseAttackStyle('把他骂一顿', [], { hasThirdPartyTarget: true }), true);
 });
 
+test('引用作者和引用内容会成为评价对象，而不是误伤提问者', () => {
+  const interactionContext = {
+    speakerLabel: '提问者（成员-aaaaaa）',
+    targetLabels: ['引用作者（成员-bbbbbb）'],
+    quotedAuthorLabel: '引用作者（成员-bbbbbb）',
+    hasThirdPartyTarget: true,
+  };
+  const prompt = buildAttackPrompt('评价一下这句话', {
+    interactionContext,
+    attackScene: { id: 'test', hint: '测试画面' },
+  });
+  assert.match(prompt, /引用消息作者是本轮优先评价对象：引用作者/);
+  assert.match(prompt, /引用消息内容是评价或攻击的判断依据/);
+  const normalPrompt = buildNormalReplyPrompt({ interactionContext });
+  assert.match(normalPrompt, /引用作者.*是优先评价对象/);
+  assert.match(normalPrompt, /当前发言者只是提问者/);
+  assert.equal(shouldUseAttackStyle('评价一下这句话', [], { hasThirdPartyTarget: true }), true);
+});
+
 test('攻击画面会排除近期已经用过的截图意象', () => {
   const selected = selectAttackScene([
     { role: 'assistant', content: '你🐎的骨灰盒上还刻着源码呢。' },

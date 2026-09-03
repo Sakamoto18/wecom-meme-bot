@@ -54,11 +54,16 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(source, /privateUsage/);
   assert.match(source, /私聊用量：约/);
   assert.match(source, /MAX_FORWARD_DEPTH\s*=\s*3/);
+  assert.match(source, /MAX_QUOTED_REPLY_DEPTH\s*=\s*3/);
   assert.match(source, /_forwarded_content/);
   assert.match(handler, /"forward_image_base64s": forward_image_base64s/);
   assert.match(handler, /"quoted_forward_image_base64s": quoted_forward_image_base64s/);
   assert.match(source, /action="get_msg"/);
   assert.match(source, /_quoted_message_chain/);
+  assert.match(source, /segment_type == "reply"/);
+  assert.match(source, /depth \+ 1/);
+  assert.match(handler, /quoted_text = self\._quoted_text\(quoted_chain\)/);
+  assert.doesNotMatch(handler, /_quoted_text\(quoted_chain or components\)/);
   assert.match(source, /recent_image_cache/);
   assert.match(source, /RECENT_IMAGE_REFERENCE_PATTERN/);
   assert.match(handler, /_cache_recent_images/);

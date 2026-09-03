@@ -10,7 +10,7 @@ const SIMA_NEUTRAL_PATTERN = /司马(?:迁|懿|昭|师|炎|光|相如|姓|氏|�
 const DEESCALATION_PATTERN = /(?:认真回答|正常回答|别骂了|停止对线|我道歉|对不起|不玩梗)/i;
 const SENSITIVE_SUPPORT_PATTERN = /(?:我(?:的)?(?:妈|爸|父亲|母亲|家人|朋友|亲人).*(?:去世|过世|离世|没了)|自杀|轻生|性侵|强奸|家暴|绝症|病危|急救|葬礼|哀悼)/i;
 const ADVERSARIAL_FOLLOWUP_PATTERN = /(?:回答我|哪(?:里)?来的|你(?:妈|🐎|呢)|咋(?:了|地|么)|干什么|凭什么|不服|然后呢|就这|继续|有种|笑死)/i;
-const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /(?:骂|攻击|怼|喷|拷打|锐评|羞辱|嘲讽|对线|输出)(?:一下|一顿|几句|他|她|它|这个人)?/i;
+const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /(?:骂|攻击|怼|喷|拷打|锐评|羞辱|嘲讽|对线|输出|评价)(?:一下|一顿|几句|他|她|它|这个人)?/i;
 const LONGTU_TOPIC_PATTERN = /(?:龙图|龙玉涛|老冯)/i;
 const KNOWLEDGE_INTENT_PATTERN = /(?:是什么|是谁|什么意思|哪里来|来源|出处|由来|什么梗|语录|搜索|联网|资料|历史|评价|看待|怎么看|如何看)/i;
 const MEME_KNOWLEDGE_PATTERN = /(?:(?:什么|啥|这个|这|该)(?:网络)?梗|(?:查|搜|搜索|查询|科普|解释|讲讲|说说).{0,28}梗|(?:网络|网上|热|流行|抽象|贴吧|B站|抖音).{0,8}梗|梗.{0,10}(?:意思|含义|来源|出处|由来|怎么火)|(?:网络用语|网络流行语|流行语|黑话).{0,10}(?:意思|含义|来源|出处|由来))/i;
@@ -167,6 +167,12 @@ export function buildAttackPrompt(userContent, options = {}) {
       `当前指令发送者：${interaction.speakerLabel || '未知群成员'}`,
       `本轮被攻击目标：${interaction.targetLabels.join('、')}`,
       '攻击对象必须是“本轮被攻击目标”，不得把攻击落到指令发送者身上；人称或称呼有歧义时直接点目标昵称。',
+      ...(interaction.quotedAuthorLabel
+        ? [
+          `引用消息作者是本轮优先评价对象：${interaction.quotedAuthorLabel}`,
+          '引用消息内容是评价或攻击的判断依据；当前发言者只是提出请求的人，除非明确要求，否则不要攻击当前发言者。',
+        ]
+        : []),
     ]
     : [
       `当前发言者兼回击目标：${interaction.speakerLabel || '当前用户'}`,
@@ -252,7 +258,12 @@ export function buildNormalReplyContextPrompt(options = {}) {
   if (options.requirePersonaBite === false) return '';
   const interaction = options.interactionContext ?? {};
   return interaction.targetLabels?.length > 0
-    ? `本轮明确被谈论或评价的目标是：${interaction.targetLabels.join('、')}。毒舌落在这些目标或其言行上，不得误伤发言者 ${interaction.speakerLabel || '当前用户'}。`
+    ? [
+      `本轮明确被谈论或评价的目标是：${interaction.targetLabels.join('、')}。毒舌落在这些目标或其言行上，不得误伤发言者 ${interaction.speakerLabel || '当前用户'}。`,
+      ...(interaction.quotedAuthorLabel
+        ? [`引用作者 ${interaction.quotedAuthorLabel} 是优先评价对象；引用内容是评价依据，当前发言者只是提问者。`]
+        : []),
+    ].join('\n')
     : `当前没有明确第三方目标；可以直接损发言者 ${interaction.speakerLabel || '当前用户'} 的问题、前提、判断或执行能力，不要凭空攻击无关群员。`;
 }
 

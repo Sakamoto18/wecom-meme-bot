@@ -118,6 +118,25 @@ test('群聊输入区分指令发送者、被 @ 成员和引用作者', () => {
   assert.doesNotMatch(input, /机器人（成员-/);
 });
 
+test('只有引用作者时也会把引用作者作为第三方目标', () => {
+  const input = buildModelInput({
+    chattype: 'group',
+    from: { userid: 'sender', name: '提问者' },
+    bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot', name: '机器人' }],
+    quote: {
+      msgtype: 'text',
+      text: { content: '被引用的一句话' },
+      from: { userid: 'quoted', name: '引用作者' },
+    },
+  }, '评价一下');
+
+  assert.match(input, /本条消息指向或提到的群成员：引用作者/);
+  assert.match(input, /引用消息作者：引用作者/);
+  assert.match(input, /引用消息内容：被引用的一句话/);
+  assert.doesNotMatch(input, /提问者（成员-[a-f0-9]{6}）.*引用消息作者：提问者/);
+});
+
 test('主动附图为单聊和群聊选择正确目标', () => {
   assert.equal(getMessageTarget({
     chattype: 'single',
