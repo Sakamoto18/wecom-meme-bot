@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OpenAICompatibleChatClient } from './chat-client.js';
 import { ActiveReplyDecider } from './active-reply.js';
+import { RepeatDetector } from './repeat-detector.js';
 import { PeerBotContinuationDecider } from './peer-bot-gate.js';
 import { MemeStore } from './meme-store.js';
 import { LongtuLibrary } from './longtu-library.js';
@@ -516,6 +517,19 @@ export async function createQqRuntime() {
     ),
     logger: console,
   });
+  const repeatDetector = new RepeatDetector({
+    enabled: parseBoolean(process.env.LONGTU_QQ_REPEAT_ENABLED, true),
+    windowMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_REPEAT_WINDOW_SECONDS,
+    ) ?? 30) * 1000,
+    maxTextCharacters: parsePositiveInteger(
+      process.env.LONGTU_QQ_REPEAT_MAX_TEXT_CHARACTERS,
+    ) ?? 500,
+    maxGroups: parsePositiveInteger(
+      process.env.LONGTU_QQ_REPEAT_MAX_GROUPS,
+    ) ?? 1_000,
+    logger: console,
+  });
   const peerBotContinuationDecider = new PeerBotContinuationDecider({
     chatClient,
     enabled: parseBoolean(
@@ -549,6 +563,7 @@ export async function createQqRuntime() {
     adminUsers,
     protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
     activeReplyDecider,
+    repeatDetector,
     peerBotContinuationDecider,
     peerBotUsers: parseIdentifierSet(process.env.LONGTU_QQ_PEER_BOT_USERS),
     peerBotMaxConsecutiveReplies: parsePositiveInteger(
@@ -599,6 +614,7 @@ export async function createQqRuntime() {
     usageReportUsers,
     webSearchEnabled,
     activeReplyEnabled: activeReplyDecider.enabled && chatClient.isConfigured,
+    repeatEnabled: repeatDetector.enabled,
     peerBotContextGateEnabled: peerBotContinuationDecider.enabled
       && chatClient.isConfigured,
   };
@@ -639,6 +655,7 @@ export async function startQqApi() {
         web_search_enabled: runtime.webSearchEnabled,
         web_search_provider: runtime.webSearch.provider,
         active_reply_enabled: runtime.activeReplyEnabled,
+        repeat_enabled: runtime.repeatEnabled,
         peer_bot_context_gate_enabled: runtime.peerBotContextGateEnabled,
         image_count: currentStats.longtuImageCount,
         bundled_image_count: currentStats.longtuImageCount - currentStats.dynamicActive,
@@ -664,6 +681,9 @@ export async function startQqApi() {
   console.log(runtime.activeReplyEnabled
     ? 'QQ 群主动回复已启用：must/may/no 优先级 + 热度与退场判定，回复仍走现有 Node 引擎'
     : 'QQ 群主动回复已关闭');
+  console.log(runtime.repeatEnabled
+    ? 'QQ 群复读检测已启用：两位不同群友重复相同文字时只主动复读一次'
+    : 'QQ 群复读检测已关闭');
   console.log(runtime.peerBotContextGateEnabled
     ? 'QQ peer Bot 续聊阀门已启用：首轮必回，后续按语境判断并保留硬上限'
     : 'QQ peer Bot 续聊阀门未启用：仅使用硬上限');

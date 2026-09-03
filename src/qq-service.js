@@ -20,6 +20,7 @@ import {
   isAdminStopCommand,
   isExplicitEngagementEnd,
 } from './active-reply.js';
+import { RepeatDetector } from './repeat-detector.js';
 import { Jimp } from 'jimp';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
@@ -1182,6 +1183,14 @@ export class QqBotService {
       buildProtectedIdentityContext(this.protectedRoles),
     ].filter(Boolean).join('\n\n');
     this.logger = options.logger ?? console;
+    this.repeatDetector = options.repeatDetector ?? new RepeatDetector({
+      enabled: options.repeatEnabled ?? true,
+      windowMs: options.repeatWindowMs,
+      maxTextCharacters: options.repeatMaxTextCharacters,
+      maxGroups: options.repeatMaxGroups,
+      now: this.now,
+      logger: this.logger,
+    });
     this.dedupeTtlMs = options.dedupeTtlMs ?? DEFAULT_DEDUPE_TTL_MS;
     this.processedMessageIds = new Set();
     this.managementTargets = new Map();
@@ -2023,6 +2032,23 @@ export class QqBotService {
 
   async handleObservedMessage(payload, message, conversationContent) {
     const conversationId = getConversationId(message);
+    const peerBotMessage = this.isPeerBotMessage(payload);
+    const repeat = this.repeatDetector?.detect({
+      ...payload,
+      isPeerBot: peerBotMessage,
+    });
+    if (repeat) {
+      // Keep the original message in group memory, but do not spend an LLM
+      // call just to join an obvious repeat. The bridge marks this as an
+      // active reply so it is sent without quoting the triggering message.
+      await this.observeMessage(payload, message);
+      return {
+        mode: 'repeat-reply',
+        messages: [{ type: 'text', text: repeat.text }],
+        active_reply: true,
+        active_reply_priority: 'may',
+      };
+    }
     if (!this.activeReplyDecider) {
       return this.observeMessage(payload, message);
     }
@@ -2030,7 +2056,6 @@ export class QqBotService {
       ...payload,
       isPeerBot: this.isPeerBotMessage(payload),
     });
-    const peerBotMessage = this.isPeerBotMessage(payload);
     if (!engagement && !peerBotMessage && !this.shouldRunPassiveDecision(payload.groupId)) {
       return this.observeMessage(payload, message);
     }
@@ -2491,6 +2516,9 @@ export class QqBotService {
           return { mode: 'admin-stop-preempted', messages: [] };
         }
         if (payload.messageType === 'group' && result?.messages?.length > 0) {
+          // A bot message breaks the human-to-human run; the next matching
+          // text must start a fresh repeat sequence.
+          this.repeatDetector?.reset?.(payload.groupId);
           this.activeReplyDecider?.recordBotReply?.(payload.groupId);
           if (this.isPeerBotMessage(payload)) {
             this.recordPeerBotReply(payload);

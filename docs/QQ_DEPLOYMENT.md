@@ -94,6 +94,10 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 
 ```dotenv
 LONGTU_QQ_ACTIVE_REPLY_ENABLED=true
+LONGTU_QQ_REPEAT_ENABLED=true
+LONGTU_QQ_REPEAT_WINDOW_SECONDS=30
+LONGTU_QQ_REPEAT_MAX_TEXT_CHARACTERS=500
+LONGTU_QQ_REPEAT_MAX_GROUPS=1000
 LONGTU_QQ_ACTIVE_REPLY_GROUPS=
 LONGTU_QQ_ACTIVE_REPLY_NAMES=龙玉涛
 LONGTU_QQ_ACTIVE_REPLY_PROBABILITY=0.30
@@ -120,6 +124,8 @@ LONGTU_QQ_PEER_BOT_DECISION_TIMEOUT_SECONDS=10
 LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES=2
 LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 ```
+
+复读检测不调用大模型：同一群在窗口内由至少两位不同群友发送相同文字时，机器人会在第二位群友发言后主动原样复读一次；同一轮里的第三条及后续相同消息不会再次触发，换内容或窗口超时后重新计算。图片、合并转发、引用、斜杠命令和 @ 他人的消息不参与检测。可将 `LONGTU_QQ_REPEAT_ENABLED` 设为 `false` 关闭。
 
 `LONGTU_QQ_ACTIVE_REPLY_GROUPS` 留空时沿用 Bridge 的 `LONGTU_QQ_ALLOWED_GROUPS` 范围。第一层判定器先用中立规则输出 `must/may/no`，不加载聊天人格：只有明确点名/引用机器人、紧迫风险和可能造成现实损失的关键纠错属于 `must`，会绕过可选插话限制；普通公开提问、求助和仍需补充的话题属于 `may`。通过概率与限流的 `may` 候选还会进入第二层上下文语义价值复核；它根据消息在当前轮次中是回答他人、附和反应、已闭合问答，还是仍有未解决需求且机器人能提供新内容，决定 `speak/skip`。这里不维护关键词、字数或固定句式黑名单，同一句短话会因上下文作用不同得到不同结果；复核失败或输出无效时默认静默。明确点名、引用和真正的 `must` 不经过第二层。普通 `may` 默认使用 0.30 候选概率，公开问句使用 0.60；同群冷却 120 秒，每群每小时最多 6 次。20 秒内至少 4 条消息且涉及 2 名发送者时只抑制普通趣味插话，不压掉公开问句。机器人发言后连续 3 条消息没人接它时，`may` 暂停 600 秒，超时后可参与新话题，不再永久退场。判定器仍会忽略明确发给其他成员的 `@`/引用、图片、斜杠指令和机器人自身消息。第一层判定模型故障时，只有点名或引用机器人按 `must` 放行，普通公开问句默认沉默，不影响原有明确 `@机器人` 的被动回复。
 
