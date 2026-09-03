@@ -2449,6 +2449,46 @@ test('纯文字提到唯一历史昵称时也会识别第三方目标，无需�
   assert.match(calls[0].modelInput, /本条消息指向或提到的群成员：古希腊掌管管的神/);
 });
 
+test('艾特机器人并指名未确认群友攻击时，攻击目标不落到指令发送者', async () => {
+  const conversationStore = new ConversationStore();
+  conversationStore.recordGroupMember = () => true;
+  conversationStore.getGroupMemberAliases = () => ({});
+  conversationStore.getGroupMembers = () => [{
+    userId: 'target-user',
+    speakerId: 'abcdef',
+    currentName: '张三',
+    knownNames: ['张三'],
+    confirmedNames: [],
+    identityConfirmed: false,
+  }];
+  const calls = [];
+  const { service } = createService({
+    conversationStore,
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push({ history, input, options });
+        return '张三这白痴脑回路，滚去垃圾桶里反省。';
+      },
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'targeted-attack-1',
+    message_type: 'group',
+    group_id: 'g-targeted-attack',
+    user_id: 'sender-user',
+    sender_name: '发令者',
+    bot_user_id: 'bot-user',
+    text: '@龙玉涛 请攻击张三',
+    mentions: [{ user_id: 'bot-user', name: '龙玉涛' }],
+  });
+
+  assert.equal(result.mode, 'generated-attack');
+  assert.match(calls[0].options.additionalSystemPrompt, /本轮被攻击目标：张三/);
+  assert.match(calls[0].options.additionalSystemPrompt, /不得把攻击落到指令发送者身上/);
+});
+
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
   const received = [];
   const usageRequests = [];

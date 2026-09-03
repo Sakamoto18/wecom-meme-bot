@@ -51,6 +51,7 @@ const DEFAULT_PEER_BOT_LOOP_WINDOW_MS = 5 * 60 * 1000;
 const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
 const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
 const MEMBER_HISTORY_INTENT_PATTERN = /(?:之前|以前|历史|上次|上回|曾经|说过|提过|聊过|记得|原话|哪次|什么时候)/;
+const EXPLICIT_TARGETED_ATTACK_PATTERN = /(?:骂|攻击|怼|喷|拷打|锐评|羞辱|嘲讽|对线|输出)(?:一下|一顿|几句|他|她|它|这个人)?/i;
 // 图片默认只做内容识别；出现这些明确的背景/核实/来源意图时，才允许
 // 回复阶段追加联网检索，避免普通“总结这几张图”被搜索结果带偏。
 const IMAGE_WEB_SEARCH_INTENT_PATTERN = /(?:联网|上网|搜索|查(?:一下|下|查)?|查询|核实|验证|背景|出处|来源|新闻|事件|人物|政策|历史|科普|解释|分析|讲讲|什么梗|什么意思)/i;
@@ -1964,6 +1965,7 @@ export class QqBotService {
     const members = this.conversationStore.getGroupMembers?.(payload.groupId, 100) ?? [];
     if (members.length === 0) return [];
     const compactText = compactParticipantName(payload.text);
+    const targetedAttackRequest = EXPLICIT_TARGETED_ATTACK_PATTERN.test(payload.text);
     const explicitIds = new Set(message.mentions.map((participant) => participant.user_id));
     const ownersByName = new Map();
     for (const member of members) {
@@ -1973,8 +1975,15 @@ export class QqBotService {
         || explicitIds.has(member.userId)) {
         continue;
       }
-      if (!member.identityConfirmed && !member.confirmedNames?.length) continue;
-      const names = new Set((member.confirmedNames ?? [])
+      // A name that was explicitly supplied together with an attack request
+      // is enough to identify the requested target, even if the member has
+      // not spoken yet and therefore is not identity-confirmed.  Outside an
+      // explicit attack request, retain the stricter confirmed-name rule.
+      if (!member.identityConfirmed && !member.confirmedNames?.length && !targetedAttackRequest) continue;
+      const names = new Set([
+        ...(member.confirmedNames ?? []),
+        ...(targetedAttackRequest ? [member.currentName, ...(member.knownNames ?? [])] : []),
+      ]
         .map(compactParticipantName)
         .filter((name) => name.length >= 2 && name.length <= 40));
       for (const name of names) {
