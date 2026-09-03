@@ -1,4 +1,3 @@
-const DEFAULT_WINDOW_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_TEXT_CHARACTERS = 500;
 const DEFAULT_MAX_GROUPS = 1_000;
 
@@ -10,17 +9,18 @@ function normalizeText(value) {
 }
 
 /**
- * Detects a short, cross-user run of identical group messages.
+ * Detects an uninterrupted, cross-user run of identical group messages.
  *
  * This is deliberately deterministic and does not call the LLM.  A run is
  * considered a repeat only after two different users have sent the same text;
  * the detector then marks that run as handled so a third copy cannot make the
- * bot repeat it again.
+ * bot repeat it again. The run lasts until another group message breaks it;
+ * it deliberately has no clock-based expiry because QQ's +1 affordance is
+ * based on the current message run rather than an arbitrary timeout.
  */
 export class RepeatDetector {
   constructor(options = {}) {
     this.enabled = options.enabled ?? true;
-    this.windowMs = Math.max(1_000, Number(options.windowMs ?? DEFAULT_WINDOW_MS));
     this.maxTextCharacters = Math.max(
       1,
       Math.floor(Number(options.maxTextCharacters ?? DEFAULT_MAX_TEXT_CHARACTERS)),
@@ -72,9 +72,7 @@ export class RepeatDetector {
 
     const previous = this.groups.get(groupId);
     const sameRun = previous
-      && previous.fingerprint === text
-      && now - previous.lastAt >= 0
-      && now - previous.lastAt <= this.windowMs;
+      && previous.fingerprint === text;
     const state = sameRun
       ? previous
       : {

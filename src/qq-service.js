@@ -1186,7 +1186,6 @@ export class QqBotService {
     this.logger = options.logger ?? console;
     this.repeatDetector = options.repeatDetector ?? new RepeatDetector({
       enabled: options.repeatEnabled ?? true,
-      windowMs: options.repeatWindowMs,
       maxTextCharacters: options.repeatMaxTextCharacters,
       maxGroups: options.repeatMaxGroups,
       now: this.now,
