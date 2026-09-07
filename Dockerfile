@@ -11,6 +11,12 @@ RUN sed -i "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" \
     tesseract-ocr \
     tesseract-ocr-chi-sim \
     tesseract-ocr-eng \
+    ffmpeg \
+    python3 \
+    python3-pip \
+  && python3 -m pip install --break-system-packages --no-cache-dir \
+    --index-url https://mirrors.cloud.tencent.com/pypi/simple \
+    yt-dlp \
   && rm -rf /var/lib/apt/lists/*
 
 ENV LONGTU_OCR_COMMAND=tesseract \

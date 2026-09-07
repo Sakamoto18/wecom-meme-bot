@@ -37,6 +37,7 @@ ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/stop", "/usage-report",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
+MEDIA_SHARE_PATTERN = re.compile(r"https?://[^\s<>\u3000]+", re.IGNORECASE)
 
 
 @register(
@@ -53,6 +54,7 @@ class LongtuQqBridge(Star):
         self.forward_cache: dict[str, tuple[float, str]] = {}
         self.forward_nodes_cache: dict[str, tuple[float, list]] = {}
         self.group_info_cache: dict[str, tuple[float, dict[str, int]]] = {}
+        self.media_status_cache: dict[str, float] = {}
         # 静默观察不调用模型，但保留短时间内最近一批图片，支持用户先发图、
         # 再单独 @ 机器人询问“上面这张图”的常见 QQ 使用方式。
         self.recent_image_cache: dict[str, tuple[float, list[str]]] = {}
@@ -599,6 +601,54 @@ class LongtuQqBridge(Star):
         return ""
 
     @staticmethod
+    def _rich_segments_from_components(components: list) -> list[dict]:
+        result = []
+        for component in components or []:
+            component_type = str(getattr(component, "type", "") or "").lower()
+            if component_type not in {"json", "xml"} and not isinstance(
+                component,
+                (Comp.Json, getattr(Comp, "Xml", Comp.Json)),
+            ):
+                continue
+            data = getattr(component, "data", None)
+            if isinstance(data, (dict, str)) and len(str(data)) <= 256 * 1024:
+                item = {"type": component_type or "json", "data": data}
+                if item not in result:
+                    result.append(item)
+        return result
+
+    @classmethod
+    def _rich_segments(
+        cls,
+        event: AstrMessageEvent,
+        extra_components: list | None = None,
+    ) -> list[dict]:
+        """保留 OneBot json/xml 卡片原文；卡片正文通常不在 Plain 组件里。"""
+        raw_message = getattr(getattr(event, "message_obj", None), "raw_message", None)
+        segments = raw_message.get("message") if isinstance(raw_message, dict) else None
+        result = []
+        if isinstance(segments, list):
+            for segment in segments:
+                if not isinstance(segment, dict) or str(segment.get("type") or "").lower() not in {"json", "xml"}:
+                    continue
+                data = segment.get("data")
+                if not isinstance(data, dict):
+                    continue
+                compact = {key: value for key, value in data.items() if key in {"data", "content", "resid", "url"}}
+                if len(str(compact)) <= 256 * 1024:
+                    result.append({"type": str(segment.get("type")).lower(), "data": compact})
+        # AstrBot 4.x often converts OneBot JSON cards into Comp.Json before
+        # exposing the event. In that path raw_message can be empty. Quoted
+        # messages use the same component path after get_msg backfill.
+        for item in cls._rich_segments_from_components([
+            *(event.get_messages() or []),
+            *(extra_components or []),
+        ]):
+            if item not in result:
+                result.append(item)
+        return result[:8]
+
+    @staticmethod
     def _plain_component_text(components: list) -> str:
         """只读取用户实际输入的 Plain 文本，不把 At 的显示昵称算作正文。"""
         return "".join(
@@ -692,6 +742,12 @@ class LongtuQqBridge(Star):
             return True
         if not self._group_is_allowed(event):
             return False
+        # 分享卡/平台短链需要主动送入媒体解析链路；Node 侧只返回视频或
+        # 静默，不会因为普通卡片触发 LLM。这样群友无需额外 @ 机器人。
+        if self._rich_segments(event) or MEDIA_SHARE_PATTERN.search(
+            self._raw_text(event) or event.message_str or "",
+        ):
+            return True
         normalized_text = event.message_str.strip().lower()
         ignored_commands = (
             os.getenv("LONGTU_QQ_IGNORED_WAKE_COMMANDS")
@@ -871,6 +927,12 @@ class LongtuQqBridge(Star):
                 text = str(data.get("text") or "")
                 if text:
                     components.append(Comp.Plain(text))
+            elif segment_type in {"json", "xml"}:
+                card = data.get("data") or data.get("content") or data
+                try:
+                    components.append(Comp.Json(card if isinstance(card, dict) else str(card)))
+                except Exception:
+                    logger.debug("引用卡片组件转换失败")
         return components
 
     async def _quoted_message_chain(
@@ -1613,6 +1675,14 @@ class LongtuQqBridge(Star):
                 reply_chain.append(
                     Comp.Image.fromBase64(str(message["base64"])),
                 )
+            elif message_type == "video" and message.get("url"):
+                # OneBot accepts an HTTPS URL for video; keep it out of the
+                # JSON bridge body as base64 because videos exceed API limits.
+                video_url = str(message["url"])
+                try:
+                    reply_chain.append(Comp.Video(file=video_url))
+                except TypeError:
+                    reply_chain.append(Comp.Plain(video_url))
         return reply_chain
 
     def _pure_mention_payload(
@@ -1643,6 +1713,8 @@ class LongtuQqBridge(Star):
             "quoted_image_base64": "",
             "forward_image_base64s": [],
             "quoted_forward_image_base64s": [],
+            "rich_segments": self._rich_segments(event),
+            "media_share": bool(self._rich_segments(event)),
             "observe_only": False,
         }
 
@@ -1690,6 +1762,11 @@ class LongtuQqBridge(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def on_qq_message(self, event: AstrMessageEvent):
         """回复唤醒消息，并静默观察允许群中的普通消息。"""
+        # OneBot normally does not echo this account's own outbound messages,
+        # but some NapCat versions do. Never feed our own messages back into
+        # the media pipeline.
+        if str(event.get_sender_id() or "").strip() == str(event.get_self_id() or "").strip():
+            return
         # 这是专用 QQ Bot：任何 AIOCQHTTP 消息都不得继续进入 AstrBot 的
         # 默认 LLM 或其他命令链路。先禁止 ProcessStage 的默认 LLM；不能在
         # yield 回复前 stop_event，否则 AstrBot 4.26 会跳过 RespondStage，纯 At
@@ -1764,6 +1841,34 @@ class LongtuQqBridge(Star):
                 self._forward_components(components)
                 or self._forward_components(quoted_chain)
             )
+            rich_segments = self._rich_segments(event, quoted_chain)
+            has_rich = bool(rich_segments)
+            has_media_signal = has_rich or bool(
+                MEDIA_SHARE_PATTERN.search(
+                    self._raw_text(event) or event.message_str or "",
+                ),
+            )
+
+            # Send a lightweight acknowledgement before the potentially slow
+            # yt-dlp request. Keep one acknowledgement per message id so a
+            # duplicate OneBot delivery cannot produce duplicate notices.
+            if should_reply and has_media_signal:
+                ack_key = str(getattr(event.message_obj, "message_id", "") or "").strip()
+                if not ack_key:
+                    ack_key = f"{event.get_group_id()}:{event.get_sender_id()}:{hash(str(rich_segments))}"
+                now = time.monotonic()
+                previous_ack = self.media_status_cache.get(ack_key)
+                if previous_ack is None or now - previous_ack > 600:
+                    self.media_status_cache[ack_key] = now
+                    if len(self.media_status_cache) > 2000:
+                        oldest_key = min(self.media_status_cache, key=self.media_status_cache.get)
+                        self.media_status_cache.pop(oldest_key, None)
+                    try:
+                        # QQ 的视频分享由一个轻量表情表示处理中；不引用原消息，
+                        # 避免多条并发卡片在群里堆出一串引用回复。
+                        await event.send(MessageChain(chain=[Comp.Face(id=14)]))
+                    except Exception as error:
+                        logger.debug(f"媒体解析提示发送失败：{type(error).__name__}")
 
             # event.message_str 会把 At 组件渲染成“@机器人昵称”，不能用它判断
             # 用户是否附带正文。只检查 OneBot 原始 text 段和 Plain 组件。
@@ -1781,7 +1886,7 @@ class LongtuQqBridge(Star):
                     has_forward=has_forward,
                 )
             )
-            if not text and not has_image and not has_forward:
+            if not text and not has_image and not has_forward and not has_rich:
                 return
             if (
                 should_reply
@@ -1887,6 +1992,8 @@ class LongtuQqBridge(Star):
                 "quoted_image_base64s": quoted_image_base64s,
                 "forward_image_base64s": forward_image_base64s,
                 "quoted_forward_image_base64s": quoted_forward_image_base64s,
+                "rich_segments": rich_segments,
+                "media_share": has_media_signal or bool(MEDIA_SHARE_PATTERN.search(text or "")),
                 # 保留旧字段，便于旧版 Node 服务平滑升级。
                 "image_base64": image_base64s[0] if image_base64s else "",
                 "quoted_image_base64": quoted_image_base64s[0] if quoted_image_base64s else "",
@@ -1919,8 +2026,12 @@ class LongtuQqBridge(Star):
             if reply_chain:
                 # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
                 # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
+                # 媒体结果直接发成可播放视频，不再挂引用；普通对话继续保留
+                # 原有引用和 @ 送达前缀。
                 if not bool(response.get("active_reply")):
                     reply_chain = self._reply_prefix(event, components) + reply_chain
+                    if response.get("mode") == "media":
+                        reply_chain = reply_chain[len(self._reply_prefix(event, components)):]
                 yield event.chain_result(reply_chain)
         finally:
             event.stop_event()

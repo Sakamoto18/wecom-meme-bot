@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -14,6 +15,8 @@ import { QqMemoryStore } from './qq-memory-store.js';
 import { QqBotService } from './qq-service.js';
 import { QqUsageTracker } from './qq-usage-tracker.js';
 import { LongtuWebSearch } from './web-search.js';
+import { MediaResolver } from './media-resolver.js';
+import { MediaUsageTracker } from './media-usage-tracker.js';
 
 // DeepSeek Vision's inline request limit is 48 MiB. Keep the bridge/API
 // aligned with that limit so multi-image payloads are not rejected locally.
@@ -163,6 +166,8 @@ export function createQqApiServer(options) {
   const { service, apiToken } = options;
   const health = options.health ?? (() => ({ ok: true }));
   const usageTracker = options.usageTracker;
+  const mediaUsageTracker = options.mediaUsageTracker;
+  const mediaResolver = options.mediaResolver;
   const adminUsers = options.adminUsers ?? new Set();
   const usageReportUsers = options.usageReportUsers ?? adminUsers;
 
@@ -196,6 +201,41 @@ export function createQqApiServer(options) {
             limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
           }),
         });
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/qq/media-usage') {
+        if (!isAuthorized(request, apiToken)) {
+          sendJson(response, 401, { ok: false, error: '认证失败' });
+          return;
+        }
+        sendJson(response, 200, {
+          ok: true,
+          report: mediaUsageTracker?.getReport({
+            startAt: Number(url.searchParams.get('start_at')) || 0,
+            endAt: Number(url.searchParams.get('end_at')) || Date.now(),
+          }) ?? { totals: {}, byProvider: [] },
+        });
+        return;
+      }
+
+      const mediaMatch = request.method === 'GET'
+        ? url.pathname.match(/^\/v1\/qq\/media\/([A-Za-z0-9_-]+)$/u)
+        : null;
+      if (mediaMatch) {
+        const mediaFile = await mediaResolver?.getMediaFile(mediaMatch[1]);
+        if (!mediaFile) {
+          sendJson(response, 404, { ok: false, error: '视频已过期或不存在' });
+          return;
+        }
+        response.writeHead(200, {
+          'Content-Type': 'video/mp4',
+          'Content-Length': String(mediaFile.size),
+          'Cache-Control': 'private, max-age=600',
+          'Content-Disposition': 'inline',
+          'Accept-Ranges': 'bytes',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        createReadStream(mediaFile.filePath).on('error', () => response.destroy()).pipe(response);
         return;
       }
 
@@ -392,6 +432,12 @@ export async function createQqRuntime() {
       process.env.QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS,
     ),
   });
+  const mediaUsageTracker = new MediaUsageTracker({
+    databaseFilePath: path.resolve(
+      projectRoot,
+      process.env.QQ_MEDIA_USAGE_DATABASE_FILE?.trim() || 'data/qq-media-usage.sqlite',
+    ),
+  });
 
   const webSearchEnabled = !/^(?:0|false|off)$/i.test(
     (process.env.WEB_SEARCH_ENABLED ?? process.env.LONGTU_WEB_SEARCH_ENABLED)?.trim() || 'true',
@@ -548,6 +594,18 @@ export async function createQqRuntime() {
   const usageReportUsers = configuredUsageReportUsers.size > 0
     ? configuredUsageReportUsers
     : new Set(adminUsers);
+  const mediaResolver = new MediaResolver({
+    enabled: parseBoolean(process.env.QQ_MEDIA_EXTRACT_ENABLED, false),
+    command: process.env.QQ_MEDIA_YTDLP_COMMAND?.trim() || 'yt-dlp',
+    timeoutMs: (parsePositiveNumber(
+      process.env.QQ_MEDIA_DOWNLOAD_TIMEOUT_SECONDS
+        ?? process.env.QQ_MEDIA_RESOLVE_TIMEOUT_SECONDS,
+    ) ?? 120) * 1000,
+    cacheTtlMs: (parsePositiveNumber(process.env.QQ_MEDIA_RESOLVE_CACHE_TTL_SECONDS) ?? 10 * 60) * 1000,
+    cacheDirectory: path.resolve(projectRoot, process.env.QQ_MEDIA_CACHE_DIRECTORY?.trim() || 'data/media-cache'),
+    publicBaseUrl: process.env.QQ_MEDIA_PUBLIC_BASE_URL?.trim() || 'http://qq-bot:8787',
+    maxConcurrent: parsePositiveInteger(process.env.QQ_MEDIA_MAX_CONCURRENT) ?? 2,
+  });
   const service = new QqBotService({
     chatClient,
     conversationStore,
@@ -570,6 +628,8 @@ export async function createQqRuntime() {
       process.env.LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS,
     ) ?? 300) * 1000,
     usageTracker,
+    mediaUsageTracker,
+    mediaResolver,
     largeGroupIds: parseIdentifierSet(process.env.QQ_USAGE_LARGE_GROUPS),
     largeGroupExcludedIds: parseIdentifierSet(
       process.env.QQ_USAGE_LARGE_GROUP_EXCLUDES,
@@ -607,6 +667,8 @@ export async function createQqRuntime() {
     memberAliases,
     webSearch,
     usageTracker,
+    mediaUsageTracker,
+    mediaResolver,
     adminUsers,
     usageReportUsers,
     webSearchEnabled,
@@ -641,6 +703,8 @@ export async function startQqApi() {
     service: runtime.service,
     apiToken,
     usageTracker: runtime.usageTracker,
+    mediaUsageTracker: runtime.mediaUsageTracker,
+    mediaResolver: runtime.mediaResolver,
     adminUsers: runtime.adminUsers,
     usageReportUsers: runtime.usageReportUsers,
     health: async () => {
@@ -654,6 +718,7 @@ export async function startQqApi() {
         active_reply_enabled: runtime.activeReplyEnabled,
         repeat_enabled: runtime.repeatEnabled,
         peer_bot_context_gate_enabled: runtime.peerBotContextGateEnabled,
+        media_extract_enabled: runtime.mediaResolver?.enabled === true,
         image_count: currentStats.longtuImageCount,
         bundled_image_count: currentStats.longtuImageCount - currentStats.dynamicActive,
         dynamic_image_count: currentStats.dynamicActive,
@@ -696,6 +761,7 @@ export async function startQqApi() {
     runtime.conversationStore.close();
     runtime.longtuLibrary.close();
     runtime.usageTracker.close();
+    runtime.mediaUsageTracker.close();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
