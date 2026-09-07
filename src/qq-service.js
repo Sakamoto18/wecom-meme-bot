@@ -1137,6 +1137,7 @@ export class QqBotService {
     this.usageTracker = options.usageTracker ?? null;
     this.mediaResolver = options.mediaResolver ?? null;
     this.mediaUsageTracker = options.mediaUsageTracker ?? null;
+    this.mediaExcludedGroups = new Set(options.mediaExcludedGroups ?? []);
     this.largeGroupIds = new Set(options.largeGroupIds ?? []);
     this.largeGroupExcludedIds = new Set(options.largeGroupExcludedIds ?? []);
     this.largeGroupMemberThreshold = Math.max(
@@ -2581,7 +2582,23 @@ export class QqBotService {
       text: payload.text,
       richSegments: payload.richSegments,
     });
-    if (payload.mediaShare && candidates.length > 0 && !payload.observeOnly) {
+    const mediaExcluded = this.mediaExcludedGroups.has(
+      String(payload.groupId ?? '').trim(),
+    );
+    if (
+      payload.mediaShare
+      && candidates.length > 0
+      && !payload.observeOnly
+      && mediaExcluded
+    ) {
+      return { mode: 'media-excluded', messages: [] };
+    }
+    if (
+      payload.mediaShare
+      && candidates.length > 0
+      && !payload.observeOnly
+      && !mediaExcluded
+    ) {
       if (!this.mediaResolver?.enabled) {
         return { mode: 'media-disabled', messages: [] };
       }

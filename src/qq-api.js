@@ -630,6 +630,9 @@ export async function createQqRuntime() {
     usageTracker,
     mediaUsageTracker,
     mediaResolver,
+    mediaExcludedGroups: parseIdentifierSet(
+      process.env.QQ_MEDIA_EXCLUDED_GROUPS,
+    ),
     largeGroupIds: parseIdentifierSet(process.env.QQ_USAGE_LARGE_GROUPS),
     largeGroupExcludedIds: parseIdentifierSet(
       process.env.QQ_USAGE_LARGE_GROUP_EXCLUDES,

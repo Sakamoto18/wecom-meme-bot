@@ -94,6 +94,35 @@ class LongtuQqBridge(Star):
             or ""
         ).strip()
 
+    async def _react_media_share(self, event: AstrMessageEvent) -> bool:
+        """Use QQ's native message reaction instead of sending a visible message."""
+        message_id = str(
+            getattr(getattr(event, "message_obj", None), "message_id", "") or "",
+        ).strip()
+        bot = getattr(event, "bot", None)
+        call_action = getattr(bot, "call_action", None)
+        if not message_id or not callable(call_action):
+            logger.debug("QQ 原生消息回应不可用：缺少 message_id 或 OneBot bot")
+            return False
+        emoji_id = str(
+            os.getenv("QQ_MEDIA_ACK_EMOJI_ID")
+            or self.config.get("media_ack_emoji_id")
+            or "128077"
+        ).strip()
+        if not emoji_id:
+            return False
+        try:
+            numeric_message_id = int(message_id)
+        except ValueError:
+            numeric_message_id = message_id
+        await call_action(
+            "set_msg_emoji_like",
+            message_id=numeric_message_id,
+            emoji_id=emoji_id,
+            set=True,
+        )
+        return True
+
     def _usage_api_url(self) -> str:
         api_url = self._api_url().rstrip("/")
         if api_url.endswith("/v1/qq/message"):
@@ -559,6 +588,22 @@ class LongtuQqBridge(Star):
             for group_id in str(configured).split(",")
             if group_id.strip()
         }
+
+    def _media_group_enabled(self, event: AstrMessageEvent) -> bool:
+        """Return whether external video-share parsing is enabled for this chat."""
+        if event.is_private_chat():
+            return True
+        configured = (
+            os.getenv("QQ_MEDIA_EXCLUDED_GROUPS")
+            or self.config.get("media_excluded_groups")
+            or ""
+        )
+        excluded_groups = {
+            group_id.strip()
+            for group_id in str(configured).split(",")
+            if group_id.strip()
+        }
+        return str(event.get_group_id() or "").strip() not in excluded_groups
 
     @staticmethod
     def _enabled(value, default: bool = False) -> bool:
@@ -1848,9 +1893,22 @@ class LongtuQqBridge(Star):
             )
             rich_segments = self._rich_segments(event, quoted_chain)
             has_rich = bool(rich_segments)
+            media_group_enabled = self._media_group_enabled(event)
+            raw_media_text = self._raw_text(event) or event.message_str or ""
+            if (
+                not media_group_enabled
+                and (
+                    has_rich
+                    or MEDIA_SHARE_PATTERN.search(raw_media_text)
+                )
+            ):
+                logger.info(
+                    f"群 {event.get_group_id()} 已禁用外部视频分享解析，保持静默",
+                )
+                return
             media_signal_text = " ".join(
                 [
-                    self._raw_text(event) or event.message_str or "",
+                    raw_media_text,
                     str(rich_segments),
                 ],
             )
@@ -1876,11 +1934,12 @@ class LongtuQqBridge(Star):
                         oldest_key = min(self.media_status_cache, key=self.media_status_cache.get)
                         self.media_status_cache.pop(oldest_key, None)
                     try:
-                        # QQ 的视频分享由一个轻量表情表示处理中；不引用原消息，
-                        # 避免多条并发卡片在群里堆出一串引用回复。
-                        await event.send(MessageChain(chain=[Comp.Face(id=14)]))
+                        # 直接挂在原分享消息上的 QQ 原生表情回应；不发送任何
+                        # 可见的普通消息，因此不会在群里产生“收到分享”的废话。
+                        if media_group_enabled:
+                            await self._react_media_share(event)
                     except Exception as error:
-                        logger.debug(f"媒体解析提示发送失败：{type(error).__name__}")
+                        logger.debug(f"QQ 原生媒体回应失败：{type(error).__name__}")
 
             # event.message_str 会把 At 组件渲染成“@机器人昵称”，不能用它判断
             # 用户是否附带正文。只检查 OneBot 原始 text 段和 Plain 组件。
@@ -2005,7 +2064,10 @@ class LongtuQqBridge(Star):
                 "forward_image_base64s": forward_image_base64s,
                 "quoted_forward_image_base64s": quoted_forward_image_base64s,
                 "rich_segments": rich_segments,
-                "media_share": has_media_payload or bool(MEDIA_SHARE_PATTERN.search(text or "")),
+                "media_share": media_group_enabled and (
+                    has_media_payload
+                    or bool(MEDIA_SHARE_PATTERN.search(text or ""))
+                ),
                 # 保留旧字段，便于旧版 Node 服务平滑升级。
                 "image_base64": image_base64s[0] if image_base64s else "",
                 "quoted_image_base64": quoted_image_base64s[0] if quoted_image_base64s else "",
