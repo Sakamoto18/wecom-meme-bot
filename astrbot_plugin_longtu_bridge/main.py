@@ -38,6 +38,11 @@ ALLOWED_BRIDGE_SLASH_COMMANDS = {
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 MEDIA_SHARE_PATTERN = re.compile(r"https?://[^\s<>\u3000]+", re.IGNORECASE)
+MEDIA_ACK_PATTERN = re.compile(
+    r"https?://[^\s<>\u3000]*(?:bilibili\.com|b23\.tv|xhslink\.com|xiaohongshu\.com|"
+    r"douyin\.com|iesdouyin\.com|kuaishou\.com|gifshow\.com|v\.qq\.com)[^\s<>\u3000]*",
+    re.IGNORECASE,
+)
 
 
 @register(
@@ -1843,7 +1848,14 @@ class LongtuQqBridge(Star):
             )
             rich_segments = self._rich_segments(event, quoted_chain)
             has_rich = bool(rich_segments)
-            has_media_signal = has_rich or bool(
+            media_signal_text = " ".join(
+                [
+                    self._raw_text(event) or event.message_str or "",
+                    str(rich_segments),
+                ],
+            )
+            has_media_signal = bool(MEDIA_ACK_PATTERN.search(media_signal_text))
+            has_media_payload = has_rich or bool(
                 MEDIA_SHARE_PATTERN.search(
                     self._raw_text(event) or event.message_str or "",
                 ),
@@ -1993,7 +2005,7 @@ class LongtuQqBridge(Star):
                 "forward_image_base64s": forward_image_base64s,
                 "quoted_forward_image_base64s": quoted_forward_image_base64s,
                 "rich_segments": rich_segments,
-                "media_share": has_media_signal or bool(MEDIA_SHARE_PATTERN.search(text or "")),
+                "media_share": has_media_payload or bool(MEDIA_SHARE_PATTERN.search(text or "")),
                 # 保留旧字段，便于旧版 Node 服务平滑升级。
                 "image_base64": image_base64s[0] if image_base64s else "",
                 "quoted_image_base64": quoted_image_base64s[0] if quoted_image_base64s else "",
