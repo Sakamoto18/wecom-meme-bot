@@ -373,3 +373,28 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs --tail=200 qq-bo
 ### Apple Silicon 启动 NapCat 很慢
 
 NapCat 容器需要模拟 amd64，首次启动较慢是正常现象。若 Docker Desktop 未启用 Rosetta，可在 Docker Desktop 设置中开启相关选项后重试。
+# QQ 小程序 / 小红书视频源提取
+
+Bridge 会主动处理群友发送的外部分享卡片和 HTTPS 分享文本，不要求额外 `@` 机器人。它保留 OneBot 原始 `json/xml` 卡片中的跳转地址，也支持从引用卡片中回捞地址，再交给 `yt-dlp` 判断是否为可提取的视频。Node 服务会先把视频下载并生成标准 MP4，再通过短期随机媒体地址返回 QQ 视频消息，避免把带鉴权/防盗链的原站临时直链直接交给 QQ。视频不经过 48 MiB 的 JSON/Base64 接口。媒体事件单独写入 `QQ_MEDIA_USAGE_DATABASE_FILE`，记录平台、成功/失败、耗时和下载/输出字节数，和 LLM Token 日报分开。文章、图片等非视频外链解析失败后会静默跳过。
+
+前置条件：
+
+- NapCat/OneBot v11 必须保留 `json/xml` 原始段；若适配器已把卡片丢弃，Node 无法从 `appid/path` 推导视频地址。
+- `qq-bot` 容器安装 `yt-dlp`；需要合并 HLS/DASH 时同时安装 `ffmpeg`。小红书登录内容还需要合法的浏览器 cookies，公开短链不保证永久可用。
+- NapCat 必须能通过 Compose 网络访问 `QQ_MEDIA_PUBLIC_BASE_URL`（默认 `http://qq-bot:8787`）；视频文件只保存在 `qq-bot` 的临时缓存目录，过期自动清理。
+- 仅处理用户有权访问的公开内容；程序拒绝 `file://`、回环和私网地址。不要尝试绕过 DRM、登录限制或平台风控。
+
+启用配置：
+
+```dotenv
+QQ_MEDIA_EXTRACT_ENABLED=true
+QQ_MEDIA_YTDLP_COMMAND=yt-dlp
+QQ_MEDIA_RESOLVE_TIMEOUT_SECONDS=20
+QQ_MEDIA_DOWNLOAD_TIMEOUT_SECONDS=120
+QQ_MEDIA_RESOLVE_CACHE_TTL_SECONDS=600
+QQ_MEDIA_MAX_CONCURRENT=2
+QQ_MEDIA_PUBLIC_BASE_URL=http://qq-bot:8787
+QQ_MEDIA_USAGE_DATABASE_FILE=data/qq-media-usage.sqlite
+```
+
+媒体统计可用同一 Bearer Token 查询：`GET /v1/qq/media-usage?start_at=<毫秒时间戳>&end_at=<毫秒时间戳>`。

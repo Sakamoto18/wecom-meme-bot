@@ -22,6 +22,8 @@ import {
 } from './active-reply.js';
 import { RepeatDetector } from './repeat-detector.js';
 import { Jimp } from 'jimp';
+import { createHash } from 'node:crypto';
+import { mediaCandidates } from './media-link-extractor.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -787,6 +789,10 @@ export function normalizeQqPayload(payload) {
       || limitedImages.quotedForwardImages.length > 0,
     pureBotMention: payload.pure_bot_mention === true,
     observeOnly: payload.observe_only === true && messageType === 'group',
+    richSegments: Array.isArray(payload.rich_segments)
+      ? payload.rich_segments.slice(0, 8)
+      : [],
+    mediaShare: payload.media_share === true,
   };
   if (!normalized.pureBotMention && isRenderedPureBotMention(normalized)) {
     normalized.pureBotMention = true;
@@ -1129,6 +1135,8 @@ export class QqBotService {
     this.activeReplyDecider = options.activeReplyDecider ?? null;
     this.peerBotContinuationDecider = options.peerBotContinuationDecider ?? null;
     this.usageTracker = options.usageTracker ?? null;
+    this.mediaResolver = options.mediaResolver ?? null;
+    this.mediaUsageTracker = options.mediaUsageTracker ?? null;
     this.largeGroupIds = new Set(options.largeGroupIds ?? []);
     this.largeGroupExcludedIds = new Set(options.largeGroupExcludedIds ?? []);
     this.largeGroupMemberThreshold = Math.max(
@@ -2569,6 +2577,59 @@ export class QqBotService {
   }
 
   async handleNormalizedMessage(payload) {
+    const candidates = mediaCandidates({
+      text: payload.text,
+      richSegments: payload.richSegments,
+    });
+    if (payload.mediaShare && candidates.length > 0 && !payload.observeOnly) {
+      if (!this.mediaResolver?.enabled) {
+        return { mode: 'media-disabled', messages: [] };
+      }
+      const startedAt = Date.now();
+      const candidate = candidates[0];
+      try {
+        const resolved = await this.mediaResolver.resolve(candidate);
+        const sourceUrlHash = createHash('sha256')
+          .update(candidate.url)
+          .digest('hex');
+        this.mediaUsageTracker?.record({
+          groupId: payload.messageType === 'group' ? payload.groupId : '',
+          userId: payload.userId,
+          provider: candidate.provider,
+          operation: 'resolve',
+          sourceUrlHash,
+          durationMs: Date.now() - startedAt,
+          downloadBytes: resolved.downloadBytes,
+          outputBytes: resolved.outputBytes,
+        });
+        return {
+          mode: 'media',
+          messages: [{
+            type: 'video',
+            url: resolved.url,
+            title: resolved.title,
+            duration: resolved.duration,
+            provider: candidate.provider,
+          }],
+        };
+      } catch (error) {
+        const sourceUrlHash = createHash('sha256')
+          .update(candidate.url)
+          .digest('hex');
+        this.mediaUsageTracker?.record({
+          groupId: payload.messageType === 'group' ? payload.groupId : '',
+          userId: payload.userId,
+          provider: candidate.provider,
+          operation: 'resolve',
+          sourceUrlHash,
+          status: 'failed',
+          durationMs: Date.now() - startedAt,
+          errorStage: 'resolve',
+        });
+        this.logger.warn(`媒体源解析失败：${error.message}`);
+        return { mode: 'media-unavailable', messages: [] };
+      }
+    }
     const conversationContent = buildConversationContent(payload)
       || (payload.hasImage ? IMAGE_ONLY_MESSAGE_TEXT : '');
     if (!conversationContent && !payload.hasImage) {
