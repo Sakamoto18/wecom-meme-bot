@@ -375,7 +375,7 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs --tail=200 qq-bo
 NapCat 容器需要模拟 amd64，首次启动较慢是正常现象。若 Docker Desktop 未启用 Rosetta，可在 Docker Desktop 设置中开启相关选项后重试。
 # QQ 小程序 / 小红书视频源提取
 
-Bridge 会主动处理群友发送的外部分享卡片和 HTTPS 分享文本，不要求额外 `@` 机器人。它保留 OneBot 原始 `json/xml` 卡片中的跳转地址，也支持从引用卡片中回捞地址，再交给 `yt-dlp` 判断是否为可提取的视频。Node 服务会先把视频下载并生成标准 MP4，再通过短期随机媒体地址返回 QQ 视频消息，避免把带鉴权/防盗链的原站临时直链直接交给 QQ。视频不经过 48 MiB 的 JSON/Base64 接口。媒体事件单独写入 `QQ_MEDIA_USAGE_DATABASE_FILE`，记录平台、成功/失败、耗时和下载/输出字节数，和 LLM Token 日报分开。文章、图片等非视频外链解析失败后会静默跳过。
+Bridge 会主动处理群友发送的外部分享卡片和 HTTPS 分享文本，不要求额外 `@` 机器人。它保留 OneBot 原始 `json/xml` 卡片中的跳转地址，也支持从引用卡片中回捞地址，再交给 `yt-dlp` 判断是否为可提取的视频。解析开始时通过 NapCat 的 `set_msg_emoji_like` 给原分享消息挂一个 QQ 原生表情回应，不发送“收到分享”之类的普通消息。Node 服务会先把视频下载并生成标准 MP4，再通过短期随机媒体地址返回 QQ 视频消息，避免把带鉴权/防盗链的原站临时直链直接交给 QQ。视频不经过 48 MiB 的 JSON/Base64 接口。媒体事件单独写入 `QQ_MEDIA_USAGE_DATABASE_FILE`，记录平台、成功/失败、耗时和下载/输出字节数，和 LLM Token 日报分开。文章、图片等非视频外链解析失败后会静默跳过。
 
 前置条件：
 
@@ -394,7 +394,11 @@ QQ_MEDIA_DOWNLOAD_TIMEOUT_SECONDS=120
 QQ_MEDIA_RESOLVE_CACHE_TTL_SECONDS=600
 QQ_MEDIA_MAX_CONCURRENT=2
 QQ_MEDIA_PUBLIC_BASE_URL=http://qq-bot:8787
+QQ_MEDIA_ACK_EMOJI_ID=128077
+QQ_MEDIA_EXCLUDED_GROUPS=
 QQ_MEDIA_USAGE_DATABASE_FILE=data/qq-media-usage.sqlite
 ```
+
+`QQ_MEDIA_EXCLUDED_GROUPS` 使用英文逗号分隔群号。配置后，指定群中的外部分享卡和分享链接会保持静默，不发送原生表情回应，也不会进入视频解析服务；例如 `QQ_MEDIA_EXCLUDED_GROUPS=239375116`。
 
 媒体统计可用同一 Bearer Token 查询：`GET /v1/qq/media-usage?start_at=<毫秒时间戳>&end_at=<毫秒时间戳>`。

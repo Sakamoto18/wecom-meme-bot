@@ -61,6 +61,9 @@ function createService(options = {}) {
     peerBotMaxConsecutiveReplies: options.peerBotMaxConsecutiveReplies,
     peerBotLoopWindowMs: options.peerBotLoopWindowMs,
     usageTracker: options.usageTracker,
+    mediaResolver: options.mediaResolver,
+    mediaUsageTracker: options.mediaUsageTracker,
+    mediaExcludedGroups: options.mediaExcludedGroups,
     largeGroupIds: options.largeGroupIds,
     largeGroupExcludedIds: options.largeGroupExcludedIds,
     largeGroupMemberThreshold: options.largeGroupMemberThreshold,
@@ -2487,6 +2490,34 @@ test('艾特机器人并指名未确认群友攻击时，攻击目标不落到�
   assert.equal(result.mode, 'generated-attack');
   assert.match(calls[0].options.additionalSystemPrompt, /本轮被攻击目标：张三/);
   assert.match(calls[0].options.additionalSystemPrompt, /不得把攻击落到指令发送者身上/);
+});
+
+test('外部视频分享在排除群中保持静默且不调用解析器', async () => {
+  let resolveCalls = 0;
+  const { service, calls } = createService({
+    mediaResolver: {
+      enabled: true,
+      async resolve() {
+        resolveCalls += 1;
+        return { url: 'https://cdn.example/video.mp4' };
+      },
+    },
+    mediaExcludedGroups: new Set(['239375116']),
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'media-excluded-1',
+    message_type: 'group',
+    group_id: '239375116',
+    user_id: 'sender-1',
+    text: 'https://www.bilibili.com/video/BV1xx411c7mD',
+    media_share: true,
+  });
+
+  assert.equal(result.mode, 'media-excluded');
+  assert.deepEqual(result.messages, []);
+  assert.equal(resolveCalls, 0);
+  assert.equal(calls.length, 0);
 });
 
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {

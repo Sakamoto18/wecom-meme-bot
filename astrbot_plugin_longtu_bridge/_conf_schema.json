@@ -52,6 +52,18 @@
     "type": "bool",
     "default": false
   },
+  "media_ack_emoji_id": {
+    "description": "视频分享解析前挂在原消息上的 QQ 表情回应 ID",
+    "type": "string",
+    "default": "128077",
+    "hint": "默认是点赞；NapCat 使用 set_msg_emoji_like，QQ_MEDIA_ACK_EMOJI_ID 可覆盖"
+  },
+  "media_excluded_groups": {
+    "description": "禁止视频分享解析的 QQ 群号",
+    "type": "string",
+    "default": "",
+    "hint": "英文逗号分隔；也可设置 QQ_MEDIA_EXCLUDED_GROUPS"
+  },
   "request_timeout_seconds": {
     "description": "等待 QQ Bot 服务的最长秒数",
     "type": "int",
