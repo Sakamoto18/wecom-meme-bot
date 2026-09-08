@@ -150,7 +150,7 @@ class LongtuQqBridge(Star):
         emoji_id = str(
             os.getenv("QQ_MEDIA_ACK_EMOJI_ID")
             or self.config.get("media_ack_emoji_id")
-            or "128077"
+            or "128524"
         ).strip()
         if not emoji_id:
             return False
