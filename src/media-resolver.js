@@ -7,7 +7,7 @@ import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { resolveSharedUrl } from './share-resolver.js';
-import { resolveBilibiliMedia } from './bilibili-provider.js';
+import { extractBilibiliVideoId, resolveBilibiliMedia } from './bilibili-provider.js';
 
 const MAX_MEDIA_BYTES = 256 * 1024 * 1024;
 
@@ -328,7 +328,11 @@ export class MediaResolver {
             this.logger.warn(`媒体 Provider 失败，转入下载兜底：${error.message}`);
           }
         }
-        if (candidate?.provider === 'bilibili') {
+        let bilibiliSource = null;
+        try {
+          bilibiliSource = extractBilibiliVideoId(sourceKey);
+        } catch { /* sourceKey is validated later by the generic fallback */ }
+        if (bilibiliSource) {
           try {
             const bilibili = await resolveBilibiliMedia(sourceKey, {
               timeoutMs: Math.min(this.timeoutMs, 15_000),
