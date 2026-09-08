@@ -143,6 +143,10 @@ export class MediaResolver {
     this.publicBaseUrl = String(options.publicBaseUrl || 'http://qq-bot:8787').replace(/\/+$/u, '');
     this.maxConcurrent = Math.max(1, Number(options.maxConcurrent ?? 2));
     this.publicResolverEnabled = options.publicResolverEnabled !== false;
+    this.providerResolver = typeof options.providerResolver === 'function'
+      ? options.providerResolver
+      : null;
+    this.logger = options.logger || console;
     this.cache = new Map();
     this.mediaFiles = new Map();
     this.inflight = new Map();
@@ -222,6 +226,27 @@ export class MediaResolver {
       try {
         let sourceKey = key;
         let publicMetadata = {};
+        if (this.providerResolver) {
+          try {
+            const provided = await this.providerResolver({
+              url: key,
+              platform: candidate?.provider || 'unknown',
+            });
+            if (provided?.mediaUrl) {
+              return {
+                url: provided.mediaUrl,
+                title: provided.title || '',
+                duration: positive(provided.duration),
+                extractor: 'provider-direct',
+                downloadBytes: 0,
+                outputBytes: 0,
+                direct: true,
+              };
+            }
+          } catch (error) {
+            this.logger.warn(`媒体 Provider 失败，转入下载兜底：${error.message}`);
+          }
+        }
         if (this.publicResolverEnabled) {
           try {
             publicMetadata = await resolveSharedUrl(key, {

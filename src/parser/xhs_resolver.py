@@ -149,10 +149,12 @@ def resolve(
     if not endpoint_template:
         return {"status": "failed", "msg": "未配置已授权的详情接口"}
     timestamp = str(int(time.time() * 1000))
-    params = {"note_id": note_id}
-    headers.update(build_signed_headers(params, timestamp))
+    request_body = {"source_note_id": note_id}
+    headers.update(build_signed_headers(request_body, timestamp))
     endpoint = endpoint_template.replace("{note_id}", note_id)
-    response = requests.get(endpoint, params=params, headers=headers, timeout=timeout)
+    response = requests.post(
+        endpoint, json=request_body, headers=headers, timeout=timeout
+    )
     if response.status_code in {401, 403, 412, 429}:
         return {"status": "failed", "msg": "签名失效或风控拦截"}
     response.raise_for_status()
@@ -160,7 +162,9 @@ def resolve(
         payload = response.json()
     except requests.JSONDecodeError:
         return {"status": "failed", "msg": "详情接口返回非 JSON"}
-    data = parse_detail(payload)
+    if payload.get("code") == -100 or not payload.get("data"):
+        return {"status": "failed", "msg": "签名过期，请更新请求头配置"}
+    data = parse_detail(payload.get("data"))
     if not data:
         return {"status": "failed", "msg": "签名失效或风控拦截"}
     return {"status": "success", "data": data}

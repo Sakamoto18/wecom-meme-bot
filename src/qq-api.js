@@ -17,6 +17,7 @@ import { QqUsageTracker } from './qq-usage-tracker.js';
 import { LongtuWebSearch } from './web-search.js';
 import { MediaResolver } from './media-resolver.js';
 import { MediaUsageTracker } from './media-usage-tracker.js';
+import { createXhsProvider } from './xhs-provider.js';
 
 // DeepSeek Vision's inline request limit is 48 MiB. Keep the bridge/API
 // aligned with that limit so multi-image payloads are not rejected locally.
@@ -594,6 +595,13 @@ export async function createQqRuntime() {
   const usageReportUsers = configuredUsageReportUsers.size > 0
     ? configuredUsageReportUsers
     : new Set(adminUsers);
+  const xhsProvider = createXhsProvider({
+    apiUrl: process.env.XHS_DETAIL_API_URL,
+    headersJson: process.env.XHS_HEADERS_JSON,
+    userAgent: process.env.XHS_USER_AGENT,
+    cookie: process.env.XHS_COOKIE,
+    timeoutMs: (parsePositiveNumber(process.env.XHS_PROVIDER_TIMEOUT_SECONDS) ?? 6) * 1000,
+  });
   const mediaResolver = new MediaResolver({
     enabled: parseBoolean(process.env.QQ_MEDIA_EXTRACT_ENABLED, false),
     command: process.env.QQ_MEDIA_YTDLP_COMMAND?.trim() || 'yt-dlp',
@@ -605,6 +613,8 @@ export async function createQqRuntime() {
     cacheDirectory: path.resolve(projectRoot, process.env.QQ_MEDIA_CACHE_DIRECTORY?.trim() || 'data/media-cache'),
     publicBaseUrl: process.env.QQ_MEDIA_PUBLIC_BASE_URL?.trim() || 'http://qq-bot:8787',
     maxConcurrent: parsePositiveInteger(process.env.QQ_MEDIA_MAX_CONCURRENT) ?? 2,
+    providerResolver: xhsProvider,
+    logger: console,
   });
   const service = new QqBotService({
     chatClient,
