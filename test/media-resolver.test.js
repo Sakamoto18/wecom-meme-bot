@@ -35,6 +35,21 @@ test('B站公开接口按 bvid 获取 cid 和 MP4 流', async () => {
   assert.match(requested[1], /cid=99/u);
   assert.equal(result.mediaUrl, 'https://cdn.example/video.mp4');
   assert.equal(result.title, '测试');
+  assert.equal(result.size, 100);
+});
+
+test('B站单文件 MP4 注册为流式中转，不等待完整下载', async () => {
+  const resolver = new MediaResolver({ enabled: true, cacheTtlMs: 60_000 });
+  const result = resolver.registerRemoteMedia({
+    mediaUrl: 'https://cdn.example/video.mp4', size: 1234, title: '流式视频',
+    requestHeaders: { referer: 'https://www.bilibili.com/' },
+  });
+  const resource = await resolver.getMediaFile(result.mediaId);
+  assert.equal(result.streamed, true);
+  assert.equal(result.downloadBytes, 0);
+  assert.equal(resource.remote, true);
+  assert.equal(resource.remoteUrl, 'https://cdn.example/video.mp4');
+  resolver.close();
 });
 
 test('媒体主链优先使用 Provider 直链且不下载文件', async () => {
