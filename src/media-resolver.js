@@ -405,6 +405,15 @@ export class MediaResolver {
               sourceKey = normalizeDownloadSource(publicMetadata.canonicalUrl)
                 || sourceKey;
             }
+            if (publicMetadata.platform === 'xiaohongshu' && publicMetadata.images?.length) {
+              return {
+                images: publicMetadata.images,
+                title: publicMetadata.title || '',
+                description: publicMetadata.description || '',
+                extractor: 'public-metadata-gallery', downloadBytes: 0,
+                outputBytes: 0, direct: true,
+              };
+            }
           } catch {
             // Public metadata is an optimization. yt-dlp remains the fallback.
           }

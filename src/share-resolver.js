@@ -61,6 +61,7 @@ export async function resolveSharedUrl(input, {
     }
     const html = (await response.text()).slice(0, MAX_HTML_BYTES);
     const title = metaContent(html, 'og:title') || metaContent(html, 'twitter:title');
+    const description = metaContent(html, 'og:description') || metaContent(html, 'description');
     const coverUrl = normalizeMediaUrl(metaContent(html, 'og:image') || metaContent(html, 'twitter:image'));
     const mediaUrl = normalizeMediaUrl(
       metaContent(html, 'og:video')
@@ -73,8 +74,10 @@ export async function resolveSharedUrl(input, {
       canonicalUrl,
       platform: classifyMediaUrl(canonicalUrl),
       title,
+      description,
       coverUrl,
       mediaUrl,
+      images: coverUrl ? [coverUrl] : [],
     };
     if (typeof providerResolver === 'function') {
       const provided = await providerResolver(result);
