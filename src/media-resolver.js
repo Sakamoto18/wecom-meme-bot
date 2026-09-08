@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { resolveSharedUrl } from './share-resolver.js';
@@ -186,7 +187,8 @@ export class MediaResolver {
     this.command = options.command || 'yt-dlp';
     this.timeoutMs = options.timeoutMs ?? 120_000;
     this.cacheTtlMs = Math.max(0, Number(options.cacheTtlMs ?? 10 * 60 * 1000));
-    this.cacheDirectory = options.cacheDirectory || path.resolve('data/media-cache');
+    this.cacheDirectory = options.cacheDirectory || path.join(os.tmpdir(), 'longtu-media-cache');
+    this.maxCacheBytes = Math.max(0, Number(options.maxCacheBytes ?? 512 * 1024 * 1024));
     this.publicBaseUrl = String(options.publicBaseUrl || 'http://qq-bot:8787').replace(/\/+$/u, '');
     this.maxConcurrent = Math.max(1, Number(options.maxConcurrent ?? 2));
     this.publicResolverEnabled = options.publicResolverEnabled !== false;
@@ -199,7 +201,16 @@ export class MediaResolver {
     this.inflight = new Map();
     this.active = 0;
     this.waiters = [];
-    mkdir(this.cacheDirectory, { recursive: true }).catch(() => {});
+    mkdir(this.cacheDirectory, { recursive: true })
+      .then(() => this.cleanupExpired())
+      .catch(() => {});
+    const cleanupIntervalMs = Math.max(30_000, Math.min(this.cacheTtlMs || 60_000, 60_000));
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupExpired().catch((error) => {
+        this.logger.warn(`媒体临时缓存清理失败：${error.message}`);
+      });
+    }, cleanupIntervalMs);
+    this.cleanupTimer.unref?.();
   }
 
   async acquireSlot() {
@@ -224,13 +235,36 @@ export class MediaResolver {
       await unlink(item.filePath).catch(() => {});
     }
     const entries = await readdir(this.cacheDirectory).catch(() => []);
+    const files = [];
     for (const entry of entries) {
       const filePath = path.join(this.cacheDirectory, entry);
       const info = await stat(filePath).catch(() => null);
-      if (info?.isFile() && now - info.mtimeMs > this.cacheTtlMs * 2) {
+      if (!info?.isFile()) continue;
+      if (now - info.mtimeMs > this.cacheTtlMs) {
         await unlink(filePath).catch(() => {});
+      } else {
+        files.push({ filePath, size: info.size, mtimeMs: info.mtimeMs });
       }
     }
+    if (this.maxCacheBytes > 0) {
+      let totalBytes = files.reduce((sum, item) => sum + item.size, 0);
+      const protectedPaths = new Set(
+        [...this.mediaFiles.values()]
+          .filter((item) => item.expiresAt > now)
+          .map((item) => item.filePath),
+      );
+      for (const item of files.sort((left, right) => left.mtimeMs - right.mtimeMs)) {
+        if (totalBytes <= this.maxCacheBytes) break;
+        if (protectedPaths.has(item.filePath)) continue;
+        await unlink(item.filePath).catch(() => {});
+        totalBytes -= item.size;
+      }
+    }
+  }
+
+  close() {
+    clearInterval(this.cleanupTimer);
+    this.cleanupTimer = null;
   }
 
   registerMedia(value) {
