@@ -698,6 +698,11 @@ class LongtuQqBridge(Star):
         result = []
         for component in components or []:
             component_type = str(getattr(component, "type", "") or "").lower()
+            if component_type == "video" or isinstance(component, getattr(Comp, "Video", ())):
+                url = str(getattr(component, "url", "") or getattr(component, "file", "") or "").strip()
+                if url.startswith(("http://", "https://")):
+                    result.append({"type": "video", "data": {"url": url}})
+                continue
             if component_type not in {"json", "xml"} and not isinstance(
                 component,
                 (Comp.Json, getattr(Comp, "Xml", Comp.Json)),
@@ -2134,7 +2139,13 @@ class LongtuQqBridge(Star):
                 "quoted_image_base64s": quoted_image_base64s,
                 "forward_image_base64s": forward_image_base64s,
                 "quoted_forward_image_base64s": quoted_forward_image_base64s,
-                "rich_segments": rich_segments,
+            "rich_segments": rich_segments,
+                "video_urls": [
+                    str(item.get("data", {}).get("url"))
+                    for item in rich_segments
+                    if item.get("type") == "video"
+                    and str(item.get("data", {}).get("url", "")).startswith(("http://", "https://"))
+                ][:4],
                 "media_share": media_group_enabled and (
                     has_media_payload
                     or bool(MEDIA_SHARE_PATTERN.search(text or ""))
