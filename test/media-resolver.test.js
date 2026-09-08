@@ -14,6 +14,13 @@ test('B站 QQ 小程序播放器地址转换为 yt-dlp 支持的视频页', () =
   );
 });
 
+test('B站卡片编码参数中的 BV 号也能提取', () => {
+  assert.deepEqual(
+    extractBilibiliVideoId('https://example.com/jump?target=https%3A%2F%2Fwww.bilibili.com%2Fvideo%2FBV1DV5v6HELu'),
+    { bvid: 'BV1DV5v6HELu' },
+  );
+});
+
 test('B站公开接口按 bvid 获取 cid 和 MP4 流', async () => {
   const requested = [];
   const result = await resolveBilibiliMedia(
