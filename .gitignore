@@ -14,3 +14,4 @@ data/longtu-review*.png
 data/longtu-approval-review*/
 deploy/qq/astrbot-data/
 deploy/qq/napcat/
+.env.xhs
