@@ -55,6 +55,7 @@ export async function resolveBilibiliMedia(value, { fetchImpl = fetch, timeoutMs
   if (!stream) throw new Error('B站公开播放接口没有返回 MP4 流');
   return {
     mediaUrl: normalizeMediaUrl(stream.url),
+    size: Number(stream.size || 0),
     title: String(metadata.title || '').slice(0, 200),
     duration: Number(metadata.duration || 0),
     requestHeaders: HEADERS,

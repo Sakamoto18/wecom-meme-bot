@@ -228,6 +228,38 @@ export function createQqApiServer(options) {
           sendJson(response, 404, { ok: false, error: '视频已过期或不存在' });
           return;
         }
+        if (mediaFile.remote) {
+          const upstreamHeaders = { ...mediaFile.requestHeaders };
+          if (request.headers.range) upstreamHeaders.range = request.headers.range;
+          const upstream = await fetch(mediaFile.remoteUrl, { headers: upstreamHeaders });
+          if (!upstream.ok || !upstream.body) {
+            sendJson(response, 502, { ok: false, error: `源视频返回 HTTP ${upstream.status}` });
+            return;
+          }
+          const headers = {
+            'Content-Type': upstream.headers.get('content-type') || 'video/mp4',
+            'Cache-Control': 'private, max-age=600',
+            'Content-Disposition': 'inline',
+            'Accept-Ranges': upstream.headers.get('accept-ranges') || 'bytes',
+            'X-Content-Type-Options': 'nosniff',
+          };
+          for (const name of ['content-length', 'content-range']) {
+            const value = upstream.headers.get(name);
+            if (value) headers[name] = value;
+          }
+          response.writeHead(upstream.status, headers);
+          upstream.body.pipeTo(new WritableStream({
+            write(chunk) {
+              if (!response.write(Buffer.from(chunk))) {
+                return new Promise((resolve) => response.once('drain', resolve));
+              }
+              return undefined;
+            },
+            close() { response.end(); },
+            abort() { response.destroy(); },
+          })).catch(() => response.destroy());
+          return;
+        }
         response.writeHead(200, {
           'Content-Type': 'video/mp4',
           'Content-Length': String(mediaFile.size),

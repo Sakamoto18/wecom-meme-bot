@@ -232,7 +232,7 @@ export class MediaResolver {
     for (const [id, item] of this.mediaFiles) {
       if (item.expiresAt > now) continue;
       this.mediaFiles.delete(id);
-      await unlink(item.filePath).catch(() => {});
+      if (item.filePath) await unlink(item.filePath).catch(() => {});
     }
     const entries = await readdir(this.cacheDirectory).catch(() => []);
     const files = [];
@@ -278,16 +278,38 @@ export class MediaResolver {
     };
   }
 
+  registerRemoteMedia(value) {
+    const id = randomBytes(24).toString('base64url');
+    const expiresAt = Date.now() + this.cacheTtlMs;
+    this.mediaFiles.set(id, {
+      remoteUrl: value.mediaUrl,
+      requestHeaders: value.requestHeaders || {},
+      expiresAt,
+      size: positive(value.size),
+    });
+    return {
+      url: `${this.publicBaseUrl}/v1/qq/media/${id}`,
+      mediaId: id,
+      title: value.title || '',
+      duration: positive(value.duration),
+      extractor: 'bilibili-stream-proxy',
+      downloadBytes: 0,
+      outputBytes: positive(value.size),
+      streamed: true,
+    };
+  }
+
   async getMediaFile(mediaId) {
     const normalizedId = String(mediaId || '');
     const item = this.mediaFiles.get(normalizedId);
     if (!item || item.expiresAt <= Date.now()) {
       if (item) {
         this.mediaFiles.delete(normalizedId);
-        await unlink(item.filePath).catch(() => {});
+        if (item.filePath) await unlink(item.filePath).catch(() => {});
       }
       return null;
     }
+    if (item.remoteUrl) return { ...item, remote: true };
     const info = await stat(item.filePath).catch(() => null);
     return info?.isFile() ? { ...item, size: info.size } : null;
   }
@@ -338,9 +360,7 @@ export class MediaResolver {
               timeoutMs: Math.min(this.timeoutMs, 15_000),
             });
             if (bilibili?.mediaUrl) {
-              return this.registerMedia(await downloadDirectMedia(
-                bilibili, this.timeoutMs, this.cacheDirectory,
-              ));
+              return this.registerRemoteMedia(bilibili);
             }
           } catch (error) {
             this.logger.warn(`B站公开接口解析失败，转入通用兜底：${error.message}`);
