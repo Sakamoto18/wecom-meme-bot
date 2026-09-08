@@ -91,6 +91,7 @@ test('B站公开接口按 bvid 获取 cid 和 MP4 流', async () => {
   assert.deepEqual(extractBilibiliVideoId('https://www.bilibili.com/video/BV1DV5v6HELu'), { bvid: 'BV1DV5v6HELu' });
   assert.equal(requested.length, 2);
   assert.match(requested[1], /cid=99/u);
+  assert.match(requested[1], /qn=64/u);
   assert.equal(result.mediaUrl, 'https://cdn.example/video.mp4');
   assert.equal(result.title, '测试');
   assert.equal(result.size, 100);

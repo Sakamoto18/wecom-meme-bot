@@ -91,7 +91,8 @@ export async function resolveBilibiliMedia(value, {
   const cid = metadata.cid || metadata.pages?.[0]?.cid;
   if (!cid) throw new Error('B站元数据中没有 cid');
   query.set('cid', String(cid));
-  query.set('qn', '80');
+  // Mobile playback baseline: prefer 720P instead of always requesting the largest stream.
+  query.set('qn', '64');
   query.set('fnval', '1');
   query.set('fourk', '1');
   const play = await getJson(
@@ -106,6 +107,7 @@ export async function resolveBilibiliMedia(value, {
     size: Number(stream.size || 0),
     title: String(metadata.title || '').slice(0, 200),
     duration: Number(metadata.duration || 0),
+    quality: Number(play.quality || 0),
     requestHeaders: HEADERS,
   };
 }

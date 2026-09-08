@@ -2626,7 +2626,7 @@ export class QqBotService {
           downloadBytes: resolved.downloadBytes,
           outputBytes: resolved.outputBytes,
         });
-        this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} duration_ms=${Date.now() - startedAt}`);
+        this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0} output_bytes=${resolved.outputBytes || 0} duration_ms=${Date.now() - startedAt}`);
         return {
           mode: 'media',
           messages: [{
