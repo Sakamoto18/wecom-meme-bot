@@ -49,6 +49,29 @@ test('B站短链跳转 412 时使用工具回收的 BV 号访问公开接口', a
   assert.equal(result.mediaUrl, 'https://cdn.example/short.mp4');
 });
 
+test('B站短链只读取第一跳 Location，避免跟随到网页触发 412', async () => {
+  const requested = [];
+  const result = await resolveBilibiliMedia('https://b23.tv/BQHUcP1', {
+    fetchImpl: async (url, options = {}) => {
+      requested.push({ url: String(url), redirect: options.redirect });
+      if (String(url).startsWith('https://b23.tv/')) {
+        return new Response('', {
+          status: 302, headers: { location: 'https://www.bilibili.com/video/BV18U4R6GEkz?p=1' },
+        });
+      }
+      if (String(url).includes('/view?')) {
+        return new Response(JSON.stringify({ code: 0, data: { cid: 88, title: '第一跳测试' } }));
+      }
+      return new Response(JSON.stringify({
+        code: 0, data: { durl: [{ size: 9, url: 'https://cdn.example/manual.mp4' }] },
+      }));
+    },
+  });
+  assert.equal(requested[0].redirect, 'manual');
+  assert.match(requested[1].url, /bvid=BV18U4R6GEkz/u);
+  assert.equal(result.mediaUrl, 'https://cdn.example/manual.mp4');
+});
+
 test('B站公开接口按 bvid 获取 cid 和 MP4 流', async () => {
   const requested = [];
   const result = await resolveBilibiliMedia(

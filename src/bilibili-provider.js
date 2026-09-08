@@ -40,8 +40,12 @@ async function followBilibiliRedirect(value, fetchImpl, timeoutMs) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetchImpl(value, {
-      redirect: 'follow', headers: HEADERS, signal: controller.signal,
+      redirect: 'manual', headers: HEADERS, signal: controller.signal,
     });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (location) return new URL(location, value).href;
+    }
     if (!response.ok) throw new Error(`B站短链返回 HTTP ${response.status}`);
     return response.url || value;
   } finally {
