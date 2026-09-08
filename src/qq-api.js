@@ -628,6 +628,7 @@ export async function createQqRuntime() {
     ? configuredUsageReportUsers
     : new Set(adminUsers);
   const xhsProvider = createXhsProvider({
+    providerUrl: process.env.XHS_PROVIDER_URL,
     apiUrl: process.env.XHS_DETAIL_API_URL,
     headersJson: process.env.XHS_HEADERS_JSON,
     userAgent: process.env.XHS_USER_AGENT,
