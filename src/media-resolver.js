@@ -311,6 +311,7 @@ export class MediaResolver {
       extractor: 'bilibili-stream-proxy',
       downloadBytes: 0,
       outputBytes: positive(value.size),
+      quality: positive(value.quality),
       streamed: true,
     };
   }
