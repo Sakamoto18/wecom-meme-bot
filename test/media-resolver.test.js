@@ -1,6 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MediaResolver } from '../src/media-resolver.js';
+import { MediaResolver, normalizeDownloadSource } from '../src/media-resolver.js';
+import { extractBilibiliVideoId, resolveBilibiliMedia } from '../src/bilibili-provider.js';
+
+test('B站 QQ 小程序播放器地址转换为 yt-dlp 支持的视频页', () => {
+  assert.equal(
+    normalizeDownloadSource('https://player.bilibili.com/player.html?bvid=BV1DV5v6HELu'),
+    'https://www.bilibili.com/video/BV1DV5v6HELu',
+  );
+  assert.equal(
+    normalizeDownloadSource('https://player.bilibili.com/player.html?aid=123456'),
+    'https://www.bilibili.com/video/av123456',
+  );
+});
+
+test('B站公开接口按 bvid 获取 cid 和 MP4 流', async () => {
+  const requested = [];
+  const result = await resolveBilibiliMedia(
+    'https://player.bilibili.com/player.html?bvid=BV1DV5v6HELu',
+    {
+      fetchImpl: async (url) => {
+        requested.push(String(url));
+        if (String(url).includes('/view?')) {
+          return new Response(JSON.stringify({ code: 0, data: { cid: 99, title: '测试', duration: 12 } }));
+        }
+        return new Response(JSON.stringify({
+          code: 0, data: { durl: [{ size: 100, url: 'https://cdn.example/video.mp4' }] },
+        }));
+      },
+    },
+  );
+  assert.deepEqual(extractBilibiliVideoId('https://www.bilibili.com/video/BV1DV5v6HELu'), { bvid: 'BV1DV5v6HELu' });
+  assert.equal(requested.length, 2);
+  assert.match(requested[1], /cid=99/u);
+  assert.equal(result.mediaUrl, 'https://cdn.example/video.mp4');
+  assert.equal(result.title, '测试');
+});
 
 test('媒体主链优先使用 Provider 直链且不下载文件', async () => {
   const calls = [];

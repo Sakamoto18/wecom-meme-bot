@@ -6,12 +6,28 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { resolveSharedUrl } from './share-resolver.js';
+import { resolveBilibiliMedia } from './bilibili-provider.js';
 
 const MAX_MEDIA_BYTES = 256 * 1024 * 1024;
 
 function positive(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+export function normalizeDownloadSource(value) {
+  const normalized = normalizeMediaUrl(value);
+  if (!normalized) return '';
+  const parsed = new URL(normalized);
+  if (parsed.hostname.toLowerCase() === 'player.bilibili.com') {
+    const bvid = String(parsed.searchParams.get('bvid') || '').trim();
+    if (/^BV[0-9A-Za-z]+$/u.test(bvid)) {
+      return `https://www.bilibili.com/video/${bvid}`;
+    }
+    const aid = String(parsed.searchParams.get('aid') || '').trim();
+    if (/^\d+$/u.test(aid)) return `https://www.bilibili.com/video/av${aid}`;
+  }
+  return normalized;
 }
 
 function runCommand(command, args, { timeoutMs = 120_000, cwd } = {}) {
@@ -133,6 +149,37 @@ async function extractHtmlVideo(url, timeoutMs, outputDirectory) {
   }
 }
 
+async function downloadDirectMedia(value, timeoutMs, outputDirectory) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let filePath = '';
+  try {
+    const response = await fetch(value.mediaUrl, {
+      signal: controller.signal,
+      headers: value.requestHeaders || {},
+    });
+    if (!response.ok || !response.body) throw new Error(`视频流返回 HTTP ${response.status}`);
+    const declaredSize = Number(response.headers.get('content-length') || 0);
+    if (declaredSize > MAX_MEDIA_BYTES) throw new Error('视频文件超过 256 MiB，已跳过发送');
+    await mkdir(outputDirectory, { recursive: true });
+    filePath = path.join(outputDirectory, `${Date.now()}-${randomBytes(8).toString('hex')}.mp4`);
+    await pipeline(response.body, createWriteStream(filePath));
+    const info = await stat(filePath);
+    if (!info.isFile() || info.size <= 0 || info.size > MAX_MEDIA_BYTES) {
+      throw new Error('下载的视频文件为空或超过 256 MiB');
+    }
+    return {
+      filePath, title: value.title || '', duration: positive(value.duration),
+      extractor: 'bilibili-public-api', downloadBytes: info.size, outputBytes: info.size,
+    };
+  } catch (error) {
+    if (filePath) await unlink(filePath).catch(() => {});
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class MediaResolver {
   constructor(options = {}) {
     this.enabled = options.enabled === true;
@@ -224,7 +271,7 @@ export class MediaResolver {
     const task = (async () => {
       await this.acquireSlot();
       try {
-        let sourceKey = key;
+        let sourceKey = normalizeDownloadSource(key) || key;
         let publicMetadata = {};
         if (this.providerResolver) {
           try {
@@ -247,12 +294,32 @@ export class MediaResolver {
             this.logger.warn(`媒体 Provider 失败，转入下载兜底：${error.message}`);
           }
         }
+        if (candidate?.provider === 'bilibili') {
+          try {
+            const bilibili = await resolveBilibiliMedia(sourceKey, {
+              timeoutMs: Math.min(this.timeoutMs, 15_000),
+            });
+            if (bilibili?.mediaUrl) {
+              return this.registerMedia(await downloadDirectMedia(
+                bilibili, this.timeoutMs, this.cacheDirectory,
+              ));
+            }
+          } catch (error) {
+            this.logger.warn(`B站公开接口解析失败，转入通用兜底：${error.message}`);
+          }
+        }
         if (this.publicResolverEnabled) {
           try {
             publicMetadata = await resolveSharedUrl(key, {
               timeoutMs: Math.min(this.timeoutMs, 15_000),
             });
-            if (publicMetadata.mediaUrl) sourceKey = publicMetadata.mediaUrl;
+            if (publicMetadata.mediaUrl) {
+              sourceKey = normalizeDownloadSource(publicMetadata.mediaUrl)
+                || publicMetadata.mediaUrl;
+            } else if (publicMetadata.canonicalUrl) {
+              sourceKey = normalizeDownloadSource(publicMetadata.canonicalUrl)
+                || sourceKey;
+            }
           } catch {
             // Public metadata is an optimization. yt-dlp remains the fallback.
           }
