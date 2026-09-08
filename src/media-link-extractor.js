@@ -50,7 +50,7 @@ export function normalizeMediaUrl(value) {
 
 function addUrl(set, value) {
   const normalized = normalizeMediaUrl(value);
-  if (normalized) set.add(normalized);
+  if (normalized && !/[……]|\.\.\./u.test(normalized)) set.add(normalized);
 }
 
 function walkCard(value, urls, depth = 0) {

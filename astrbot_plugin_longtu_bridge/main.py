@@ -732,9 +732,10 @@ class LongtuQqBridge(Star):
                 data = segment.get("data")
                 if not isinstance(data, dict):
                     continue
-                compact = {key: value for key, value in data.items() if key in {"data", "content", "resid", "url"}}
-                if len(str(compact)) <= 256 * 1024:
-                    result.append({"type": str(segment.get("type")).lower(), "data": compact})
+                # QQ 卡片的真实 jumpurl/qqdocurl 常位于 data/content 的更深层，
+                # 不能只保留少数展示字段，否则会把完整地址降级成标题里的“it…”。
+                if len(str(data)) <= 256 * 1024:
+                    result.append({"type": str(segment.get("type")).lower(), "data": data})
         # AstrBot 4.x often converts OneBot JSON cards into Comp.Json before
         # exposing the event. In that path raw_message can be empty. Quoted
         # messages use the same component path after get_msg backfill.
