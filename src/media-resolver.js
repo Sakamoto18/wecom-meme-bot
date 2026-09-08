@@ -414,8 +414,11 @@ export class MediaResolver {
                 outputBytes: 0, direct: true,
               };
             }
-          } catch {
-            // Public metadata is an optimization. yt-dlp remains the fallback.
+          } catch (error) {
+            if (candidate?.provider === 'xiaohongshu') {
+              throw new Error(`小红书图文解析失败：公开页面不可访问（${error.message}）`);
+            }
+            // Other platforms may still use yt-dlp as a fallback.
           }
         }
         // 小红书图文笔记没有视频流时，不应再交给 yt-dlp 当视频处理。
