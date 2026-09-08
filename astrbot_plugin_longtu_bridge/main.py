@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import contextlib
+import hmac
 from datetime import datetime, time as datetime_time, timedelta
 import os
 import re
@@ -8,6 +9,7 @@ import time
 from zoneinfo import ZoneInfo
 
 import aiohttp
+from aiohttp import web
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
@@ -65,6 +67,7 @@ class LongtuQqBridge(Star):
         self.recent_image_cache: dict[str, tuple[float, list[str]]] = {}
         self.report_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
+        self.internal_send_runner: web.AppRunner | None = None
 
     async def initialize(self):
         timeout_seconds = max(
@@ -74,6 +77,7 @@ class LongtuQqBridge(Star):
         self.session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=timeout_seconds),
         )
+        await self._start_internal_send_server()
         if self._daily_report_enabled():
             self.report_task = asyncio.create_task(
                 self._daily_usage_report_loop(),
@@ -93,6 +97,45 @@ class LongtuQqBridge(Star):
             or self.config.get("api_token")
             or ""
         ).strip()
+
+    async def _start_internal_send_server(self):
+        app = web.Application(client_max_size=16 * 1024)
+        app.router.add_post('/send-video', self._handle_internal_send_video)
+        self.internal_send_runner = web.AppRunner(app, access_log=None)
+        await self.internal_send_runner.setup()
+        site = web.TCPSite(
+            self.internal_send_runner, '0.0.0.0',
+            int(os.getenv('LONGTU_QQ_INTERNAL_SEND_PORT', '8790')),
+        )
+        await site.start()
+        logger.info('QQ 主动视频发送内网接口已启动')
+
+    async def _handle_internal_send_video(self, request: web.Request):
+        expected = self._api_token()
+        provided = request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+        if not expected or not hmac.compare_digest(provided, expected):
+            return web.json_response({'ok': False, 'error': 'unauthorized'}, status=401)
+        try:
+            body = await request.json()
+            group_id = str(body.get('group_id') or '').strip()
+            video_url = str(body.get('video_url') or '').strip()
+            if not group_id.isdigit() or not video_url.startswith(('http://', 'https://')):
+                raise ValueError('group_id 或 video_url 无效')
+            platform = self._qq_platform()
+            if not platform:
+                raise RuntimeError('QQ 平台未连接')
+            session = f'{platform.meta().id}:GroupMessage:{group_id}'
+            sent = await self.context.send_message(
+                session, MessageChain([Comp.Video(file=video_url)]),
+            )
+            if not sent:
+                raise RuntimeError('未找到 QQ 平台实例')
+            return web.json_response({'ok': True})
+        except Exception as error:
+            logger.error(f'QQ 主动视频发送失败：{error}')
+            return web.json_response(
+                {'ok': False, 'error': str(error)}, status=400,
+            )
 
     async def _react_media_share(self, event: AstrMessageEvent) -> bool:
         """Use QQ's native message reaction instead of sending a visible message."""
@@ -2118,3 +2161,5 @@ class LongtuQqBridge(Star):
                 await self.report_task
         if self.session and not self.session.closed:
             await self.session.close()
+        if self.internal_send_runner:
+            await self.internal_send_runner.cleanup()
