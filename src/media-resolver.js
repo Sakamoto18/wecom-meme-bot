@@ -418,6 +418,13 @@ export class MediaResolver {
             // Public metadata is an optimization. yt-dlp remains the fallback.
           }
         }
+        // 小红书图文笔记没有视频流时，不应再交给 yt-dlp 当视频处理。
+        // 没有 Provider 且公开页面没有图片元数据，就明确失败并等待授权 Provider。
+        if (candidate?.provider === 'xiaohongshu'
+          && !publicMetadata.mediaUrl
+          && !publicMetadata.images?.length) {
+          throw new Error('小红书图文详情不可用：需要授权 Provider 才能读取正文和图集');
+        }
         let downloaded;
         try {
           downloaded = await runYtDlp(sourceKey, {
