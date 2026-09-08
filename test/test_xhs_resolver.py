@@ -31,6 +31,23 @@ class XhsResolverTest(unittest.TestCase):
         self.assertEqual(parsed["video_url"], "https://cdn.example/high.mp4")
         self.assertFalse(parsed["watermarked"])
 
+    def test_parses_image_note_title_description_and_images(self):
+        parsed = MODULE.parse_detail({
+            "items": [{"note_card": {
+                "title": "图文标题", "desc": "图文正文",
+                "image_list": [
+                    {"url_default": "https://cdn.example/1.jpg"},
+                    {"url": "https://cdn.example/2.jpg"},
+                ],
+            }}],
+        })
+        self.assertEqual(parsed["video_url"], "")
+        self.assertEqual(parsed["title"], "图文标题")
+        self.assertEqual(parsed["description"], "图文正文")
+        self.assertEqual(parsed["images"], [
+            "https://cdn.example/1.jpg", "https://cdn.example/2.jpg",
+        ])
+
     @patch.object(MODULE.requests, "post")
     @patch.object(MODULE.requests, "get")
     def test_posts_note_id_and_selects_highest_video(self, get, post):

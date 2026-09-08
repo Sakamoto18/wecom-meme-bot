@@ -135,3 +135,18 @@ test('媒体主链优先使用 Provider 直链且不下载文件', async () => {
   assert.equal(result.outputBytes, 0);
   assert.equal(result.direct, true);
 });
+
+test('媒体主链把 Provider 图文结果保留为 gallery', async () => {
+  const resolver = new MediaResolver({
+    enabled: true, cacheTtlMs: 0,
+    providerResolver: async () => ({
+      title: '图文标题', description: '图文正文',
+      images: ['https://cdn.example/1.jpg', 'https://cdn.example/2.jpg'],
+    }),
+  });
+  const result = await resolver.resolve({ url: 'https://xhslink.com/gallery', provider: 'xiaohongshu' });
+  assert.equal(result.extractor, 'provider-gallery');
+  assert.equal(result.images.length, 2);
+  assert.equal(result.title, '图文标题');
+  resolver.close();
+});

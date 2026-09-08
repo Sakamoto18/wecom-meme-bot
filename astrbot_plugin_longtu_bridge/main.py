@@ -1778,6 +1778,34 @@ class LongtuQqBridge(Star):
                     reply_chain.append(Comp.Plain(video_url))
         return reply_chain
 
+    async def _send_forward_from_backend(self, event: AstrMessageEvent, response: dict) -> bool:
+        message = next((item for item in response.get("messages", []) if item.get("type") == "forward"), None)
+        if not message or event.is_private_chat():
+            return False
+        bot = getattr(event, "bot", None)
+        call_action = getattr(bot, "call_action", None)
+        if not callable(call_action):
+            return False
+        title = str(message.get("title") or "小红书图文")[:200]
+        description = str(message.get("description") or "")[:4000]
+        images = [str(url) for url in message.get("images", []) if str(url).startswith(("http://", "https://"))][:18]
+        if not images:
+            return False
+        sender_id = str(event.get_self_id() or "2170902293")
+        sender_name = str(getattr(getattr(event, "message_obj", None), "self_id", "") or "龙玉涛")
+        text = title + (("\n\n" + description) if description else "")
+        nodes = [{
+            "type": "node", "data": {"uin": sender_id, "name": sender_name,
+            "content": [{"type": "text", "data": {"text": text}}]},
+        }]
+        nodes.extend({
+            "type": "node", "data": {"uin": sender_id, "name": sender_name,
+            "content": [{"type": "image", "data": {"file": url}}]},
+        } for url in images)
+        await call_action("send_group_forward_msg", group_id=int(event.get_group_id()), messages=nodes)
+        logger.info(f"小红书图文合并转发已发送：group={event.get_group_id()} images={len(images)}")
+        return True
+
     def _pure_mention_payload(
         self,
         event: AstrMessageEvent,
@@ -2133,6 +2161,9 @@ class LongtuQqBridge(Star):
             # 普通群消息原本以 observe_only 进入 Node 服务。Node 现在可能通过
             # “读空气”判定把它升级为主动回复；只有确实没有返回消息时才保持静默。
             if observe_only and not response["messages"]:
+                return
+
+            if await self._send_forward_from_backend(event, response):
                 return
 
             reply_chain = self._reply_chain_from_backend(response)

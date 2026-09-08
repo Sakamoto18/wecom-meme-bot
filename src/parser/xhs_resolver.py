@@ -86,6 +86,40 @@ def first_url(value: Any) -> str:
     return ""
 
 
+def text_value(value: Any) -> str:
+    return str(value).strip() if isinstance(value, (str, int, float)) else ""
+
+
+def note_objects(payload: Any) -> list[dict[str, Any]]:
+    result = []
+    for item in iter_objects(payload):
+        for key in ("note_detail", "noteDetail", "note_card", "noteCard"):
+            note = item.get(key)
+            if isinstance(note, dict):
+                result.append(note)
+    return result or ([payload] if isinstance(payload, dict) else [])
+
+
+def parse_note_content(payload: Any) -> dict[str, Any]:
+    title = ""
+    description = ""
+    images: list[str] = []
+    seen: set[str] = set()
+    for note in note_objects(payload):
+        title = title or next((text_value(note.get(k)) for k in ("title", "display_title", "displayTitle") if text_value(note.get(k))), "")
+        description = description or next((text_value(note.get(k)) for k in ("desc", "description", "content", "note_text") if text_value(note.get(k))), "")
+        for key in ("image_list", "imageList", "images", "image_infos", "imageInfos"):
+            value = note.get(key)
+            if not isinstance(value, list):
+                continue
+            for image in value:
+                url = first_url(image)
+                if url and url not in seen:
+                    seen.add(url)
+                    images.append(url)
+    return {"title": title, "description": description, "images": images[:18]}
+
+
 def parse_detail(payload: Any) -> dict[str, Any] | None:
     candidates: list[tuple[int, str]] = []
     cover = ""
@@ -120,13 +154,15 @@ def parse_detail(payload: Any) -> dict[str, Any] | None:
             except (TypeError, ValueError):
                 score = 0
             candidates.append((score, url))
-    if not candidates:
+    content = parse_note_content(payload)
+    if not candidates and not content["images"]:
         return None
     candidates.sort(key=lambda entry: entry[0], reverse=True)
     return {
-        "video_url": candidates[0][1],
+        "video_url": candidates[0][1] if candidates else "",
         "cover": cover,
         "watermarked": watermarked,
+        **content,
     }
 
 
