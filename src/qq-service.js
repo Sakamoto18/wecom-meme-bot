@@ -293,6 +293,10 @@ function imageContentBlocks(label, base64, mime) {
   ];
 }
 
+function videoContentBlocks(url) {
+  return [{ type: 'video_url', video_url: { url } }];
+}
+
 function tileStarts(total, coreSize) {
   const starts = [];
   for (let offset = 0; offset < total; offset += coreSize) {
@@ -779,6 +783,10 @@ export function normalizeQqPayload(payload) {
     quotedImageBase64s: limitedImages.quotedImages,
     forwardImageBase64s: limitedImages.forwardImages,
     quotedForwardImageBase64s: limitedImages.quotedForwardImages,
+    videoUrls: Array.isArray(payload.video_urls)
+      ? payload.video_urls.map((url) => normalizeString(url, 4096))
+        .filter((url) => /^https?:\/\//u.test(url)).slice(0, 2)
+      : [],
     // Keep the singular fields for management commands and older callers.
     imageBase64: limitedImages.images[0] ?? '',
     quotedImageBase64: limitedImages.quotedImages[0] ?? '',
@@ -1672,6 +1680,7 @@ export class QqBotService {
         content,
         modelInput: input,
         imageBlocks: blocks,
+        videoBlocks: message.videoUrls.map((url) => ({ type: 'video_url', video_url: { url } })),
         history,
         memorySummary,
         interactionContext,
@@ -2105,6 +2114,7 @@ export class QqBotService {
       payload.senderName,
       {
         imageBlocks: preparedImages.blocks,
+        videoBlocks: message.videoUrls.map((url) => ({ type: 'video_url', video_url: { url } })),
         imageNotice: preparedImages.notice,
         activeReply: true,
         activeReplyPriority: String(decision.reason).includes('must')
