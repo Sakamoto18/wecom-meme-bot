@@ -7,7 +7,9 @@ import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { resolveSharedUrl } from './share-resolver.js';
-import { extractBilibiliVideoId, resolveBilibiliMedia } from './bilibili-provider.js';
+import {
+  extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
+} from './bilibili-provider.js';
 
 const MAX_MEDIA_BYTES = 256 * 1024 * 1024;
 
@@ -52,12 +54,26 @@ function runCommand(command, args, { timeoutMs = 120_000, cwd } = {}) {
     child.on('close', (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        reject(new Error(`yt-dlp 下载失败（${String(stderr).trim().slice(-500)}）`));
+        const error = new Error(`yt-dlp 下载失败（${String(stderr).trim().slice(-500)}）`);
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
         return;
       }
       resolve({ stdout, stderr });
     });
   });
+}
+
+async function probeBilibiliShortLink(url, { command, timeoutMs }) {
+  try {
+    const output = await runCommand(command, [
+      '--skip-download', '--no-playlist', '--no-warnings', '--print', 'id', url,
+    ], { timeoutMs });
+    return extractBilibiliVideoIdFromToolOutput(`${output.stdout}\n${output.stderr}`);
+  } catch (error) {
+    return extractBilibiliVideoIdFromToolOutput(`${error.stdout || ''}\n${error.stderr || ''}`);
+  }
 }
 
 function parsePrintedJson(stdout) {
@@ -358,6 +374,9 @@ export class MediaResolver {
           try {
             const bilibili = await resolveBilibiliMedia(sourceKey, {
               timeoutMs: Math.min(this.timeoutMs, 15_000),
+              shortLinkIdResolver: (url) => probeBilibiliShortLink(url, {
+                command: this.command, timeoutMs: Math.min(this.timeoutMs, 15_000),
+              }),
             });
             if (bilibili?.mediaUrl) {
               return this.registerRemoteMedia(bilibili);

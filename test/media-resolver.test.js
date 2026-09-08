@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MediaResolver, normalizeDownloadSource } from '../src/media-resolver.js';
-import { extractBilibiliVideoId, resolveBilibiliMedia } from '../src/bilibili-provider.js';
+import {
+  extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
+} from '../src/bilibili-provider.js';
 
 test('B站 QQ 小程序播放器地址转换为 yt-dlp 支持的视频页', () => {
   assert.equal(
@@ -19,6 +21,32 @@ test('B站卡片编码参数中的 BV 号也能提取', () => {
     extractBilibiliVideoId('https://example.com/jump?target=https%3A%2F%2Fwww.bilibili.com%2Fvideo%2FBV1DV5v6HELu'),
     { bvid: 'BV1DV5v6HELu' },
   );
+});
+
+test('从 yt-dlp 的 412 错误输出回收 B站 BV 号', () => {
+  assert.deepEqual(
+    extractBilibiliVideoIdFromToolOutput('[BiliBili] 18U4R6GEkz: Downloading webpage\nHTTP Error 412'),
+    { bvid: 'BV18U4R6GEkz' },
+  );
+});
+
+test('B站短链跳转 412 时使用工具回收的 BV 号访问公开接口', async () => {
+  const requested = [];
+  const result = await resolveBilibiliMedia('https://b23.tv/BQHUcP1', {
+    shortLinkIdResolver: async () => ({ bvid: 'BV18U4R6GEkz' }),
+    fetchImpl: async (url) => {
+      requested.push(String(url));
+      if (String(url).startsWith('https://b23.tv/')) return new Response('', { status: 412 });
+      if (String(url).includes('/view?')) {
+        return new Response(JSON.stringify({ code: 0, data: { cid: 88, title: '短链测试' } }));
+      }
+      return new Response(JSON.stringify({
+        code: 0, data: { durl: [{ size: 9, url: 'https://cdn.example/short.mp4' }] },
+      }));
+    },
+  });
+  assert.match(requested[1], /bvid=BV18U4R6GEkz/u);
+  assert.equal(result.mediaUrl, 'https://cdn.example/short.mp4');
 });
 
 test('B站公开接口按 bvid 获取 cid 和 MP4 流', async () => {
