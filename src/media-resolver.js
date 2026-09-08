@@ -354,7 +354,7 @@ export class MediaResolver {
         try {
           bilibiliSource = extractBilibiliVideoId(sourceKey);
         } catch { /* sourceKey is validated later by the generic fallback */ }
-        if (bilibiliSource) {
+        if (bilibiliSource || candidate?.provider === 'bilibili') {
           try {
             const bilibili = await resolveBilibiliMedia(sourceKey, {
               timeoutMs: Math.min(this.timeoutMs, 15_000),

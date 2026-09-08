@@ -2604,6 +2604,13 @@ export class QqBotService {
       }
       const startedAt = Date.now();
       const candidate = candidates[0];
+      let candidateSummary = 'invalid-url';
+      try {
+        const parsedCandidate = new URL(candidate.url);
+        candidateSummary = `${parsedCandidate.hostname}${parsedCandidate.pathname}`
+          + `?${[...parsedCandidate.searchParams.keys()].join(',')}`;
+      } catch { /* normalized candidates should already be valid */ }
+      this.logger.info(`媒体解析开始：group=${payload.groupId || ''} provider=${candidate.provider} source=${candidateSummary}`);
       try {
         const resolved = await this.mediaResolver.resolve(candidate);
         const sourceUrlHash = createHash('sha256')
@@ -2619,6 +2626,7 @@ export class QqBotService {
           downloadBytes: resolved.downloadBytes,
           outputBytes: resolved.outputBytes,
         });
+        this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} duration_ms=${Date.now() - startedAt}`);
         return {
           mode: 'media',
           messages: [{
@@ -2643,7 +2651,7 @@ export class QqBotService {
           durationMs: Date.now() - startedAt,
           errorStage: 'resolve',
         });
-        this.logger.warn(`媒体源解析失败：${error.message}`);
+        this.logger.warn(`媒体源解析失败：group=${payload.groupId || ''} provider=${candidate.provider} source=${candidateSummary} duration_ms=${Date.now() - startedAt} error=${error.message}`);
         return { mode: 'media-unavailable', messages: [] };
       }
     }
