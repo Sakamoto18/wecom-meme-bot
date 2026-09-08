@@ -401,4 +401,4 @@ QQ_MEDIA_USAGE_DATABASE_FILE=data/qq-media-usage.sqlite
 
 `QQ_MEDIA_EXCLUDED_GROUPS` 使用英文逗号分隔群号。配置后，指定群中的外部分享卡和分享链接会保持静默，不发送原生表情回应，也不会进入视频解析服务；例如 `QQ_MEDIA_EXCLUDED_GROUPS=239375116`。
 
-媒体统计可用同一 Bearer Token 查询：`GET /v1/qq/media-usage?start_at=<毫秒时间戳>&end_at=<毫秒时间戳>`。
+媒体解析会先尝试通用公开分享解析：跟随短链并读取公开页面的 `og:video`、Twitter Player 或 JSON-LD 视频元数据，再回退到 `yt-dlp`。媒体统计可用同一 Bearer Token 查询：`GET /v1/qq/media-usage?start_at=<毫秒时间戳>&end_at=<毫秒时间戳>`。

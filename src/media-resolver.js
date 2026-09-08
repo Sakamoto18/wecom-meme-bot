@@ -5,6 +5,7 @@ import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { normalizeMediaUrl } from './media-link-extractor.js';
+import { resolveSharedUrl } from './share-resolver.js';
 
 const MAX_MEDIA_BYTES = 256 * 1024 * 1024;
 
@@ -141,6 +142,7 @@ export class MediaResolver {
     this.cacheDirectory = options.cacheDirectory || path.resolve('data/media-cache');
     this.publicBaseUrl = String(options.publicBaseUrl || 'http://qq-bot:8787').replace(/\/+$/u, '');
     this.maxConcurrent = Math.max(1, Number(options.maxConcurrent ?? 2));
+    this.publicResolverEnabled = options.publicResolverEnabled !== false;
     this.cache = new Map();
     this.mediaFiles = new Map();
     this.inflight = new Map();
@@ -218,20 +220,33 @@ export class MediaResolver {
     const task = (async () => {
       await this.acquireSlot();
       try {
+        let sourceKey = key;
+        let publicMetadata = {};
+        if (this.publicResolverEnabled) {
+          try {
+            publicMetadata = await resolveSharedUrl(key, {
+              timeoutMs: Math.min(this.timeoutMs, 15_000),
+            });
+            if (publicMetadata.mediaUrl) sourceKey = publicMetadata.mediaUrl;
+          } catch {
+            // Public metadata is an optimization. yt-dlp remains the fallback.
+          }
+        }
         let downloaded;
         try {
-          downloaded = await runYtDlp(key, {
+          downloaded = await runYtDlp(sourceKey, {
             command: this.command,
             timeoutMs: this.timeoutMs,
             outputDirectory: this.cacheDirectory,
           });
         } catch (ytError) {
           try {
-            downloaded = await extractHtmlVideo(key, this.timeoutMs, this.cacheDirectory);
+            downloaded = await extractHtmlVideo(sourceKey, this.timeoutMs, this.cacheDirectory);
           } catch (htmlError) {
             throw new Error(`${ytError.message}；网页兜底：${htmlError.message}`);
           }
         }
+        downloaded.title ||= publicMetadata.title || '';
         return this.registerMedia(downloaded);
       } finally {
         this.releaseSlot();
