@@ -25,6 +25,14 @@ export function extractBilibiliVideoId(value) {
   return pathAid ? { aid: pathAid } : null;
 }
 
+export function extractBilibiliVideoIdFromToolOutput(value) {
+  const raw = String(value || '');
+  const direct = raw.match(/\b(BV[0-9A-Za-z]{10,})\b/u)?.[1];
+  if (direct) return { bvid: direct };
+  const extractorId = raw.match(/\[BiliBili\]\s+(?:Extracting URL:\s*)?(?:BV)?([0-9A-Za-z]{10,})/iu)?.[1];
+  return extractorId ? { bvid: `BV${extractorId}` } : null;
+}
+
 async function followBilibiliRedirect(value, fetchImpl, timeoutMs) {
   const url = new URL(value);
   if (url.hostname !== 'b23.tv' && !url.hostname.endsWith('.b23.tv')) return value;
@@ -57,11 +65,19 @@ async function getJson(url, fetchImpl, timeoutMs) {
   }
 }
 
-export async function resolveBilibiliMedia(value, { fetchImpl = fetch, timeoutMs = 15_000 } = {}) {
+export async function resolveBilibiliMedia(value, {
+  fetchImpl = fetch, timeoutMs = 15_000, shortLinkIdResolver,
+} = {}) {
   let id = extractBilibiliVideoId(value);
   if (!id) {
-    const finalUrl = await followBilibiliRedirect(value, fetchImpl, timeoutMs);
-    id = extractBilibiliVideoId(finalUrl);
+    try {
+      const finalUrl = await followBilibiliRedirect(value, fetchImpl, timeoutMs);
+      id = extractBilibiliVideoId(finalUrl);
+    } catch (error) {
+      if (!shortLinkIdResolver) throw error;
+      id = await shortLinkIdResolver(value);
+      if (!id) throw error;
+    }
   }
   if (!id) return null;
   const query = new URLSearchParams(id);
