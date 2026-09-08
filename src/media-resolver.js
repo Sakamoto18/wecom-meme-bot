@@ -363,6 +363,13 @@ export class MediaResolver {
                 direct: true,
               };
             }
+            if (provided?.images?.length) {
+              return {
+                images: provided.images, title: provided.title || '',
+                description: provided.description || '', extractor: 'provider-gallery',
+                downloadBytes: 0, outputBytes: 0, direct: true,
+              };
+            }
           } catch (error) {
             this.logger.warn(`媒体 Provider 失败，转入下载兜底：${error.message}`);
           }

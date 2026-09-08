@@ -61,11 +61,15 @@ export function createXhsProvider(options = {}) {
       throw new Error(String(result?.msg || '小红书 Provider 解析失败'));
     }
     const mediaUrl = normalizeMediaUrl(result.data?.video_url);
-    if (!mediaUrl) throw new Error('小红书 Provider 未返回合法的公网视频地址');
+    const images = [...new Set((Array.isArray(result.data?.images) ? result.data.images : [])
+      .map(normalizeMediaUrl).filter(Boolean))].slice(0, 18);
+    if (!mediaUrl && images.length === 0) throw new Error('小红书 Provider 未返回可发送的视频或图片');
     return {
       mediaUrl,
+      images,
       coverUrl: normalizeMediaUrl(result.data?.cover),
       title: String(result.data?.title || ''),
+      description: String(result.data?.description || '').slice(0, 4000),
       watermarked: result.data?.watermarked === true,
     };
   };
