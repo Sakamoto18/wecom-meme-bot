@@ -610,7 +610,8 @@ export async function createQqRuntime() {
         ?? process.env.QQ_MEDIA_RESOLVE_TIMEOUT_SECONDS,
     ) ?? 120) * 1000,
     cacheTtlMs: (parsePositiveNumber(process.env.QQ_MEDIA_RESOLVE_CACHE_TTL_SECONDS) ?? 10 * 60) * 1000,
-    cacheDirectory: path.resolve(projectRoot, process.env.QQ_MEDIA_CACHE_DIRECTORY?.trim() || 'data/media-cache'),
+    cacheDirectory: process.env.QQ_MEDIA_CACHE_DIRECTORY?.trim() || '/tmp/longtu-media-cache',
+    maxCacheBytes: (parsePositiveNumber(process.env.QQ_MEDIA_CACHE_MAX_MIB) ?? 512) * 1024 * 1024,
     publicBaseUrl: process.env.QQ_MEDIA_PUBLIC_BASE_URL?.trim() || 'http://qq-bot:8787',
     maxConcurrent: parsePositiveInteger(process.env.QQ_MEDIA_MAX_CONCURRENT) ?? 2,
     providerResolver: xhsProvider,
@@ -775,6 +776,7 @@ export async function startQqApi() {
     runtime.longtuLibrary.close();
     runtime.usageTracker.close();
     runtime.mediaUsageTracker.close();
+    runtime.mediaResolver.close();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
