@@ -2670,7 +2670,9 @@ export class QqBotService {
           durationMs: Date.now() - startedAt,
           errorStage: 'resolve',
         });
-        this.logger.warn(`媒体源解析失败：group=${payload.groupId || ''} provider=${candidate.provider} source=${candidateSummary} duration_ms=${Date.now() - startedAt} error=${error.message}`);
+        const stage = candidate.provider === 'xiaohongshu' && /图文详情|正文|图集/u.test(error.message)
+          ? '小红书图文解析失败' : '媒体源解析失败';
+        this.logger.warn(`${stage}：group=${payload.groupId || ''} provider=${candidate.provider} source=${candidateSummary} duration_ms=${Date.now() - startedAt} error=${error.message}`);
         return { mode: 'media-unavailable', messages: [] };
       }
     }
