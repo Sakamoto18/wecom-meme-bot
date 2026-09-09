@@ -1870,7 +1870,10 @@ class LongtuQqBridge(Star):
             "forward_image_base64s": [],
             "quoted_forward_image_base64s": [],
             "rich_segments": self._rich_segments(event),
-            "media_share": bool(self._rich_segments(event)),
+            "media_share": any(
+                isinstance(item, dict) and item.get("type") in {"json", "xml"}
+                for item in self._rich_segments(event)
+            ),
             "observe_only": False,
         }
 
@@ -2019,10 +2022,11 @@ class LongtuQqBridge(Star):
                 ],
             )
             has_media_signal = bool(MEDIA_ACK_PATTERN.search(media_signal_text))
-            # 只有视频组件或分享卡片才算媒体载荷；普通图片/普通文本即使带有
-            # 其它富文本也不应误入媒体解析。
+            # 只有外部分享卡片才算媒体载荷。原生 video 组件是用户直接发送的
+            # 视频文件（包括 Bot 之前发出后被搬运的文件），应进入视频理解，
+            # 不能再次当作外部分享触发下载解析。
             has_media_payload = any(
-                isinstance(item, dict) and item.get("type") in {"video", "json", "xml"}
+                isinstance(item, dict) and item.get("type") in {"json", "xml"}
                 for item in rich_segments
             ) or bool(
                 MEDIA_SHARE_PATTERN.search(
