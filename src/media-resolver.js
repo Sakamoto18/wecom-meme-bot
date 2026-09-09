@@ -371,7 +371,7 @@ export class MediaResolver {
               };
             }
           } catch (error) {
-            this.logger.warn(`媒体 Provider 失败，转入下载兜底：${error.message}`);
+            this.logger.warn(`媒体 Provider 失败，尝试公开页面解析：${error.message}`);
           }
         }
         let bilibiliSource = null;
@@ -405,7 +405,7 @@ export class MediaResolver {
               sourceKey = normalizeDownloadSource(publicMetadata.canonicalUrl)
                 || sourceKey;
             }
-            if (publicMetadata.platform === 'xiaohongshu' && publicMetadata.images?.length) {
+            if (publicMetadata.platform === 'xiaohongshu' && !publicMetadata.mediaUrl && publicMetadata.images?.length) {
               return {
                 images: publicMetadata.images,
                 title: publicMetadata.title || '',
@@ -426,7 +426,7 @@ export class MediaResolver {
         if (candidate?.provider === 'xiaohongshu'
           && !publicMetadata.mediaUrl
           && !publicMetadata.images?.length) {
-          throw new Error('小红书图文详情不可用：需要授权 Provider 才能读取正文和图集');
+          throw new Error('小红书图文详情不可用：Provider 和公开页面均未返回可用媒体，不能据此判断笔记不存在或账号无权限');
         }
         let downloaded;
         try {

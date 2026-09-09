@@ -8,6 +8,20 @@ const DEFAULT_SCRIPT = path.resolve(
   'parser/xhs_resolver.py',
 );
 
+export function normalizeXhsProviderData(data = {}) {
+  const kind = data.media_type || data.mediaKind || data.type;
+  const gallery = ['normal', 'gallery', 'image'].includes(kind);
+  const mediaUrl = gallery ? '' : normalizeMediaUrl(data.video_url || data.videoUrl);
+  if (kind === 'video' && !mediaUrl) throw new Error('视频笔记没有可用视频流，不能将封面作为图文发送');
+  const rawImages = data.images || data.image_list;
+  const images = mediaUrl ? [] : [...new Set((Array.isArray(rawImages) ? rawImages : [])
+    .map((item) => normalizeMediaUrl(typeof item === 'string' ? item : item?.url_default || item?.url || item?.original_url))
+    .filter(Boolean))].slice(0, 18);
+  if (!mediaUrl && !images.length) throw new Error('Spider_XHS Provider 未返回媒体');
+  return { mediaUrl, images, title: String(data.title || ''),
+    description: String(data.description || data.desc || '').replaceAll('[话题]', '').slice(0, 4000) };
+}
+
 function runResolver(url, { command, scriptPath, timeoutMs, env }) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, [
@@ -57,13 +71,7 @@ export function createXhsProvider(options = {}) {
       if (!response.ok) throw new Error(`Spider_XHS Provider HTTP ${response.status}`);
       const external = await response.json();
       if (external?.status !== 'success') throw new Error(String(external?.msg || 'Spider_XHS Provider 解析失败'));
-      const data = external.data || external;
-      const mediaUrl = normalizeMediaUrl(data.video_url || data.videoUrl);
-      const images = [...new Set((data.images || data.image_list || [])
-        .map((item) => normalizeMediaUrl(typeof item === 'string' ? item : item?.url_default || item?.url || item?.original_url))
-        .filter(Boolean))].slice(0, 18);
-      if (!mediaUrl && images.length === 0) throw new Error('Spider_XHS Provider 未返回媒体');
-      return { mediaUrl, images, title: String(data.title || ''), description: String(data.description || data.desc || '').slice(0, 4000) };
+      return normalizeXhsProviderData(external.data || external);
     }
     const result = await runResolver(url, {
       command, scriptPath, timeoutMs,

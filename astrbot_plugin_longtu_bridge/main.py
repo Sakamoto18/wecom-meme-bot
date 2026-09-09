@@ -1796,12 +1796,16 @@ class LongtuQqBridge(Star):
 
     async def _send_forward_from_backend(self, event: AstrMessageEvent, response: dict) -> bool:
         message = next((item for item in response.get("messages", []) if item.get("type") == "forward"), None)
-        if not message or event.is_private_chat():
+        if not message:
             return False
         bot = getattr(event, "bot", None)
         call_action = getattr(bot, "call_action", None)
         if not callable(call_action):
             return False
+        private = event.is_private_chat()
+        destination = {"user_id": int(event.get_sender_id())} if private else {"group_id": int(event.get_group_id())}
+        forward_action = "send_private_forward_msg" if private else "send_group_forward_msg"
+        image_action = "send_private_msg" if private else "send_group_msg"
         title = str(message.get("title") or "小红书图文")[:200]
         description = str(message.get("description") or "")[:4000]
         images = [str(url) for url in message.get("images", []) if str(url).startswith(("http://", "https://"))][:18]
@@ -1819,15 +1823,19 @@ class LongtuQqBridge(Star):
             "content": [{"type": "image", "data": {"file": url}}]},
         } for url in images)
         try:
-            result = await call_action("send_group_forward_msg", group_id=int(event.get_group_id()), messages=nodes)
-            logger.info(f"小红书图文合并转发已发送：group={event.get_group_id()} images={len(images)} result={result!r}")
+            result = await call_action(forward_action, **destination, messages=nodes)
+            if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
+                raise RuntimeError("QQ 合并转发接口返回失败")
+            logger.info(f"小红书图文合并转发已发送：target={destination} images={len(images)} result={result!r}")
             return True
         except Exception as error:
             logger.warning(f"小红书图文合并转发失败，改为逐图发送：group={event.get_group_id()} error={error}")
             sent = 0
             for url in images:
                 try:
-                    await call_action("send_group_msg", group_id=int(event.get_group_id()), message=[{"type": "image", "data": {"file": url}}])
+                    result = await call_action(image_action, **destination, message=[{"type": "image", "data": {"file": url}}])
+                    if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
+                        raise RuntimeError("QQ 图片接口返回失败")
                     sent += 1
                 except Exception as image_error:
                     logger.warning(f"小红书图片发送失败：group={event.get_group_id()} error={image_error}")
