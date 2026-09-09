@@ -64,6 +64,7 @@ export class MemeStore {
     this.trustedManifestDetected = false;
     this.longtuIndexWarningShown = false;
     this.lastPickedPath = new Map();
+    this.recentPickedPaths = new Map();
   }
 
   async scanDirectory(directory) {
@@ -315,11 +316,9 @@ export class MemeStore {
       return candidates[0];
     }
 
-    const lastPath = this.lastPickedPath.get(category);
-    let candidate = candidates[randomInt(candidates.length)];
-    for (let attempt = 0; attempt < 5 && candidate.path === lastPath; attempt += 1) {
-      candidate = candidates[randomInt(candidates.length)];
-    }
+    const recent = this.recentPickedPaths.get(category) ?? [];
+    const fresh = candidates.filter((item) => !recent.includes(item.path));
+    let candidate = (fresh.length ? fresh : candidates)[randomInt(fresh.length || candidates.length)];
     return candidate;
   }
 
@@ -338,6 +337,8 @@ export class MemeStore {
 
     const parsedPath = path.parse(filePath);
     this.lastPickedPath.set(category, filePath);
+    const recent = this.recentPickedPaths.get(category) ?? [];
+    this.recentPickedPaths.set(category, [filePath, ...recent.filter((item) => item !== filePath)].slice(0, 12));
     return {
       key: `${filePath}:${metadata.mtimeMs}`,
       filename: `${parsedPath.name}${detectedExtension}`,
