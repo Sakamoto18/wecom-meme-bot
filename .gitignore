@@ -15,3 +15,5 @@ data/longtu-approval-review*/
 deploy/qq/astrbot-data/
 deploy/qq/napcat/
 .env.xhs
+
+__pycache__/

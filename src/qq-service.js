@@ -824,7 +824,7 @@ export function buildQqCompatibleMessage(payload) {
     from: { userid: payload.userId, name: payload.senderName },
     text: { content },
     bot_user_id: payload.botUserId,
-    mentions: payload.mentions.map((participant) => ({
+    mentions: (Array.isArray(payload.mentions) ? payload.mentions : []).map((participant) => ({
       user_id: participant.userId,
       name: participant.name,
     })),
@@ -1680,7 +1680,8 @@ export class QqBotService {
         content,
         modelInput: input,
         imageBlocks: blocks,
-        videoBlocks: message.videoUrls.map((url) => ({ type: 'video_url', video_url: { url } })),
+        videoBlocks: (Array.isArray(message.videoUrls) ? message.videoUrls : [])
+          .map((url) => ({ type: 'video_url', video_url: { url } })),
         history,
         memorySummary,
         interactionContext,
@@ -2114,7 +2115,8 @@ export class QqBotService {
       payload.senderName,
       {
         imageBlocks: preparedImages.blocks,
-        videoBlocks: message.videoUrls.map((url) => ({ type: 'video_url', video_url: { url } })),
+        videoBlocks: (Array.isArray(message.videoUrls) ? message.videoUrls : [])
+          .map((url) => ({ type: 'video_url', video_url: { url } })),
         imageNotice: preparedImages.notice,
         activeReply: true,
         activeReplyPriority: String(decision.reason).includes('must')
