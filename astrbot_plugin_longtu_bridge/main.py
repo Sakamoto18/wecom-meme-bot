@@ -2022,9 +2022,8 @@ class LongtuQqBridge(Star):
                 ],
             )
             has_media_signal = bool(MEDIA_ACK_PATTERN.search(media_signal_text))
-            # 只有外部分享卡片才算媒体载荷。原生 video 组件是用户直接发送的
-            # 视频文件（包括 Bot 之前发出后被搬运的文件），应进入视频理解，
-            # 不能再次当作外部分享触发下载解析。
+            # 外部分享可能由 QQ 表示为 video/json/xml 富段；纯原生视频没有
+            # 分享链接或卡片元数据时才跳过媒体解析。
             has_media_payload = any(
                 isinstance(item, dict) and item.get("type") in {"json", "xml"}
                 for item in rich_segments
@@ -2033,6 +2032,17 @@ class LongtuQqBridge(Star):
                     self._raw_text(event) or event.message_str or "",
                 ),
             )
+            if not has_media_payload:
+                has_media_payload = any(
+                    isinstance(item, dict)
+                    and item.get("type") == "video"
+                    and isinstance(item.get("data"), dict)
+                    and any(
+                        str(item["data"].get(key) or "").startswith(("http://", "https://"))
+                        for key in ("url", "stream", "share_url", "origin_url")
+                    )
+                    for item in rich_segments
+                )
 
             # Send a lightweight acknowledgement before the potentially slow
             # yt-dlp request. Keep one acknowledgement per message id so a
