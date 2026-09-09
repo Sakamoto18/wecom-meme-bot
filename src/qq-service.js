@@ -2639,7 +2639,7 @@ export class QqBotService {
           outputBytes: resolved.outputBytes,
         });
         this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} duration_ms=${Date.now() - startedAt}`);
-        if (resolved.images?.length) {
+        if (!resolved.url && resolved.images?.length) {
           return {
             mode: 'media-gallery',
             messages: [{

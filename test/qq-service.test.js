@@ -75,7 +75,7 @@ function createService(options = {}) {
     largeGroupHistoryCharacters: options.largeGroupHistoryCharacters,
     largeGroupBackgroundSummariesEnabled: options.largeGroupBackgroundSummariesEnabled,
     now: options.now,
-    logger: { log() {}, warn() {} },
+    logger: { log() {}, warn() {}, info() {} },
   });
   return { service, calls };
 }
@@ -2518,6 +2518,31 @@ test('外部视频分享在排除群中保持静默且不调用解析器', async
   assert.deepEqual(result.messages, []);
   assert.equal(resolveCalls, 0);
   assert.equal(calls.length, 0);
+});
+
+for (const messageType of ['group', 'private']) {
+  for (const kind of ['gallery', 'video']) {
+    test(`实际分享类型回归：${messageType} ${kind} 输出互不混用`, async () => {
+      const { service, calls } = createService({ mediaResolver: { enabled: true, async resolve() {
+        return kind === 'gallery'
+          ? { title: '图文', description: '#英语#', images: ['https://cdn.example/1.jpg'] }
+          : { url: 'https://cdn.example/video.mp4', images: ['https://cdn.example/cover.jpg'] };
+      } } });
+      const result = await service.handleMessage({ message_id: `media-${messageType}-${kind}`,
+        message_type: messageType, group_id: messageType === 'group' ? '361522110' : '',
+        user_id: '1079175957', media_share: true, text: 'https://xhslink.com/m/47pnZUAJib8' });
+      assert.equal(result.mode, kind === 'gallery' ? 'media-gallery' : 'media');
+      assert.deepEqual(result.messages.map((m) => m.type), [kind === 'gallery' ? 'forward' : 'video']);
+      assert.equal(calls.length, 0);
+    });
+  }
+}
+
+test('普通文字消息不能调用媒体解析器', async () => {
+  let resolves = 0;
+  const { service } = createService({ mediaResolver: { enabled: true, async resolve() { resolves++; } } });
+  await service.handleMessage({ message_id: 'plain-no-media', message_type: 'private', user_id: '1079175957', text: '你好' });
+  assert.equal(resolves, 0);
 });
 
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
