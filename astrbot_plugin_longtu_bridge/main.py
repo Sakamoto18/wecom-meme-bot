@@ -40,6 +40,11 @@ ALLOWED_BRIDGE_SLASH_COMMANDS = {
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 MEDIA_SHARE_PATTERN = re.compile(r"https?://[^\s<>\u3000]+", re.IGNORECASE)
+NATIVE_QQ_VIDEO_PATTERN = re.compile(
+    r"(?:(?:[^/]+\.)?multimedia\.nt\.qq\.com\.cn|gchat\.qpic\.cn|"
+    r"c2cpicdw\.qpic\.cn)/",
+    re.IGNORECASE,
+)
 MEDIA_ACK_PATTERN = re.compile(
     r"https?://[^\s<>\u3000]*(?:bilibili\.com|b23\.tv|xhslink\.com|xiaohongshu\.com|"
     r"douyin\.com|iesdouyin\.com|kuaishou\.com|gifshow\.com|v\.qq\.com)[^\s<>\u3000]*",
@@ -2025,7 +2030,16 @@ class LongtuQqBridge(Star):
             # 外部分享可能由 QQ 表示为 video/json/xml 富段；纯原生视频没有
             # 分享链接或卡片元数据时才跳过媒体解析。
             has_media_payload = any(
-                isinstance(item, dict) and item.get("type") in {"video", "json", "xml"}
+                isinstance(item, dict)
+                and item.get("type") in {"json", "xml"}
+                for item in rich_segments
+            ) or any(
+                isinstance(item, dict)
+                and item.get("type") == "video"
+                and isinstance(item.get("data"), dict)
+                and not NATIVE_QQ_VIDEO_PATTERN.search(
+                    str(item["data"].get("url") or ""),
+                )
                 for item in rich_segments
             ) or bool(
                 MEDIA_SHARE_PATTERN.search(
