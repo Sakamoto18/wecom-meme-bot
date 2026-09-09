@@ -2025,24 +2025,13 @@ class LongtuQqBridge(Star):
             # 外部分享可能由 QQ 表示为 video/json/xml 富段；纯原生视频没有
             # 分享链接或卡片元数据时才跳过媒体解析。
             has_media_payload = any(
-                isinstance(item, dict) and item.get("type") in {"json", "xml"}
+                isinstance(item, dict) and item.get("type") in {"video", "json", "xml"}
                 for item in rich_segments
             ) or bool(
                 MEDIA_SHARE_PATTERN.search(
                     self._raw_text(event) or event.message_str or "",
                 ),
             )
-            if not has_media_payload:
-                has_media_payload = any(
-                    isinstance(item, dict)
-                    and item.get("type") == "video"
-                    and isinstance(item.get("data"), dict)
-                    and any(
-                        str(item["data"].get(key) or "").startswith(("http://", "https://"))
-                        for key in ("url", "stream", "share_url", "origin_url")
-                    )
-                    for item in rich_segments
-                )
 
             # Send a lightweight acknowledgement before the potentially slow
             # yt-dlp request. Keep one acknowledgement per message id so a
