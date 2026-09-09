@@ -289,6 +289,7 @@ export function createQqApiServer(options) {
       const result = await service.handleMessage(payload);
       sendJson(response, 200, { ok: true, ...result });
     } catch (error) {
+      console.error('QQ API 原始异常：', error?.stack || error);
       const statusCode = error.statusCode
         ?? (error instanceof TypeError ? 400 : 500);
       if (statusCode >= 500) {

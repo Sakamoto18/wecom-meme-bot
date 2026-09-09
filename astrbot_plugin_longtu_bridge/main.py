@@ -1782,6 +1782,16 @@ class LongtuQqBridge(Star):
                     reply_chain.append(Comp.Video(file=video_url))
                 except TypeError:
                     reply_chain.append(Comp.Plain(video_url))
+            elif message_type == "forward":
+                title = str(message.get("title") or "小红书图文")
+                description = str(message.get("description") or "")
+                reply_chain.append(Comp.Plain(title + (("\n\n" + description) if description else "")))
+                for url in message.get("images", [])[:18]:
+                    if str(url).startswith(("http://", "https://")):
+                        try:
+                            reply_chain.append(Comp.Image(file=str(url)))
+                        except TypeError:
+                            reply_chain.append(Comp.Image(url=str(url)))
         return reply_chain
 
     async def _send_forward_from_backend(self, event: AstrMessageEvent, response: dict) -> bool:
@@ -1808,9 +1818,20 @@ class LongtuQqBridge(Star):
             "type": "node", "data": {"uin": sender_id, "name": sender_name,
             "content": [{"type": "image", "data": {"file": url}}]},
         } for url in images)
-        await call_action("send_group_forward_msg", group_id=int(event.get_group_id()), messages=nodes)
-        logger.info(f"小红书图文合并转发已发送：group={event.get_group_id()} images={len(images)}")
-        return True
+        try:
+            result = await call_action("send_group_forward_msg", group_id=int(event.get_group_id()), messages=nodes)
+            logger.info(f"小红书图文合并转发已发送：group={event.get_group_id()} images={len(images)} result={result!r}")
+            return True
+        except Exception as error:
+            logger.warning(f"小红书图文合并转发失败，改为逐图发送：group={event.get_group_id()} error={error}")
+            sent = 0
+            for url in images:
+                try:
+                    await call_action("send_group_msg", group_id=int(event.get_group_id()), message=[{"type": "image", "data": {"file": url}}])
+                    sent += 1
+                except Exception as image_error:
+                    logger.warning(f"小红书图片发送失败：group={event.get_group_id()} error={image_error}")
+            return sent > 0
 
     def _pure_mention_payload(
         self,
@@ -1990,7 +2011,12 @@ class LongtuQqBridge(Star):
                 ],
             )
             has_media_signal = bool(MEDIA_ACK_PATTERN.search(media_signal_text))
-            has_media_payload = has_rich or bool(
+            # 只有视频组件或分享卡片才算媒体载荷；普通图片/普通文本即使带有
+            # 其它富文本也不应误入媒体解析。
+            has_media_payload = any(
+                isinstance(item, dict) and item.get("type") in {"video", "json", "xml"}
+                for item in rich_segments
+            ) or bool(
                 MEDIA_SHARE_PATTERN.search(
                     self._raw_text(event) or event.message_str or "",
                 ),
