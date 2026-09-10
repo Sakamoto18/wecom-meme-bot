@@ -405,9 +405,13 @@ async function prepareSingleImage(base64, label, maxImages) {
   const dimensions = imageDimensions(sourceBuffer, sourceMime);
   const canSendOriginal = SUPPORTED_IMAGE_MIME_TYPES.has(sourceMime)
     && sourceBuffer.length <= MAX_IMAGE_BYTES;
+  // 原样透传只适用于模型不会明显降采样的图。面积超预算时必须继续走下面的
+  // 切片流程，否则密集文字会在模型侧被压糊。
   if (canSendOriginal && dimensions
     && dimensions.width <= MAX_IMAGE_SIDE_PIXELS
-    && dimensions.height <= MAX_IMAGE_SIDE_PIXELS) {
+    && dimensions.height <= MAX_IMAGE_SIDE_PIXELS
+    && modelDownscaleRatio(dimensions.width, dimensions.height)
+      >= PRECISION_TILE_MIN_SCALE) {
     return {
       images: [{ label, base64, mime: sourceMime }],
       notice: '',

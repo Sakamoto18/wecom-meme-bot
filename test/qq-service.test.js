@@ -627,6 +627,31 @@ test('尺寸在预算内的截图不会被切片', () => {
   assert.equal(regions.length, 1);
 });
 
+test('面积超预算的截图不会走原样透传，实际送出的是多张切片', async () => {
+  // 回归用例：单边都在 8192 以内的长截图曾被前置的“原样透传”分支直接返回，
+  // 精度切片完全没有生效。断言必须穿过 prepareImageBlocks，只测区域计算
+  // 函数是发现不了的。
+  const width = 1_080;
+  const height = 4_000;
+  const source = new Jimp({ width, height, color: 0xffffffff });
+  const base64 = (await source.getBuffer('image/jpeg')).toString('base64');
+
+  const prepared = await prepareImageBlocks({ imageBase64s: [base64] });
+  const imageBlocks = prepared.blocks.filter((block) => block.type === 'image_url');
+
+  assert.ok(
+    imageBlocks.length > 1,
+    `应当送出多张切片，实际 ${imageBlocks.length} 张`,
+  );
+  assert.match(prepared.notice, /切成/);
+  for (const block of imageBlocks) {
+    const tile = await Jimp.read(
+      Buffer.from(block.image_url.url.split(',')[1], 'base64'),
+    );
+    assert.equal(modelDownscaleRatio(tile.bitmap.width, tile.bitmap.height), 1);
+  }
+});
+
 test('长图切片尺寸受模型限制且相邻切片保留重叠内容', async () => {
   const width = 96;
   const height = IMAGE_TILE_CORE_SIZE * 2 + 900;
