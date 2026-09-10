@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 
 const MAX_OCR_OUTPUT_BYTES = 2 * 1024 * 1024;
+const MAX_OCR_TEXT_CHARACTERS = 3_000;
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MIN_WORD_CONFIDENCE = 35;
 const MIN_LINE_CONFIDENCE = 50;
@@ -53,6 +54,9 @@ function runTesseract(filePath, options = {}) {
   const command = String(options.command ?? '').trim();
   if (!command) throw new Error('未配置 OCR 命令');
   const languages = String(options.languages ?? '').trim() || 'chi_sim+eng';
+  // 11 是稀疏文本，适合从表情图里捞零散短语；6 把整图当成一个文字块，
+  // 聊天记录和文章截图用它才能保住阅读顺序。
+  const pageSegMode = String(options.pageSegMode ?? '').trim() || '11';
   const timeoutMs = Number.isFinite(options.timeoutMs)
     ? Math.max(1_000, Math.min(options.timeoutMs, 60_000))
     : DEFAULT_TIMEOUT_MS;
@@ -64,7 +68,7 @@ function runTesseract(filePath, options = {}) {
       '-l',
       languages,
       '--psm',
-      '11',
+      pageSegMode,
       'tsv',
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -119,4 +123,70 @@ function runTesseract(filePath, options = {}) {
 export async function recognizeImageTextAliases(filePath, options = {}) {
   const tsv = await runTesseract(filePath, options);
   return parseTesseractTsv(tsv);
+}
+
+/**
+ * Reassemble Tesseract TSV rows into reading-order lines.
+ *
+ * Unlike the alias parser this keeps spacing between latin words, preserves
+ * line breaks and applies no length filter, because the caller wants the
+ * screenshot's prose rather than short searchable labels.
+ */
+export function parseTesseractLines(tsv, maxCharacters = MAX_OCR_TEXT_CHARACTERS) {
+  const groupedLines = new Map();
+  for (const rawRow of String(tsv ?? '').split(/\r?\n/).slice(1)) {
+    if (!rawRow.trim()) continue;
+    const columns = rawRow.split('\t');
+    if (columns.length < 12 || columns[0] !== '5') continue;
+    const confidence = Number.parseFloat(columns[10]);
+    const text = columns.slice(11).join('\t').trim();
+    if (!text || !Number.isFinite(confidence) || confidence < MIN_WORD_CONFIDENCE) {
+      continue;
+    }
+    // block:paragraph:line 决定同一行，page 在单图里恒定。
+    const key = columns.slice(1, 5).join(':');
+    const line = groupedLines.get(key) ?? { words: [], confidenceTotal: 0, weight: 0 };
+    const weight = Math.max(1, text.length);
+    line.words.push(text);
+    line.confidenceTotal += confidence * weight;
+    line.weight += weight;
+    groupedLines.set(key, line);
+  }
+
+  const lines = [];
+  let totalCharacters = 0;
+  for (const line of groupedLines.values()) {
+    if (line.confidenceTotal / line.weight < MIN_LINE_CONFIDENCE) continue;
+    // 汉字之间不补空格，拉丁词之间保留一个空格。
+    const joined = line.words
+      .reduce((accumulator, word) => {
+        if (!accumulator) return word;
+        const needsSpace = /[\p{L}\p{N}]$/u.test(accumulator)
+          && /^[\p{L}\p{N}]/u.test(word)
+          && !/[\p{Script=Han}]$/u.test(accumulator)
+          && !/^[\p{Script=Han}]/u.test(word);
+        return accumulator + (needsSpace ? ' ' : '') + word;
+      }, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!joined) continue;
+    if (totalCharacters + joined.length > maxCharacters) break;
+    lines.push(joined);
+    totalCharacters += joined.length;
+  }
+  return lines;
+}
+
+/**
+ * Extract a screenshot's text in reading order for use as model context.
+ *
+ * The model still sees the image itself; this only supplies a local reading of
+ * the pixels so dense text survives the model's own downscaling.
+ */
+export async function recognizeImageText(filePath, options = {}) {
+  const tsv = await runTesseract(filePath, {
+    ...options,
+    pageSegMode: options.pageSegMode ?? '6',
+  });
+  return parseTesseractLines(tsv, options.maxCharacters);
 }
