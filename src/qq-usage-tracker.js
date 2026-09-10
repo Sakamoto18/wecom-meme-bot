@@ -23,19 +23,21 @@ const LOCALLY_REPAIRABLE_REVIEW_ISSUES = new Set([
 ]);
 const PRICE_UNIT_TOKENS = 1_000_000;
 const DEEPSEEK_PRICING_SOURCE = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/';
-const DEEPSEEK_PRICING_CHECKED_AT = '2026-08-25';
+const DEEPSEEK_PRICING_CHECKED_AT = '2026-09-10';
+// Flash 价格按 DeepSeek-V4.1-Flash。旧模型名 deepseek-v4-flash、
+// deepseek-v4-flash-vision-exp 已下线，请求由 V4.1-Flash 承接并按 Flash 价计费，
+// 因此三个 flash 键共用同一份价格。
+const DEEPSEEK_FLASH_PRICES = {
+  offPeak: { cachedInput: 0.02, uncachedInput: 1, output: 4 },
+  peak: { cachedInput: 0.04, uncachedInput: 2, output: 8 },
+};
 const DEEPSEEK_PRICES_CNY = new Map([
-  ['deepseek-v4-flash', {
-    offPeak: { cachedInput: 0.05, uncachedInput: 1.5, output: 4.5 },
-    peak: { cachedInput: 0.10, uncachedInput: 3.0, output: 9.0 },
-  }],
+  ['deepseek-flash', DEEPSEEK_FLASH_PRICES],
+  ['deepseek-v4-flash', DEEPSEEK_FLASH_PRICES],
+  ['deepseek-v4-flash-vision-exp', DEEPSEEK_FLASH_PRICES],
   ['deepseek-v4-pro', {
     offPeak: { cachedInput: 0.15, uncachedInput: 4.5, output: 13.5 },
     peak: { cachedInput: 0.30, uncachedInput: 9.0, output: 27.0 },
-  }],
-  ['deepseek-v4-flash-vision-exp', {
-    offPeak: { cachedInput: 0.05, uncachedInput: 1.5, output: 4.5 },
-    peak: { cachedInput: 0.10, uncachedInput: 3.0, output: 9.0 },
   }],
 ]);
 

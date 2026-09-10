@@ -662,6 +662,14 @@ export async function createQqRuntime() {
     longtuLibrary,
     adminUsers,
     protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
+    // 本地 OCR 默认开启：镜像内已带 tesseract，缺失时会自动退回纯视觉识别。
+    imageOcrEnabled: process.env.QQ_IMAGE_OCR_ENABLED?.trim() !== 'false',
+    imageOcrCommand: process.env.QQ_IMAGE_OCR_COMMAND?.trim() || 'tesseract',
+    imageOcrLanguages: process.env.QQ_IMAGE_OCR_LANGUAGES?.trim() || 'chi_sim+eng',
+    imageOcrTimeoutMs: parseNonnegativeInteger(
+      process.env.QQ_IMAGE_OCR_TIMEOUT_MS,
+      20_000,
+    ),
     activeReplyDecider,
     repeatDetector,
     peerBotContinuationDecider,

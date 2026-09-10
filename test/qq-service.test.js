@@ -9,6 +9,8 @@ import {
   IMAGE_TILE_CORE_SIZE,
   IMAGE_TILE_OVERLAP,
   MAX_IMAGE_SIDE_PIXELS,
+  modelDownscaleRatio,
+  PRECISION_TILE_MIN_SCALE,
   prepareImageBlocks,
   QqBotService,
   buildQqCompatibleMessage,
@@ -51,6 +53,9 @@ function createService(options = {}) {
     longtuLibrary: options.longtuLibrary,
     adminUsers: options.adminUsers,
     protectedRoles: options.protectedRoles,
+    // 默认关掉本地 OCR：绝大多数用例不该依赖宿主机是否装了 tesseract。
+    imageOcrEnabled: options.imageOcrEnabled ?? false,
+    imageOcrRecognizer: options.imageOcrRecognizer,
     activeReplyDecider: options.activeReplyDecider,
     repeatDetector: options.repeatDetector,
     repeatEnabled: options.repeatEnabled,
@@ -526,6 +531,100 @@ test('QQ 只有图片标记但没有图片数据时不会伪造随机龙图', as
   assert.ok(callCount >= 1);
   assert.equal(result.messages[0].type, 'text');
   assert.match(result.messages[0].text, /没有收到/);
+});
+
+test('本地 OCR 结果作为待校对资料进入视觉模型提示词', async () => {
+  const prompts = [];
+  const { service } = createService({
+    imageOcrEnabled: true,
+    async imageOcrRecognizer() {
+      return ['预算已经批了', '周五复盘'];
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, modelInput) {
+        prompts.push(modelInput);
+        return '{"description":"聊天记录截图","visible_text":["预算已经批了"],"keywords":[],"scene":"群聊"}';
+      },
+    },
+  });
+  const source = new Jimp({ width: 40, height: 40, color: 0xffffffff });
+  const base64 = (await source.getBuffer('image/png')).toString('base64');
+  const prepared = await prepareImageBlocks({ imageBase64s: [base64] });
+
+  const analysis = await service.analyzeImages(prepared.blocks);
+
+  assert.ok(analysis, '应当返回图片分析结果');
+  const promptText = prompts
+    .flat()
+    .filter((block) => block?.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
+  assert.match(promptText, /本地 OCR 开始/);
+  assert.match(promptText, /预算已经批了/);
+  assert.match(promptText, /周五复盘/);
+  // OCR 是资料而非事实来源，提示词必须要求模型对照图片校正。
+  assert.match(promptText, /以图片为准/);
+});
+
+test('本地 OCR 不可用时退回纯视觉识别且不影响回复', async () => {
+  const { service } = createService({
+    imageOcrEnabled: true,
+    async imageOcrRecognizer() {
+      throw new Error('无法执行 OCR：spawn tesseract ENOENT');
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '{"description":"一张图","visible_text":[],"keywords":[],"scene":"未知"}';
+      },
+    },
+  });
+  const source = new Jimp({ width: 40, height: 40, color: 0xffffffff });
+  const base64 = (await source.getBuffer('image/png')).toString('base64');
+  const prepared = await prepareImageBlocks({ imageBase64s: [base64] });
+
+  const analysis = await service.analyzeImages(prepared.blocks);
+
+  assert.ok(analysis, 'OCR 失败不应影响图片分析');
+  assert.match(analysis.description, /一张图/);
+});
+
+test('面积超模型像素预算的截图会切片，每片按原分辨率进入模型', () => {
+  // 1080×4000 单边都没到 8192，旧逻辑整张送出后会被压到 0.625 倍。
+  const width = 1_080;
+  const height = 4_000;
+  assert.ok(width <= MAX_IMAGE_SIDE_PIXELS && height <= MAX_IMAGE_SIDE_PIXELS);
+  assert.ok(modelDownscaleRatio(width, height) < PRECISION_TILE_MIN_SCALE);
+
+  const regions = calculateImageTileRegions(width, height);
+  assert.ok(regions.length > 1, `应当切片，实际 ${regions.length} 片`);
+  for (const region of regions) {
+    assert.equal(modelDownscaleRatio(region.width, region.height), 1);
+  }
+  for (let index = 1; index < regions.length; index += 1) {
+    const overlap = regions[index - 1].y + regions[index - 1].height - regions[index].y;
+    assert.ok(overlap >= IMAGE_TILE_OVERLAP, `第 ${index + 1} 片重叠仅 ${overlap}px`);
+  }
+});
+
+test('超长截图片数封顶后仍优于整张送出的缩放系数', () => {
+  const width = 1_080;
+  const height = 20_000;
+  const regions = calculateImageTileRegions(width, height);
+  const wholeImageRatio = modelDownscaleRatio(width, height);
+  const tileRatio = modelDownscaleRatio(regions[0].width, regions[0].height);
+
+  assert.ok(regions.length <= 8, `片数应封顶，实际 ${regions.length} 片`);
+  assert.ok(
+    tileRatio > wholeImageRatio * 2,
+    `每片 ${tileRatio.toFixed(3)} 应显著优于整张 ${wholeImageRatio.toFixed(3)}`,
+  );
+});
+
+test('尺寸在预算内的截图不会被切片', () => {
+  const regions = calculateImageTileRegions(1_080, 1_920);
+  assert.equal(regions.length, 1);
 });
 
 test('长图切片尺寸受模型限制且相邻切片保留重叠内容', async () => {
