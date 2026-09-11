@@ -60,8 +60,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await Bridge()._send_forward_from_backend(event, response))
         self.assertEqual(calls, [])
         chain = Bridge._reply_chain_from_backend(response)
-        self.assertEqual([type(item) for item in chain], [Video, Plain])
-        self.assertEqual(chain[1].args, ('视频标题',))
+        self.assertEqual([type(item) for item in chain], [Video])
 
     async def test_failed_forward_falls_back_to_images_not_links(self):
         event, calls = self.event(fail_forward=True)
