@@ -343,7 +343,7 @@ export class MediaResolver {
     if (cached && cached.expiresAt > Date.now()) {
       // Do not reuse legacy direct-video entries that predate cover/title
       // propagation; they cannot produce a share card.
-      if (cached.value?.url && (cached.value.title || cached.value.coverUrl)) {
+      if (cached.value?.url && cached.value.title && cached.value.coverUrl) {
         return cached.value;
       }
       this.cache.delete(key);
