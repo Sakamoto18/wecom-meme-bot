@@ -150,3 +150,52 @@ test('媒体主链把 Provider 图文结果保留为 gallery', async () => {
   assert.equal(result.title, '图文标题');
   resolver.close();
 });
+
+test('Provider 原作者/正文/tag 经跨群缓存复用且没有视频下载', async () => {
+  let calls = 0;
+  const resolver = new MediaResolver({ enabled: true,
+    providerResolver: async () => {
+      calls++;
+      return { mediaUrl: 'https://cdn.example/v.mp4', title: '视频',
+        coverUrl: 'https://cdn.example/cover.jpg', author: '原作者',
+        avatarUrl: 'https://cdn.example/author.jpg', description: '正文 #模型[话题]#', tags: ['模型'] };
+    } });
+  try {
+    const results = await Promise.all(['group-a', 'group-b'].map(groupId => resolver.resolve({
+      url: 'https://xhslink.com/m/shared', provider: 'xiaohongshu', groupId } )));
+    const cached = await resolver.resolve({ url: 'https://xhslink.com/m/shared', provider: 'xiaohongshu' });
+    assert.equal(calls, 1);
+    assert.strictEqual(results[0], cached);
+    assert.equal(cached.author, '原作者');
+    assert.equal(cached.avatarUrl, 'https://cdn.example/author.jpg');
+    assert.equal(cached.description, '正文 #模型[话题]#');
+    assert.deepEqual(cached.tags, ['模型']);
+    assert.equal(cached.downloadBytes, 0);
+  } finally { resolver.close(); }
+});
+
+test('缺少可选卡片元数据也复用媒体缓存，不为生成卡片重复解析', async () => {
+  let calls = 0;
+  const resolver = new MediaResolver({ enabled: true, providerResolver: async () => {
+    calls++; return { mediaUrl: 'https://cdn.example/a.mp4' };
+  } });
+  try {
+    const candidate = { url: 'https://example.com/share', provider: 'unknown' };
+    await resolver.resolve(candidate);
+    await resolver.resolve(candidate);
+    assert.equal(calls, 1);
+  } finally { resolver.close(); }
+});
+
+test('B站简介和原作者经过播放代理仍完整保留', async () => {
+  const resolver = new MediaResolver({ enabled: true });
+  try {
+    const result = resolver.registerRemoteMedia({ mediaUrl: 'https://cdn.example/video.mp4',
+      author: 'UP主', avatarUrl: 'https://cdn.example/avatar.jpg', description: '第一行\n#高达 第二行',
+      coverUrl: 'https://cdn.example/cover.jpg' });
+    assert.equal(result.author, 'UP主');
+    assert.equal(result.avatarUrl, 'https://cdn.example/avatar.jpg');
+    assert.equal(result.description, '第一行\n#高达 第二行');
+    assert.equal(result.streamed, true);
+  } finally { resolver.close(); }
+});

@@ -42,6 +42,18 @@ class PublicContentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.normalize_note({'type': 'video', 'image_list': [{'url': 'https://cdn.example/cover.jpg'}]})
 
+    def test_actual_provider_preserves_note_user_and_topics(self):
+        result = module.normalize_note({'type': 'video', 'title': '真实原作者',
+            'user': {'nickname': '作者甲', 'avatar': 'https://cdn.example/author.jpg'},
+            'tagList': [{'name': '高达'}, {'name': '模型'}], 'desc': '正文 #高达[话题]#',
+            'imageList': [{'urlDefault': 'https://cdn.example/cover.jpg'}],
+            'video': {'media': {'stream': {'h264': [{'height': 720, 'masterUrl': 'https://cdn.example/video.mp4'}]}}}})
+        self.assertEqual(result['author'], '作者甲')
+        self.assertEqual(result['avatarUrl'], 'https://cdn.example/author.jpg')
+        self.assertEqual(result['tags'], ['高达', '模型'])
+        self.assertEqual(result['description'], '正文 #高达#')
+        self.assertEqual(result['images'], [])
+
     def test_unknown_type_is_not_success(self):
         with self.assertRaises(ValueError):
             module.normalize_note({'type': 'unknown'})
