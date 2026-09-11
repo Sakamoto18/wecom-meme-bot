@@ -18,7 +18,10 @@ export function normalizeXhsProviderData(data = {}) {
     .map((item) => normalizeMediaUrl(typeof item === 'string' ? item : item?.url_default || item?.url || item?.original_url))
     .filter(Boolean))].slice(0, 18);
   if (!mediaUrl && !images.length) throw new Error('Spider_XHS Provider 未返回媒体');
+  const user = data.user || data.author || {};
   return { mediaUrl, images, title: String(data.title || ''),
+    author: String(data.author_name || data.authorName || data.nickname || user.nickname || user.name || ''),
+    avatarUrl: normalizeMediaUrl(data.author_avatar || data.avatar || user.avatar || user.avatar_url || ''),
     description: String(data.description || data.desc || '').replaceAll('[话题]', '').slice(0, 4000) };
 }
 
@@ -95,6 +98,8 @@ export function createXhsProvider(options = {}) {
       images,
       coverUrl: normalizeMediaUrl(result.data?.cover),
       title: String(result.data?.title || ''),
+      author: String(result.data?.author_name || result.data?.authorName || result.data?.nickname || result.data?.user?.nickname || ''),
+      avatarUrl: normalizeMediaUrl(result.data?.author_avatar || result.data?.avatar || result.data?.user?.avatar || ''),
       description: String(result.data?.description || '').slice(0, 4000),
       watermarked: result.data?.watermarked === true,
     };
