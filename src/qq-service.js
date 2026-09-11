@@ -2831,6 +2831,8 @@ export class QqBotService {
             url: resolved.url,
             title: resolved.title,
             coverUrl: resolved.coverUrl || '',
+            author: resolved.author || '',
+            avatarUrl: resolved.avatarUrl || '',
             duration: resolved.duration,
             provider: candidate.provider,
           }],
