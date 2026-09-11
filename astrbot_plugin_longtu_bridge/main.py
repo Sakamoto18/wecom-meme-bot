@@ -1810,8 +1810,9 @@ class LongtuQqBridge(Star):
     async def _video_card(self, message: dict) -> str:
         cover = str(message.get("coverUrl") or "").strip()
         title = str(message.get("title") or "").strip()
-        if not cover or not title or not cover.startswith(("http://", "https://")):
+        if not cover or not cover.startswith(("http://", "https://")):
             return ""
+        title = title or "视频分享"
         try:
             async with self.session.get(cover, timeout=aiohttp.ClientTimeout(total=5)) as response:
                 raw = await response.read()
