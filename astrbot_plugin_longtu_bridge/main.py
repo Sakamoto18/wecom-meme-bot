@@ -1860,10 +1860,10 @@ class LongtuQqBridge(Star):
             provider = str(message.get("provider") or "").lower()
             if provider == "xiaohongshu":
                 badge, badge_text, badge_color = "小红书", "小红书", "#ff2442"
-                logo_url = "https://www.xiaohongshu.com/favicon.ico"
+                logo_url = str(Path(__file__).resolve().parent / "assets" / "xiaohongshu-logo.png")
             elif provider == "bilibili":
                 badge, badge_text, badge_color = "B", "哔哩哔哩", "#00aeec"
-                logo_url = "https://www.bilibili.com/favicon.ico"
+                logo_url = str(Path(__file__).resolve().parent / "assets" / "bilibili-logo.png")
             else:
                 badge, badge_text, badge_color = "▶", "视频", "#666666"
                 logo_url = ""
@@ -1871,8 +1871,11 @@ class LongtuQqBridge(Star):
             logo_ok = False
             if logo_url:
                 try:
-                    async with self.session.get(logo_url, timeout=aiohttp.ClientTimeout(total=2)) as logo_response:
-                        logo = Image.open(io.BytesIO(await logo_response.read())).convert("RGBA")
+                    if logo_url.startswith("http"):
+                        async with self.session.get(logo_url, timeout=aiohttp.ClientTimeout(total=2)) as logo_response:
+                            logo = Image.open(io.BytesIO(await logo_response.read())).convert("RGBA")
+                    else:
+                        logo = Image.open(logo_url).convert("RGBA")
                     logo.thumbnail((30, 30)); logo_ok = True
                 except Exception:
                     pass
@@ -1897,6 +1900,8 @@ class LongtuQqBridge(Star):
             description = str(message.get("description") or "")
             tags = re.findall(r"#[^\s#，。！？]{1,18}", description)
             tag_text = "  ".join(tags[:4])
+            if str(message.get("provider")) == "bilibili" and description and not tag_text:
+                tag_text = description.replace("\n", " ").strip()[:120]
             if tag_text:
                 draw.text((24, cover_y + image.height + 14), tag_text, fill="#c05a78", font=small)
             output = io.BytesIO(); card.save(output, format="PNG", optimize=True)
