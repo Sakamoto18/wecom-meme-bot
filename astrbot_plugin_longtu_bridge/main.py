@@ -1818,9 +1818,8 @@ class LongtuQqBridge(Star):
             async with self.session.get(cover, timeout=aiohttp.ClientTimeout(total=5)) as response:
                 raw = await response.read()
             image = Image.open(io.BytesIO(raw)).convert("RGB")
-            image.thumbnail((720, 420))
+            image.thumbnail((720, 390))
             card = Image.new("RGB", (760, 560), "white")
-            card.paste(image, ((760 - image.width) // 2, 110))
             draw = ImageDraw.Draw(card)
             # Keep a CJK font with the plugin: the slim AstrBot image only
             # contains DejaVu, whose missing Chinese glyphs render as boxes.
@@ -1840,7 +1839,33 @@ class LongtuQqBridge(Star):
                     continue
             if font is None:
                 font = small = ImageFont.load_default()
-            draw.text((24, 20), "视频分享", fill="#777", font=small)
+            # Author row (provider author, or the person who shared it).
+            author = str(message.get("author") or message.get("senderName") or "视频分享").strip()[:32]
+            avatar_url = str(message.get("avatarUrl") or "").strip()
+            if avatar_url.startswith(("http://", "https://")):
+                try:
+                    async with self.session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=2)) as avatar_response:
+                        avatar = Image.open(io.BytesIO(await avatar_response.read())).convert("RGB")
+                    avatar.thumbnail((44, 44))
+                    card.paste(avatar, (24, 18))
+                except Exception:
+                    pass
+            draw.text((78, 22), author, fill="#333", font=small)
+            source = "小红书视频" if str(message.get("provider")) == "xiaohongshu" else "视频分享"
+            draw.text((78, 50), source, fill="#d34b68" if "小红书" in source else "#888", font=small)
+            # Compact platform mark in the top-right corner.  Drawing it
+            # locally keeps card generation fast and avoids another network
+            # dependency while still making the source immediately visible.
+            provider = str(message.get("provider") or "").lower()
+            if provider == "xiaohongshu":
+                badge, badge_text, badge_color = "小红书", "小红书", "#ff2442"
+            elif provider == "bilibili":
+                badge, badge_text, badge_color = "B", "哔哩哔哩", "#00aeec"
+            else:
+                badge, badge_text, badge_color = "▶", "视频", "#666666"
+            badge_width = 92 if len(badge_text) > 1 else 54
+            draw.rounded_rectangle((760 - badge_width - 24, 20, 736, 54), radius=10, fill=badge_color)
+            draw.text((760 - badge_width - 16, 24), badge_text, fill="white", font=small)
             lines = []
             current = ""
             for char in title[:80]:
@@ -1849,7 +1874,14 @@ class LongtuQqBridge(Star):
                 current += char
             if current: lines.append(current)
             for index, line in enumerate(lines[:2]):
-                draw.text((24, 55 + index * 36), line, fill="#44208f", font=font)
+                draw.text((24, 82 + index * 36), line, fill="#44208f", font=font)
+            cover_y = 160
+            card.paste(image, ((760 - image.width) // 2, cover_y))
+            # Render source/topic tags below the cover, like a share summary.
+            description = str(message.get("description") or "")
+            tags = re.findall(r"#[^\s#，。！？]{1,18}", description)
+            tag_text = "  ".join(tags[:4]) or ("#小红书视频" if "小红书" in source else "#视频分享")
+            draw.text((24, cover_y + image.height + 14), tag_text, fill="#c05a78", font=small)
             output = io.BytesIO(); card.save(output, format="PNG", optimize=True)
             return base64.b64encode(output.getvalue()).decode("ascii")
         except Exception as error:
@@ -2326,6 +2358,14 @@ class LongtuQqBridge(Star):
                 if response.get("mode") == "media":
                     video_message = next((item for item in response.get("messages", [])
                                           if item.get("type") == "video"), {})
+                    # Provider metadata may not contain an author. In that
+                    # case identify the person who shared the link and use a
+                    # QQ avatar as the card's author row.
+                    video_message = dict(video_message)
+                    video_message.setdefault("senderName", str(event.get_sender_name() or "").strip())
+                    sender_id = str(event.get_sender_id() or "").strip()
+                    if sender_id:
+                        video_message.setdefault("avatarUrl", f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=100")
                     logger.info(
                         f"视频分享数据：title={str(video_message.get('title') or '')[:80]} "
                         f"cover={'yes' if video_message.get('coverUrl') else 'no'}",
@@ -2335,7 +2375,14 @@ class LongtuQqBridge(Star):
                     if card:
                         # QQ may drop an image when it shares a MessageChain
                         # with a video; send the generated card separately.
-                        await event.send(MessageChain(chain=[Comp.Image.fromBase64(card)]))
+                        try:
+                            await event.send(MessageChain(chain=[Comp.Image.fromBase64(card)]))
+                            # Give the OneBot adapter a moment to enqueue the
+                            # image before the video response is emitted.
+                            await asyncio.sleep(0.8)
+                            logger.info("视频分享卡片：独立图片消息已发送")
+                        except Exception as error:
+                            logger.warning(f"视频分享卡片发送失败：{error}")
                     cover = next((str(item.get("coverUrl") or "").strip()
                                   for item in response.get("messages", [])
                                   if item.get("type") == "video" and item.get("coverUrl")), "")
