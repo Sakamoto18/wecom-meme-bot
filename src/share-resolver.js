@@ -52,7 +52,12 @@ export function extractXhsPageNote(html, canonicalUrl) {
         || item.urlDefault || item.url || infos[0]?.url);
     }).filter(Boolean);
     const description = String(note.desc || '').replaceAll('[话题]', '').trim();
-    const common = { title: String(note.title || ''), description, coverUrl: images[0] || '' };
+    const author = note.user || note.author || note.userInfo || {};
+    const common = {
+      title: String(note.title || ''), description, coverUrl: images[0] || '',
+      author: String(author.nickname || author.nickName || author.name || note.nickname || ''),
+      avatarUrl: normalizeMediaUrl(author.avatar || author.avatarUrl || author.image || ''),
+    };
     if (note.type === 'normal' && images.length) {
       return { ...common, images: [...new Set(images)].slice(0, 18), mediaUrl: '', mediaKind: 'gallery' };
     }
@@ -62,7 +67,7 @@ export function extractXhsPageNote(html, canonicalUrl) {
         .filter((stream) => normalizeMediaUrl(stream.masterUrl || stream.master_url || stream.url))
         .sort((a, b) => Number(a.height || 0) - Number(b.height || 0));
       const stream = candidates.find((item) => Number(item.height) >= 720) || candidates.at(-1);
-      return { ...common, images: [], mediaKind: 'video',
+      return { ...common, images, mediaKind: 'video',
         mediaUrl: normalizeMediaUrl(stream?.masterUrl || stream?.master_url || stream?.url) };
     }
   } catch { /* malformed/unavailable page data is not a successful gallery */ }
