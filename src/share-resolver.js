@@ -57,6 +57,7 @@ export function extractXhsPageNote(html, canonicalUrl) {
       title: String(note.title || ''), description, coverUrl: images[0] || '',
       author: String(author.nickname || author.nickName || author.name || note.nickname || ''),
       avatarUrl: normalizeMediaUrl(author.avatar || author.avatarUrl || author.image || ''),
+      tags: (note.tagList || note.tag_list || []).map(tag => typeof tag === 'string' ? tag : tag?.name).filter(Boolean),
     };
     if (note.type === 'normal' && images.length) {
       return { ...common, images: [...new Set(images)].slice(0, 18), mediaUrl: '', mediaKind: 'gallery' };
@@ -67,7 +68,7 @@ export function extractXhsPageNote(html, canonicalUrl) {
         .filter((stream) => normalizeMediaUrl(stream.masterUrl || stream.master_url || stream.url))
         .sort((a, b) => Number(a.height || 0) - Number(b.height || 0));
       const stream = candidates.find((item) => Number(item.height) >= 720) || candidates.at(-1);
-      return { ...common, images, mediaKind: 'video',
+      return { ...common, images: [], mediaKind: 'video',
         mediaUrl: normalizeMediaUrl(stream?.masterUrl || stream?.master_url || stream?.url) };
     }
   } catch { /* malformed/unavailable page data is not a successful gallery */ }

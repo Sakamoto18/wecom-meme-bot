@@ -1,0 +1,11 @@
+{
+  "platform": "xiaohongshu",
+  "source_page": "https://www.xiaohongshu.com/explore",
+  "source_element": "img.header-logo, inline data:image/png;base64",
+  "retrieved": "2026-09-11",
+  "transformation": "Base64-decoded the original official header PNG without resizing, recoloring, recompression, or any screenshot.",
+  "size": [205, 96],
+  "files": {
+    "xiaohongshu.png": "10105375fe3a60a6eba75c7056eb693842fa33818e8ca953e06ee594a3576dfe"
+  }
+}
