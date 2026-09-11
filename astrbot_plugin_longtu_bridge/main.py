@@ -1875,10 +1875,8 @@ class LongtuQqBridge(Star):
                     logo.thumbnail((30, 30)); logo_ok = True
                 except Exception:
                     pass
-            draw.rounded_rectangle((760 - badge_width - 24, 20, 736, 54), radius=10, fill=badge_color)
             if logo_ok:
-                card.paste(logo, (760 - badge_width - 20, 22), logo)
-            draw.text((760 - badge_width - 16, 24), badge_text, fill="white", font=small)
+                logo.thumbnail((46, 46)); card.paste(logo, (690, 14), logo)
             lines = []
             current = ""
             for char in title[:80]:
@@ -1897,8 +1895,9 @@ class LongtuQqBridge(Star):
             # Render source/topic tags below the cover, like a share summary.
             description = str(message.get("description") or "")
             tags = re.findall(r"#[^\s#，。！？]{1,18}", description)
-            tag_text = "  ".join(tags[:4]) or ("#小红书视频" if "小红书" in source else "#视频分享")
-            draw.text((24, cover_y + image.height + 14), tag_text, fill="#c05a78", font=small)
+            tag_text = "  ".join(tags[:4])
+            if tag_text:
+                draw.text((24, cover_y + image.height + 14), tag_text, fill="#c05a78", font=small)
             output = io.BytesIO(); card.save(output, format="PNG", optimize=True)
             return base64.b64encode(output.getvalue()).decode("ascii")
         except Exception as error:

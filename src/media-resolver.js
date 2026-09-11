@@ -308,6 +308,8 @@ export class MediaResolver {
       mediaId: id,
       title: value.title || '',
       coverUrl: value.coverUrl || '',
+      author: value.author || '',
+      avatarUrl: value.avatarUrl || '',
       duration: positive(value.duration),
       extractor: 'bilibili-stream-proxy',
       downloadBytes: 0,
