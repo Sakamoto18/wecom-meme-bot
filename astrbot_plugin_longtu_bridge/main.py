@@ -2273,10 +2273,18 @@ class LongtuQqBridge(Star):
             # the image is not dropped after the text response has been sent.
             if reply_chain:
                 if response.get("mode") == "media":
+                    cover = next((str(item.get("coverUrl") or "").strip()
+                                  for item in response.get("messages", [])
+                                  if item.get("type") == "video" and item.get("coverUrl")), "")
+                    if cover.startswith(("http://", "https://")):
+                        try:
+                            reply_chain.insert(0, Comp.Image(file=cover))
+                        except TypeError:
+                            pass
                     title = next((str(item.get("title") or "").strip()
                                   for item in response.get("messages", [])
                                   if item.get("type") == "video" and item.get("title")), "")
-                    if title:
+                    if title and not cover:
                         yield event.plain_result(title[:200])
                 # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
                 # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
