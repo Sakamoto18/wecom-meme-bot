@@ -11,7 +11,10 @@ const DEFAULT_SCRIPT = path.resolve(
 export function normalizeXhsProviderData(data = {}) {
   const find = (root, keys) => {
     if (!root || typeof root !== 'object') return '';
-    for (const key of keys) if (typeof root[key] === 'string' && root[key].trim()) return root[key];
+    const wanted = new Set(keys.map((key) => key.toLowerCase().replaceAll('_', '')));
+    for (const [key, value] of Object.entries(root)) {
+      if (wanted.has(key.toLowerCase().replaceAll('_', '')) && typeof value === 'string' && value.trim()) return value;
+    }
     for (const value of Object.values(root)) { const found = find(value, keys); if (found) return found; }
     return '';
   };
@@ -99,13 +102,14 @@ export function createXhsProvider(options = {}) {
     const images = [...new Set((Array.isArray(result.data?.images) ? result.data.images : [])
       .map(normalizeMediaUrl).filter(Boolean))].slice(0, 18);
     if (!mediaUrl && images.length === 0) throw new Error('小红书 Provider 未返回可发送的视频或图片');
+    const normalized = normalizeXhsProviderData(result.data || {});
     return {
       mediaUrl,
       images,
       coverUrl: normalizeMediaUrl(result.data?.cover),
-      title: String(result.data?.title || ''),
-      author: String(result.data?.author_name || result.data?.authorName || result.data?.nickname || result.data?.user?.nickname || result.data?.user_info?.nickname || ''),
-      avatarUrl: normalizeMediaUrl(result.data?.author_avatar || result.data?.avatar || result.data?.user?.avatar || result.data?.user_info?.avatar || ''),
+      title: String(result.data?.title || normalized.title || ''),
+      author: normalized.author,
+      avatarUrl: normalized.avatarUrl,
       description: String(result.data?.description || '').slice(0, 4000),
       watermarked: result.data?.watermarked === true,
     };
