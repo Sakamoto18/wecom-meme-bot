@@ -2406,6 +2406,7 @@ class LongtuQqBridge(Star):
                             )
                             if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
                                 raise RuntimeError(f"QQ 图片接口返回失败：{result!r}")
+                            logger.info(f"视频分享卡片：OneBot 图片回执={result!r}")
                             # Give the OneBot adapter a moment to enqueue the
                             # image before the video response is emitted.
                             await asyncio.sleep(0.8)
