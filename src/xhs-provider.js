@@ -19,7 +19,7 @@ export function normalizeXhsProviderData(data = {}) {
     .filter(Boolean))].slice(0, 18);
   if (!mediaUrl && !images.length) throw new Error('Spider_XHS Provider 未返回媒体');
   const user = data.user || data.author || {};
-  return { mediaUrl, images, title: String(data.title || ''),
+  return { mediaUrl, images, coverUrl: normalizeMediaUrl(data.cover || data.cover_url || data.coverUrl || images[0] || ''), title: String(data.title || ''),
     author: String(data.author_name || data.authorName || data.nickname || user.nickname || user.name || ''),
     avatarUrl: normalizeMediaUrl(data.author_avatar || data.avatar || user.avatar || user.avatar_url || ''),
     description: String(data.description || data.desc || '').replaceAll('[话题]', '').slice(0, 4000) };
