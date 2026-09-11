@@ -38,3 +38,12 @@ together. Restart AstrBot after all files are present; do not recreate NapCat.
 
 Media cache validity depends on the media TTL, not optional card metadata.
 Repeated shares across groups continue to reuse the resolved video/gallery.
+
+## Bilibili transfer
+
+Use the original UPOS URLs in the playback API's backup_url before edge nodes,
+retaining all alternatives for the same MP4. Resolution still returns a streaming
+proxy immediately at 720P. The proxy switches sources after 8 seconds without
+data, resumes interrupted transfers with validated byte ranges, and logs the
+CDN hostname, transferred bytes, and elapsed time without exposing signed URLs.
+The cover/avatar renderer and media resolution cache are independent of this.
