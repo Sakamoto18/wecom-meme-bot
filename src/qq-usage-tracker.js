@@ -14,6 +14,7 @@ const DEFAULT_ACTIVITY_USER_THRESHOLDS = [3, 8, 20, 40];
 const DEFAULT_ACTIVITY_LIMIT_PERCENTAGES = [60, 75, 85, 95, 100];
 const ACTIVITY_TIER_NAMES = ['quiet', 'light', 'normal', 'active', 'hot'];
 const DEFAULT_LARGE_GROUP_SECONDARY_REVIEW_PERCENT = 20;
+const DEFAULT_PEAK_PASSIVE_TOKEN_BUDGET_PERCENT = 40;
 const SECONDARY_REVIEW_SOURCES = new Map([
   ['conversation-reply-review', 'conversation-reply'],
   ['active-reply-review', 'active-reply'],
@@ -23,19 +24,21 @@ const LOCALLY_REPAIRABLE_REVIEW_ISSUES = new Set([
 ]);
 const PRICE_UNIT_TOKENS = 1_000_000;
 const DEEPSEEK_PRICING_SOURCE = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/';
-const DEEPSEEK_PRICING_CHECKED_AT = '2026-08-25';
+const DEEPSEEK_PRICING_CHECKED_AT = '2026-09-10';
+// Flash 价格按 DeepSeek-V4.1-Flash。旧模型名 deepseek-v4-flash、
+// deepseek-v4-flash-vision-exp 已下线，请求由 V4.1-Flash 承接并按 Flash 价计费，
+// 因此三个 flash 键共用同一份价格。
+const DEEPSEEK_FLASH_PRICES = {
+  offPeak: { cachedInput: 0.02, uncachedInput: 1, output: 4 },
+  peak: { cachedInput: 0.04, uncachedInput: 2, output: 8 },
+};
 const DEEPSEEK_PRICES_CNY = new Map([
-  ['deepseek-v4-flash', {
-    offPeak: { cachedInput: 0.05, uncachedInput: 1.5, output: 4.5 },
-    peak: { cachedInput: 0.10, uncachedInput: 3.0, output: 9.0 },
-  }],
+  ['deepseek-flash', DEEPSEEK_FLASH_PRICES],
+  ['deepseek-v4-flash', DEEPSEEK_FLASH_PRICES],
+  ['deepseek-v4-flash-vision-exp', DEEPSEEK_FLASH_PRICES],
   ['deepseek-v4-pro', {
     offPeak: { cachedInput: 0.15, uncachedInput: 4.5, output: 13.5 },
     peak: { cachedInput: 0.30, uncachedInput: 9.0, output: 27.0 },
-  }],
-  ['deepseek-v4-flash-vision-exp', {
-    offPeak: { cachedInput: 0.05, uncachedInput: 1.5, output: 4.5 },
-    peak: { cachedInput: 0.10, uncachedInput: 3.0, output: 9.0 },
   }],
 ]);
 
@@ -106,7 +109,9 @@ function startOfShanghaiDay(timestamp) {
     - SHANGHAI_OFFSET_MS;
 }
 
-function isDeepSeekPeakTime(timestamp) {
+// 峰谷时段既用于事后算钱，也用于运行时压低高峰的静默观测频率，
+// 所以只保留这一份定义并导出给服务层复用。
+export function isDeepSeekPeakTime(timestamp) {
   const shanghai = new Date(timestamp + SHANGHAI_OFFSET_MS);
   const weekday = shanghai.getUTCDay();
   if (weekday < 1 || weekday > 5) return false;
@@ -331,6 +336,12 @@ export class QqUsageTracker {
     this.largeGroupSecondaryReviewPercent = percentage(
       options.largeGroupSecondaryReviewPercent,
       DEFAULT_LARGE_GROUP_SECONDARY_REVIEW_PERCENT,
+    );
+    // 高峰时段单价是空闲时段的两倍，大型群的后台/静默调用另用一条更低的
+    // 预留线，把可延后的观测支出挤到空闲时段。
+    this.peakPassiveTokenBudgetPercent = percentage(
+      options.peakPassiveTokenBudgetPercent,
+      DEFAULT_PEAK_PASSIVE_TOKEN_BUDGET_PERCENT,
     );
     this.adaptiveLimitsEnabled = options.adaptiveLimitsEnabled !== false;
     this.activityLookbackDays = positiveInteger(
@@ -753,8 +764,13 @@ export class QqUsageTracker {
         startOfShanghaiDay(now),
         startOfShanghaiDay(now) + DAY_MS,
       ).total);
+      const peakPassive = context.largeGroup
+        && isDeepSeekPeakTime(now)
+        && this.peakPassiveTokenBudgetPercent < this.passiveTokenBudgetPercent;
       const passiveLimit = Math.floor(
-        tokenLimit * this.passiveTokenBudgetPercent / 100,
+        tokenLimit * (peakPassive
+          ? this.peakPassiveTokenBudgetPercent
+          : this.passiveTokenBudgetPercent) / 100,
       );
       if (passiveLimit > 0
         && this.isPassiveLlmCall(context, source)
@@ -765,7 +781,7 @@ export class QqUsageTracker {
           now,
           source,
           model,
-          'passive-daily-tokens',
+          peakPassive ? 'peak-passive-daily-tokens' : 'passive-daily-tokens',
         );
         throw new QqUsageLimitError(
           context.groupId,
@@ -1166,6 +1182,7 @@ export class QqUsageTracker {
       largeGroupLlmTokenLimitPerDay: this.maxLargeGroupLlmTokensPerDay || null,
       cachedTokenWeightPercent: this.cachedTokenWeightPercent,
       passiveTokenBudgetPercent: this.passiveTokenBudgetPercent,
+      peakPassiveTokenBudgetPercent: this.peakPassiveTokenBudgetPercent,
       largeGroupSecondaryReviewPercent: this.largeGroupSecondaryReviewPercent,
       groupSearchLimitPerDay: this.maxGroupSearchCallsPerDay || null,
       largeGroupSearchLimitPerDay: this.maxLargeGroupSearchCallsPerDay || null,
