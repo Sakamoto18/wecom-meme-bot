@@ -1860,10 +1860,10 @@ class LongtuQqBridge(Star):
             provider = str(message.get("provider") or "").lower()
             if provider == "xiaohongshu":
                 badge, badge_text, badge_color = "小红书", "小红书", "#ff2442"
-                logo_url = str(Path(__file__).resolve().parent / "assets" / "xiaohongshu-logo.png")
+                logo_url = "https://www.xiaohongshu.com/favicon.ico"
             elif provider == "bilibili":
                 badge, badge_text, badge_color = "B", "哔哩哔哩", "#00aeec"
-                logo_url = str(Path(__file__).resolve().parent / "assets" / "bilibili-logo.png")
+                logo_url = "https://www.bilibili.com/favicon.ico"
             else:
                 badge, badge_text, badge_color = "▶", "视频", "#666666"
                 logo_url = ""
@@ -1871,11 +1871,8 @@ class LongtuQqBridge(Star):
             logo_ok = False
             if logo_url:
                 try:
-                    if logo_url.startswith("http"):
-                        async with self.session.get(logo_url, timeout=aiohttp.ClientTimeout(total=2)) as logo_response:
-                            logo = Image.open(io.BytesIO(await logo_response.read())).convert("RGBA")
-                    else:
-                        logo = Image.open(logo_url).convert("RGBA")
+                    async with self.session.get(logo_url, timeout=aiohttp.ClientTimeout(total=2)) as logo_response:
+                        logo = Image.open(io.BytesIO(await logo_response.read())).convert("RGBA")
                     logo.thumbnail((30, 30)); logo_ok = True
                 except Exception:
                     pass
