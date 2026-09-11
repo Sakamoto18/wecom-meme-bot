@@ -106,6 +106,7 @@ export async function resolveBilibiliMedia(value, {
     mediaUrl: normalizeMediaUrl(stream.url),
     size: Number(stream.size || 0),
     title: String(metadata.title || '').slice(0, 200),
+    description: String(metadata.desc || '').slice(0, 4000),
     coverUrl: normalizeMediaUrl(metadata.pic || metadata.cover || ''),
     author: String(metadata.owner?.name || ''),
     avatarUrl: normalizeMediaUrl(metadata.owner?.face || ''),
