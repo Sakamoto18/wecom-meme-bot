@@ -9,6 +9,12 @@ const DEFAULT_SCRIPT = path.resolve(
 );
 
 export function normalizeXhsProviderData(data = {}) {
+  const find = (root, keys) => {
+    if (!root || typeof root !== 'object') return '';
+    for (const key of keys) if (typeof root[key] === 'string' && root[key].trim()) return root[key];
+    for (const value of Object.values(root)) { const found = find(value, keys); if (found) return found; }
+    return '';
+  };
   const kind = data.media_type || data.mediaKind || data.type;
   const gallery = ['normal', 'gallery', 'image'].includes(kind);
   const mediaUrl = gallery ? '' : normalizeMediaUrl(data.video_url || data.videoUrl);
@@ -20,8 +26,8 @@ export function normalizeXhsProviderData(data = {}) {
   if (!mediaUrl && !images.length) throw new Error('Spider_XHS Provider 未返回媒体');
   const user = data.user || data.author || data.user_info || data.userInfo || {};
   return { mediaUrl, images, coverUrl: normalizeMediaUrl(data.cover || data.cover_url || data.coverUrl || images[0] || ''), title: String(data.title || ''),
-    author: String(data.author_name || data.authorName || data.nickname || user.nickname || user.name || user.nick_name || ''),
-    avatarUrl: normalizeMediaUrl(data.author_avatar || data.avatar || user.avatar || user.avatar_url || user.image || ''),
+    author: String(find(data, ['author_name','authorName','nickname','nick_name','name']) || ''),
+    avatarUrl: normalizeMediaUrl(find(data, ['author_avatar','avatar','avatar_url','image']) || ''),
     description: String(data.description || data.desc || '').replaceAll('[话题]', '').slice(0, 4000) };
 }
 
