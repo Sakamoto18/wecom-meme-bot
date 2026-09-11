@@ -1822,11 +1822,6 @@ class LongtuQqBridge(Star):
                 video_url = str(message["url"])
                 try:
                     reply_chain.append(Comp.Video(file=video_url))
-                    # QQ/NapCat may drop text placed before a video component;
-                    # append the title after the video so it remains visible.
-                    title = str(message.get("title") or "").strip()
-                    if title:
-                        reply_chain.append(Comp.Plain(title[:200]))
                 except TypeError:
                     reply_chain.append(Comp.Plain(video_url))
             elif message_type == "forward":
@@ -2277,6 +2272,12 @@ class LongtuQqBridge(Star):
             # response pipeline. Keep text and the attached meme in one chain so
             # the image is not dropped after the text response has been sent.
             if reply_chain:
+                if response.get("mode") == "media":
+                    title = next((str(item.get("title") or "").strip()
+                                  for item in response.get("messages", [])
+                                  if item.get("type") == "video" and item.get("title")), "")
+                    if title:
+                        yield event.plain_result(title[:200])
                 # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
                 # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
                 # 媒体结果直接发成可播放视频，不再挂引用；普通对话继续保留
