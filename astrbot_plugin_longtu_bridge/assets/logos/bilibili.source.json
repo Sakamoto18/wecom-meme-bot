@@ -1,0 +1,13 @@
+{
+  "platform": "bilibili",
+  "source_page": "https://www.bilibili.com/blackboard/aboutUs.html",
+  "source_asset": "https://s1.hdslb.com/bfs/seed/laputa-header/bili-header.umd.js",
+  "source_component": "BilibiliIcon (uNe; SVG viewBox 0 0 2240 1024)",
+  "source_build": "@bilibili/bili-header v1.0.0; Built 2026-08-04 11:38:51; Commit aa702d2",
+  "retrieved": "2026-09-11",
+  "transformation": "Extracted official SVG path unchanged, resolved its --brand_blue CSS variable to the official #00AEEC value, rasterized at 560x256 with @resvg/resvg-js. Transparent background. No screenshot or redrawing.",
+  "files": {
+    "bilibili.svg": "aca638592477a29fc4ee83424dc321f54d578f37eeb449436b7c3a69e88bede2",
+    "bilibili.png": "a7ddc6062fcdc1e277c4864c93f7a81467ef8d515a4a02de387f4f50d4df87b1"
+  }
+}

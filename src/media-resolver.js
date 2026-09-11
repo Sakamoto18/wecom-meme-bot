@@ -345,12 +345,9 @@ export class MediaResolver {
     await this.cleanupExpired();
     const cached = this.cache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
-      // Do not reuse legacy direct-video entries that predate cover/title
-      // propagation; they cannot produce a share card.
-      if (cached.value?.url && cached.value.title && cached.value.coverUrl) {
-        return cached.value;
-      }
-      this.cache.delete(key);
+      // Media validity is independent of optional card metadata. Reuse the
+      // parsed video/gallery across groups even when an author/cover is absent.
+      return cached.value;
     }
     if (cached) this.cache.delete(key);
     if (this.inflight.has(key)) return this.inflight.get(key);
@@ -369,17 +366,25 @@ export class MediaResolver {
             if (provided?.mediaUrl) {
               let title = provided.title || '';
               let coverUrl = provided.coverUrl || '';
+              let cardMetadata = provided;
               if ((!title || !coverUrl) && candidate?.provider === 'xiaohongshu') {
                 try {
                   const fallback = await resolveSharedUrl(key, { timeoutMs: Math.min(this.timeoutMs, 5_000) });
                   title ||= fallback.title || '';
                   coverUrl ||= fallback.coverUrl || '';
+                  cardMetadata = { ...fallback, ...provided,
+                    author: provided.author || fallback.author || '',
+                    avatarUrl: provided.avatarUrl || fallback.avatarUrl || '',
+                    description: provided.description || fallback.description || '',
+                    tags: provided.tags?.length ? provided.tags : (fallback.tags || []),
+                  };
                 } catch { /* provider video remains usable without card metadata */ }
               }
               return {
                 url: provided.mediaUrl,
                 title, coverUrl: coverUrl || (provided.images && provided.images[0]) || '',
-                author: provided.author || '', avatarUrl: provided.avatarUrl || '',
+                author: cardMetadata.author || '', avatarUrl: cardMetadata.avatarUrl || '',
+                description: cardMetadata.description || '', tags: cardMetadata.tags || [],
                 duration: positive(provided.duration),
                 extractor: 'provider-direct',
                 downloadBytes: 0,
@@ -469,6 +474,10 @@ export class MediaResolver {
         }
         downloaded.title ||= publicMetadata.title || '';
         downloaded.coverUrl ||= publicMetadata.coverUrl || '';
+        downloaded.author ||= publicMetadata.author || '';
+        downloaded.avatarUrl ||= publicMetadata.avatarUrl || '';
+        downloaded.description ||= publicMetadata.description || '';
+        downloaded.tags ||= publicMetadata.tags || [];
         return this.registerMedia(downloaded);
       } finally {
         this.releaseSlot();

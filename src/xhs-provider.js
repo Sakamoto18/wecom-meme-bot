@@ -9,15 +9,6 @@ const DEFAULT_SCRIPT = path.resolve(
 );
 
 export function normalizeXhsProviderData(data = {}) {
-  const find = (root, keys) => {
-    if (!root || typeof root !== 'object') return '';
-    const wanted = new Set(keys.map((key) => key.toLowerCase().replaceAll('_', '')));
-    for (const [key, value] of Object.entries(root)) {
-      if (wanted.has(key.toLowerCase().replaceAll('_', '')) && typeof value === 'string' && value.trim()) return value;
-    }
-    for (const value of Object.values(root)) { const found = find(value, keys); if (found) return found; }
-    return '';
-  };
   const kind = data.media_type || data.mediaKind || data.type;
   const gallery = ['normal', 'gallery', 'image'].includes(kind);
   const mediaUrl = gallery ? '' : normalizeMediaUrl(data.video_url || data.videoUrl);
@@ -27,10 +18,15 @@ export function normalizeXhsProviderData(data = {}) {
     .map((item) => normalizeMediaUrl(typeof item === 'string' ? item : item?.url_default || item?.url || item?.original_url))
     .filter(Boolean))].slice(0, 18);
   if (!mediaUrl && !images.length) throw new Error('Spider_XHS Provider 未返回媒体');
-  const user = data.user || data.author || data.user_info || data.userInfo || {};
-  return { mediaUrl, images, coverUrl: normalizeMediaUrl(data.cover || data.cover_url || data.coverUrl || images[0] || ''), title: String(data.title || ''),
-    author: String(find(data, ['author_name','authorName','nickname','nick_name','name']) || ''),
-    avatarUrl: normalizeMediaUrl(find(data, ['author_avatar','avatar','avatar_url','image']) || ''),
+  const user = data.user || data.user_info || data.userInfo
+    || (typeof data.author === 'object' ? data.author : null) || {};
+  return { mediaUrl, images: mediaUrl ? [] : images, coverUrl: normalizeMediaUrl(data.cover || data.cover_url || data.coverUrl || images[0] || ''), title: String(data.title || ''),
+    author: String((typeof data.author === 'string' ? data.author : '')
+      || data.author_name || data.authorName || user.nickname || user.nickName || user.nick_name || ''),
+    avatarUrl: normalizeMediaUrl(data.avatarUrl || data.author_avatar
+      || user.avatar || user.avatarUrl || user.avatar_url || ''),
+    tags: (Array.isArray(data.tags) ? data.tags : (data.tagList || data.tag_list || []))
+      .map(tag => typeof tag === 'string' ? tag : tag?.name).filter(Boolean),
     description: String(data.description || data.desc || '').replaceAll('[话题]', '').slice(0, 4000) };
 }
 
@@ -110,6 +106,7 @@ export function createXhsProvider(options = {}) {
       title: String(result.data?.title || normalized.title || ''),
       author: normalized.author,
       avatarUrl: normalized.avatarUrl,
+      tags: normalized.tags,
       description: String(result.data?.description || '').slice(0, 4000),
       watermarked: result.data?.watermarked === true,
     };
