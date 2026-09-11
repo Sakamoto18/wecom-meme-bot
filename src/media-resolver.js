@@ -333,7 +333,10 @@ export class MediaResolver {
 
   async resolve(candidate) {
     if (!this.enabled) throw new Error('媒体解析未启用');
-    const key = String(candidate?.url || '').trim();
+    // Share links carry per-user tracking parameters; normalize before cache
+    // lookup so the same media is not resolved once per group/share URL.
+    const rawKey = String(candidate?.url || '').trim();
+    const key = normalizeDownloadSource(rawKey) || rawKey;
     if (!key) throw new Error('媒体地址为空');
     await this.cleanupExpired();
     const cached = this.cache.get(key);
