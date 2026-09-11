@@ -101,6 +101,7 @@ test('B站单文件 MP4 注册为流式中转，不等待完整下载', async ()
   const resolver = new MediaResolver({ enabled: true, cacheTtlMs: 60_000 });
   const result = resolver.registerRemoteMedia({
     mediaUrl: 'https://cdn.example/video.mp4', size: 1234, title: '流式视频',
+    backupMediaUrls: ['https://cdn.example/backup.mp4'],
     requestHeaders: { referer: 'https://www.bilibili.com/' },
   });
   const resource = await resolver.getMediaFile(result.mediaId);
@@ -108,7 +109,23 @@ test('B站单文件 MP4 注册为流式中转，不等待完整下载', async ()
   assert.equal(result.downloadBytes, 0);
   assert.equal(resource.remote, true);
   assert.equal(resource.remoteUrl, 'https://cdn.example/video.mp4');
+  assert.deepEqual(resource.backupUrls, ['https://cdn.example/backup.mp4']);
   resolver.close();
+});
+
+test('B站优先 API 返回的 UPOS 备用 CDN，保留主地址且去重', async () => {
+  const primary = 'https://edge.example/video.mp4?token=original';
+  const fast = 'https://upos-sz-mirrorcos.bilivideo.com/video.mp4?token=backup';
+  const result = await resolveBilibiliMedia('https://www.bilibili.com/video/BV1fhYN6AEay', {
+    fetchImpl: async url => new Response(JSON.stringify({code:0,data:String(url).includes('/view?')
+      ? {cid:99,title:'原视频',owner:{name:'原作者'}}
+      : {quality:64,durl:[{url:primary,size:100,backup_url:[fast,fast,'javascript:invalid',primary]}]},
+    })),
+  });
+  assert.equal(result.mediaUrl, fast);
+  assert.deepEqual(result.backupMediaUrls, [primary]);
+  assert.equal(result.quality, 64);
+  assert.equal(result.author, '原作者');
 });
 
 test('媒体主链优先使用 Provider 直链且不下载文件', async () => {
