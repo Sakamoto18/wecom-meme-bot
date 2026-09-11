@@ -356,10 +356,18 @@ export class MediaResolver {
               platform: candidate?.provider || 'unknown',
             });
             if (provided?.mediaUrl) {
+              let title = provided.title || '';
+              let coverUrl = provided.coverUrl || '';
+              if ((!title || !coverUrl) && candidate?.provider === 'xiaohongshu') {
+                try {
+                  const fallback = await resolveSharedUrl(key, { timeoutMs: Math.min(this.timeoutMs, 5_000) });
+                  title ||= fallback.title || '';
+                  coverUrl ||= fallback.coverUrl || '';
+                } catch { /* provider video remains usable without card metadata */ }
+              }
               return {
                 url: provided.mediaUrl,
-                title: provided.title || '',
-                coverUrl: provided.coverUrl || '',
+                title, coverUrl,
                 duration: positive(provided.duration),
                 extractor: 'provider-direct',
                 downloadBytes: 0,
