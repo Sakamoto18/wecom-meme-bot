@@ -7,6 +7,7 @@ from datetime import datetime, time as datetime_time, timedelta
 import os
 import re
 import time
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw, ImageFont
 
@@ -1821,15 +1822,24 @@ class LongtuQqBridge(Star):
             card = Image.new("RGB", (760, 560), "white")
             card.paste(image, ((760 - image.width) // 2, 110))
             draw = ImageDraw.Draw(card)
-            # AstrBot's slim image ships DejaVu by default; use it as a
-            # guaranteed fallback when CJK fonts are not installed.
-            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-            try:
-                font = ImageFont.truetype(font_path, 30)
-                small = ImageFont.truetype(font_path, 22)
-            except OSError:
-                font = ImageFont.load_default()
-                small = font
+            # Keep a CJK font with the plugin: the slim AstrBot image only
+            # contains DejaVu, whose missing Chinese glyphs render as boxes.
+            bundled_font = Path(__file__).resolve().parent / "assets" / "HiraginoSansGB.ttc"
+            font_candidates = (
+                str(bundled_font),
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            )
+            font = small = None
+            for font_path in font_candidates:
+                try:
+                    font = ImageFont.truetype(font_path, 30)
+                    small = ImageFont.truetype(font_path, 22)
+                    break
+                except (OSError, IOError):
+                    continue
+            if font is None:
+                font = small = ImageFont.load_default()
             draw.text((24, 20), "视频分享", fill="#777", font=small)
             lines = []
             current = ""
@@ -2325,7 +2335,7 @@ class LongtuQqBridge(Star):
                     if card:
                         # QQ may drop an image when it shares a MessageChain
                         # with a video; send the generated card separately.
-                        yield event.chain_result([Comp.Image.fromBase64(card)])
+                        await event.send(MessageChain(chain=[Comp.Image.fromBase64(card)]))
                     cover = next((str(item.get("coverUrl") or "").strip()
                                   for item in response.get("messages", [])
                                   if item.get("type") == "video" and item.get("coverUrl")), "")
