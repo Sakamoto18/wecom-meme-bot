@@ -376,6 +376,7 @@ export class MediaResolver {
               return {
                 url: provided.mediaUrl,
                 title, coverUrl,
+                author: provided.author || '', avatarUrl: provided.avatarUrl || '',
                 duration: positive(provided.duration),
                 extractor: 'provider-direct',
                 downloadBytes: 0,
