@@ -1821,10 +1821,12 @@ class LongtuQqBridge(Star):
                 # JSON bridge body as base64 because videos exceed API limits.
                 video_url = str(message["url"])
                 try:
+                    reply_chain.append(Comp.Video(file=video_url))
+                    # QQ/NapCat may drop text placed before a video component;
+                    # append the title after the video so it remains visible.
                     title = str(message.get("title") or "").strip()
                     if title:
                         reply_chain.append(Comp.Plain(title[:200]))
-                    reply_chain.append(Comp.Video(file=video_url))
                 except TypeError:
                     reply_chain.append(Comp.Plain(video_url))
             elif message_type == "forward":
