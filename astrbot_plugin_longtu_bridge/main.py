@@ -1824,8 +1824,12 @@ class LongtuQqBridge(Star):
             # AstrBot's slim image ships DejaVu by default; use it as a
             # guaranteed fallback when CJK fonts are not installed.
             font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-            font = ImageFont.truetype(font_path,  thirty := 30)
-            small = ImageFont.truetype(font_path, 22)
+            try:
+                font = ImageFont.truetype(font_path, 30)
+                small = ImageFont.truetype(font_path, 22)
+            except OSError:
+                font = ImageFont.load_default()
+                small = font
             draw.text((24, 20), "视频分享", fill="#777", font=small)
             lines = []
             current = ""
