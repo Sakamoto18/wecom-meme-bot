@@ -1811,14 +1811,14 @@ class LongtuQqBridge(Star):
     async def _video_card(self, message: dict) -> str:
         cover = str(message.get("coverUrl") or "").strip()
         title = str(message.get("title") or "").strip()
-        if not cover or not cover.startswith(("http://", "https://")):
-            return ""
         title = title or "视频分享"
         try:
-            async with self.session.get(cover, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                raw = await response.read()
-            image = Image.open(io.BytesIO(raw)).convert("RGB")
-            image.thumbnail((720, 390))
+            image = None
+            if cover.startswith(("http://", "https://")):
+                async with self.session.get(cover, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    raw = await response.read()
+                image = Image.open(io.BytesIO(raw)).convert("RGB")
+                image.thumbnail((720, 390))
             card = Image.new("RGB", (760, 560), "white")
             draw = ImageDraw.Draw(card)
             # Keep a CJK font with the plugin: the slim AstrBot image only
@@ -1876,6 +1876,10 @@ class LongtuQqBridge(Star):
             for index, line in enumerate(lines[:2]):
                 draw.text((24, 82 + index * 36), line, fill="#44208f", font=font)
             cover_y = 160
+            if image is None:
+                image = Image.new("RGB", (720, 390), "#eeeaf7")
+                placeholder = ImageDraw.Draw(image)
+                placeholder.text((280, 175), "视频封面暂不可用", fill="#776b91", font=small)
             card.paste(image, ((760 - image.width) // 2, cover_y))
             # Render source/topic tags below the cover, like a share summary.
             description = str(message.get("description") or "")
