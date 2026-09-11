@@ -18,3 +18,17 @@ test('视频和封面同时返回时仅选择视频', () => {
 test('视频流缺失不能以封面充当成功图文', () => {
   assert.throws(() => normalizeXhsProviderData({ media_type: 'video', images: ['https://cdn.example/cover.jpg'] }), /视频流/);
 });
+
+test('实际 /resolve 扁平作者信息透传，不递归误取tag或封面为作者', () => {
+  const data = { media_type: 'video', video_url: 'https://cdn.example/video.mp4',
+    cover: 'https://cdn.example/cover.jpg', author: '原作者', avatarUrl: 'https://cdn.example/avatar.jpg',
+    tags: ['话题'], description: '正文 #话题[话题]#' };
+  const result = normalizeXhsProviderData(data);
+  assert.equal(result.author, '原作者');
+  assert.equal(result.avatarUrl, 'https://cdn.example/avatar.jpg');
+  assert.deepEqual(result.tags, ['话题']);
+  const missing = normalizeXhsProviderData({ ...data, author: '', avatarUrl: '',
+    tagList: [{ name: '不是作者' }], unrelated: { image: 'https://cdn.example/ad.jpg' } });
+  assert.equal(missing.author, '');
+  assert.equal(missing.avatarUrl, '');
+});

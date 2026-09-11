@@ -1,15 +1,13 @@
 import asyncio
 import base64
-import io
 import contextlib
 import hmac
 from datetime import datetime, time as datetime_time, timedelta
 import os
 import re
 import time
-from pathlib import Path
 from zoneinfo import ZoneInfo
-from PIL import Image, ImageDraw, ImageFont
+from .video_card import render_video_card
 
 import aiohttp
 from aiohttp import web
@@ -1810,101 +1808,30 @@ class LongtuQqBridge(Star):
 
     async def _video_card(self, message: dict) -> str:
         cover = str(message.get("coverUrl") or "").strip()
-        title = str(message.get("title") or "").strip()
-        title = title or "视频分享"
+        avatar_url = str(message.get("avatarUrl") or "").strip()
         try:
-            image = None
+            cover_bytes = avatar_bytes = b""
             if cover.startswith(("http://", "https://")):
                 async with self.session.get(cover, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                    raw = await response.read()
-                image = Image.open(io.BytesIO(raw)).convert("RGB")
-                image.thumbnail((720, 390))
-            card = Image.new("RGB", (760, 560), "white")
-            draw = ImageDraw.Draw(card)
-            # Keep a CJK font with the plugin: the slim AstrBot image only
-            # contains DejaVu, whose missing Chinese glyphs render as boxes.
-            bundled_font = Path(__file__).resolve().parent / "assets" / "HiraginoSansGB.ttc"
-            font_candidates = (
-                str(bundled_font),
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            )
-            font = small = None
-            for font_path in font_candidates:
-                try:
-                    font = ImageFont.truetype(font_path, 30)
-                    small = ImageFont.truetype(font_path, 22)
-                    break
-                except (OSError, IOError):
-                    continue
-            if font is None:
-                font = small = ImageFont.load_default()
-            # Author row (provider author, or the person who shared it).
-            author = str(message.get("author") or "视频作者").strip()[:32]
-            avatar_url = str(message.get("avatarUrl") or "").strip()
+                    cover_bytes = await response.read()
             if avatar_url.startswith(("http://", "https://")):
                 try:
-                    async with self.session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=2)) as avatar_response:
-                        avatar = Image.open(io.BytesIO(await avatar_response.read())).convert("RGB")
-                    avatar.thumbnail((44, 44))
-                    card.paste(avatar, (24, 18))
-                except Exception:
-                    pass
-            draw.text((78, 22), author, fill="#333", font=small)
-            source = "小红书视频" if str(message.get("provider")) == "xiaohongshu" else "视频分享"
-            # The platform is represented by its native icon at right; do not
-            # add a redundant textual “小红书视频” label under the author.
-            # Compact platform mark in the top-right corner.  Drawing it
-            # locally keeps card generation fast and avoids another network
-            # dependency while still making the source immediately visible.
-            provider = str(message.get("provider") or "").lower()
-            if provider == "xiaohongshu":
-                badge, badge_text, badge_color = "小红书", "小红书", "#ff2442"
-                logo_url = "https://www.xiaohongshu.com/favicon.ico"
-            elif provider == "bilibili":
-                badge, badge_text, badge_color = "B", "哔哩哔哩", "#00aeec"
-                logo_url = "https://www.bilibili.com/favicon.ico"
-            else:
-                badge, badge_text, badge_color = "▶", "视频", "#666666"
-                logo_url = ""
-            badge_width = 92 if len(badge_text) > 1 else 54
-            logo_ok = False
-            if logo_url:
-                try:
-                    async with self.session.get(logo_url, timeout=aiohttp.ClientTimeout(total=2)) as logo_response:
-                        logo = Image.open(io.BytesIO(await logo_response.read())).convert("RGBA")
-                    logo.thumbnail((30, 30)); logo_ok = True
-                except Exception:
-                    pass
-            if logo_ok:
-                logo.thumbnail((46, 46)); card.paste(logo, (690, 14), logo)
-            lines = []
-            current = ""
-            for char in title[:80]:
-                if draw.textlength(current + char, font=font) > 710:
-                    lines.append(current); current = ""
-                current += char
-            if current: lines.append(current)
-            for index, line in enumerate(lines[:2]):
-                draw.text((24, 82 + index * 36), line, fill="#44208f", font=font)
-            cover_y = 160
-            if image is None:
-                image = Image.new("RGB", (720, 390), "#eeeaf7")
-                placeholder = ImageDraw.Draw(image)
-                placeholder.text((280, 175), "视频封面暂不可用", fill="#776b91", font=small)
-            card.paste(image, ((760 - image.width) // 2, cover_y))
-            # Render source/topic tags below the cover, like a share summary.
-            description = str(message.get("description") or "")
-            tags = re.findall(r"#[^\s#，。！？]{1,18}", description)
-            tag_text = "  ".join(tags[:4])
-            if str(message.get("provider")) == "bilibili" and description and not tag_text:
-                tag_text = description.replace("\n", " ").strip()[:120]
-            if tag_text:
-                draw.text((24, cover_y + image.height + 14), tag_text, fill="#c05a78", font=small)
-            output = io.BytesIO(); card.save(output, format="PNG", optimize=True)
-            return base64.b64encode(output.getvalue()).decode("ascii")
+                    async with self.session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=2)) as response:
+                        response.raise_for_status()
+                        avatar_bytes = await response.read()
+                except Exception as error:
+                    logger.warning(f"视频原作者头像下载失败：{type(error).__name__}")
+            png = render_video_card(message, cover_bytes, avatar_bytes)
+            logger.info(
+                f"视频分享卡片元数据：author={message.get('author') or ''} "
+                f"avatar={'yes' if avatar_bytes else 'no'} "
+                f"provider={message.get('provider') or ''} "
+                f"description_chars={len(message.get('description') or '')} "
+                f"tags={len(message.get('tags') or [])} bytes={len(png)}",
+            )
+            return base64.b64encode(png).decode("ascii")
         except Exception as error:
-            logger.warning(f"视频分享卡片生成失败，回退封面：{error}")
+            logger.warning(f"视频分享卡片生成失败：{error}")
             return ""
 
     @staticmethod
@@ -2377,9 +2304,7 @@ class LongtuQqBridge(Star):
                 if response.get("mode") == "media":
                     video_message = next((item for item in response.get("messages", [])
                                           if item.get("type") == "video"), {})
-                    # Provider metadata may not contain an author. In that
-                    # case identify the person who shared the link and use a
-                    # QQ avatar as the card's author row.
+                    # Card identity belongs to the source video author.
                     video_message = dict(video_message)
                     logger.info(
                         f"视频分享数据：title={str(video_message.get('title') or '')[:80]} "

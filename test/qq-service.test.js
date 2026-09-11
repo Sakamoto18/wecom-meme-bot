@@ -2669,6 +2669,20 @@ test('普通文字消息不能调用媒体解析器', async () => {
   assert.equal(resolves, 0);
 });
 
+test('视频卡片只透传原作者与正文话题，QQ发送者不覆盖作者', async () => {
+  const metadata = { url: 'https://cdn.example/v.mp4', title: '测试视频', author: '视频原作者',
+    avatarUrl: 'https://cdn.example/author.jpg', coverUrl: 'https://cdn.example/cover.jpg',
+    description: '正文 #话题', tags: ['话题'] };
+  const { service } = createService({ mediaResolver: { enabled: true, async resolve() { return metadata; } } });
+  const result = await service.handleMessage({ message_id: 'card-source-metadata', message_type: 'group',
+    group_id: '1109147947', user_id: '1079175957', sender_name: 'QQ分享者',
+    media_share: true, text: 'https://xhslink.com/m/share' });
+  for (const key of ['author', 'avatarUrl', 'coverUrl', 'description', 'tags']) {
+    assert.deepEqual(result.messages[0][key], metadata[key]);
+  }
+  assert.equal(result.messages[0].provider, 'xiaohongshu');
+});
+
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
   const received = [];
   const usageRequests = [];

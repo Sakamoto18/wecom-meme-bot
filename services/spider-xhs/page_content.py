@@ -30,10 +30,19 @@ def normalize_note(note):
         url = url or next((info.get('url') for info in infos if info.get('url')), None)
         if isinstance(url, str) and url.startswith(('https://', 'http://')) and url not in images:
             images.append(url)
+    user = note.get('user') or {}
+    tags = []
+    for tag in note.get('tagList', note.get('tag_list', [])) or []:
+        name = tag.get('name') if isinstance(tag, dict) else tag
+        if isinstance(name, str) and name.strip() and name.strip() not in tags:
+            tags.append(name.strip())
     content = {
         'title': str(note.get('title') or ''),
         'description': str(note.get('desc') or '').replace('[话题]', '').strip(),
         'cover': images[0] if images else '',
+        'author': str(user.get('nickname') or user.get('nickName') or ''),
+        'avatarUrl': str(user.get('avatar') or user.get('avatarUrl') or ''),
+        'tags': tags,
     }
     if kind == 'normal':
         if not images:
