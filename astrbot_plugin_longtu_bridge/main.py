@@ -2323,7 +2323,9 @@ class LongtuQqBridge(Star):
                     card = await self._video_card(video_message)
                     logger.info(f"视频分享卡片：{'generated' if card else 'fallback'}")
                     if card:
-                        reply_chain.insert(0, Comp.Image.fromBase64(card))
+                        # QQ may drop an image when it shares a MessageChain
+                        # with a video; send the generated card separately.
+                        yield event.chain_result([Comp.Image.fromBase64(card)])
                     cover = next((str(item.get("coverUrl") or "").strip()
                                   for item in response.get("messages", [])
                                   if item.get("type") == "video" and item.get("coverUrl")), "")
