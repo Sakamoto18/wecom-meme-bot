@@ -14,7 +14,7 @@ import {
   parseLongtuManagementCommand,
 } from './longtu-management.js';
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
-import { QqUsageLimitError } from './qq-usage-tracker.js';
+import { QqUsageLimitError, isDeepSeekPeakTime } from './qq-usage-tracker.js';
 import { generateConversationReply } from './reply-engine.js';
 import {
   isAdminStopCommand,
@@ -1250,6 +1250,18 @@ export class QqBotService {
           ?? 180_000,
       ),
     );
+    // 高峰时段（工作日 09:00-12:00、14:00-18:00 北京时间）DeepSeek 单价翻倍，
+    // 大型群的静默读空气在这几个小时里额外降频，明确 @/引用不走这条路径。
+    this.peakLargeGroupPassiveDecisionMultiplier = Math.max(
+      1,
+      Number(options.peakLargeGroupPassiveDecisionMultiplier ?? 3),
+    );
+    // 被点名后的连续话题窗口原本不受冷却限制，大型群高峰时段改为至少间隔
+    // 这么久才允许再判定一次“跟话题插话”。
+    this.peakLargeGroupEngagementDecisionCooldownMs = Math.max(
+      0,
+      Number(options.peakLargeGroupEngagementDecisionCooldownMs ?? 30_000),
+    );
     this.largeGroupHistoryMessages = Math.max(
       2,
       Number(options.largeGroupHistoryMessages ?? 20),
@@ -1257,6 +1269,16 @@ export class QqBotService {
     this.largeGroupHistoryCharacters = Math.max(
       1_000,
       Number(options.largeGroupHistoryCharacters ?? 8_000),
+    );
+    // 判定调用的输出只有几个 token，成本几乎全在随调用附带的群聊上下文，
+    // 因此高峰时段只压缩判定用的上下文，回复生成仍使用完整预算。
+    this.peakLargeGroupHistoryMessages = Math.max(
+      2,
+      Number(options.peakLargeGroupHistoryMessages ?? 10),
+    );
+    this.peakLargeGroupHistoryCharacters = Math.max(
+      1_000,
+      Number(options.peakLargeGroupHistoryCharacters ?? 4_000),
     );
     // Background summaries/member-memory summaries are opt-in for all groups;
     // passive observation must not silently create extra LLM calls.
@@ -1335,22 +1357,42 @@ export class QqBotService {
     return false;
   }
 
-  historyForGroup(groupId, history) {
-    return this.isLargeGroup(groupId)
-      ? fitUsageHistory(
-        history,
-        this.largeGroupHistoryMessages,
-        this.largeGroupHistoryCharacters,
-      )
-      : history;
+  historyForGroup(groupId, history, { passiveDecision = false } = {}) {
+    if (!this.isLargeGroup(groupId)) return history;
+    const peakDecision = passiveDecision && isDeepSeekPeakTime(this.now());
+    return fitUsageHistory(
+      history,
+      peakDecision
+        ? Math.min(this.peakLargeGroupHistoryMessages, this.largeGroupHistoryMessages)
+        : this.largeGroupHistoryMessages,
+      peakDecision
+        ? Math.min(this.peakLargeGroupHistoryCharacters, this.largeGroupHistoryCharacters)
+        : this.largeGroupHistoryCharacters,
+    );
   }
 
-  shouldRunPassiveDecision(groupId) {
+  passiveDecisionCooldownMs(groupId, { engaged = false } = {}) {
+    const peakLargeGroup = this.isLargeGroup(groupId)
+      && isDeepSeekPeakTime(this.now());
+    if (engaged) {
+      // 连续话题窗口内平时不设冷却，只有大型群高峰时段加一条下限。
+      return peakLargeGroup ? this.peakLargeGroupEngagementDecisionCooldownMs : 0;
+    }
+    return peakLargeGroup
+      ? this.groupPassiveDecisionCooldownMs
+        * this.peakLargeGroupPassiveDecisionMultiplier
+      : this.groupPassiveDecisionCooldownMs;
+  }
+
+  shouldRunPassiveDecision(groupId, { engaged = false } = {}) {
     const normalizedGroupId = String(groupId ?? '').trim();
     if (!normalizedGroupId) return false;
     const now = this.now();
+    const cooldownMs = this.passiveDecisionCooldownMs(normalizedGroupId, {
+      engaged,
+    });
     const lastAt = this.lastGroupPassiveDecisionAt.get(normalizedGroupId) ?? 0;
-    if (lastAt && now - lastAt < this.groupPassiveDecisionCooldownMs) {
+    if (lastAt && now - lastAt < cooldownMs) {
       return false;
     }
     this.lastGroupPassiveDecisionAt.set(normalizedGroupId, now);
@@ -2211,7 +2253,12 @@ export class QqBotService {
       ...payload,
       isPeerBot: this.isPeerBotMessage(payload),
     });
-    if (!engagement && !peerBotMessage && !this.shouldRunPassiveDecision(payload.groupId)) {
+    const directHumanEngagement = this.isDirectHumanEngagementTrigger(payload);
+    if (!peerBotMessage
+      && !directHumanEngagement
+      && !this.shouldRunPassiveDecision(payload.groupId, {
+        engaged: Boolean(engagement),
+      })) {
       return this.observeMessage(payload, message);
     }
 
@@ -2229,6 +2276,7 @@ export class QqBotService {
       history: this.historyForGroup(
         payload.groupId,
         this.conversationStore.get(conversationId),
+        { passiveDecision: true },
       ),
     });
     if (!decision.reply) {
