@@ -14,14 +14,14 @@ export function normalizeXhsProviderData(data = {}) {
   const mediaUrl = gallery ? '' : normalizeMediaUrl(data.video_url || data.videoUrl);
   if (kind === 'video' && !mediaUrl) throw new Error('视频笔记没有可用视频流，不能将封面作为图文发送');
   const rawImages = data.images || data.image_list;
-  const images = mediaUrl ? [] : [...new Set((Array.isArray(rawImages) ? rawImages : [])
+  const images = [...new Set((Array.isArray(rawImages) ? rawImages : [])
     .map((item) => normalizeMediaUrl(typeof item === 'string' ? item : item?.url_default || item?.url || item?.original_url))
     .filter(Boolean))].slice(0, 18);
   if (!mediaUrl && !images.length) throw new Error('Spider_XHS Provider 未返回媒体');
-  const user = data.user || data.author || {};
+  const user = data.user || data.author || data.user_info || data.userInfo || {};
   return { mediaUrl, images, coverUrl: normalizeMediaUrl(data.cover || data.cover_url || data.coverUrl || images[0] || ''), title: String(data.title || ''),
-    author: String(data.author_name || data.authorName || data.nickname || user.nickname || user.name || ''),
-    avatarUrl: normalizeMediaUrl(data.author_avatar || data.avatar || user.avatar || user.avatar_url || ''),
+    author: String(data.author_name || data.authorName || data.nickname || user.nickname || user.name || user.nick_name || ''),
+    avatarUrl: normalizeMediaUrl(data.author_avatar || data.avatar || user.avatar || user.avatar_url || user.image || ''),
     description: String(data.description || data.desc || '').replaceAll('[话题]', '').slice(0, 4000) };
 }
 
@@ -98,8 +98,8 @@ export function createXhsProvider(options = {}) {
       images,
       coverUrl: normalizeMediaUrl(result.data?.cover),
       title: String(result.data?.title || ''),
-      author: String(result.data?.author_name || result.data?.authorName || result.data?.nickname || result.data?.user?.nickname || ''),
-      avatarUrl: normalizeMediaUrl(result.data?.author_avatar || result.data?.avatar || result.data?.user?.avatar || ''),
+      author: String(result.data?.author_name || result.data?.authorName || result.data?.nickname || result.data?.user?.nickname || result.data?.user_info?.nickname || ''),
+      avatarUrl: normalizeMediaUrl(result.data?.author_avatar || result.data?.avatar || result.data?.user?.avatar || result.data?.user_info?.avatar || ''),
       description: String(result.data?.description || '').slice(0, 4000),
       watermarked: result.data?.watermarked === true,
     };
