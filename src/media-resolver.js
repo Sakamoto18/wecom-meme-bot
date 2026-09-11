@@ -310,6 +310,7 @@ export class MediaResolver {
       coverUrl: value.coverUrl || '',
       author: value.author || '',
       avatarUrl: value.avatarUrl || '',
+      description: value.description || '',
       duration: positive(value.duration),
       extractor: 'bilibili-stream-proxy',
       downloadBytes: 0,
