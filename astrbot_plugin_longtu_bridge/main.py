@@ -1840,7 +1840,7 @@ class LongtuQqBridge(Star):
             if font is None:
                 font = small = ImageFont.load_default()
             # Author row (provider author, or the person who shared it).
-            author = str(message.get("author") or message.get("senderName") or "视频分享").strip()[:32]
+            author = str(message.get("author") or "视频作者").strip()[:32]
             avatar_url = str(message.get("avatarUrl") or "").strip()
             if avatar_url.startswith(("http://", "https://")):
                 try:
@@ -1852,7 +1852,8 @@ class LongtuQqBridge(Star):
                     pass
             draw.text((78, 22), author, fill="#333", font=small)
             source = "小红书视频" if str(message.get("provider")) == "xiaohongshu" else "视频分享"
-            draw.text((78, 50), source, fill="#d34b68" if "小红书" in source else "#888", font=small)
+            # The platform is represented by its native icon at right; do not
+            # add a redundant textual “小红书视频” label under the author.
             # Compact platform mark in the top-right corner.  Drawing it
             # locally keeps card generation fast and avoids another network
             # dependency while still making the source immediately visible.
@@ -2378,10 +2379,6 @@ class LongtuQqBridge(Star):
                     # case identify the person who shared the link and use a
                     # QQ avatar as the card's author row.
                     video_message = dict(video_message)
-                    video_message.setdefault("senderName", str(event.get_sender_name() or "").strip())
-                    sender_id = str(event.get_sender_id() or "").strip()
-                    if sender_id:
-                        video_message.setdefault("avatarUrl", f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=100")
                     logger.info(
                         f"视频分享数据：title={str(video_message.get('title') or '')[:80]} "
                         f"cover={'yes' if video_message.get('coverUrl') else 'no'}",
