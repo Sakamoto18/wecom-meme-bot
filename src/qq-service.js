@@ -2830,6 +2830,7 @@ export class QqBotService {
             type: 'video',
             url: resolved.url,
             title: resolved.title,
+            coverUrl: resolved.coverUrl || '',
             duration: resolved.duration,
             provider: candidate.provider,
           }],
