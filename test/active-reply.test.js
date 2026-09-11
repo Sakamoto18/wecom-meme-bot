@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { OpenAICompatibleChatClient } from '../src/chat-client.js';
 import {
   ActiveReplyDecider,
   isAdminStopCommand,
@@ -22,6 +23,41 @@ function groupPayload(overrides = {}) {
     ...overrides,
   };
 }
+
+test('两层中立判定复用真实请求前缀，保留全部上下文且不加载人格', async () => {
+  const requests = [];
+  const client = new OpenAICompatibleChatClient({
+    apiKey: 'test', baseUrl: 'https://example.test', model: 'test',
+    systemPrompt: 'PERSONALITY_MUST_NOT_LEAK',
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: requests.length === 1 ? 'may' : 'speak' } }],
+      }), { status: 200 });
+    },
+  });
+  const decider = new ActiveReplyDecider({
+    chatClient: client, enabled: true, candidateProbability: 1,
+    questionProbability: 1, random: () => 0, now: () => 100_000,
+  });
+  const result = await decider.shouldReply({
+    payload: groupPayload({ text: '这个周末能发布吗？' }),
+    history: [{ role: 'user', content: 'HISTORY_SENTINEL：还差一次回归' }],
+  });
+  assert.equal(result.reply, true);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].messages.slice(0, 2), requests[1].messages.slice(0, 2));
+  for (const request of requests) {
+    assert.deepEqual(request.messages.map((m) => m.role), ['system', 'user', 'system', 'user']);
+    assert.match(request.messages[0].content, /不可信资料/);
+    assert.match(request.messages[1].content, /HISTORY_SENTINEL/);
+    assert.match(request.messages[1].content, /这个周末能发布吗/);
+    assert.equal(JSON.stringify(request).split('HISTORY_SENTINEL').length - 1, 1);
+    assert.doesNotMatch(JSON.stringify(request), /PERSONALITY_MUST_NOT_LEAK/);
+  }
+  assert.match(requests[0].messages[2].content, /must、may 或 no/);
+  assert.match(requests[1].messages[2].content, /speak 或 skip/);
+});
 
 test('主动回复判定使用中立规则和近期群聊，AI 返回 must 时放行', async () => {
   const calls = [];
@@ -53,8 +89,8 @@ test('主动回复判定使用中立规则和近期群聊，AI 返回 must 时�
   assert.doesNotMatch(calls[0].options.systemPrompt, /互联网文化/);
   assert.match(calls[0].options.systemPrompt, /不加载机器人聊天人格/);
   assert.match(calls[0].options.systemPrompt, /must、may 或 no/);
-  assert.match(calls[0].input, /最近群聊/);
-  assert.match(calls[0].input, /当前消息/);
+  assert.match(calls[0].options.sharedContext, /最近群聊/);
+  assert.match(calls[0].options.sharedContext, /当前消息/);
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
 });
 
@@ -398,7 +434,7 @@ test('may 候选按上下文语义价值复核，不维护低信息关键词黑�
   assert.equal(calls.length, 2);
   assert.match(calls[1].options.systemPrompt, /不得按固定关键词、字数或句式/);
   assert.doesNotMatch(calls[1].options.systemPrompt, /毒舌吐槽/);
-  assert.match(calls[1].input, /这个周末能发布吗/);
+  assert.match(calls[1].options.sharedContext, /这个周末能发布吗/);
   assert.match(calls[1].input, /复核机器人是否应主动发言/);
 });
 

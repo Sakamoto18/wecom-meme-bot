@@ -104,7 +104,7 @@ test('日报总计包含私聊用量，但群排行只展示群聊聚合', async
     assert.equal(report.totals.totalTokens, 440);
     assert.equal(report.privateUsage.llmCalls, 1);
     assert.equal(report.privateUsage.totalTokens, 220);
-    assert.equal(report.privateUsage.estimatedCostCny, 0.00039);
+    assert.equal(report.privateUsage.estimatedCostCny, 0.00028);
   } finally {
     fixture.close();
   }
@@ -246,12 +246,12 @@ test('大型群只给二次风格复核保留百分比预算并估算节省', as
     assert.equal(group.secondaryReviewCalls, 1);
     assert.equal(group.skippedSecondaryReviews, 4);
     assert.equal(group.estimatedSavedTokens, 4_400);
-    assert.equal(group.estimatedSavedCostCny, 0.00316);
+    assert.equal(group.estimatedSavedCostCny, 0.002464);
     assert.equal(report.totals.primaryReplyCalls, 5);
     assert.equal(report.totals.secondaryReviewCalls, 1);
     assert.equal(report.totals.skippedSecondaryReviews, 4);
     assert.equal(report.totals.estimatedSavedTokens, 4_400);
-    assert.equal(report.totals.estimatedSavedCostCny, 0.00316);
+    assert.equal(report.totals.estimatedSavedCostCny, 0.002464);
     assert.equal(report.largeGroupSecondaryReviewPercent, 20);
   } finally {
     fixture.close();
@@ -290,16 +290,50 @@ test('DeepSeek V4 Flash 按调用发生时间分别计算高峰与空闲费用',
       group.groupId === 'off-peak-group'
     ));
 
-    assert.equal(peak.estimatedCostCny, 3.32);
-    assert.equal(peak.peakCostCny, 3.32);
-    assert.equal(offPeak.estimatedCostCny, 1.66);
-    assert.equal(offPeak.offPeakCostCny, 1.66);
-    assert.equal(report.pricing.estimatedCostCny, 4.98);
-    assert.equal(report.pricing.cachedInputCostCny, 0.03);
-    assert.equal(report.pricing.uncachedInputCostCny, 3.6);
-    assert.equal(report.pricing.outputCostCny, 1.35);
+    assert.equal(peak.estimatedCostCny, 2.408);
+    assert.equal(peak.peakCostCny, 2.408);
+    assert.equal(offPeak.estimatedCostCny, 1.204);
+    assert.equal(offPeak.offPeakCostCny, 1.204);
+    assert.equal(report.pricing.estimatedCostCny, 3.612);
+    assert.equal(report.pricing.cachedInputCostCny, 0.012);
+    assert.equal(report.pricing.uncachedInputCostCny, 2.4);
+    assert.equal(report.pricing.outputCostCny, 1.2);
     assert.deepEqual(report.pricing.models, ['deepseek-v4-flash']);
     assert.equal(report.pricing.unpricedCalls, 0);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('现用模型名 deepseek-flash 按 Flash 价计价而不落入未计价', async () => {
+  const now = Date.UTC(2026, 8, 10, 2); // 北京时间周四 10:00，高峰。
+  const fixture = createTracker({ now: () => now });
+  const client = fixture.tracker.wrapChatClient({
+    model: 'deepseek-flash',
+    isConfigured: true,
+    async complete(_history, _content, options) {
+      options.onUsage({
+        usage: {
+          prompt_tokens: 1_000_000,
+          completion_tokens: 100_000,
+          prompt_cache_hit_tokens: 200_000,
+        },
+      });
+      return 'ok';
+    },
+  });
+
+  try {
+    await fixture.tracker.runWithContext({ groupId: 'flash-group' }, () => (
+      client.complete([], 'hi')
+    ));
+    const report = fixture.tracker.getReport();
+
+    // 高峰：缓存命中 0.2M×0.04 + 未命中 0.8M×2 + 输出 0.1M×8。
+    assert.equal(report.pricing.estimatedCostCny, 2.408);
+    assert.equal(report.pricing.unpricedCalls, 0);
+    assert.equal(report.pricing.unpricedTokens, 0);
+    assert.deepEqual(report.pricing.models, ['deepseek-flash']);
   } finally {
     fixture.close();
   }

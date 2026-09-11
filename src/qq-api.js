@@ -434,6 +434,10 @@ export async function createQqRuntime() {
       process.env.QQ_USAGE_PASSIVE_TOKEN_BUDGET_PERCENT,
       70,
     ),
+    peakPassiveTokenBudgetPercent: parseNonnegativeInteger(
+      process.env.QQ_USAGE_PEAK_PASSIVE_TOKEN_BUDGET_PERCENT,
+      40,
+    ),
     largeGroupSecondaryReviewPercent: parseNonnegativeInteger(
       process.env.QQ_USAGE_LARGE_GROUP_SECONDARY_REVIEW_PERCENT,
       20,
@@ -662,6 +666,14 @@ export async function createQqRuntime() {
     longtuLibrary,
     adminUsers,
     protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
+    // 本地 OCR 默认开启：镜像内已带 tesseract，缺失时会自动退回纯视觉识别。
+    imageOcrEnabled: process.env.QQ_IMAGE_OCR_ENABLED?.trim() !== 'false',
+    imageOcrCommand: process.env.QQ_IMAGE_OCR_COMMAND?.trim() || 'tesseract',
+    imageOcrLanguages: process.env.QQ_IMAGE_OCR_LANGUAGES?.trim() || 'chi_sim+eng',
+    imageOcrTimeoutMs: parseNonnegativeInteger(
+      process.env.QQ_IMAGE_OCR_TIMEOUT_MS,
+      20_000,
+    ),
     activeReplyDecider,
     repeatDetector,
     peerBotContinuationDecider,
@@ -693,12 +705,25 @@ export async function createQqRuntime() {
       process.env.QQ_USAGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS
         ?? process.env.QQ_USAGE_LARGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS,
     ) ?? 180) * 1000,
+    peakLargeGroupPassiveDecisionMultiplier: parsePositiveNumber(
+      process.env.QQ_USAGE_PEAK_LARGE_GROUP_PASSIVE_DECISION_MULTIPLIER,
+    ) ?? 3,
+    peakLargeGroupEngagementDecisionCooldownMs: (parseNonnegativeInteger(
+      process.env.QQ_USAGE_PEAK_LARGE_GROUP_ENGAGEMENT_DECISION_COOLDOWN_SECONDS,
+      30,
+    )) * 1000,
     largeGroupHistoryMessages: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_HISTORY_MESSAGES,
     ) ?? 20,
     largeGroupHistoryCharacters: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_HISTORY_CHARACTERS,
     ) ?? 8_000,
+    peakLargeGroupHistoryMessages: parsePositiveInteger(
+      process.env.QQ_USAGE_PEAK_LARGE_GROUP_HISTORY_MESSAGES,
+    ) ?? 10,
+    peakLargeGroupHistoryCharacters: parsePositiveInteger(
+      process.env.QQ_USAGE_PEAK_LARGE_GROUP_HISTORY_CHARACTERS,
+    ) ?? 4_000,
     groupBackgroundSummariesEnabled: parseBoolean(
       process.env.QQ_USAGE_GROUP_BACKGROUND_SUMMARIES_ENABLED
         ?? process.env.QQ_USAGE_LARGE_GROUP_BACKGROUND_SUMMARIES_ENABLED,

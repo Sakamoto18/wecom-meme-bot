@@ -528,13 +528,14 @@ export class ActiveReplyDecider {
     };
   }
 
-  async evaluateOptionalValue(decisionInput) {
+  async evaluateOptionalValue(decisionInput, sharedContext) {
     if (!this.semanticValueGateEnabled) {
       return { speak: true, reason: 'semantic-value-gate-disabled' };
     }
     try {
       const answer = await this.chatClient.complete([], decisionInput, {
         systemPrompt: OPTIONAL_VALUE_SYSTEM_PROMPT,
+        sharedContext,
         maxTokens: 4,
         usageSource: 'active-value-gate',
         timeoutMs: this.timeoutMs,
@@ -631,13 +632,17 @@ export class ActiveReplyDecider {
       `内容：${String(input.currentContent ?? payload.text ?? '').trim()}`,
       ...signalSummary.map((signal) => `程序信号：${signal}`),
     ].filter(Boolean).join('\n');
-    const decisionInput = `${conversationInput}\n现在判断机器人接话的优先级。`;
-    const optionalValueInput = `${conversationInput}\n现在复核机器人是否应主动发言。`;
+    // Both neutral tasks read exactly the same context. Put it ahead of the
+    // task-specific rules so the second request can reuse the first prefix.
+    // Final reply/personality requests do not use this layout.
+    const decisionInput = '现在判断机器人接话的优先级。';
+    const optionalValueInput = '现在复核机器人是否应主动发言。';
 
     let decision;
     try {
       const answer = await this.chatClient.complete([], decisionInput, {
         systemPrompt: DECISION_SYSTEM_PROMPT,
+        sharedContext: conversationInput,
         maxTokens: 8,
         usageSource: 'active-reply-decision',
         timeoutMs: this.timeoutMs,
@@ -684,7 +689,7 @@ export class ActiveReplyDecider {
         );
       }
       if (decision === 'may') {
-        const value = await this.evaluateOptionalValue(optionalValueInput);
+        const value = await this.evaluateOptionalValue(optionalValueInput, conversationInput);
         if (!value.speak) {
           return { reply: false, reason: `engagement-${value.reason}` };
         }
@@ -733,7 +738,7 @@ export class ActiveReplyDecider {
       return { reply: false, reason: 'probability' };
     }
 
-    const value = await this.evaluateOptionalValue(optionalValueInput);
+    const value = await this.evaluateOptionalValue(optionalValueInput, conversationInput);
     if (!value.speak) {
       return { reply: false, reason: value.reason };
     }

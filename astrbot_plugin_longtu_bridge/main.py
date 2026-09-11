@@ -28,6 +28,12 @@ GROUP_INFO_CACHE_TTL_SECONDS = 10 * 60
 GROUP_INFO_CACHE_MAX_ENTRIES = 512
 MAX_IMAGE_COMPONENTS = 12
 MAX_FORWARD_IMAGE_BYTES = 32 * 1024 * 1024
+# get_image 只是为了拿原图而非缩略图，失败时直接下载同样能取到内容。
+# NapCat 这个 action 一旦不响应，每张图都白等满超时：12 张图能拖到 4 分钟，
+# 所以这里给一个短超时，并在连续失败后短路掉后续调用。
+GET_IMAGE_TIMEOUT_SECONDS = 3
+GET_IMAGE_FAILURE_THRESHOLD = 3
+GET_IMAGE_CIRCUIT_RESET_SECONDS = 300
 RECENT_IMAGE_CACHE_TTL_SECONDS = 10 * 60
 RECENT_IMAGE_CACHE_MAX_ENTRIES = 256
 RECENT_IMAGE_CACHE_MAX_BASE64_CHARACTERS = 24 * 1024 * 1024 * 4 // 3
@@ -73,6 +79,9 @@ class LongtuQqBridge(Star):
         self.report_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
         self.internal_send_runner: web.AppRunner | None = None
+        # get_image 熔断状态：连续失败到阈值后在一段时间内直接走下载回退。
+        self.get_image_failures = 0
+        self.get_image_circuit_until = 0.0
 
     async def initialize(self):
         timeout_seconds = max(
@@ -1396,6 +1405,32 @@ class LongtuQqBridge(Star):
             return ""
         return base64.b64encode(body).decode("ascii")
 
+    def _get_image_circuit_open(self) -> bool:
+        """连续失败后短暂跳过 get_image，避免每张图重复等满超时。"""
+        if self.get_image_failures < GET_IMAGE_FAILURE_THRESHOLD:
+            return False
+        if time.monotonic() >= self.get_image_circuit_until:
+            # 冷却结束，放一次探测请求决定是否恢复。
+            self.get_image_failures = 0
+            return False
+        return True
+
+    def _note_get_image_failure(self, error: BaseException) -> None:
+        self.get_image_failures += 1
+        if self.get_image_failures == GET_IMAGE_FAILURE_THRESHOLD:
+            self.get_image_circuit_until = (
+                time.monotonic() + GET_IMAGE_CIRCUIT_RESET_SECONDS
+            )
+            logger.warning(
+                f"NapCat get_image 连续 {self.get_image_failures} 次失败"
+                f"（{type(error).__name__}），"
+                f"接下来 {GET_IMAGE_CIRCUIT_RESET_SECONDS} 秒改用直接下载取图",
+            )
+        else:
+            logger.debug(
+                f"合并转发原图 API 读取失败，回退直接下载：{type(error).__name__}",
+            )
+
     async def _forward_image_base64(
         self,
         event: AstrMessageEvent,
@@ -1420,7 +1455,8 @@ class LongtuQqBridge(Star):
         if (file_ref
                 and not file_ref.startswith(("http://", "https://", "base64://", "data:"))
                 and bot
-                and callable(getattr(bot, "call_action", None))):
+                and callable(getattr(bot, "call_action", None))
+                and not self._get_image_circuit_open()):
             try:
                 result = await asyncio.wait_for(
                     bot.call_action(
@@ -1428,11 +1464,12 @@ class LongtuQqBridge(Star):
                         file=file_ref,
                         **routing_params,
                     ),
-                    timeout=20,
+                    timeout=GET_IMAGE_TIMEOUT_SECONDS,
                 )
             except Exception as error:
-                logger.debug(f"合并转发原图 API 读取失败，回退直接下载：{type(error).__name__}")
+                self._note_get_image_failure(error)
             else:
+                self.get_image_failures = 0
                 if isinstance(result, dict):
                     for key in ("base64", "file", "url"):
                         await collect(result.get(key))
