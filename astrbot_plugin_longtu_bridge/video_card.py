@@ -91,7 +91,11 @@ def render_video_card(message, cover_bytes=b"", avatar_bytes=b""):
     if avatar_bytes:
         avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
         avatar = ImageOps.fit(avatar, (44, 44), method=Image.Resampling.LANCZOS)
-        card.paste(avatar, (padding, 20))
+        # Supersample the circular mask for a smooth edge at the displayed size.
+        mask = Image.new("L", (176, 176), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, 175, 175), fill=255)
+        mask = mask.resize(avatar.size, Image.Resampling.LANCZOS)
+        card.paste(avatar, (padding, 20), mask)
     while author and small.getlength(author) > 490:
         author = author[:-2] + "…"
     if author:
