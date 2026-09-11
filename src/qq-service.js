@@ -2833,6 +2833,7 @@ export class QqBotService {
             coverUrl: resolved.coverUrl || '',
             author: resolved.author || '',
             avatarUrl: resolved.avatarUrl || '',
+            description: resolved.description || '',
             duration: resolved.duration,
             provider: candidate.provider,
           }],
