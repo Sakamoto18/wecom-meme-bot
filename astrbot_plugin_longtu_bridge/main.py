@@ -1821,7 +1821,9 @@ class LongtuQqBridge(Star):
             card = Image.new("RGB", (760, 560), "white")
             card.paste(image, ((760 - image.width) // 2, 110))
             draw = ImageDraw.Draw(card)
-            font_path = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
+            # AstrBot's slim image ships DejaVu by default; use it as a
+            # guaranteed fallback when CJK fonts are not installed.
+            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
             font = ImageFont.truetype(font_path,  thirty := 30)
             small = ImageFont.truetype(font_path, 22)
             draw.text((24, 20), "视频分享", fill="#777", font=small)
