@@ -307,6 +307,7 @@ export class MediaResolver {
       url: `${this.publicBaseUrl}/v1/qq/media/${id}`,
       mediaId: id,
       title: value.title || '',
+      coverUrl: value.coverUrl || '',
       duration: positive(value.duration),
       extractor: 'bilibili-stream-proxy',
       downloadBytes: 0,
@@ -463,6 +464,7 @@ export class MediaResolver {
           }
         }
         downloaded.title ||= publicMetadata.title || '';
+        downloaded.coverUrl ||= publicMetadata.coverUrl || '';
         return this.registerMedia(downloaded);
       } finally {
         this.releaseSlot();
