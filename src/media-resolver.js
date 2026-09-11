@@ -340,7 +340,14 @@ export class MediaResolver {
     if (!key) throw new Error('媒体地址为空');
     await this.cleanupExpired();
     const cached = this.cache.get(key);
-    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    if (cached && cached.expiresAt > Date.now()) {
+      // Do not reuse legacy direct-video entries that predate cover/title
+      // propagation; they cannot produce a share card.
+      if (cached.value?.url && (cached.value.title || cached.value.coverUrl)) {
+        return cached.value;
+      }
+      this.cache.delete(key);
+    }
     if (cached) this.cache.delete(key);
     if (this.inflight.has(key)) return this.inflight.get(key);
 
