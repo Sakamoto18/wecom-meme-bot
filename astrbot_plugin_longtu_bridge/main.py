@@ -1859,12 +1859,25 @@ class LongtuQqBridge(Star):
             provider = str(message.get("provider") or "").lower()
             if provider == "xiaohongshu":
                 badge, badge_text, badge_color = "小红书", "小红书", "#ff2442"
+                logo_url = "https://www.xiaohongshu.com/favicon.ico"
             elif provider == "bilibili":
                 badge, badge_text, badge_color = "B", "哔哩哔哩", "#00aeec"
+                logo_url = "https://www.bilibili.com/favicon.ico"
             else:
                 badge, badge_text, badge_color = "▶", "视频", "#666666"
+                logo_url = ""
             badge_width = 92 if len(badge_text) > 1 else 54
+            logo_ok = False
+            if logo_url:
+                try:
+                    async with self.session.get(logo_url, timeout=aiohttp.ClientTimeout(total=2)) as logo_response:
+                        logo = Image.open(io.BytesIO(await logo_response.read())).convert("RGBA")
+                    logo.thumbnail((30, 30)); logo_ok = True
+                except Exception:
+                    pass
             draw.rounded_rectangle((760 - badge_width - 24, 20, 736, 54), radius=10, fill=badge_color)
+            if logo_ok:
+                card.paste(logo, (760 - badge_width - 20, 22), logo)
             draw.text((760 - badge_width - 16, 24), badge_text, fill="white", font=small)
             lines = []
             current = ""
