@@ -102,8 +102,18 @@ export async function resolveBilibiliMedia(value, {
     .filter((item) => normalizeMediaUrl(item?.url))
     .sort((left, right) => Number(right.size || 0) - Number(left.size || 0))[0];
   if (!stream) throw new Error('B站公开播放接口没有返回 MP4 流');
+  // The API may put a slow edge/P2P node first while supplying fast UPOS
+  // alternatives. Use only those original signed URLs; keep the primary as fallback.
+  const mediaUrls = [...new Set([stream.url, ...(Array.isArray(stream.backup_url) ? stream.backup_url : [])]
+    .map(normalizeMediaUrl).filter(Boolean))];
+  const priority = (url) => {
+    const host = new URL(url).hostname;
+    return host.startsWith('upos-') && host.endsWith('.bilivideo.com') ? 0 : 1;
+  };
+  mediaUrls.sort((left, right) => priority(left) - priority(right));
   return {
-    mediaUrl: normalizeMediaUrl(stream.url),
+    mediaUrl: mediaUrls[0],
+    backupMediaUrls: mediaUrls.slice(1),
     size: Number(stream.size || 0),
     title: String(metadata.title || '').slice(0, 200),
     description: String(metadata.desc || '').slice(0, 4000),

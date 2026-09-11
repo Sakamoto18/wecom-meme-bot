@@ -299,6 +299,7 @@ export class MediaResolver {
     const expiresAt = Date.now() + this.cacheTtlMs;
     this.mediaFiles.set(id, {
       remoteUrl: value.mediaUrl,
+      backupUrls: value.backupMediaUrls || [],
       requestHeaders: value.requestHeaders || {},
       expiresAt,
       size: positive(value.size),
