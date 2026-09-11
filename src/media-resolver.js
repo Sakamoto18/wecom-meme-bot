@@ -359,6 +359,7 @@ export class MediaResolver {
               return {
                 url: provided.mediaUrl,
                 title: provided.title || '',
+                coverUrl: provided.coverUrl || '',
                 duration: positive(provided.duration),
                 extractor: 'provider-direct',
                 downloadBytes: 0,
@@ -369,6 +370,7 @@ export class MediaResolver {
             if (provided?.images?.length) {
               return {
                 images: provided.images, title: provided.title || '',
+                coverUrl: provided.coverUrl || '',
                 description: provided.description || '', extractor: 'provider-gallery',
                 downloadBytes: 0, outputBytes: 0, direct: true,
               };
