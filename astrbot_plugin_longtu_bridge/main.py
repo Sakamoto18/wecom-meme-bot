@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import io
 import contextlib
 import hmac
 from datetime import datetime, time as datetime_time, timedelta
@@ -7,6 +8,7 @@ import os
 import re
 import time
 from zoneinfo import ZoneInfo
+from PIL import Image, ImageDraw, ImageFont
 
 import aiohttp
 from aiohttp import web
@@ -1805,6 +1807,38 @@ class LongtuQqBridge(Star):
                 raise RuntimeError("QQ Bot API 返回格式无效")
             return body
 
+    async def _video_card(self, message: dict) -> str:
+        cover = str(message.get("coverUrl") or "").strip()
+        title = str(message.get("title") or "").strip()
+        if not cover or not title or not cover.startswith(("http://", "https://")):
+            return ""
+        try:
+            async with self.session.get(cover, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                raw = await response.read()
+            image = Image.open(io.BytesIO(raw)).convert("RGB")
+            image.thumbnail((720, 420))
+            card = Image.new("RGB", (760, 560), "white")
+            card.paste(image, ((760 - image.width) // 2, 110))
+            draw = ImageDraw.Draw(card)
+            font_path = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"
+            font = ImageFont.truetype(font_path,  thirty := 30)
+            small = ImageFont.truetype(font_path, 22)
+            draw.text((24, 20), "视频分享", fill="#777", font=small)
+            lines = []
+            current = ""
+            for char in title[:80]:
+                if draw.textlength(current + char, font=font) > 710:
+                    lines.append(current); current = ""
+                current += char
+            if current: lines.append(current)
+            for index, line in enumerate(lines[:2]):
+                draw.text((24, 55 + index * 36), line, fill="#44208f", font=font)
+            output = io.BytesIO(); card.save(output, format="PNG", optimize=True)
+            return base64.b64encode(output.getvalue()).decode("ascii")
+        except Exception as error:
+            logger.warning(f"视频分享卡片生成失败，回退封面：{error}")
+            return ""
+
     @staticmethod
     def _reply_chain_from_backend(response: dict) -> list:
         reply_chain = []
@@ -2273,10 +2307,15 @@ class LongtuQqBridge(Star):
             # the image is not dropped after the text response has been sent.
             if reply_chain:
                 if response.get("mode") == "media":
+                    video_message = next((item for item in response.get("messages", [])
+                                          if item.get("type") == "video"), {})
+                    card = await self._video_card(video_message)
+                    if card:
+                        reply_chain.insert(0, Comp.Image.fromBase64(card))
                     cover = next((str(item.get("coverUrl") or "").strip()
                                   for item in response.get("messages", [])
                                   if item.get("type") == "video" and item.get("coverUrl")), "")
-                    if cover.startswith(("http://", "https://")):
+                    if cover.startswith(("http://", "https://")) and not card:
                         try:
                             reply_chain.insert(0, Comp.Image(file=cover))
                         except TypeError:
@@ -2284,7 +2323,7 @@ class LongtuQqBridge(Star):
                     title = next((str(item.get("title") or "").strip()
                                   for item in response.get("messages", [])
                                   if item.get("type") == "video" and item.get("title")), "")
-                    if title and not cover:
+                    if title and not cover and not card:
                         yield event.plain_result(title[:200])
                 # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
                 # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
