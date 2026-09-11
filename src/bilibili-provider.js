@@ -102,20 +102,10 @@ export async function resolveBilibiliMedia(value, {
     .filter((item) => normalizeMediaUrl(item?.url))
     .sort((left, right) => Number(right.size || 0) - Number(left.size || 0))[0];
   if (!stream) throw new Error('B站公开播放接口没有返回 MP4 流');
-  let title = String(metadata.title || '').trim();
-  if (!title) {
-    try {
-      const page = await fetchImpl(`https://www.bilibili.com/video/${id.bvid || `av${id.aid}`}`, {
-        headers: HEADERS, signal: AbortSignal.timeout(Math.min(timeoutMs, 5_000)),
-      });
-      const html = await page.text();
-      title = html.match(/<title[^>]*>([^<]+)<\/title>/iu)?.[1]?.replace(/_哔哩哔哩_bilibili$/iu, '').trim() || '';
-    } catch { /* 播放流已可用，标题兜底失败不影响发视频 */ }
-  }
   return {
     mediaUrl: normalizeMediaUrl(stream.url),
     size: Number(stream.size || 0),
-    title: title.slice(0, 200),
+    title: String(metadata.title || '').slice(0, 200),
     duration: Number(metadata.duration || 0),
     quality: Number(play.quality || 0),
     requestHeaders: HEADERS,
