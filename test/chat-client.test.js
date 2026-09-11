@@ -44,6 +44,15 @@ test('OpenAI 兼容客户端携带角色、历史与当前消息', async () => {
   assert.equal(body.messages[4].content, '本轮联网摘要');
   assert.equal(body.messages.at(-2).content, '根据复核结果重写');
   assert.equal(body.messages.at(-1).content, '这一问');
+  assert.deepEqual(body.messages, [
+    { role: 'system', content: '你是测试角色' },
+    { role: 'system', content: '稳定回复规则' },
+    { role: 'user', content: '上一问' },
+    { role: 'assistant', content: '上一答' },
+    { role: 'system', content: '本轮联网摘要' },
+    { role: 'system', content: '根据复核结果重写' },
+    { role: 'user', content: '这一问' },
+  ]);
 });
 
 test('OpenAI 兼容客户端将上游错误转成可诊断信息', async () => {
