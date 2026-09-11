@@ -2376,7 +2376,19 @@ class LongtuQqBridge(Star):
                         # QQ may drop an image when it shares a MessageChain
                         # with a video; send the generated card separately.
                         try:
-                            await event.send(MessageChain(chain=[Comp.Image.fromBase64(card)]))
+                            bot = getattr(event, "bot", None)
+                            call_action = getattr(bot, "call_action", None)
+                            private = event.is_private_chat()
+                            action = "send_private_msg" if private else "send_group_msg"
+                            destination = {"user_id": int(event.get_sender_id())} if private else {"group_id": int(event.get_group_id())}
+                            if not callable(call_action):
+                                raise RuntimeError("QQ Bot API 不支持 call_action")
+                            result = await call_action(
+                                action, **destination,
+                                message=[{"type": "image", "data": {"file": f"base64://{card}"}}],
+                            )
+                            if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
+                                raise RuntimeError(f"QQ 图片接口返回失败：{result!r}")
                             # Give the OneBot adapter a moment to enqueue the
                             # image before the video response is emitted.
                             await asyncio.sleep(0.8)
