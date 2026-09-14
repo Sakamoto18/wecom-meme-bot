@@ -1816,11 +1816,14 @@ class LongtuQqBridge(Star):
                     cover_bytes = await response.read()
             if avatar_url.startswith(("http://", "https://")):
                 try:
-                    async with self.session.get(avatar_url, timeout=aiohttp.ClientTimeout(total=2)) as response:
+                    avatar_headers = {"User-Agent": "Mozilla/5.0"}
+                    if message.get("provider") == "xiaohongshu":
+                        avatar_headers["Referer"] = "https://www.xiaohongshu.com/"
+                    async with self.session.get(avatar_url, headers=avatar_headers, timeout=aiohttp.ClientTimeout(total=2)) as response:
                         response.raise_for_status()
                         avatar_bytes = await response.read()
                 except Exception as error:
-                    logger.warning(f"视频原作者头像下载失败：{type(error).__name__}")
+                    logger.warning(f"视频原作者头像下载失败：{type(error).__name__} status={getattr(error, 'status', None)}")
             png = render_video_card(message, cover_bytes, avatar_bytes)
             logger.info(
                 f"视频分享卡片元数据：author={message.get('author') or ''} "
