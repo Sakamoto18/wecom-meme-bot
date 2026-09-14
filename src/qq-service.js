@@ -2770,12 +2770,16 @@ export class QqBotService {
       text: payload.text,
       richSegments: payload.richSegments,
     });
+    // Only platform links with a supported resolver are media shares. Generic
+    // URLs must remain ordinary text and must never trigger video extraction.
+    const supportedCandidates = candidates.filter((candidate) =>
+      ['bilibili', 'xiaohongshu', 'douyin', 'kuaishou'].includes(candidate.provider));
     const mediaExcluded = this.mediaExcludedGroups.has(
       String(payload.groupId ?? '').trim(),
     );
     if (
       payload.mediaShare
-      && candidates.length > 0
+      && supportedCandidates.length > 0
       && !payload.observeOnly
       && mediaExcluded
     ) {
@@ -2783,7 +2787,7 @@ export class QqBotService {
     }
     if (
       payload.mediaShare
-      && candidates.length > 0
+      && supportedCandidates.length > 0
       && !payload.observeOnly
       && !mediaExcluded
     ) {
@@ -2791,7 +2795,7 @@ export class QqBotService {
         return { mode: 'media-disabled', messages: [] };
       }
       const startedAt = Date.now();
-      const candidate = candidates[0];
+      const candidate = supportedCandidates[0];
       let candidateSummary = 'invalid-url';
       try {
         const parsedCandidate = new URL(candidate.url);
