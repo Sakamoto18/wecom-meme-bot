@@ -27,47 +27,89 @@ def emoji_font():
     return ImageFont.truetype(str(ASSETS / "NotoColorEmoji.ttf"), 109)
 
 
-def draw_author(card, author, font):
-    # Group variation selectors, skin tones and ZWJ sequences with their emoji.
+def text_clusters(text):
+    """Keep emoji modifiers, flags and ZWJ sequences intact when wrapping."""
     chunks = []
-    for char in author:
+    for char in str(text):
         cp = ord(char)
-        if chunks and (cp in (0xFE0F, 0xFE0E, 0x200D, 0x20E3)
-                       or 0x1F3FB <= cp <= 0x1F3FF or chunks[-1].endswith("\u200d")):
+        regional = 0x1F1E6 <= cp <= 0x1F1FF
+        if chunks and chunks[-1] != "\n" and (
+            cp in (0xFE0F, 0xFE0E, 0x200D, 0x20E3)
+            or 0x1F3FB <= cp <= 0x1F3FF or 0xE0020 <= cp <= 0xE007F
+            or chunks[-1].endswith("\u200d")
+            or (regional and len(chunks[-1]) == 1 and 0x1F1E6 <= ord(chunks[-1]) <= 0x1F1FF)
+        ):
             chunks[-1] += char
         else:
             chunks.append(char)
-    x = 78
+    return chunks
+
+
+def is_emoji(chunk):
+    if "\ufe0e" in chunk:
+        return False
+    return any(0x1F000 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF
+               or ord(c) in (0xFE0F, 0x20E3, 0x231A, 0x231B, 0x23F0, 0x23F3)
+               for c in chunk)
+
+
+@lru_cache(maxsize=256)
+def emoji_tile(chunk, size):
+    font = emoji_font()
+    bounds = font.getbbox(chunk)
+    tile = Image.new("RGBA", (max(1, bounds[2] - bounds[0]), max(1, bounds[3] - bounds[1])))
+    ImageDraw.Draw(tile).text((-bounds[0], -bounds[1]), chunk, font=font, embedded_color=True)
+    painted = tile.getbbox()
+    if not painted:
+        return None
+    tile = tile.crop(painted)
+    tile.thumbnail((size, size), Image.Resampling.LANCZOS)
+    return tile
+
+
+def text_width(text, font):
+    return sum(font.size + 2 if is_emoji(c) else font.getlength(c) for c in text_clusters(text))
+
+
+def draw_rich_text(card, xy, text, font, fill, max_width=None):
+    x, y = xy
     draw = ImageDraw.Draw(card)
-    for chunk in chunks:
-        is_emoji = any(0x1F000 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF
-                       or ord(c) in (0xFE0F, 0x20E3) for c in chunk)
-        advance = 24 if is_emoji else font.getlength(chunk)
-        if x + advance > 568:
-            draw.text((x, 26), "…", font=font, fill="#333333")
+    for chunk in text_clusters(text):
+        size = font.size + 2
+        advance = size if is_emoji(chunk) else font.getlength(chunk)
+        if max_width is not None and x + advance > xy[0] + max_width:
             break
-        if is_emoji:
-            tile = Image.new("RGBA", (180, 160))
-            ImageDraw.Draw(tile).text((0, 0), chunk, font=emoji_font(), embedded_color=True)
-            bounds = tile.getbbox()
-            if bounds:
-                tile = tile.crop(bounds)
-                tile.thumbnail((24, 24), Image.Resampling.LANCZOS)
-                card.paste(tile, (round(x), 29), tile)
+        if is_emoji(chunk):
+            tile = emoji_tile(chunk, size)
+            if tile:
+                card.paste(tile, (round(x + (size - tile.width) / 2), round(y + (size - tile.height) / 2 + 3)), tile)
+            else:
+                draw.text((x, y), chunk, font=font, fill=fill)
         else:
-            draw.text((x, 26), chunk, font=font, fill="#333333")
+            draw.text((x, y), chunk, font=font, fill=fill)
         x += advance
+
+
+def draw_author(card, author, font):
+    if text_width(author, font) > 490:
+        chunks = text_clusters(author)
+        while chunks and text_width("".join(chunks) + "…", font) > 490:
+            chunks.pop()
+        author = "".join(chunks) + "…"
+    draw_rich_text(card, (78, 26), author, font, "#333333")
 
 
 def wrap_text(text, font, width):
     lines = []
     for paragraph in str(text).split("\n"):
-        current = ""
-        for char in paragraph:
-            if current and font.getlength(current + char) > width:
+        current, current_width = "", 0
+        for chunk in text_clusters(paragraph):
+            advance = text_width(chunk, font)
+            if current and current_width + advance > width:
                 lines.append(current.rstrip())
-                current = ""
-            current += char
+                current, current_width = "", 0
+            current += chunk
+            current_width += advance
         lines.append(current.rstrip())
     return lines
 
@@ -143,12 +185,12 @@ def render_video_card(message, cover_bytes=b"", avatar_bytes=b""):
         logo.thumbnail((112, 52), Image.Resampling.LANCZOS)
         card.paste(logo, (width - padding - logo.width, 20 + (44 - logo.height) // 2), logo)
     for i, line in enumerate(title_lines):
-        draw.text((padding, title_y + i * title_step), line, fill="#44208f", font=font)
+        draw_rich_text(card, (padding, title_y + i * title_step), line, font, "#44208f")
     if cover:
         card.paste(cover, (padding if portrait else (width - cover.width) // 2, cover_y))
     color = "#666666" if message.get("provider") == "bilibili" else "#333333"
     for i, line in enumerate(footer_lines):
-        draw.text((padding, footer_y + i * 32), line, fill=color, font=small)
+        draw_rich_text(card, (padding, footer_y + i * 32), line, small, color)
     output = io.BytesIO()
     card.save(output, format="PNG", optimize=True)
     return output.getvalue()
