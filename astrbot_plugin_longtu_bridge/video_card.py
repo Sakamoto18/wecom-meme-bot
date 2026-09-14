@@ -69,7 +69,8 @@ def emoji_tile(chunk, size):
 
 
 def text_width(text, font):
-    return sum(font.size if is_emoji(c) else font.getlength(c.rstrip("\ufe0f")) for c in text_clusters(text))
+    return sum(font.size * 0.55 if c.rstrip("\ufe0f") in ("▪", "▫") else
+               font.size if is_emoji(c) else font.getlength(c.rstrip("\ufe0f")) for c in text_clusters(text))
 
 
 def draw_rich_text(card, xy, text, font, fill, max_width=None):
@@ -77,10 +78,17 @@ def draw_rich_text(card, xy, text, font, fill, max_width=None):
     draw = ImageDraw.Draw(card)
     for chunk in text_clusters(text):
         size = font.size
-        advance = size if is_emoji(chunk) else font.getlength(chunk.rstrip("\ufe0f"))
+        advance = text_width(chunk, font)
         if max_width is not None and x + advance > xy[0] + max_width:
             break
-        if is_emoji(chunk):
+        if chunk.rstrip("\ufe0f") in ("▪", "▫"):
+            # These geometric bullets are absent in some CJK fonts. Their
+            # small square shape is independent of platform emoji artwork.
+            edge = max(3, round(size * 0.25))
+            left, top = round(x + 2), round(y + size * 0.6)
+            draw.rectangle((left, top, left + edge - 1, top + edge - 1),
+                           fill=fill if chunk.startswith("▪") else None, outline=fill)
+        elif is_emoji(chunk):
             tile = emoji_tile(chunk, size)
             if tile:
                 card.paste(tile, (round(x + (size - tile.width) / 2), round(y + (size - tile.height) / 2 + 3)), tile)
