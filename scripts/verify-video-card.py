@@ -24,7 +24,7 @@ async def main():
     source = ast.parse((plugin_dir / "main.py").read_text())
     bridge = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == "LongtuQqBridge")
     method = next(n for n in bridge.body if getattr(n, "name", "") == "_video_card")
-    namespace = {"aiohttp": aiohttp, "base64": base64, "logger": logging.getLogger("verify-card"),
+    namespace = {"asyncio": asyncio, "aiohttp": aiohttp, "base64": base64, "logger": logging.getLogger("verify-card"),
                  "render_video_card": renderer.render_video_card}
     exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])), str(plugin_dir / "main.py"), "exec"), namespace)
     message = json.loads(message_file.read_text())
