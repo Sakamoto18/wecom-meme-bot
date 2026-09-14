@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageChops
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "astrbot_plugin_longtu_bridge"))
-from video_card import render_video_card, card_footer, card_font, wrap_text
+from video_card import render_video_card, card_footer, card_font, wrap_text, text_clusters, text_width
 
 
 def png(color, size):
@@ -17,6 +17,25 @@ def png(color, size):
 
 
 class CardTests(unittest.TestCase):
+    def test_title_and_body_render_colored_emoji(self):
+        card = Image.open(io.BytesIO(render_video_card({
+            "title": "强化型ZZ🔥", "description": "ZZ党😭🧨📌⚠️▪️", "provider": "xiaohongshu",
+        })))
+        def colored_pixels(region):
+            return sum(max(pixel) - min(pixel) > 70 and pixel[0] > pixel[2] + 40
+                       for pixel in card.crop(region).getdata())
+        self.assertGreater(colored_pixels((24, 82, 500, 122)), 20)
+        self.assertGreater(colored_pixels((24, 166, 500, 200)), 20)
+
+    def test_wrapping_keeps_combined_emoji_intact(self):
+        clusters = ["👩🏽‍💻", "🇨🇳", "1️⃣", "⚠️", "▪️"]
+        self.assertEqual(text_clusters("".join(clusters)), clusters)
+        font = card_font(22)
+        lines = wrap_text("".join(clusters), font, 48)
+        self.assertEqual("".join(lines), "".join(clusters))
+        self.assertTrue(all(text_width(line, font) <= 48 for line in lines))
+        self.assertTrue(all(not line.startswith(("‍", "️", "🏽")) for line in lines))
+
     def test_bilibili_publication_time_is_under_author(self):
         metadata = {"provider": "bilibili", "title": "标题", "author": "UP主"}
         blank = self.render(metadata)
