@@ -19,6 +19,12 @@ namespace = {'AstrMessageEvent': object, 'logger': logging.getLogger('test'),
              'Comp': SimpleNamespace(Image=Image, Video=Video, Plain=Plain)}
 exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(name='Bridge', bases=[], keywords=[], body=methods, decorator_list=[])], type_ignores=[])), '<bridge-methods>', 'exec'), namespace)
 Bridge = namespace['Bridge']
+async def fake_card(self, message):
+    assert message['coverUrl'] == message['images'][0]
+    assert message['title'] == '测试'
+    assert message['description'] == '#英语#'
+    return 'card-png-base64'
+Bridge._video_card = fake_card
 
 class DeliveryTests(unittest.IsolatedAsyncioTestCase):
     def event(self, private=False, fail_forward=False):
@@ -39,20 +45,22 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_group_images_use_one_forward_with_image_nodes(self):
         event, calls = self.event()
         self.assertTrue(await Bridge()._send_forward_from_backend(event, self.gallery()))
-        self.assertEqual(len(calls), 1)
-        action, kwargs = calls[0]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0], 'send_group_msg')
+        self.assertEqual(calls[0][1]['message'][0]['data']['file'], 'base64://card-png-base64')
+        action, kwargs = calls[1]
         self.assertEqual(action, 'send_group_forward_msg')
         nodes = kwargs['messages']
-        self.assertEqual(len(nodes), 3)
-        self.assertEqual([n['data']['content'][0]['type'] for n in nodes], ['text', 'image', 'image'])
-        self.assertNotIn('[话题]', nodes[0]['data']['content'][0]['data']['text'])
+        self.assertEqual(len(nodes), 2)
+        self.assertEqual([n['data']['content'][0]['type'] for n in nodes], ['image', 'image'])
+        self.assertEqual([n['data']['content'][0]['data']['file'] for n in nodes], self.gallery()['messages'][0]['images'])
 
     async def test_private_images_use_private_forward(self):
         event, calls = self.event(private=True)
         self.assertTrue(await Bridge()._send_forward_from_backend(event, self.gallery()))
-        self.assertEqual(calls[0][0], 'send_private_forward_msg')
-        self.assertEqual(calls[0][1]['user_id'], 1079175957)
-        self.assertNotIn('group_id', calls[0][1])
+        self.assertEqual(calls[1][0], 'send_private_forward_msg')
+        self.assertEqual(calls[1][1]['user_id'], 1079175957)
+        self.assertNotIn('group_id', calls[1][1])
 
     async def test_video_never_enters_forward_sender(self):
         event, calls = self.event()
@@ -65,11 +73,11 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_forward_falls_back_to_images_not_links(self):
         event, calls = self.event(fail_forward=True)
         self.assertTrue(await Bridge()._send_forward_from_backend(event, self.gallery()))
-        self.assertEqual([c[0] for c in calls], ['send_group_forward_msg', 'send_group_msg', 'send_group_msg'])
+        self.assertEqual([c[0] for c in calls], ['send_group_msg', 'send_group_forward_msg', 'send_group_msg', 'send_group_msg'])
         self.assertEqual(calls[-1][1]['message'][0]['type'], 'image')
 
     def test_final_gallery_fallback_uses_native_images(self):
         chain = Bridge._reply_chain_from_backend(self.gallery())
-        self.assertEqual([type(c) for c in chain], [Plain, Image, Image])
+        self.assertEqual([type(c) for c in chain], [Image, Image])
 
 if __name__ == '__main__': unittest.main()
