@@ -135,7 +135,32 @@ def card_footer(message):
 
 
 
-def render_video_card(message, cover_bytes=b"", avatar_bytes=b""):
+def gallery_grid(previews, total, width=712):
+    count = min(total, 9)
+    columns = min(count, 3)
+    gap = 5
+    cell = (width - gap * (columns - 1)) // columns
+    rows = (count + columns - 1) // columns
+    grid = Image.new("RGB", (width, rows * cell + (rows - 1) * gap), "white")
+    for index in range(count):
+        tile = Image.new("RGB", (cell, cell), "#eeeeee")
+        raw = previews[index] if index < len(previews) else b""
+        if raw:
+            try:
+                with Image.open(io.BytesIO(raw)) as source:
+                    tile = ImageOps.fit(ImageOps.exif_transpose(source).convert("RGB"),
+                                        (cell, cell), method=Image.Resampling.LANCZOS)
+            except (OSError, ValueError):
+                pass
+        if index == 8 and total > 9:
+            tile = Image.blend(tile, Image.new("RGB", tile.size, "black"), 0.48)
+            ImageDraw.Draw(tile).text((cell / 2, cell / 2), f"+{total - 9}",
+                                     font=card_font(48), fill="white", anchor="mm")
+        grid.paste(tile, ((index % columns) * (cell + gap), (index // columns) * (cell + gap)))
+    return grid
+
+
+def render_video_card(message, cover_bytes=b"", avatar_bytes=b"", preview_bytes=None):
     width, padding = 760, 24
     font, small = card_font(30), card_font(22)
     title = str(message.get("title") or "").strip()
@@ -145,7 +170,10 @@ def render_video_card(message, cover_bytes=b"", avatar_bytes=b""):
     title_y, title_step = 82, 40
     cover_y = title_y + len(title_lines) * title_step + 20
     cover = None
-    if cover_bytes:
+    portrait = False
+    if preview_bytes is not None and len(message.get("images") or []) > 1:
+        cover = gallery_grid(preview_bytes, len(message["images"]))
+    elif cover_bytes:
         cover = Image.open(io.BytesIO(cover_bytes)).convert("RGB")
         portrait = cover.height > cover.width
         target = (430, 760) if portrait else (712, 400)
