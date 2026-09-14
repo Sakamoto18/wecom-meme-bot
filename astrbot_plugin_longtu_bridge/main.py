@@ -154,6 +154,8 @@ class LongtuQqBridge(Star):
 
     async def _react_media_share(self, event: AstrMessageEvent) -> bool:
         """Use QQ's native message reaction instead of sending a visible message."""
+        if not self._media_group_enabled(event):
+            return False
         message_id = str(
             getattr(getattr(event, "message_obj", None), "message_id", "") or "",
         ).strip()
