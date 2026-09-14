@@ -1813,7 +1813,25 @@ class LongtuQqBridge(Star):
         avatar_url = str(message.get("avatarUrl") or "").strip()
         try:
             cover_bytes = avatar_bytes = b""
-            if cover.startswith(("http://", "https://")):
+            preview_bytes = None
+            images = message.get("images") or []
+            if len(images) > 1:
+                async def fetch_preview(url):
+                    try:
+                        headers = {"User-Agent": "Mozilla/5.0"}
+                        if message.get("provider") == "xiaohongshu":
+                            headers["Referer"] = "https://www.xiaohongshu.com/"
+                        async with self.session.get(str(url), headers=headers,
+                                                    timeout=aiohttp.ClientTimeout(total=5)) as response:
+                            response.raise_for_status()
+                            return await response.read()
+                    except Exception as error:
+                        logger.warning(f"图文预览下载失败：{type(error).__name__}")
+                        return b""
+                # Keep source order, even if one download fails. Only nine
+                # previews are fetched; original gallery delivery is unchanged.
+                preview_bytes = await asyncio.gather(*(fetch_preview(url) for url in images[:9]))
+            elif cover.startswith(("http://", "https://")):
                 async with self.session.get(cover, timeout=aiohttp.ClientTimeout(total=5)) as response:
                     cover_bytes = await response.read()
             if avatar_url.startswith(("http://", "https://")):
@@ -1826,7 +1844,10 @@ class LongtuQqBridge(Star):
                         avatar_bytes = await response.read()
                 except Exception as error:
                     logger.warning(f"视频原作者头像下载失败：{type(error).__name__} status={getattr(error, 'status', None)}")
-            png = render_video_card(message, cover_bytes, avatar_bytes)
+            if preview_bytes is None:
+                png = render_video_card(message, cover_bytes, avatar_bytes)
+            else:
+                png = render_video_card(message, cover_bytes, avatar_bytes, preview_bytes=preview_bytes)
             logger.info(
                 f"视频分享卡片元数据：author={message.get('author') or ''} "
                 f"avatar={'yes' if avatar_bytes else 'no'} "

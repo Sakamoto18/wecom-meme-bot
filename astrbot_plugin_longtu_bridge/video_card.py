@@ -46,7 +46,7 @@ def text_clusters(text):
 
 
 def is_emoji(chunk):
-    if "\ufe0e" in chunk:
+    if "\ufe0e" in chunk or chunk.rstrip("\ufe0f") in ("▪", "▫"):
         return False
     return any(0x1F000 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF
                or ord(c) in (0xFE0F, 0x20E3, 0x231A, 0x231B, 0x23F0, 0x23F3)
@@ -62,31 +62,40 @@ def emoji_tile(chunk, size):
     painted = tile.getbbox()
     if not painted:
         return None
-    tile = tile.crop(painted)
+    # Scale the complete font cell, not its ink bounds. Cropping ink first
+    # enlarges tiny symbols into full-size blocks and distorts emoji proportions.
     tile.thumbnail((size, size), Image.Resampling.LANCZOS)
     return tile
 
 
 def text_width(text, font):
-    return sum(font.size + 2 if is_emoji(c) else font.getlength(c) for c in text_clusters(text))
+    return sum(font.size * 0.55 if c.rstrip("\ufe0f") in ("▪", "▫") else
+               font.size if is_emoji(c) else font.getlength(c.rstrip("\ufe0f")) for c in text_clusters(text))
 
 
 def draw_rich_text(card, xy, text, font, fill, max_width=None):
     x, y = xy
     draw = ImageDraw.Draw(card)
     for chunk in text_clusters(text):
-        size = font.size + 2
-        advance = size if is_emoji(chunk) else font.getlength(chunk)
+        size = font.size
+        advance = text_width(chunk, font)
         if max_width is not None and x + advance > xy[0] + max_width:
             break
-        if is_emoji(chunk):
+        if chunk.rstrip("\ufe0f") in ("▪", "▫"):
+            # These geometric bullets are absent in some CJK fonts. Their
+            # small square shape is independent of platform emoji artwork.
+            edge = max(3, round(size * 0.25))
+            left, top = round(x + 2), round(y + size * 0.6)
+            draw.rectangle((left, top, left + edge - 1, top + edge - 1),
+                           fill=fill if chunk.startswith("▪") else None, outline=fill)
+        elif is_emoji(chunk):
             tile = emoji_tile(chunk, size)
             if tile:
                 card.paste(tile, (round(x + (size - tile.width) / 2), round(y + (size - tile.height) / 2 + 3)), tile)
             else:
                 draw.text((x, y), chunk, font=font, fill=fill)
         else:
-            draw.text((x, y), chunk, font=font, fill=fill)
+            draw.text((x, y), chunk.rstrip("\ufe0f"), font=font, fill=fill)
         x += advance
 
 
@@ -135,7 +144,32 @@ def card_footer(message):
 
 
 
-def render_video_card(message, cover_bytes=b"", avatar_bytes=b""):
+def gallery_grid(previews, total, width=712):
+    count = min(total, 9)
+    columns = min(count, 3)
+    gap = 5
+    cell = (width - gap * (columns - 1)) // columns
+    rows = (count + columns - 1) // columns
+    grid = Image.new("RGB", (width, rows * cell + (rows - 1) * gap), "white")
+    for index in range(count):
+        tile = Image.new("RGB", (cell, cell), "#eeeeee")
+        raw = previews[index] if index < len(previews) else b""
+        if raw:
+            try:
+                with Image.open(io.BytesIO(raw)) as source:
+                    tile = ImageOps.fit(ImageOps.exif_transpose(source).convert("RGB"),
+                                        (cell, cell), method=Image.Resampling.LANCZOS)
+            except (OSError, ValueError):
+                pass
+        if index == 8 and total > 9:
+            tile = Image.blend(tile, Image.new("RGB", tile.size, "black"), 0.48)
+            ImageDraw.Draw(tile).text((cell / 2, cell / 2), f"+{total - 9}",
+                                     font=card_font(48), fill="white", anchor="mm")
+        grid.paste(tile, ((index % columns) * (cell + gap), (index // columns) * (cell + gap)))
+    return grid
+
+
+def render_video_card(message, cover_bytes=b"", avatar_bytes=b"", preview_bytes=None):
     width, padding = 760, 24
     font, small = card_font(30), card_font(22)
     title = str(message.get("title") or "").strip()
@@ -145,7 +179,10 @@ def render_video_card(message, cover_bytes=b"", avatar_bytes=b""):
     title_y, title_step = 82, 40
     cover_y = title_y + len(title_lines) * title_step + 20
     cover = None
-    if cover_bytes:
+    portrait = False
+    if preview_bytes is not None and len(message.get("images") or []) > 1:
+        cover = gallery_grid(preview_bytes, len(message["images"]))
+    elif cover_bytes:
         cover = Image.open(io.BytesIO(cover_bytes)).convert("RGB")
         portrait = cover.height > cover.width
         target = (430, 760) if portrait else (712, 400)

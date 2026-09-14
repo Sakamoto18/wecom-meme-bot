@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageChops
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "astrbot_plugin_longtu_bridge"))
-from video_card import render_video_card, card_footer, card_font, wrap_text, text_clusters, text_width
+from video_card import render_video_card, card_footer, card_font, wrap_text, text_clusters, text_width, gallery_grid, is_emoji, emoji_tile
 
 
 def png(color, size):
@@ -17,6 +17,33 @@ def png(color, size):
 
 
 class CardTests(unittest.TestCase):
+    def test_small_bullets_are_text_and_emoji_keep_font_cell_padding(self):
+        self.assertFalse(is_emoji("▪️"))
+        self.assertFalse(is_emoji("▫️"))
+        tile = emoji_tile("🔥", 22)
+        bounds = tile.getbbox()
+        self.assertTrue(bounds[0] > 0 or bounds[1] > 0 or bounds[2] < tile.width or bounds[3] < tile.height)
+
+    def test_grid_preserves_order_and_only_last_cell_has_overflow(self):
+        colors = [(20 * i, 40, 60) for i in range(9)]
+        previews = [png(color, (80, 120)) for color in colors]
+        nine = gallery_grid(previews, 9)
+        ten = gallery_grid(previews, 10)
+        self.assertEqual(nine.size, (712, 712))
+        for i, color in enumerate(colors):
+            point = ((i % 3) * 239 + 10, (i // 3) * 239 + 10)
+            self.assertEqual(nine.getpixel(point), color)
+            if i < 8: self.assertEqual(ten.getpixel(point), color)
+        difference = ImageChops.difference(nine, ten).getbbox()
+        self.assertGreaterEqual(difference[0], 478)
+        self.assertGreaterEqual(difference[1], 478)
+        self.assertNotEqual(ten.tobytes(), gallery_grid(previews, 12).tobytes())
+
+    def test_grid_failed_preview_keeps_its_slot(self):
+        grid = gallery_grid([b'invalid', png('red', (80, 120))], 2)
+        self.assertEqual(grid.getpixel((10, 10)), (238, 238, 238))
+        self.assertEqual(grid.getpixel((370, 10)), (255, 0, 0))
+
     def test_title_and_body_render_colored_emoji(self):
         card = Image.open(io.BytesIO(render_video_card({
             "title": "强化型ZZ🔥", "description": "ZZ党😭🧨📌⚠️▪️", "provider": "xiaohongshu",
