@@ -46,7 +46,7 @@ def text_clusters(text):
 
 
 def is_emoji(chunk):
-    if "\ufe0e" in chunk:
+    if "\ufe0e" in chunk or chunk.rstrip("\ufe0f") in ("▪", "▫"):
         return False
     return any(0x1F000 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF
                or ord(c) in (0xFE0F, 0x20E3, 0x231A, 0x231B, 0x23F0, 0x23F3)
@@ -62,21 +62,22 @@ def emoji_tile(chunk, size):
     painted = tile.getbbox()
     if not painted:
         return None
-    tile = tile.crop(painted)
+    # Scale the complete font cell, not its ink bounds. Cropping ink first
+    # enlarges tiny symbols into full-size blocks and distorts emoji proportions.
     tile.thumbnail((size, size), Image.Resampling.LANCZOS)
     return tile
 
 
 def text_width(text, font):
-    return sum(font.size + 2 if is_emoji(c) else font.getlength(c) for c in text_clusters(text))
+    return sum(font.size if is_emoji(c) else font.getlength(c.rstrip("\ufe0f")) for c in text_clusters(text))
 
 
 def draw_rich_text(card, xy, text, font, fill, max_width=None):
     x, y = xy
     draw = ImageDraw.Draw(card)
     for chunk in text_clusters(text):
-        size = font.size + 2
-        advance = size if is_emoji(chunk) else font.getlength(chunk)
+        size = font.size
+        advance = size if is_emoji(chunk) else font.getlength(chunk.rstrip("\ufe0f"))
         if max_width is not None and x + advance > xy[0] + max_width:
             break
         if is_emoji(chunk):
@@ -86,7 +87,7 @@ def draw_rich_text(card, xy, text, font, fill, max_width=None):
             else:
                 draw.text((x, y), chunk, font=font, fill=fill)
         else:
-            draw.text((x, y), chunk, font=font, fill=fill)
+            draw.text((x, y), chunk.rstrip("\ufe0f"), font=font, fill=fill)
         x += advance
 
 
