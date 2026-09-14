@@ -311,6 +311,7 @@ export class MediaResolver {
       coverUrl: value.coverUrl || '',
       author: value.author || '',
       avatarUrl: value.avatarUrl || '',
+      publishedAt: positive(value.publishedAt),
       description: value.description || '',
       duration: positive(value.duration),
       extractor: 'bilibili-stream-proxy',

@@ -1,6 +1,7 @@
 """Render platform metadata without mixing in the QQ sharer's identity."""
 import io
 import re
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -127,6 +128,13 @@ def render_video_card(message, cover_bytes=b"", avatar_bytes=b""):
         card.paste(avatar, (padding, 20), mask)
     if author:
         draw_author(card, author, small)
+    if message.get("provider") == "bilibili" and message.get("publishedAt"):
+        try:
+            published = datetime.fromtimestamp(float(message["publishedAt"]), timezone(timedelta(hours=8)))
+            draw.text((78, 55), published.strftime("%Y-%m-%d %H:%M"),
+                      font=card_font(16), fill="#888888")
+        except (ValueError, TypeError, OverflowError, OSError):
+            pass
     logo_file = LOGOS.get(str(message.get("provider") or ""))
     if logo_file:
         # Official website assets downloaded once, with provenance.
