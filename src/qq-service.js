@@ -2825,6 +2825,8 @@ export class QqBotService {
             messages: [{
               type: 'forward', title: resolved.title || '小红书图文',
               description: resolved.description || '', images: resolved.images,
+              coverUrl: resolved.images[0] || '', author: resolved.author || '',
+              avatarUrl: resolved.avatarUrl || '', tags: resolved.tags || [], provider: candidate.provider,
             }],
           };
         }
