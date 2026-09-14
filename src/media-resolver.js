@@ -397,7 +397,8 @@ export class MediaResolver {
             if (provided?.images?.length) {
               return {
                 images: provided.images, title: provided.title || '',
-                coverUrl: provided.coverUrl || '',
+                coverUrl: provided.images[0] || '',
+                author: provided.author || '', avatarUrl: provided.avatarUrl || '', tags: provided.tags || [],
                 description: provided.description || '', extractor: 'provider-gallery',
                 downloadBytes: 0, outputBytes: 0, direct: true,
               };
@@ -441,6 +442,8 @@ export class MediaResolver {
               return {
                 images: publicMetadata.images,
                 title: publicMetadata.title || '',
+                coverUrl: publicMetadata.images[0] || '',
+                author: publicMetadata.author || '', avatarUrl: publicMetadata.avatarUrl || '', tags: publicMetadata.tags || [],
                 description: publicMetadata.description || '',
                 extractor: 'public-metadata-gallery', downloadBytes: 0,
                 outputBytes: 0, direct: true,

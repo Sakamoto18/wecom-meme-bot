@@ -161,6 +161,7 @@ test('媒体主链把 Provider 图文结果保留为 gallery', async () => {
     enabled: true, cacheTtlMs: 0,
     providerResolver: async () => ({
       title: '图文标题', description: '图文正文',
+      author: '图文原作者', avatarUrl: 'https://cdn.example/avatar.jpg', tags: ['话题'],
       images: ['https://cdn.example/1.jpg', 'https://cdn.example/2.jpg'],
     }),
   });
@@ -168,6 +169,10 @@ test('媒体主链把 Provider 图文结果保留为 gallery', async () => {
   assert.equal(result.extractor, 'provider-gallery');
   assert.equal(result.images.length, 2);
   assert.equal(result.title, '图文标题');
+  assert.equal(result.coverUrl, 'https://cdn.example/1.jpg');
+  assert.equal(result.author, '图文原作者');
+  assert.equal(result.avatarUrl, 'https://cdn.example/avatar.jpg');
+  assert.deepEqual(result.tags, ['话题']);
   resolver.close();
 });
 

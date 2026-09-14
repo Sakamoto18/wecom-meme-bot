@@ -1857,9 +1857,6 @@ class LongtuQqBridge(Star):
                 except TypeError:
                     reply_chain.append(Comp.Plain(video_url))
             elif message_type == "forward":
-                title = str(message.get("title") or "小红书图文")
-                description = str(message.get("description") or "")
-                reply_chain.append(Comp.Plain(title + (("\n\n" + description) if description else "")))
                 for url in message.get("images", [])[:18]:
                     if str(url).startswith(("http://", "https://")):
                         try:
@@ -1880,22 +1877,27 @@ class LongtuQqBridge(Star):
         destination = {"user_id": int(event.get_sender_id())} if private else {"group_id": int(event.get_group_id())}
         forward_action = "send_private_forward_msg" if private else "send_group_forward_msg"
         image_action = "send_private_msg" if private else "send_group_msg"
-        title = str(message.get("title") or "小红书图文")[:200]
-        description = str(message.get("description") or "")[:4000]
         images = [str(url) for url in message.get("images", []) if str(url).startswith(("http://", "https://"))][:18]
         if not images:
             return False
+        # The introduction is a separate image. Forward nodes contain only the
+        # original gallery, including its first image, in source order.
+        try:
+            card = await self._video_card({**message, "coverUrl": images[0]})
+            if card:
+                result = await call_action(image_action, **destination,
+                    message=[{"type": "image", "data": {"file": f"base64://{card}"}}])
+                if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
+                    raise RuntimeError("QQ 简介卡片接口返回失败")
+                logger.info(f"图文简介卡片：独立图片消息已发送 target={destination} result={result!r}")
+        except Exception as error:
+            logger.warning(f"图文简介卡片发送失败：{error}")
         sender_id = str(event.get_self_id() or "2170902293")
         sender_name = str(getattr(getattr(event, "message_obj", None), "self_id", "") or "龙玉涛")
-        text = title + (("\n\n" + description) if description else "")
         nodes = [{
             "type": "node", "data": {"uin": sender_id, "name": sender_name,
-            "content": [{"type": "text", "data": {"text": text}}]},
-        }]
-        nodes.extend({
-            "type": "node", "data": {"uin": sender_id, "name": sender_name,
             "content": [{"type": "image", "data": {"file": url}}]},
-        } for url in images)
+        } for url in images]
         try:
             result = await call_action(forward_action, **destination, messages=nodes)
             if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):

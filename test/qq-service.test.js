@@ -2754,3 +2754,21 @@ test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('图文简介元数据完整传递，封面始终选第一张原图', async () => {
+  const { service } = createService({mediaResolver:{enabled:true,async resolve(){return {
+    title:'图文标题',description:'图文正文',author:'原作者',avatarUrl:'https://cdn.example/avatar.jpg',
+    tags:['话题'],coverUrl:'https://cdn.example/other.jpg',images:['https://cdn.example/first.jpg','https://cdn.example/second.jpg'],
+  };}}});
+  const result=await service.handleMessage({message_id:'gallery-card-meta',message_type:'group',
+    group_id:'1109147947',user_id:'1079175957',media_share:true,text:'https://xhslink.com/m/gallery'});
+  const message=result.messages[0];
+  assert.equal(result.mode,'media-gallery');
+  assert.equal(message.coverUrl,message.images[0]);
+  assert.equal(message.author,'原作者');
+  assert.equal(message.avatarUrl,'https://cdn.example/avatar.jpg');
+  assert.equal(message.title,'图文标题');
+  assert.equal(message.description,'图文正文');
+  assert.equal(message.provider,'xiaohongshu');
+  assert.deepEqual(message.tags,['话题']);
+});
