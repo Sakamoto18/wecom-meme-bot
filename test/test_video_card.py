@@ -35,8 +35,8 @@ class CardTests(unittest.TestCase):
         self.assertEqual(card_footer({"provider": "bilibili", "description": ""}), "")
 
     def test_no_fabricated_tags_or_platform_label(self):
-        self.assertEqual(card_footer({"provider": "xiaohongshu", "description": "没有话题的正文"}), "")
-        self.assertEqual(card_footer({"provider": "xiaohongshu", "description": "正文 #模型[话题]# #高达[话题]#"}), "#模型  #高达")
+        self.assertEqual(card_footer({"provider": "xiaohongshu", "description": "没有话题的正文"}), "没有话题的正文")
+        self.assertEqual(card_footer({"provider": "xiaohongshu", "description": "正文 #模型[话题]# #高达[话题]#"}), "正文 #模型# #高达#")
 
     def test_missing_author_never_uses_qq_sender_or_placeholder(self):
         card = Image.open(io.BytesIO(render_video_card({"provider": "xiaohongshu", "title": "标题", "senderName": "QQ发送者"})))
