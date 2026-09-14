@@ -7,7 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageChops
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "astrbot_plugin_longtu_bridge"))
-from video_card import render_video_card, card_footer, card_font, wrap_text, text_clusters, text_width, gallery_grid
+from video_card import render_video_card, card_footer, card_font, wrap_text, text_clusters, text_width, gallery_grid, is_emoji, emoji_tile
 
 
 def png(color, size):
@@ -17,6 +17,13 @@ def png(color, size):
 
 
 class CardTests(unittest.TestCase):
+    def test_small_bullets_are_text_and_emoji_keep_font_cell_padding(self):
+        self.assertFalse(is_emoji("▪️"))
+        self.assertFalse(is_emoji("▫️"))
+        tile = emoji_tile("🔥", 22)
+        bounds = tile.getbbox()
+        self.assertTrue(bounds[0] > 0 or bounds[1] > 0 or bounds[2] < tile.width or bounds[3] < tile.height)
+
     def test_grid_preserves_order_and_only_last_cell_has_overflow(self):
         colors = [(20 * i, 40, 60) for i in range(9)]
         previews = [png(color, (80, 120)) for color in colors]
