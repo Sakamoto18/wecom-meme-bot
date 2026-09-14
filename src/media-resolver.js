@@ -311,6 +311,7 @@ export class MediaResolver {
       coverUrl: value.coverUrl || '',
       author: value.author || '',
       avatarUrl: value.avatarUrl || '',
+      publishedAt: positive(value.publishedAt),
       description: value.description || '',
       duration: positive(value.duration),
       extractor: 'bilibili-stream-proxy',
@@ -473,7 +474,10 @@ export class MediaResolver {
             throw new Error(`${ytError.message}；网页兜底：${htmlError.message}`);
           }
         }
-        downloaded.title ||= publicMetadata.title || '';
+        // Generic direct-file extractors use the MP4 basename as a title.
+        // XHS notes can intentionally have no title: retain their source title.
+        if (candidate?.provider === 'xiaohongshu') downloaded.title = publicMetadata.title || '';
+        else downloaded.title ||= publicMetadata.title || '';
         downloaded.coverUrl ||= publicMetadata.coverUrl || '';
         downloaded.author ||= publicMetadata.author || '';
         downloaded.avatarUrl ||= publicMetadata.avatarUrl || '';

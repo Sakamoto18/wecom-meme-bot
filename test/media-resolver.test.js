@@ -80,7 +80,7 @@ test('B站公开接口按 bvid 获取 cid 和 MP4 流', async () => {
       fetchImpl: async (url) => {
         requested.push(String(url));
         if (String(url).includes('/view?')) {
-          return new Response(JSON.stringify({ code: 0, data: { cid: 99, title: '测试', duration: 12 } }));
+          return new Response(JSON.stringify({ code: 0, data: { cid: 99, title: '测试', duration: 12, pubdate: 1789113600 } }));
         }
         return new Response(JSON.stringify({
           code: 0, data: { durl: [{ size: 100, url: 'https://cdn.example/video.mp4' }] },
@@ -95,6 +95,7 @@ test('B站公开接口按 bvid 获取 cid 和 MP4 流', async () => {
   assert.equal(result.mediaUrl, 'https://cdn.example/video.mp4');
   assert.equal(result.title, '测试');
   assert.equal(result.size, 100);
+  assert.equal(result.publishedAt, 1789113600);
 });
 
 test('B站单文件 MP4 注册为流式中转，不等待完整下载', async () => {
@@ -102,10 +103,12 @@ test('B站单文件 MP4 注册为流式中转，不等待完整下载', async ()
   const result = resolver.registerRemoteMedia({
     mediaUrl: 'https://cdn.example/video.mp4', size: 1234, title: '流式视频',
     backupMediaUrls: ['https://cdn.example/backup.mp4'],
+    publishedAt: 1789113600,
     requestHeaders: { referer: 'https://www.bilibili.com/' },
   });
   const resource = await resolver.getMediaFile(result.mediaId);
   assert.equal(result.streamed, true);
+  assert.equal(result.publishedAt, 1789113600);
   assert.equal(result.downloadBytes, 0);
   assert.equal(resource.remote, true);
   assert.equal(resource.remoteUrl, 'https://cdn.example/video.mp4');

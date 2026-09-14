@@ -120,6 +120,7 @@ export async function resolveBilibiliMedia(value, {
     coverUrl: normalizeMediaUrl(metadata.pic || metadata.cover || ''),
     author: String(metadata.owner?.name || ''),
     avatarUrl: normalizeMediaUrl(metadata.owner?.face || ''),
+    publishedAt: Number(metadata.pubdate || 0),
     duration: Number(metadata.duration || 0),
     quality: Number(play.quality || 0),
     requestHeaders: HEADERS,

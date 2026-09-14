@@ -27,7 +27,7 @@ def normalize(payload: Any) -> dict:
     if payload.get("status") in ("success", "failed"):
         return payload
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    result = {k: data[k] for k in ("video_url", "cover", "images", "title", "description", "desc") if data.get(k)}
+    result = {k: data[k] for k in ("video_url", "cover", "images", "title", "description", "desc", "author", "avatarUrl", "avatar_url", "tags") if data.get(k)}
     if result.get("video_url") or result.get("images"):
         return {"status": "success", "data": result}
     return {"status": "failed", "msg": payload.get("msg", "未找到可发送的媒体内容")}
