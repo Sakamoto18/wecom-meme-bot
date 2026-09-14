@@ -17,6 +17,14 @@ def png(color, size):
 
 
 class CardTests(unittest.TestCase):
+    def test_bilibili_publication_time_is_under_author(self):
+        metadata = {"provider": "bilibili", "title": "标题", "author": "UP主"}
+        blank = self.render(metadata)
+        dated = self.render({**metadata, "publishedAt": 1789113600})
+        region = (78, 55, 300, 79)
+        self.assertIsNotNone(ImageChops.difference(blank.crop(region), dated.crop(region)).getbbox())
+        self.assertEqual(blank.size, dated.size)
+
     def render(self, metadata):
         return Image.open(io.BytesIO(render_video_card(metadata, png("navy", (540, 720)), png("red", (100, 100)))))
 

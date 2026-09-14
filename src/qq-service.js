@@ -2837,6 +2837,7 @@ export class QqBotService {
             coverUrl: resolved.coverUrl || '',
             author: resolved.author || '',
             avatarUrl: resolved.avatarUrl || '',
+            publishedAt: resolved.publishedAt || 0,
             description: resolved.description || '',
             tags: resolved.tags || [],
             duration: resolved.duration,
