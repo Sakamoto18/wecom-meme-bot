@@ -714,6 +714,9 @@ async function handleIncomingMessage(frame) {
   }
 
   const content = extractMessageText(frame.body);
+  if (content.trim() === '/') {
+    return;
+  }
   const managementCommand = parseLongtuManagementCommand(content);
   if (managementCommand?.action === 'ignored-slash') {
     return;
