@@ -132,3 +132,32 @@ export async function proxyRemoteMedia(request, response, media, {
     response.removeListener('close', onClose);
   }
 }
+
+// Establish the CDN connection as soon as a remote media item is resolved.
+// The request is cancelled after the first body chunk; QQ will open the same
+// public proxy URL later, while DNS/TLS/CDN edge selection is already warm.
+export async function warmRemoteMedia(media, { fetchImpl = fetch, timeoutMs = 2_000, logger = console } = {}) {
+  const urls = [...new Set([media?.remoteUrl, ...(media?.backupUrls || [])].filter(Boolean))];
+  if (!urls.length) return false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const result = await Promise.any(urls.map((url) => fetchImpl(url, {
+      headers: media.requestHeaders || {}, signal: controller.signal,
+    }).then(async (response) => {
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      const reader = response.body.getReader();
+      await reader.read();
+      await reader.cancel().catch(() => {});
+      return new URL(url).hostname;
+    })));
+    logger.info(`视频链路预热完成：host=${result}`);
+    return true;
+  } catch (error) {
+    logger.debug?.(`视频链路预热跳过：${error.message}`);
+    return false;
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
