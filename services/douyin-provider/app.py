@@ -28,8 +28,32 @@ async def login_status():
 async def resolve(req:Req):
  async with lock:
   try:
-   page=await (await get_context()).new_page(); await page.goto(req.url,wait_until='domcontentloaded',timeout=20000); await page.wait_for_timeout(1200)
-   d=await page.evaluate('''() => ({title:document.title,desc:document.querySelector('meta[name=description]')?.content||'',cover:document.querySelector('meta[property="og:image"]')?.content||'',video:document.querySelector('meta[property="og:video"]')?.content||''})'''); await page.close()
+   ctx=await get_context(); page=await ctx.new_page()
+   video_requests=[]
+   def capture(response):
+    url=response.url
+    low=url.lower()
+    if any(token in low for token in ('.mp4', '.m3u8', 'playwm', 'play/')):
+     if url not in video_requests: video_requests.append(url)
+   page.on('response', capture)
+   await page.goto(req.url,wait_until='domcontentloaded',timeout=25000)
+   await page.wait_for_timeout(1800)
+   try:
+    await page.locator('video').first.scroll_into_view_if_needed(timeout=2000)
+    await page.locator('video').first.evaluate("v => { try { v.muted=true; v.play().catch(()=>{}); } catch (_) {} }")
+   except Exception: pass
+   await page.wait_for_timeout(2500)
+   d=await page.evaluate('''() => {
+    const resources=performance.getEntriesByType('resource').map(x=>x.name);
+    const videos=[...document.querySelectorAll('video')].flatMap(v=>[v.currentSrc,v.src]);
+    const html=document.documentElement?.outerHTML || '';
+    const urls=[...html.matchAll(/https?:\\/\\/[^\"'\s<>]+/g)].map(m=>m[0].replaceAll('\\/','/'));
+    const candidates=[...videos,...resources,...urls].filter(Boolean);
+    const video=candidates.find(u=>/\.(mp4|m3u8)(?:[?#]|$)/i.test(u)||/playwm|play\//i.test(u)) || '';
+    return {title:document.title,desc:document.querySelector('meta[name=description]')?.content||'',cover:document.querySelector('meta[property="og:image"]')?.content||'',video};
+   }''')
+   if not d.get('video') and video_requests: d['video']=video_requests[-1]
+   await page.close()
    if not d.get('video'): return {'status':'failed','msg':'未获取到视频地址，请先完成抖音登录'}
    return {'status':'success','data':{'media_type':'video','video_url':d['video'],'cover':d['cover'],'title':d['title'],'description':d['desc']}}
   except Exception as e: return {'status':'failed','msg':str(e)}
