@@ -36,7 +36,31 @@ export async function proxyRemoteMedia(request, response, media, {
           headers.range = 'bytes=' + (rangeStart + bytes) + '-' + rangeEnd;
         } else if (request.headers.range) headers.range = request.headers.range;
         resetTimeout();
-        const upstream = await fetchImpl(url, { headers, signal: controller.signal });
+        // Race CDN candidates for the initial request. Some Bilibili UPOS
+        // nodes accept the connection but deliver bytes very slowly; waiting
+        // for that node before trying backups makes QQ appear to hang. The
+        // first healthy response wins and losing requests are aborted.
+        let upstream;
+        if (bytes === 0 && urls.length > 1 && url === urls[0]) {
+          const racers = urls.map((candidate) => {
+            const raceController = new AbortController();
+            const raceTimer = setTimeout(() => raceController.abort(), timeoutMs);
+            return fetchImpl(candidate, { headers: { ...headers }, signal: raceController.signal })
+              .then((result) => {
+                if (!result.ok || !result.body) throw new Error('视频源 HTTP ' + result.status);
+                return { result, raceController, raceTimer };
+              })
+              .catch((error) => { clearTimeout(raceTimer); raceController.abort(); throw error; });
+          });
+          const winner = await Promise.any(racers);
+          racers.forEach((promise) => promise.then(({ raceController, raceTimer }) => {
+            if (raceController !== winner.raceController) { clearTimeout(raceTimer); raceController.abort(); }
+          }).catch(() => {}));
+          upstream = winner.result;
+          clearTimeout(winner.raceTimer);
+        } else {
+          upstream = await fetchImpl(url, { headers, signal: controller.signal });
+        }
         if (!upstream.ok || !upstream.body) throw new Error('视频源 HTTP ' + upstream.status);
         const contentRange = upstream.headers.get('content-range')?.match(/^bytes (\d+)-(\d+)\/(\d+)$/u);
         const length = upstream.headers.get('content-length');
