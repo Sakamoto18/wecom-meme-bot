@@ -3,6 +3,8 @@ services:
     build: ./services/douyin-provider
     container_name: longtu-douyin-provider
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:9001:9001"
     volumes:
       - ./data/douyin-profile:/data/profile
     networks:
