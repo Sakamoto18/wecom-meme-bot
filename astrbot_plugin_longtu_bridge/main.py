@@ -2295,6 +2295,7 @@ class LongtuQqBridge(Star):
                 "media_share": media_group_enabled and (
                     has_media_payload
                     or bool(MEDIA_SHARE_PATTERN.search(text or ""))
+                    or bool(MEDIA_ACK_PATTERN.search(str(rich_segments)))
                 ),
                 # 保留旧字段，便于旧版 Node 服务平滑升级。
                 "image_base64": image_base64s[0] if image_base64s else "",
