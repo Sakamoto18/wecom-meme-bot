@@ -93,17 +93,23 @@ async function runYtDlp(url, {
   command = 'yt-dlp',
   timeoutMs = 120_000,
   outputDirectory,
+  cookiesFile = '',
+  cookie = '',
 } = {}) {
   await mkdir(outputDirectory, { recursive: true });
   const basename = `${Date.now()}-${randomBytes(8).toString('hex')}`;
   const outputTemplate = path.join(outputDirectory, `${basename}.%(ext)s`);
-  const { stdout } = await runCommand(command, [
+  const args = [
     '--no-playlist', '--no-warnings', '--no-progress',
     '--format', 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b',
     '--merge-output-format', 'mp4', '--recode-video', 'mp4',
     '--print', 'after_move:filepath', '--print-json',
-    '--output', outputTemplate, url,
-  ], { timeoutMs, cwd: outputDirectory });
+    '--output', outputTemplate,
+  ];
+  if (cookiesFile) args.push('--cookies', cookiesFile);
+  if (cookie) args.push('--add-header', `Cookie: ${cookie}`);
+  args.push(url);
+  const { stdout } = await runCommand(command, args, { timeoutMs, cwd: outputDirectory });
 
   const info = parsePrintedJson(stdout);
   const printedPath = String(stdout).split(/\r?\n/gu)
@@ -202,6 +208,8 @@ export class MediaResolver {
   constructor(options = {}) {
     this.enabled = options.enabled === true;
     this.command = options.command || 'yt-dlp';
+    this.cookiesFile = String(options.cookiesFile || '').trim();
+    this.cookie = String(options.cookie || '').trim();
     this.timeoutMs = options.timeoutMs ?? 120_000;
     this.cacheTtlMs = Math.max(0, Number(options.cacheTtlMs ?? 10 * 60 * 1000));
     this.cacheDirectory = options.cacheDirectory || path.join(os.tmpdir(), 'longtu-media-cache');
@@ -500,6 +508,8 @@ export class MediaResolver {
             command: this.command,
             timeoutMs: this.timeoutMs,
             outputDirectory: this.cacheDirectory,
+            cookiesFile: this.cookiesFile,
+            cookie: this.cookie,
           });
         } catch (ytError) {
           try {
