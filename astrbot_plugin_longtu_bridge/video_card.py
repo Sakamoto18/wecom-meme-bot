@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 ASSETS = Path(__file__).resolve().parent / "assets"
-LOGOS = {"bilibili": "bilibili.png", "xiaohongshu": "xiaohongshu.png"}
+LOGOS = {"bilibili": "bilibili.png", "xiaohongshu": "xiaohongshu.png", "douyin": "douyin.png"}
 
 
 @lru_cache(maxsize=4)
