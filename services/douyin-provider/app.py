@@ -1,4 +1,4 @@
-import asyncio, os
+import asyncio, os, html
 from fastapi import FastAPI
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -62,5 +62,6 @@ async def resolve(req:Req):
     if real_requests: d['video']=real_requests[-1]
    await page.close()
    if not d.get('video'): return {'status':'failed','msg':'未获取到视频地址，请先完成抖音登录'}
+   d['video']=html.unescape(d['video'])
    return {'status':'success','data':{'media_type':'video','video_url':d['video'],'cover':d['cover'],'title':d['title'],'description':d['desc']}}
   except Exception as e: return {'status':'failed','msg':str(e)}
