@@ -9,7 +9,7 @@ async def health(): return {'status':'ok'}
 async def get_context():
  global context
  if context: return context
- pw=await async_playwright().start(); context=await pw.chromium.launch_persistent_context(os.getenv('DOUYIN_PROFILE','/data/profile'),headless=True,args=['--disable-dev-shm-usage']); return context
+ pw=await async_playwright().start(); context=await pw.chromium.launch_persistent_context(os.getenv('DOUYIN_PROFILE','/data/profile'),headless=True,executable_path='/usr/bin/chromium',args=['--no-sandbox','--disable-dev-shm-usage','--disable-gpu']); return context
 @app.post('/resolve')
 async def resolve(req:Req):
  async with lock:
