@@ -1,4 +1,13 @@
 services:
+  douyin-provider:
+    build: ./services/douyin-provider
+    container_name: longtu-douyin-provider
+    restart: unless-stopped
+    volumes:
+      - ./data/douyin-profile:/data/profile
+    networks:
+      astrbot-network:
+        aliases: [douyin-provider]
   qq-bot:
     build:
       context: .
@@ -12,6 +21,7 @@ services:
     environment:
       QQ_API_HOST: 0.0.0.0
       QQ_API_PORT: 8787
+      DOUYIN_PROVIDER_URL: http://douyin-provider:9001/resolve
     volumes:
       - ./memes:/app/memes:ro
       - ./config:/app/config:ro
