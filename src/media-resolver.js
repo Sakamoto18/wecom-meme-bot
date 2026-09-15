@@ -7,6 +7,7 @@ import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { resolveSharedUrl } from './share-resolver.js';
+import { warmRemoteMedia } from './media-stream-proxy.js';
 import {
   extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
 } from './bilibili-provider.js';
@@ -304,6 +305,9 @@ export class MediaResolver {
       expiresAt,
       size: positive(value.size),
     });
+    // Start DNS/TLS/CDN negotiation immediately; card rendering can overlap
+    // with this warm-up before QQ requests the proxy URL.
+    warmRemoteMedia(this.mediaFiles.get(id), { logger: this.logger }).catch(() => {});
     return {
       url: `${this.publicBaseUrl}/v1/qq/media/${id}`,
       mediaId: id,
@@ -335,6 +339,12 @@ export class MediaResolver {
     if (item.remoteUrl) return { ...item, remote: true };
     const info = await stat(item.filePath).catch(() => null);
     return info?.isFile() ? { ...item, size: info.size } : null;
+  }
+
+  warm(mediaId) {
+    const item = this.mediaFiles.get(String(mediaId || ''));
+    if (!item?.remoteUrl) return;
+    warmRemoteMedia(item, { logger: this.logger }).catch(() => {});
   }
 
   async resolve(candidate) {
