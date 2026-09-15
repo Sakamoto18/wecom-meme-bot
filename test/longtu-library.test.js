@@ -175,6 +175,8 @@ test('解析图库聊天管理指令', () => {
     action: 'delete-this', force: false, shortId: 'LT-A1B2C3D4', alias: '',
   });
   assert.equal(parseLongtuManagementCommand('/help').action, 'ignored-slash');
+  assert.equal(parseLongtuManagementCommand('/').action, 'ignored-slash');
+  assert.equal(parseLongtuManagementCommand(' / ').action, 'ignored-slash');
   assert.equal(parseLongtuManagementCommand('把这张龙图添加进图库'), null);
   assert.equal(parseLongtuManagementCommand('图片标记赛尔号'), null);
   assert.equal(parseLongtuManagementCommand('删除上一张龙图'), null);
