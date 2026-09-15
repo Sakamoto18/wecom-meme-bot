@@ -616,6 +616,8 @@ export async function createQqRuntime() {
   const mediaResolver = new MediaResolver({
     enabled: parseBoolean(process.env.QQ_MEDIA_EXTRACT_ENABLED, false),
     command: process.env.QQ_MEDIA_YTDLP_COMMAND?.trim() || 'yt-dlp',
+    cookiesFile: process.env.QQ_MEDIA_YTDLP_COOKIES_FILE?.trim() || '',
+    cookie: process.env.QQ_MEDIA_YTDLP_COOKIE?.trim() || '',
     timeoutMs: (parsePositiveNumber(
       process.env.QQ_MEDIA_DOWNLOAD_TIMEOUT_SECONDS
         ?? process.env.QQ_MEDIA_RESOLVE_TIMEOUT_SECONDS,
