@@ -10,7 +10,7 @@ async def health(): return {'status':'ok'}
 async def get_context():
  global context
  if context: return context
- pw=await async_playwright().start(); context=await pw.chromium.launch_persistent_context(os.getenv('DOUYIN_PROFILE','/data/profile'),headless=True,executable_path='/usr/bin/chromium',args=['--no-sandbox','--disable-dev-shm-usage','--disable-gpu']); return context
+ pw=await async_playwright().start(); context=await pw.chromium.launch_persistent_context(os.getenv('DOUYIN_PROFILE','/data/profile'),headless=False,executable_path='/usr/bin/chromium',args=['--no-sandbox','--disable-dev-shm-usage','--disable-gpu']); return context
 @app.get('/login.png')
 async def login_png():
  global login_page
