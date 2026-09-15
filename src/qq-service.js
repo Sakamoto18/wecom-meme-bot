@@ -2766,6 +2766,11 @@ export class QqBotService {
   }
 
   async handleNormalizedMessage(payload) {
+    // A bare slash is an incomplete command. Drop it before media, history,
+    // or LLM handling so it can never produce an authentication/error reply.
+    if (String(payload.text ?? '').trim() === '/') {
+      return { mode: 'ignored', messages: [] };
+    }
     const candidates = mediaCandidates({
       text: payload.text,
       richSegments: payload.richSegments,
