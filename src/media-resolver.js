@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
+import { mkdir, readdir, stat, unlink, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
@@ -106,7 +106,30 @@ async function runYtDlp(url, {
     '--print', 'after_move:filepath', '--print-json',
     '--output', outputTemplate,
   ];
-  if (cookiesFile) args.push('--cookies', cookiesFile);
+  let normalizedCookiesFile = cookiesFile;
+  if (cookiesFile) {
+    try {
+      const rawCookies = await readFile(cookiesFile, 'utf8');
+      if (/^\s*[\[{]/u.test(rawCookies)) {
+        const parsed = JSON.parse(rawCookies);
+        const entries = Array.isArray(parsed) ? parsed : (parsed.cookies || []);
+        const lines = ['# Netscape HTTP Cookie File'];
+        for (const item of entries) {
+          const domain = String(item.domain || item.host || '.douyin.com');
+          const includeSubdomains = domain.startsWith('.') ? 'TRUE' : 'FALSE';
+          const pathValue = String(item.path || '/');
+          const secure = item.secure ? 'TRUE' : 'FALSE';
+          const expiry = Number(item.expirationDate || item.expires || 0) || 0;
+          const name = String(item.name || '');
+          const value = String(item.value || '');
+          if (name) lines.push([domain, includeSubdomains, pathValue, secure, expiry, name, value].join('\t'));
+        }
+        normalizedCookiesFile = path.join(outputDirectory, '.cookies.normalized.txt');
+        await writeFile(normalizedCookiesFile, `${lines.join('\n')}\n`, { mode: 0o600 });
+      }
+    } catch { /* yt-dlp will report malformed cookie files */ }
+  }
+  if (normalizedCookiesFile) args.push('--cookies', normalizedCookiesFile);
   if (cookie) args.push('--add-header', `Cookie: ${cookie}`);
   args.push(url);
   const { stdout } = await runCommand(command, args, { timeoutMs, cwd: outputDirectory });
