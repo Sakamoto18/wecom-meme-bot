@@ -298,16 +298,32 @@ export class MediaResolver {
   registerRemoteMedia(value) {
     const id = randomBytes(24).toString('base64url');
     const expiresAt = Date.now() + this.cacheTtlMs;
-    this.mediaFiles.set(id, {
+    const item = {
       remoteUrl: value.mediaUrl,
       backupUrls: value.backupMediaUrls || [],
       requestHeaders: value.requestHeaders || {},
       expiresAt,
       size: positive(value.size),
-    });
+    };
+    this.mediaFiles.set(id, item);
+    // Download in the background while the share card is rendered. The proxy
+    // will await this promise and stream the completed local file to NapCat.
+    item.prefetchPromise = downloadDirectMedia({ mediaUrl: value.mediaUrl, requestHeaders: value.requestHeaders || {} }, this.timeoutMs, this.cacheDirectory)
+      .then((downloaded) => {
+        item.filePath = downloaded.filePath;
+        item.size = downloaded.outputBytes;
+        item.remoteUrl = '';
+        item.backupUrls = [];
+        this.logger.info(`视频后台预下载完成：bytes=${item.size}`);
+        return item;
+      })
+      .catch((error) => {
+        this.logger.warn(`视频后台预下载失败，回退流式代理：${error.message}`);
+        return item;
+      });
     // Start DNS/TLS/CDN negotiation immediately; card rendering can overlap
     // with this warm-up before QQ requests the proxy URL.
-    warmRemoteMedia(this.mediaFiles.get(id), { logger: this.logger }).catch(() => {});
+    warmRemoteMedia(item, { logger: this.logger }).catch(() => {});
     return {
       url: `${this.publicBaseUrl}/v1/qq/media/${id}`,
       mediaId: id,
@@ -335,6 +351,11 @@ export class MediaResolver {
         if (item.filePath) await unlink(item.filePath).catch(() => {});
       }
       return null;
+    }
+    if (item.prefetchPromise) await Promise.race([item.prefetchPromise, new Promise((resolve) => setTimeout(resolve, Math.max(100, this.timeoutMs)))]);
+    if (item.filePath) {
+      const info = await stat(item.filePath).catch(() => null);
+      if (info?.isFile()) return { ...item, size: info.size };
     }
     if (item.remoteUrl) return { ...item, remote: true };
     const info = await stat(item.filePath).catch(() => null);
