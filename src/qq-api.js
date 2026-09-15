@@ -613,6 +613,16 @@ export async function createQqRuntime() {
     cookie: process.env.XHS_COOKIE,
     timeoutMs: (parsePositiveNumber(process.env.XHS_PROVIDER_TIMEOUT_SECONDS) ?? 6) * 1000,
   });
+  const douyinProviderUrl = process.env.DOUYIN_PROVIDER_URL?.trim();
+  const mediaProvider = async ({ url, platform }) => {
+    if (platform === 'xiaohongshu') return xhsProvider?.({ url, platform });
+    if (platform !== 'douyin' || !douyinProviderUrl) return null;
+    const response = await fetch(douyinProviderUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url }), signal: AbortSignal.timeout(25_000) });
+    if (!response.ok) throw new Error(`抖音 Provider HTTP ${response.status}`);
+    const payload = await response.json();
+    if (payload?.status !== 'success') throw new Error(String(payload?.msg || '抖音 Provider 解析失败'));
+    return payload.data || payload;
+  };
   const mediaResolver = new MediaResolver({
     enabled: parseBoolean(process.env.QQ_MEDIA_EXTRACT_ENABLED, false),
     command: process.env.QQ_MEDIA_YTDLP_COMMAND?.trim() || 'yt-dlp',
@@ -627,7 +637,7 @@ export async function createQqRuntime() {
     maxCacheBytes: (parsePositiveNumber(process.env.QQ_MEDIA_CACHE_MAX_MIB) ?? 512) * 1024 * 1024,
     publicBaseUrl: process.env.QQ_MEDIA_PUBLIC_BASE_URL?.trim() || 'http://qq-bot:8787',
     maxConcurrent: parsePositiveInteger(process.env.QQ_MEDIA_MAX_CONCURRENT) ?? 2,
-    providerResolver: xhsProvider,
+    providerResolver: mediaProvider,
     logger: console,
   });
   const service = new QqBotService({
