@@ -4,6 +4,11 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
 app=FastAPI(); context=None; login_page=None; lock=asyncio.Lock()
+def is_real_video_url(url):
+ low=str(url or '').lower()
+ if not low or 'uuu_265.mp4' in low:
+  return False
+ return bool('.mp4' in low or '.m3u8' in low or 'playwm' in low or 'play/' in low)
 class Req(BaseModel): url:str
 @app.get('/healthz')
 async def health(): return {'status':'ok'}
@@ -49,10 +54,12 @@ async def resolve(req:Req):
     const html=document.documentElement?.outerHTML || '';
     const urls=[...html.matchAll(/https?:\\/\\/[^\"'\s<>]+/g)].map(m=>m[0].replaceAll('\\/','/'));
     const candidates=[...videos,...resources,...urls].filter(Boolean);
-    const video=candidates.find(u=>/\.(mp4|m3u8)(?:[?#]|$)/i.test(u)||/playwm|play\//i.test(u)) || '';
+    const video=candidates.find(u=>{ const low=String(u).toLowerCase(); return low.indexOf('uuu_265.mp4')<0 && (/\.(mp4|m3u8)(?:[?#]|$)/i.test(u)||/playwm|play\//i.test(u)); }) || '';
     return {title:document.title,desc:document.querySelector('meta[name=description]')?.content||'',cover:document.querySelector('meta[property="og:image"]')?.content||'',video};
    }''')
-   if not d.get('video') and video_requests: d['video']=video_requests[-1]
+   if not d.get('video'):
+    real_requests=[url for url in video_requests if is_real_video_url(url)]
+    if real_requests: d['video']=real_requests[-1]
    await page.close()
    if not d.get('video'): return {'status':'failed','msg':'未获取到视频地址，请先完成抖音登录'}
    return {'status':'success','data':{'media_type':'video','video_url':d['video'],'cover':d['cover'],'title':d['title'],'description':d['desc']}}
