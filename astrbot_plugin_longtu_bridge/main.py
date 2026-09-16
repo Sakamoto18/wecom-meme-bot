@@ -1895,15 +1895,16 @@ class LongtuQqBridge(Star):
             )
             self.cover_cache.pop(oldest_key, None)
 
-    async def _cover_bytes(self, cover_url: str, message: dict) -> bytes:
-        """取封面字节：先看缓存，再下载，失败重试几次。
+    async def _cover_bytes(self, cover_url: str, message: dict, label: str = "视频封面") -> bytes:
+        """取图片字节：先看缓存，再下载，失败重试几次。
 
-        重复转发同一条视频时直接复用上次的字节，卡片和第一次完全一样；
-        拿不到就返回空，由渲染侧出无封面卡片，不影响其余内容。
+        封面和图集预览共用这条路径。重复转发同一条分享时直接复用上次的
+        字节，卡片和第一次完全一样；拿不到就返回空，由渲染侧退化处理，
+        封面变成无封面卡片、预览变成灰格，都不影响卡片其余内容。
         """
         cached = self._cached_cover(cover_url)
         if cached:
-            logger.info(f"视频封面命中缓存：bytes={len(cached)}")
+            logger.info(f"{label}命中缓存：bytes={len(cached)}")
             return cached
         headers = {"User-Agent": "Mozilla/5.0"}
         if message.get("provider") == "xiaohongshu":
@@ -1929,10 +1930,10 @@ class LongtuQqBridge(Star):
                 return payload
             except Exception as error:
                 logger.warning(
-                    f"视频封面下载失败（第 {attempt + 1}/{COVER_FETCH_ATTEMPTS} 次）："
+                    f"{label}下载失败（第 {attempt + 1}/{COVER_FETCH_ATTEMPTS} 次）："
                     f"{type(error).__name__} status={getattr(error, 'status', None)}",
                 )
-        logger.warning("视频封面全部重试失败，改出无封面卡片")
+        logger.warning(f"{label}全部重试失败，该位置留空")
         return b""
 
     async def _video_card(self, message: dict) -> str:
@@ -1943,21 +1944,14 @@ class LongtuQqBridge(Star):
             preview_bytes = None
             images = message.get("images") or []
             if len(images) > 1:
-                async def fetch_preview(url):
-                    try:
-                        headers = {"User-Agent": "Mozilla/5.0"}
-                        if message.get("provider") == "xiaohongshu":
-                            headers["Referer"] = "https://www.xiaohongshu.com/"
-                        async with self.session.get(str(url), headers=headers,
-                                                    timeout=aiohttp.ClientTimeout(total=5)) as response:
-                            response.raise_for_status()
-                            return await response.read()
-                    except Exception as error:
-                        logger.warning(f"图文预览下载失败：{type(error).__name__}")
-                        return b""
+                # 预览图和封面走同一条取图路径，一并拿到重试和缓存：抖音图集
+                # 的 CDN 会短时拒绝，没有重试时格子就空成灰块。
                 # Keep source order, even if one download fails. Only nine
                 # previews are fetched; original gallery delivery is unchanged.
-                preview_bytes = await asyncio.gather(*(fetch_preview(url) for url in images[:9]))
+                preview_bytes = await asyncio.gather(*(
+                    self._cover_bytes(str(url), message, label="图文预览")
+                    for url in images[:9]
+                ))
             elif cover.startswith(("http://", "https://")):
                 cover_bytes = await self._cover_bytes(cover, message)
             if avatar_url.startswith(("http://", "https://")):
