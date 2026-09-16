@@ -56,11 +56,14 @@ async def resolve(req:Req):
     const avatar=authorImg?.currentSrc || '';
     const author=authorImg?.alt || '';
     const keywords=meta('keywords').split(',').map(x=>x.trim()).filter(Boolean);
+    const poster=[...document.querySelectorAll('video[poster], video')].map(v=>v.poster || '').find(Boolean) || '';
     const html=document.documentElement?.outerHTML || '';
     const urls=[...html.matchAll(/https?:\\/\\/[^\"'\s<>]+/g)].map(m=>m[0].replaceAll('\\/','/'));
     const candidates=[...videos,...resources,...urls].filter(Boolean);
     const video=candidates.find(u=>{ const low=String(u).toLowerCase(); return low.indexOf('uuu_265.mp4')<0 && (/\.(mp4|m3u8)(?:[?#]|$)/i.test(u)||/playwm|play\//i.test(u)); }) || '';
-    return {title:document.title,desc:meta('description'),cover:meta('lark:url:video_cover_image_url') || document.querySelector('meta[property="og:image"]')?.content||'',video,author,avatar,tags:keywords};
+    const imageCandidates=[...document.images].map(img=>img.currentSrc || img.src || '').filter(Boolean);
+    const embeddedCover=imageCandidates.find(u=>{ const low=String(u).toLowerCase(); return !/aweme-avatar|icon|logo/.test(low) && /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(u); }) || '';
+    return {title:document.title,desc:meta('description'),cover:meta('lark:url:video_cover_image_url') || document.querySelector('meta[property="og:image"]')?.content || poster || embeddedCover,video,author,avatar,tags:keywords};
    }''')
    if not d.get('video'):
     real_requests=[url for url in video_requests if is_real_video_url(url)]
