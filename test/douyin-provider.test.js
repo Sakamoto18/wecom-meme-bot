@@ -7,11 +7,18 @@ import { createDouyinProvider } from '../src/douyin-provider.js';
 import { MediaResolver } from '../src/media-resolver.js';
 import { QqBotService } from '../src/qq-service.js';
 
-test('抖音 HTTP 响应经 Provider 和媒体解析器生成可发送视频，跨群复用且不回退下载', async (t) => {
+test('抖音 HTTP 响应经 Provider 和媒体解析器生成代理视频，跨群复用且不直连 CDN', async (t) => {
   const cacheDirectory = await mkdtemp(path.join(os.tmpdir(), 'douyin-contract-'));
   let calls = 0;
+  let providerCalls = 0;
   t.mock.method(globalThis, 'fetch', async (endpoint, options) => {
     calls++;
+    if (endpoint === 'https://cdn.example/work.mp4') {
+      return new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([0, 1, 2])); controller.close(); } }), {
+        status: 200, headers: { 'content-length': '3' },
+      });
+    }
+    providerCalls++;
     assert.equal(endpoint, 'http://provider.test/resolve');
     assert.deepEqual(JSON.parse(options.body), { url: 'https://v.douyin.com/example/' });
     return new Response(JSON.stringify({ status: 'success', data: {
@@ -22,6 +29,7 @@ test('抖音 HTTP 响应经 Provider 和媒体解析器生成可发送视频，�
   });
   const resolver = new MediaResolver({ enabled: true, cacheDirectory,
     command: 'must-not-run-yt-dlp',
+    publicBaseUrl: 'http://qq-bot:8787',
     providerResolver: createDouyinProvider({ providerUrl: 'http://provider.test/resolve' }),
   });
   const service = new QqBotService({ mediaResolver: resolver, logger: { info() {}, warn() {} } });
@@ -31,13 +39,14 @@ test('抖音 HTTP 响应经 Provider 和媒体解析器生成可发送视频，�
         text: 'https://v.douyin.com/example/', media_share: true });
       assert.equal(result.mode, 'media');
       assert.equal(result.messages[0].type, 'video');
-      assert.equal(result.messages[0].url, 'https://cdn.example/work.mp4');
+      assert.match(result.messages[0].url, /^http:\/\/qq-bot:8787\/v1\/qq\/media\//u);
       assert.equal(result.messages[0].coverUrl, 'https://cdn.example/cover.jpg');
       assert.equal(result.messages[0].author, '原作者');
       assert.equal(result.messages[0].avatarUrl, 'https://cdn.example/avatar.jpg');
       assert.equal(result.messages[0].provider, 'douyin');
     }
-    assert.equal(calls, 1);
+    assert.equal(providerCalls, 1);
+    assert.ok(calls >= 2);
   } finally {
     resolver.close();
     await rm(cacheDirectory, { recursive: true, force: true });
