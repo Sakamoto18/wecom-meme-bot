@@ -109,6 +109,31 @@ class CardTests(unittest.TestCase):
         self.assertEqual(lines[0], "简介第一段")
         self.assertTrue(all(font.getlength(line) <= 712 for line in lines))
 
+    def test_unreadable_cover_or_avatar_still_renders_the_card(self):
+        """CDN 拒绝时返回的错误页不能让整张卡片消失。"""
+        message = {"title": "测试标题", "author": "作者", "provider": "douyin",
+                   "description": "简介", "tags": ["标签"]}
+        error_page = b"<html><head><title>403 Forbidden</title></head><body>x</body></html>"
+        truncated = b"\xff\xd8\xff\xe0\x00\x10JFIF"
+        baseline = len(render_video_card(message, b"", b""))
+        for label, cover, avatar in (
+            ("cover 是错误页", error_page, b""),
+            ("cover 被截断", truncated, b""),
+            ("avatar 是错误页", b"", error_page),
+            ("两个都坏", error_page, error_page),
+        ):
+            with self.subTest(label):
+                # 坏图退化成无封面卡片，而不是抛异常或返回空。
+                self.assertEqual(len(render_video_card(message, cover, avatar)), baseline)
+
+    def test_readable_cover_is_still_drawn(self):
+        message = {"title": "测试标题", "author": "作者", "provider": "douyin"}
+        with_cover = render_video_card(message, png("red", (720, 1280)), b"")
+        without_cover = render_video_card(message, b"", b"")
+        self.assertGreater(len(with_cover), len(without_cover))
+        with Image.open(io.BytesIO(with_cover)) as card:
+            self.assertGreater(card.height, 760)
+
 
 if __name__ == "__main__":
     unittest.main()

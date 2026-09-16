@@ -183,11 +183,17 @@ def render_video_card(message, cover_bytes=b"", avatar_bytes=b"", preview_bytes=
     if preview_bytes is not None and len(message.get("images") or []) > 1:
         cover = gallery_grid(preview_bytes, len(message["images"]))
     elif cover_bytes:
-        cover = Image.open(io.BytesIO(cover_bytes)).convert("RGB")
-        portrait = cover.height > cover.width
-        target = (430, 760) if portrait else (712, 400)
-        scale = min(target[0] / cover.width, target[1] / cover.height)
-        cover = cover.resize((round(cover.width * scale), round(cover.height * scale)), Image.Resampling.LANCZOS)
+        # 状态码正常但内容不是图片（CDN 的 200 错误页、截断的响应）时，只
+        # 放弃封面，卡片其余部分照常渲染。gallery_grid 同理。
+        try:
+            cover = Image.open(io.BytesIO(cover_bytes)).convert("RGB")
+        except (OSError, ValueError):
+            cover = None
+        if cover:
+            portrait = cover.height > cover.width
+            target = (430, 760) if portrait else (712, 400)
+            scale = min(target[0] / cover.width, target[1] / cover.height)
+            cover = cover.resize((round(cover.width * scale), round(cover.height * scale)), Image.Resampling.LANCZOS)
     cover_height = cover.height if cover else 0
     footer = card_footer(message)
     footer_lines = wrap_text(footer, small, width - padding * 2) if footer else []
@@ -198,13 +204,17 @@ def render_video_card(message, cover_bytes=b"", avatar_bytes=b"", preview_bytes=
     draw = ImageDraw.Draw(card)
     author = str(message.get("author") or "").strip()
     if avatar_bytes:
-        avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
-        avatar = ImageOps.fit(avatar, (44, 44), method=Image.Resampling.LANCZOS)
-        # Supersample the circular mask for a smooth edge at the displayed size.
-        mask = Image.new("L", (176, 176), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, 175, 175), fill=255)
-        mask = mask.resize(avatar.size, Image.Resampling.LANCZOS)
-        card.paste(avatar, (padding, 20), mask)
+        try:
+            avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
+        except (OSError, ValueError):
+            avatar = None
+        if avatar:
+            avatar = ImageOps.fit(avatar, (44, 44), method=Image.Resampling.LANCZOS)
+            # Supersample the circular mask for a smooth edge at the displayed size.
+            mask = Image.new("L", (176, 176), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, 175, 175), fill=255)
+            mask = mask.resize(avatar.size, Image.Resampling.LANCZOS)
+            card.paste(avatar, (padding, 20), mask)
     if author:
         draw_author(card, author, small)
     if message.get("provider") == "bilibili" and message.get("publishedAt"):

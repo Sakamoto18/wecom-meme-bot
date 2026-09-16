@@ -61,6 +61,13 @@ MEDIA_ACK_PATTERN = re.compile(
 # \u53c2\u4e0e\u7684\u4f1a\u8bdd\u8303\u56f4\u4e0e\u89e3\u6790\u5f00\u5173\u4e00\u81f4\uff08_media_group_enabled\uff09\uff0c\u4e0d\u9650\u5b9a\u67d0\u4e2a\u4eba\u3002
 MEDIA_SUCCESS_EMOJI_ID = "478"
 MEDIA_FAILURE_EMOJI_ID = "479"
+# \u540c\u4e00\u6761\u89c6\u9891\u88ab\u518d\u6b21\u8f6c\u53d1\u65f6\uff0c\u5c01\u9762\u76f4\u63a5\u590d\u7528\u4e0a\u6b21\u4e0b\u8f7d\u5230\u7684\u5b57\u8282\uff0c\u5361\u7247\u56e0\u6b64\u548c\u7b2c\u4e00\u6b21
+# \u5b8c\u5168\u4e00\u81f4\uff0c\u4e5f\u4e0d\u518d\u5411 CDN \u91cd\u590d\u8bf7\u6c42\u3002\u6296\u97f3\u7b7e\u540d\u57df\u540d\u4f1a\u77ed\u65f6\u62d2\u7edd\u91cd\u590d\u8bf7\u6c42\uff0c\u5b9e\u6d4b\u540c
+# \u4e00\u4e2a\u5730\u5740\u5148 403\u3001\u5341\u5206\u949f\u540e\u53c8 200\uff0c\u6240\u4ee5\u9996\u6b21\u5931\u8d25\u8fd8\u8981\u91cd\u8bd5\u51e0\u6b21\u3002
+COVER_CACHE_TTL_SECONDS = 6 * 60 * 60
+COVER_CACHE_MAX_ENTRIES = 64
+COVER_FETCH_ATTEMPTS = 3
+COVER_FETCH_RETRY_SECONDS = 0.6
 
 
 @register(
@@ -81,6 +88,8 @@ class LongtuQqBridge(Star):
         # 静默观察不调用模型，但保留短时间内最近一批图片，支持用户先发图、
         # 再单独 @ 机器人询问“上面这张图”的常见 QQ 使用方式。
         self.recent_image_cache: dict[str, tuple[float, list[str]]] = {}
+        # 同一条视频的封面字节，键是去掉签名的地址，重复转发直接命中。
+        self.cover_cache: dict[str, tuple[float, bytes]] = {}
         self.report_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
         self.internal_send_runner: web.AppRunner | None = None
@@ -1853,6 +1862,79 @@ class LongtuQqBridge(Star):
                 raise RuntimeError("QQ Bot API 返回格式无效")
             return body
 
+    @staticmethod
+    def _cover_cache_key(cover_url: str) -> str:
+        """去掉查询串再做键。
+
+        抖音每次解析同一条视频都会给出不同的 x-signature，但路径里的图片
+        标识是稳定的；按完整地址缓存永远不会命中。
+        """
+        without_query = str(cover_url or "").split("?", 1)[0].split("#", 1)[0]
+        return without_query.strip()
+
+    def _cached_cover(self, cover_url: str) -> bytes:
+        key = self._cover_cache_key(cover_url)
+        cached = self.cover_cache.get(key)
+        if not cached:
+            return b""
+        stored_at, payload = cached
+        if time.monotonic() - stored_at > COVER_CACHE_TTL_SECONDS:
+            self.cover_cache.pop(key, None)
+            return b""
+        return payload
+
+    def _remember_cover(self, cover_url: str, payload: bytes) -> None:
+        key = self._cover_cache_key(cover_url)
+        if not key or not payload:
+            return
+        self.cover_cache[key] = (time.monotonic(), payload)
+        if len(self.cover_cache) > COVER_CACHE_MAX_ENTRIES:
+            oldest_key = min(
+                self.cover_cache,
+                key=lambda cache_key: self.cover_cache[cache_key][0],
+            )
+            self.cover_cache.pop(oldest_key, None)
+
+    async def _cover_bytes(self, cover_url: str, message: dict) -> bytes:
+        """取封面字节：先看缓存，再下载，失败重试几次。
+
+        重复转发同一条视频时直接复用上次的字节，卡片和第一次完全一样；
+        拿不到就返回空，由渲染侧出无封面卡片，不影响其余内容。
+        """
+        cached = self._cached_cover(cover_url)
+        if cached:
+            logger.info(f"视频封面命中缓存：bytes={len(cached)}")
+            return cached
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if message.get("provider") == "xiaohongshu":
+            headers["Referer"] = "https://www.xiaohongshu.com/"
+        for attempt in range(COVER_FETCH_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(COVER_FETCH_RETRY_SECONDS)
+            try:
+                async with self.session.get(
+                    cover_url, headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as response:
+                    # 不看状态码的话，CDN 拒绝时返回的错误页 HTML 会被当成
+                    # 图片数据，之前就是这样让整张卡片一起没了的。
+                    response.raise_for_status()
+                    content_type = str(response.headers.get("Content-Type") or "").lower()
+                    payload = await response.read()
+                if content_type and not content_type.startswith("image/"):
+                    raise RuntimeError(f"封面返回非图片内容：{content_type}")
+                if not payload:
+                    raise RuntimeError("封面返回空内容")
+                self._remember_cover(cover_url, payload)
+                return payload
+            except Exception as error:
+                logger.warning(
+                    f"视频封面下载失败（第 {attempt + 1}/{COVER_FETCH_ATTEMPTS} 次）："
+                    f"{type(error).__name__} status={getattr(error, 'status', None)}",
+                )
+        logger.warning("视频封面全部重试失败，改出无封面卡片")
+        return b""
+
     async def _video_card(self, message: dict) -> str:
         cover = str(message.get("coverUrl") or "").strip()
         avatar_url = str(message.get("avatarUrl") or "").strip()
@@ -1877,8 +1959,7 @@ class LongtuQqBridge(Star):
                 # previews are fetched; original gallery delivery is unchanged.
                 preview_bytes = await asyncio.gather(*(fetch_preview(url) for url in images[:9]))
             elif cover.startswith(("http://", "https://")):
-                async with self.session.get(cover, timeout=aiohttp.ClientTimeout(total=5)) as response:
-                    cover_bytes = await response.read()
+                cover_bytes = await self._cover_bytes(cover, message)
             if avatar_url.startswith(("http://", "https://")):
                 try:
                     avatar_headers = {"User-Agent": "Mozilla/5.0"}
