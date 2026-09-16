@@ -21,11 +21,15 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 25_000 } = {}) {
     if (new URL(mediaUrl).pathname.endsWith('/uuu_265.mp4')) {
       throw new Error('抖音 Provider 返回了页面占位视频');
     }
+    const description = String(data.description || data.desc || '')
+      .replace(/\s+-\s+抖音\s*$/u, '')
+      .replace(/来抖音，记录美好生活！?\s*$/u, '')
+      .trim();
     return {
       mediaUrl,
       coverUrl: normalizeMediaUrl(data.coverUrl || data.cover_url || data.cover),
       title: String(data.title || ''),
-      description: String(data.description || data.desc || ''),
+      description,
       author: String(data.author || ''),
       avatarUrl: normalizeMediaUrl(data.avatarUrl || data.avatar_url),
       tags: Array.isArray(data.tags) ? data.tags : [],
