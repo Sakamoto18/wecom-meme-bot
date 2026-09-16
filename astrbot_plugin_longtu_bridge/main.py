@@ -2339,12 +2339,25 @@ class LongtuQqBridge(Star):
                         f"视频分享数据：title={str(video_message.get('title') or '')[:80]} "
                         f"cover={'yes' if video_message.get('coverUrl') else 'no'}",
                     )
-                    card = await self._video_card(video_message)
-                    logger.info(f"视频分享卡片：{'generated' if card else 'fallback'}")
-                    if card:
-                        # QQ may drop an image when it shares a MessageChain
-                        # with a video; send the generated card separately.
+                    # Video delivery is the primary result. Generate the card
+                    # in parallel, but never put a remote cover/image in the
+                    # same MessageChain: a 403 on a cover must not cancel the
+                    # video upload in NapCat.
+                    media_chain = [
+                        component for component in reply_chain
+                        if isinstance(component, Comp.Video)
+                    ]
+                    if not media_chain:
+                        media_chain = reply_chain
+                    if not bool(response.get("active_reply")):
+                        media_chain = self._reply_prefix(event, components) + media_chain
+                        media_chain = media_chain[len(self._reply_prefix(event, components)):]
+                    async def _deliver_card() -> None:
                         try:
+                            card = await self._video_card(video_message)
+                            logger.info(f"视频分享卡片：{'generated' if card else 'fallback'}")
+                            if not card:
+                                return
                             bot = getattr(event, "bot", None)
                             call_action = getattr(bot, "call_action", None)
                             private = event.is_private_chat()
@@ -2359,25 +2372,16 @@ class LongtuQqBridge(Star):
                             if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
                                 raise RuntimeError(f"QQ 图片接口返回失败：{result!r}")
                             logger.info(f"视频分享卡片：OneBot 图片回执={result!r}")
-                            # The OneBot image call is acknowledged once queued.
-                            # Avoid an artificial delay that slows every video
-                            # and serializes consecutive shares.
                             logger.info("视频分享卡片：独立图片消息已发送")
                         except Exception as error:
-                            logger.warning(f"视频分享卡片发送失败：{error}")
-                    cover = next((str(item.get("coverUrl") or "").strip()
-                                  for item in response.get("messages", [])
-                                  if item.get("type") == "video" and item.get("coverUrl")), "")
-                    if cover.startswith(("http://", "https://")) and not card:
-                        try:
-                            reply_chain.insert(0, Comp.Image(file=cover))
-                        except TypeError:
-                            pass
-                    title = next((str(item.get("title") or "").strip()
-                                  for item in response.get("messages", [])
-                                  if item.get("type") == "video" and item.get("title")), "")
-                    if title and not cover and not card:
-                        yield event.plain_result(title[:200])
+                            logger.warning(f"视频分享卡片发送失败（不影响视频）：{error}")
+                    # Do not await card generation here. The event consumer may
+                    # only request one yielded result; scheduling it guarantees
+                    # the video can be delivered immediately and the card stays
+                    # best effort in the background.
+                    asyncio.create_task(_deliver_card(), name="longtu-video-card")
+                    yield event.chain_result(media_chain)
+                    return
                 # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
                 # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
                 # 媒体结果直接发成可播放视频，不再挂引用；普通对话继续保留
