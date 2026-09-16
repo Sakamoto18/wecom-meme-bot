@@ -2454,8 +2454,21 @@ class LongtuQqBridge(Star):
                 with contextlib.suppress(Exception):
                     await self._react_media_result(event, False)
 
+            # 图文分享（小红书图集）在这里就把结果发完了，和视频一样要给出
+            # 结果回应。判据用 _send_forward_from_backend 的返回值：它是照
+            # OneBot 回执得出的，比 yield 有没有抛异常可靠——RespondStage
+            # 发送失败只记日志、不会让 yield 抛出。
+            gallery_mode = response.get("mode") == "media-gallery"
             if await self._send_forward_from_backend(event, response):
+                if gallery_mode:
+                    with contextlib.suppress(Exception):
+                        await self._react_media_result(event, True)
                 return
+            if gallery_mode:
+                # 合并转发和逐图发送都被 QQ 拒了。下面的原生图片链是最后一次
+                # 尝试，但它走同一个接口发同一批地址，成功概率很低。
+                with contextlib.suppress(Exception):
+                    await self._react_media_result(event, False)
 
             reply_chain = self._reply_chain_from_backend(response)
 
