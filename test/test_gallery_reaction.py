@@ -68,7 +68,7 @@ def build(response, forward_fails=False, image_fails=False):
     bridge._is_slash_command = lambda event: False
     bridge._should_reply = lambda event: True
     bridge._is_pure_bot_mention = lambda event: False
-    bridge._media_group_enabled = lambda event: True
+    bridge._media_group_enabled = lambda event, text='': True
     bridge._reply_prefix = lambda event, components: []
     bridge._raw_text = lambda event: 'https://www.xiaohongshu.com/explore/abc'
     bridge._text_for_backend = lambda *a, **k: 'https://www.xiaohongshu.com/explore/abc'

@@ -57,6 +57,14 @@ MEDIA_ACK_PATTERN = re.compile(
     r"douyin\.com|iesdouyin\.com|kuaishou\.com|gifshow\.com|v\.qq\.com)[^\s<>\u3000]*",
     re.IGNORECASE,
 )
+# \u6309\u5e73\u53f0\u8bc6\u522b\u5206\u4eab\u94fe\u63a5\uff0c\u4f9b\u6309\u7fa4\u7684\u5e73\u53f0\u767d\u540d\u5355\u4f7f\u7528\u3002\u57df\u540d\u5212\u5206\u4e0e Node \u4fa7
+# classifyMediaUrl \u4fdd\u6301\u4e00\u81f4\uff0c\u4e24\u8fb9\u5224\u65ad\u540c\u4e00\u6761\u94fe\u63a5\u5fc5\u987b\u5f97\u5230\u540c\u4e00\u4e2a\u5e73\u53f0\u3002
+MEDIA_PROVIDER_PATTERNS = {
+    "bilibili": re.compile(r"https?://[^\s<>\u3000]*(?:bilibili\.com|b23\.tv)", re.IGNORECASE),
+    "xiaohongshu": re.compile(r"https?://[^\s<>\u3000]*(?:xhslink\.com|xiaohongshu\.com)", re.IGNORECASE),
+    "douyin": re.compile(r"https?://[^\s<>\u3000]*(?:douyin\.com|iesdouyin\.com)", re.IGNORECASE),
+    "kuaishou": re.compile(r"https?://[^\s<>\u3000]*(?:kuaishou\.com|gifshow\.com)", re.IGNORECASE),
+}
 # \u5a92\u4f53\u7ed3\u679c\u56de\u5e94\uff1a\u76f4\u63a5\u6302\u5728\u53d1\u5206\u4eab\u94fe\u63a5\u90a3\u6761\u6d88\u606f\u4e0a\uff0c\u6210\u529f\u548c\u5931\u8d25\u5404\u7528\u4e00\u4e2a\u8868\u60c5\u3002
 # \u53c2\u4e0e\u7684\u4f1a\u8bdd\u8303\u56f4\u4e0e\u89e3\u6790\u5f00\u5173\u4e00\u81f4\uff08_media_group_enabled\uff09\uff0c\u4e0d\u9650\u5b9a\u67d0\u4e2a\u4eba\u3002
 MEDIA_SUCCESS_EMOJI_ID = "478"
@@ -703,10 +711,54 @@ class LongtuQqBridge(Star):
             if group_id.strip()
         }
 
-    def _media_group_enabled(self, event: AstrMessageEvent) -> bool:
-        """Return whether external video-share parsing is enabled for this chat."""
+    def _group_allowed_providers(self, group_id: str) -> set[str] | None:
+        """读取按群的平台白名单；没有配置该群时返回 None。
+
+        格式 `群号:平台|平台,群号:平台`，与 Node 侧
+        QQ_MEDIA_GROUP_ALLOWED_PROVIDERS 同一份配置。
+        """
+        configured = str(
+            os.getenv("QQ_MEDIA_GROUP_ALLOWED_PROVIDERS")
+            or self.config.get("media_group_allowed_providers")
+            or "",
+        )
+        for entry in configured.split(","):
+            separator = entry.find(":")
+            if separator <= 0:
+                continue
+            if entry[:separator].strip() != group_id:
+                continue
+            providers = {
+                item.strip().lower()
+                for item in entry[separator + 1:].split("|")
+                if item.strip()
+            }
+            if providers:
+                return providers
+        return None
+
+    @staticmethod
+    def _providers_in_text(text: str) -> set[str]:
+        return {
+            provider for provider, pattern in MEDIA_PROVIDER_PATTERNS.items()
+            if pattern.search(text or "")
+        }
+
+    def _media_group_enabled(self, event: AstrMessageEvent, text: str = "") -> bool:
+        """Return whether external video-share parsing is enabled for this chat.
+
+        白名单群里按平台判断：只有白名单内的平台才算开启，其余平台和整群
+        关闭时一样保持静默、不挂表情。`text` 为空时只做群级判断——此时无法
+        分辨平台，白名单群按开启处理，最终由 Node 侧按 provider 裁决。
+        """
         if event.is_private_chat():
             return True
+        group_id = str(event.get_group_id() or "").strip()
+        allowed_providers = self._group_allowed_providers(group_id)
+        if allowed_providers is not None:
+            if not text:
+                return True
+            return bool(self._providers_in_text(text) & allowed_providers)
         configured = (
             os.getenv("QQ_MEDIA_EXCLUDED_GROUPS")
             or self.config.get("media_excluded_groups")
@@ -717,7 +769,7 @@ class LongtuQqBridge(Star):
             for group_id in str(configured).split(",")
             if group_id.strip()
         }
-        return str(event.get_group_id() or "").strip() not in excluded_groups
+        return group_id not in excluded_groups
 
     @staticmethod
     def _enabled(value, default: bool = False) -> bool:
@@ -2221,8 +2273,11 @@ class LongtuQqBridge(Star):
             )
             rich_segments = self._rich_segments(event, quoted_chain)
             has_rich = bool(rich_segments)
-            media_group_enabled = self._media_group_enabled(event)
             raw_media_text = self._raw_text(event) or event.message_str or ""
+            # 平台白名单要看链接才能判断，分享地址可能只在富段卡片里。
+            media_group_enabled = self._media_group_enabled(
+                event, " ".join([raw_media_text, str(rich_segments)]),
+            )
             if (
                 not media_group_enabled
                 and (

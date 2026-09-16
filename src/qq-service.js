@@ -1211,6 +1211,8 @@ export class QqBotService {
     this.mediaResolver = options.mediaResolver ?? null;
     this.mediaUsageTracker = options.mediaUsageTracker ?? null;
     this.mediaExcludedGroups = new Set(options.mediaExcludedGroups ?? []);
+    this.mediaGroupAllowedProviders = options.mediaGroupAllowedProviders
+      instanceof Map ? options.mediaGroupAllowedProviders : new Map();
     this.largeGroupIds = new Set(options.largeGroupIds ?? []);
     this.largeGroupExcludedIds = new Set(options.largeGroupExcludedIds ?? []);
     this.largeGroupMemberThreshold = Math.max(
@@ -2777,11 +2779,25 @@ export class QqBotService {
     });
     // Only platform links with a supported resolver are media shares. Generic
     // URLs must remain ordinary text and must never trigger video extraction.
-    const supportedCandidates = candidates.filter((candidate) =>
+    let supportedCandidates = candidates.filter((candidate) =>
       ['bilibili', 'xiaohongshu', 'douyin', 'kuaishou'].includes(candidate.provider));
-    const mediaExcluded = this.mediaExcludedGroups.has(
-      String(payload.groupId ?? '').trim(),
-    );
+    const groupId = String(payload.groupId ?? '').trim();
+    // 按群的平台白名单比整群开关更精确，因此优先：命中的群只放行白名单里的
+    // 平台，其余平台的链接当普通文本处理，和整群关闭时的表现一致。
+    const allowedProviders = this.mediaGroupAllowedProviders.get(groupId);
+    let mediaExcluded = this.mediaExcludedGroups.has(groupId);
+    if (allowedProviders) {
+      const permitted = supportedCandidates.filter(
+        (candidate) => allowedProviders.has(candidate.provider),
+      );
+      if (permitted.length !== supportedCandidates.length) {
+        this.logger.info(`群 ${groupId} 平台白名单过滤：允许=${[...allowedProviders].join('|')} 命中=${permitted.length}/${supportedCandidates.length}`);
+      }
+      supportedCandidates = permitted;
+      // 白名单群里放行的平台不再受整群开关影响；没有放行的候选则走下面的
+      // 长度判断，自然落回普通文本。
+      mediaExcluded = false;
+    }
     if (
       payload.mediaShare
       && supportedCandidates.length > 0

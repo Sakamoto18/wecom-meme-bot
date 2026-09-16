@@ -76,6 +76,12 @@
     "default": "",
     "hint": "英文逗号分隔；也可设置 QQ_MEDIA_EXCLUDED_GROUPS"
   },
+  "media_group_allowed_providers": {
+    "description": "按群限定可解析的平台，只放行列出的平台",
+    "type": "string",
+    "default": "",
+    "hint": "格式 群号:平台|平台,群号:平台，平台取 douyin/bilibili/xiaohongshu/kuaishou；比整群开关更精确所以优先；也可设置 QQ_MEDIA_GROUP_ALLOWED_PROVIDERS"
+  },
   "request_timeout_seconds": {
     "description": "等待 QQ Bot 服务的最长秒数",
     "type": "int",

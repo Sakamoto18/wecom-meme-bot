@@ -405,9 +405,12 @@ QQ_MEDIA_MAX_CONCURRENT=2
 QQ_MEDIA_PUBLIC_BASE_URL=http://qq-bot:8787
 QQ_MEDIA_ACK_EMOJI_ID=128524
 QQ_MEDIA_EXCLUDED_GROUPS=
+QQ_MEDIA_GROUP_ALLOWED_PROVIDERS=
 QQ_MEDIA_USAGE_DATABASE_FILE=data/qq-media-usage.sqlite
 ```
 
 `QQ_MEDIA_EXCLUDED_GROUPS` 使用英文逗号分隔群号。配置后，指定群中的外部分享卡和分享链接会保持静默，不发送原生表情回应，也不会进入视频解析服务；例如 `QQ_MEDIA_EXCLUDED_GROUPS=239375116`。
+
+`QQ_MEDIA_GROUP_ALLOWED_PROVIDERS` 按群限定可解析的平台，格式 `群号:平台|平台,群号:平台`，平台取 `douyin`、`bilibili`、`xiaohongshu`、`kuaishou`。列进来的群只放行列出的平台，其余平台的分享按普通文本处理，既不解析也不挂表情。这条比 `QQ_MEDIA_EXCLUDED_GROUPS` 的整群开关更精确，因此优先生效——群号同时出现在两处时按白名单放行，不需要从排除名单里摘掉。例如 `QQ_MEDIA_GROUP_ALLOWED_PROVIDERS=821259340:douyin,239375116:douyin` 表示这两个群只开放抖音抓取。未列入的群沿用整群开关。插件侧同名配置项为 `media_group_allowed_providers`，两侧必须一致，否则插件放行的分享会被 Node 拦下（表现为挂了解析中的表情却没有结果）。
 
 媒体解析会先尝试通用公开分享解析：跟随短链并读取公开页面的 `og:video`、Twitter Player 或 JSON-LD 视频元数据，再回退到 `yt-dlp`。媒体统计可用同一 Bearer Token 查询：`GET /v1/qq/media-usage?start_at=<毫秒时间戳>&end_at=<毫秒时间戳>`。
