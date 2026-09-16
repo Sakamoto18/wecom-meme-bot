@@ -57,6 +57,10 @@ MEDIA_ACK_PATTERN = re.compile(
     r"douyin\.com|iesdouyin\.com|kuaishou\.com|gifshow\.com|v\.qq\.com)[^\s<>\u3000]*",
     re.IGNORECASE,
 )
+# \u5a92\u4f53\u7ed3\u679c\u56de\u5e94\uff1a\u76f4\u63a5\u6302\u5728\u53d1\u5206\u4eab\u94fe\u63a5\u90a3\u6761\u6d88\u606f\u4e0a\uff0c\u6210\u529f\u548c\u5931\u8d25\u5404\u7528\u4e00\u4e2a\u8868\u60c5\u3002
+# \u53c2\u4e0e\u7684\u4f1a\u8bdd\u8303\u56f4\u4e0e\u89e3\u6790\u5f00\u5173\u4e00\u81f4\uff08_media_group_enabled\uff09\uff0c\u4e0d\u9650\u5b9a\u67d0\u4e2a\u4eba\u3002
+MEDIA_SUCCESS_EMOJI_ID = "478"
+MEDIA_FAILURE_EMOJI_ID = "479"
 
 
 @register(
@@ -183,27 +187,45 @@ class LongtuQqBridge(Star):
         )
         return True
 
-    def _private_media_reaction_id(self, event: AstrMessageEvent, success: bool) -> str:
-        """Use the two agreed native reactions for the media test DM."""
-        if not event.is_private_chat() or str(event.get_sender_id() or '').strip() != '1079175957':
+    def _media_result_emoji_id(self, event: AstrMessageEvent, success: bool) -> str:
+        """成功/失败各对应一个原生表情；会话范围跟解析开关一致。"""
+        if not self._media_group_enabled(event):
             return ''
-        return '478' if success else '479'
+        if success:
+            configured = (
+                os.getenv("QQ_MEDIA_SUCCESS_EMOJI_ID")
+                or self.config.get("media_success_emoji_id")
+                or MEDIA_SUCCESS_EMOJI_ID
+            )
+        else:
+            configured = (
+                os.getenv("QQ_MEDIA_FAILURE_EMOJI_ID")
+                or self.config.get("media_failure_emoji_id")
+                or MEDIA_FAILURE_EMOJI_ID
+            )
+        return str(configured).strip()
 
     async def _react_media_result(self, event: AstrMessageEvent, success: bool) -> bool:
-        """React to the source message after media delivery has a result."""
-        emoji_id = self._private_media_reaction_id(event, success)
+        """给发分享链接那条消息挂上成功/失败对应的原生表情回应。"""
+        emoji_id = self._media_result_emoji_id(event, success)
         if not emoji_id:
             return False
-        message_id = str(getattr(getattr(event, 'message_obj', None), 'message_id', '') or '').strip()
         bot = getattr(event, 'bot', None)
         call_action = getattr(bot, 'call_action', None)
-        if not message_id or not callable(call_action):
+        if not callable(call_action):
+            return False
+        message_id = str(getattr(getattr(event, 'message_obj', None), 'message_id', '') or '').strip()
+        if not message_id:
+            logger.debug('媒体结果回应：缺少分享消息 message_id')
             return False
         try:
             numeric_message_id = int(message_id)
         except ValueError:
             numeric_message_id = message_id
         await call_action('set_msg_emoji_like', message_id=numeric_message_id, emoji_id=emoji_id, set=True)
+        logger.info(
+            f'媒体结果回应：success={success} emoji={emoji_id} message_id={numeric_message_id}',
+        )
         return True
 
     def _usage_api_url(self) -> str:
@@ -2181,7 +2203,7 @@ class LongtuQqBridge(Star):
                     try:
                         # 直接挂在原分享消息上的 QQ 原生表情回应；不发送任何
                         # 可见的普通消息，因此不会在群里产生“收到分享”的废话。
-                        if media_group_enabled and not self._private_media_reaction_id(event, True):
+                        if media_group_enabled:
                             await self._react_media_share(event)
                     except Exception as error:
                         logger.debug(f"QQ 原生媒体回应失败：{type(error).__name__}")
