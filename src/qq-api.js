@@ -70,6 +70,24 @@ function parseIdentifierSet(value) {
     .filter(Boolean));
 }
 
+// 按群限定可解析的平台，格式 `群号:平台|平台,群号:平台`。列进来的群只放行
+// 列出的平台，比 QQ_MEDIA_EXCLUDED_GROUPS 的整群开关更精确，因此优先生效。
+function parseGroupProviderMap(value) {
+  const result = new Map();
+  for (const entry of String(value ?? '').split(',')) {
+    const separator = entry.indexOf(':');
+    if (separator <= 0) continue;
+    const groupId = entry.slice(0, separator).trim();
+    const providers = entry.slice(separator + 1)
+      .split('|')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+    if (!groupId || !providers.length) continue;
+    result.set(groupId, new Set(providers));
+  }
+  return result;
+}
+
 function parseIdentifierNumberMap(value) {
   const result = new Map();
   for (const entry of String(value ?? '').split(',')) {
@@ -671,6 +689,9 @@ export async function createQqRuntime() {
     mediaResolver,
     mediaExcludedGroups: parseIdentifierSet(
       process.env.QQ_MEDIA_EXCLUDED_GROUPS,
+    ),
+    mediaGroupAllowedProviders: parseGroupProviderMap(
+      process.env.QQ_MEDIA_GROUP_ALLOWED_PROVIDERS,
     ),
     largeGroupIds: parseIdentifierSet(process.env.QQ_USAGE_LARGE_GROUPS),
     largeGroupExcludedIds: parseIdentifierSet(

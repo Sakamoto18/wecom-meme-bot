@@ -2,6 +2,7 @@
 import ast
 import logging
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -10,14 +11,19 @@ from unittest.mock import patch
 main_path = Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu_bridge/main.py'
 source = ast.parse(main_path.read_text())
 bridge = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'LongtuQqBridge')
-wanted = ('_media_group_enabled', '_media_result_emoji_id', '_react_media_result')
+wanted = ('_media_group_enabled', '_media_result_emoji_id', '_react_media_result',
+          '_group_allowed_providers', '_providers_in_text')
 methods = [n for n in bridge.body if getattr(n, 'name', '') in wanted]
 constants = [
     n for n in source.body
-    if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '').startswith('MEDIA_')
-    and getattr(n.targets[0], 'id', '').endswith('_EMOJI_ID')
+    if isinstance(n, ast.Assign) and (
+        (getattr(n.targets[0], 'id', '').startswith('MEDIA_')
+         and getattr(n.targets[0], 'id', '').endswith('_EMOJI_ID'))
+        or getattr(n.targets[0], 'id', '') == 'MEDIA_PROVIDER_PATTERNS'
+    )
 ]
-namespace = {'os': os, 'AstrMessageEvent': object, 'logger': logging.getLogger('test')}
+namespace = {'os': os, 're': re, 'AstrMessageEvent': object,
+             'logger': logging.getLogger('test')}
 module = ast.Module(
     body=[*constants, ast.ClassDef(name='Bridge', bases=[], keywords=[], body=methods, decorator_list=[])],
     type_ignores=[],
