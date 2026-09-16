@@ -2352,7 +2352,7 @@ class LongtuQqBridge(Star):
                     if not bool(response.get("active_reply")):
                         media_chain = self._reply_prefix(event, components) + media_chain
                         media_chain = media_chain[len(self._reply_prefix(event, components)):]
-                    async def _deliver_card() -> None:
+                    async def _deliver_card() -> bool:
                         try:
                             card = await self._video_card(video_message)
                             logger.info(f"视频分享卡片：{'generated' if card else 'fallback'}")
@@ -2373,13 +2373,17 @@ class LongtuQqBridge(Star):
                                 raise RuntimeError(f"QQ 图片接口返回失败：{result!r}")
                             logger.info(f"视频分享卡片：OneBot 图片回执={result!r}")
                             logger.info("视频分享卡片：独立图片消息已发送")
+                            return True
                         except Exception as error:
                             logger.warning(f"视频分享卡片发送失败（不影响视频）：{error}")
-                    # Do not await card generation here. The event consumer may
-                    # only request one yielded result; scheduling it guarantees
-                    # the video can be delivered immediately and the card stays
-                    # best effort in the background.
-                    asyncio.create_task(_deliver_card(), name="longtu-video-card")
+                            return False
+                    # Keep the visible order consistent with XHS: card first,
+                    # then video. Card delivery is bounded and best effort; a
+                    # failed/slow cover must still fall through to the video.
+                    try:
+                        await asyncio.wait_for(_deliver_card(), timeout=12)
+                    except Exception as error:
+                        logger.warning(f"视频分享卡片等待失败（继续发送视频）：{error}")
                     yield event.chain_result(media_chain)
                     return
                 # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
