@@ -7,7 +7,7 @@ RUN sed -i 's|deb.debian.org|mirrors.tencent.com|g' /etc/apt/sources.list.d/debi
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir --index-url https://mirrors.cloud.tencent.com/pypi/simple -r requirements.txt
-COPY app.py .
+COPY app.py profile_guard.py ./
 COPY start.sh .
 RUN chmod +x start.sh
 ENV DOUYIN_PROFILE=/data/profile
