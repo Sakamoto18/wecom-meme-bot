@@ -362,10 +362,13 @@ export class MediaResolver {
       coverUrl: value.coverUrl || '',
       author: value.author || '',
       avatarUrl: value.avatarUrl || '',
+      provider: value.provider || '',
+      tags: value.tags || [],
+      images: value.images || [],
       publishedAt: positive(value.publishedAt),
       description: value.description || '',
       duration: positive(value.duration),
-      extractor: 'bilibili-stream-proxy',
+      extractor: value.extractor || 'remote-stream-proxy',
       downloadBytes: 0,
       outputBytes: positive(value.size),
       quality: positive(value.quality),
@@ -444,17 +447,30 @@ export class MediaResolver {
                   };
                 } catch { /* provider video remains usable without card metadata */ }
               }
-              return {
-                url: provided.mediaUrl,
+              const directMedia = {
+                mediaUrl: provided.mediaUrl,
                 title, coverUrl: coverUrl || (provided.images && provided.images[0]) || '',
                 author: cardMetadata.author || '', avatarUrl: cardMetadata.avatarUrl || '',
                 description: cardMetadata.description || '', tags: cardMetadata.tags || [],
+                images: cardMetadata.images || [], provider: candidate?.provider || '',
                 duration: positive(provided.duration),
                 extractor: 'provider-direct',
                 downloadBytes: 0,
                 outputBytes: 0,
                 direct: true,
               };
+              // QQ/NapCat cannot reliably download signed Douyin CDN URLs
+              // directly and often gets HTTP 403. Keep the provider result
+              // metadata, but send Douyin through our authenticated stream
+              // proxy so the server fetches it with browser-like headers.
+              if (candidate?.provider === 'douyin') {
+                directMedia.requestHeaders = {
+                  'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+                  Referer: 'https://www.douyin.com/',
+                };
+                return this.registerRemoteMedia(directMedia);
+              }
+              return { url: provided.mediaUrl, ...directMedia };
             }
             if (provided?.images?.length) {
               return {
