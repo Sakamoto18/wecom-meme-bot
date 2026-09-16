@@ -58,6 +58,18 @@
     "default": "128524",
     "hint": "默认是手指按红色按钮；NapCat 使用 set_msg_emoji_like，QQ_MEDIA_ACK_EMOJI_ID 可覆盖"
   },
+  "media_success_emoji_id": {
+    "description": "视频抓取成功后挂在分享消息上的 QQ 表情回应 ID",
+    "type": "string",
+    "default": "478",
+    "hint": "QQ_MEDIA_SUCCESS_EMOJI_ID 可覆盖"
+  },
+  "media_failure_emoji_id": {
+    "description": "视频抓取失败后挂在分享消息上的 QQ 表情回应 ID",
+    "type": "string",
+    "default": "479",
+    "hint": "QQ_MEDIA_FAILURE_EMOJI_ID 可覆盖"
+  },
   "media_excluded_groups": {
     "description": "禁止视频分享解析的 QQ 群号",
     "type": "string",
