@@ -52,9 +52,9 @@ async def resolve(req:Req):
     const resources=performance.getEntriesByType('resource').map(x=>x.name);
     const videos=[...document.querySelectorAll('video')].flatMap(v=>[v.currentSrc,v.src]);
     const meta=(name)=>document.querySelector(`meta[name="${name}"]`)?.content||'';
-    const avatar=document.querySelector('img[alt]:not([alt="icon"])')?.currentSrc
-      || [...document.images].find(img=>/aweme-avatar/i.test(img.src))?.currentSrc || '';
-    const author=document.querySelector('img[alt]:not([alt="icon"])')?.alt || '';
+    const authorImg=[...document.images].find(img=>/aweme-avatar/i.test(img.src) && img.alt && !/icon/i.test(img.alt));
+    const avatar=authorImg?.currentSrc || '';
+    const author=authorImg?.alt || '';
     const keywords=meta('keywords').split(',').map(x=>x.trim()).filter(Boolean);
     const html=document.documentElement?.outerHTML || '';
     const urls=[...html.matchAll(/https?:\\/\\/[^\"'\s<>]+/g)].map(m=>m[0].replaceAll('\\/','/'));
