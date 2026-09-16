@@ -89,7 +89,7 @@ function parsePrintedJson(stdout) {
   return {};
 }
 
-async function runYtDlp(url, {
+export async function runYtDlp(url, {
   command = 'yt-dlp',
   timeoutMs = 120_000,
   outputDirectory,
@@ -106,33 +106,39 @@ async function runYtDlp(url, {
     '--print', 'after_move:filepath', '--print-json',
     '--output', outputTemplate,
   ];
-  let normalizedCookiesFile = cookiesFile;
+  let normalizedCookiesFile = '';
   if (cookiesFile) {
-    try {
-      const rawCookies = await readFile(cookiesFile, 'utf8');
-      if (/^\s*[\[{]/u.test(rawCookies)) {
-        const parsed = JSON.parse(rawCookies);
-        const entries = Array.isArray(parsed) ? parsed : (parsed.cookies || []);
-        const lines = ['# Netscape HTTP Cookie File'];
-        for (const item of entries) {
-          const domain = String(item.domain || item.host || '.douyin.com');
-          const includeSubdomains = domain.startsWith('.') ? 'TRUE' : 'FALSE';
-          const pathValue = String(item.path || '/');
-          const secure = item.secure ? 'TRUE' : 'FALSE';
-          const expiry = Number(item.expirationDate || item.expires || 0) || 0;
-          const name = String(item.name || '');
-          const value = String(item.value || '');
-          if (name) lines.push([domain, includeSubdomains, pathValue, secure, expiry, name, value].join('\t'));
-        }
-        normalizedCookiesFile = path.join(outputDirectory, '.cookies.normalized.txt');
-        await writeFile(normalizedCookiesFile, `${lines.join('\n')}\n`, { mode: 0o600 });
+    let rawCookies = await readFile(cookiesFile, 'utf8');
+    if (/^\s*[\[{]/u.test(rawCookies)) {
+      const parsed = JSON.parse(rawCookies);
+      const entries = Array.isArray(parsed) ? parsed : (parsed.cookies || []);
+      const lines = ['# Netscape HTTP Cookie File'];
+      for (const item of entries) {
+        const domain = String(item.domain || item.host || '.douyin.com');
+        const includeSubdomains = domain.startsWith('.') ? 'TRUE' : 'FALSE';
+        const pathValue = String(item.path || '/');
+        const secure = item.secure ? 'TRUE' : 'FALSE';
+        const expiry = Number(item.expirationDate || item.expires || 0) || 0;
+        const name = String(item.name || '');
+        const value = String(item.value || '');
+        if (name) lines.push([domain, includeSubdomains, pathValue, secure, expiry, name, value].join('\t'));
       }
-    } catch { /* yt-dlp will report malformed cookie files */ }
+      rawCookies = `${lines.join('\n')}\n`;
+    }
+    // yt-dlp writes the cookie jar on exit. Never hand it a read-only secret
+    // mount or share one writable jar between concurrent downloads.
+    normalizedCookiesFile = path.join(outputDirectory, `.${basename}.cookies.txt`);
+    await writeFile(normalizedCookiesFile, rawCookies, { mode: 0o600, flag: 'wx' });
   }
   if (normalizedCookiesFile) args.push('--cookies', normalizedCookiesFile);
   if (cookie) args.push('--add-header', `Cookie: ${cookie}`);
   args.push(url);
-  const { stdout } = await runCommand(command, args, { timeoutMs, cwd: outputDirectory });
+  let stdout;
+  try {
+    ({ stdout } = await runCommand(command, args, { timeoutMs, cwd: outputDirectory }));
+  } finally {
+    if (normalizedCookiesFile) await unlink(normalizedCookiesFile).catch(() => {});
+  }
 
   const info = parsePrintedJson(stdout);
   const printedPath = String(stdout).split(/\r?\n/gu)
