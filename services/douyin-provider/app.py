@@ -51,11 +51,16 @@ async def resolve(req:Req):
    d=await page.evaluate('''() => {
     const resources=performance.getEntriesByType('resource').map(x=>x.name);
     const videos=[...document.querySelectorAll('video')].flatMap(v=>[v.currentSrc,v.src]);
+    const meta=(name)=>document.querySelector(`meta[name="${name}"]`)?.content||'';
+    const avatar=document.querySelector('img[alt]:not([alt="icon"])')?.currentSrc
+      || [...document.images].find(img=>/aweme-avatar/i.test(img.src))?.currentSrc || '';
+    const author=document.querySelector('img[alt]:not([alt="icon"])')?.alt || '';
+    const keywords=meta('keywords').split(',').map(x=>x.trim()).filter(Boolean);
     const html=document.documentElement?.outerHTML || '';
     const urls=[...html.matchAll(/https?:\\/\\/[^\"'\s<>]+/g)].map(m=>m[0].replaceAll('\\/','/'));
     const candidates=[...videos,...resources,...urls].filter(Boolean);
     const video=candidates.find(u=>{ const low=String(u).toLowerCase(); return low.indexOf('uuu_265.mp4')<0 && (/\.(mp4|m3u8)(?:[?#]|$)/i.test(u)||/playwm|play\//i.test(u)); }) || '';
-    return {title:document.title,desc:document.querySelector('meta[name=description]')?.content||'',cover:document.querySelector('meta[property="og:image"]')?.content||'',video};
+    return {title:document.title,desc:meta('description'),cover:meta('lark:url:video_cover_image_url') || document.querySelector('meta[property="og:image"]')?.content||'',video,author,avatar,tags:keywords};
    }''')
    if not d.get('video'):
     real_requests=[url for url in video_requests if is_real_video_url(url)]
@@ -63,5 +68,5 @@ async def resolve(req:Req):
    await page.close()
    if not d.get('video'): return {'status':'failed','msg':'未获取到视频地址，请先完成抖音登录'}
    d['video']=html.unescape(d['video'])
-   return {'status':'success','data':{'media_type':'video','video_url':d['video'],'cover':d['cover'],'title':d['title'],'description':d['desc']}}
+   return {'status':'success','data':{'media_type':'video','video_url':d['video'],'cover':d['cover'],'title':d['title'],'description':d['desc'],'author':d.get('author',''),'avatar_url':d.get('avatar',''),'tags':d.get('tags',[])}}
   except Exception as e: return {'status':'failed','msg':str(e)}
