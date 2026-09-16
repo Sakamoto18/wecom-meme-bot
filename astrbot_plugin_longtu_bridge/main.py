@@ -183,6 +183,29 @@ class LongtuQqBridge(Star):
         )
         return True
 
+    def _private_media_reaction_id(self, event: AstrMessageEvent, success: bool) -> str:
+        """Use the two agreed native reactions for the media test DM."""
+        if not event.is_private_chat() or str(event.get_sender_id() or '').strip() != '1079175957':
+            return ''
+        return '478' if success else '479'
+
+    async def _react_media_result(self, event: AstrMessageEvent, success: bool) -> bool:
+        """React to the source message after media delivery has a result."""
+        emoji_id = self._private_media_reaction_id(event, success)
+        if not emoji_id:
+            return False
+        message_id = str(getattr(getattr(event, 'message_obj', None), 'message_id', '') or '').strip()
+        bot = getattr(event, 'bot', None)
+        call_action = getattr(bot, 'call_action', None)
+        if not message_id or not callable(call_action):
+            return False
+        try:
+            numeric_message_id = int(message_id)
+        except ValueError:
+            numeric_message_id = message_id
+        await call_action('set_msg_emoji_like', message_id=numeric_message_id, emoji_id=emoji_id, set=True)
+        return True
+
     def _usage_api_url(self) -> str:
         api_url = self._api_url().rstrip("/")
         if api_url.endswith("/v1/qq/message"):
@@ -2158,7 +2181,7 @@ class LongtuQqBridge(Star):
                     try:
                         # 直接挂在原分享消息上的 QQ 原生表情回应；不发送任何
                         # 可见的普通消息，因此不会在群里产生“收到分享”的废话。
-                        if media_group_enabled:
+                        if media_group_enabled and not self._private_media_reaction_id(event, True):
                             await self._react_media_share(event)
                     except Exception as error:
                         logger.debug(f"QQ 原生媒体回应失败：{type(error).__name__}")
@@ -2307,6 +2330,9 @@ class LongtuQqBridge(Star):
                 response = await self._request_backend(payload)
             except Exception as error:
                 logger.error(f"龙图 QQ Bridge 请求失败：{error}")
+                if has_media_signal:
+                    with contextlib.suppress(Exception):
+                        await self._react_media_result(event, False)
                 if observe_only:
                     return
                 error_message = self.config.get(
@@ -2320,6 +2346,10 @@ class LongtuQqBridge(Star):
             # “读空气”判定把它升级为主动回复；只有确实没有返回消息时才保持静默。
             if observe_only and not response["messages"]:
                 return
+
+            if response.get("mode") == "media-unavailable":
+                with contextlib.suppress(Exception):
+                    await self._react_media_result(event, False)
 
             if await self._send_forward_from_backend(event, response):
                 return
@@ -2384,7 +2414,15 @@ class LongtuQqBridge(Star):
                         await asyncio.wait_for(_deliver_card(), timeout=12)
                     except Exception as error:
                         logger.warning(f"视频分享卡片等待失败（继续发送视频）：{error}")
-                    yield event.chain_result(media_chain)
+                    try:
+                        yield event.chain_result(media_chain)
+                    except Exception:
+                        with contextlib.suppress(Exception):
+                            await self._react_media_result(event, False)
+                        raise
+                    else:
+                        with contextlib.suppress(Exception):
+                            await self._react_media_result(event, True)
                     return
                 # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
                 # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
