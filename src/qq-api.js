@@ -19,6 +19,7 @@ import { MediaResolver } from './media-resolver.js';
 import { proxyRemoteMedia } from './media-stream-proxy.js';
 import { MediaUsageTracker } from './media-usage-tracker.js';
 import { createXhsProvider } from './xhs-provider.js';
+import { createDouyinProvider } from './douyin-provider.js';
 
 // DeepSeek Vision's inline request limit is 48 MiB. Keep the bridge/API
 // aligned with that limit so multi-image payloads are not rejected locally.
@@ -613,15 +614,11 @@ export async function createQqRuntime() {
     cookie: process.env.XHS_COOKIE,
     timeoutMs: (parsePositiveNumber(process.env.XHS_PROVIDER_TIMEOUT_SECONDS) ?? 6) * 1000,
   });
-  const douyinProviderUrl = process.env.DOUYIN_PROVIDER_URL?.trim();
+  const douyinProvider = createDouyinProvider({ providerUrl: process.env.DOUYIN_PROVIDER_URL });
   const mediaProvider = async ({ url, platform }) => {
     if (platform === 'xiaohongshu') return xhsProvider?.({ url, platform });
-    if (platform !== 'douyin' || !douyinProviderUrl) return null;
-    const response = await fetch(douyinProviderUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url }), signal: AbortSignal.timeout(25_000) });
-    if (!response.ok) throw new Error(`抖音 Provider HTTP ${response.status}`);
-    const payload = await response.json();
-    if (payload?.status !== 'success') throw new Error(String(payload?.msg || '抖音 Provider 解析失败'));
-    return payload.data || payload;
+    if (platform === 'douyin') return douyinProvider?.({ url, platform });
+    return null;
   };
   const mediaResolver = new MediaResolver({
     enabled: parseBoolean(process.env.QQ_MEDIA_EXTRACT_ENABLED, false),
