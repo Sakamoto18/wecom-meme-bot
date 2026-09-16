@@ -146,6 +146,46 @@ class CoverCacheTests(unittest.IsolatedAsyncioTestCase):
         await self.bridge._cover_bytes(f'{self.base}?x-signature=CCC', {})
         self.assertEqual(len(self.hits), 2, '过期后应重新下载')
 
+    async def test_gallery_previews_are_retried_not_left_blank(self):
+        """图集预览走同一条取图路径：短时 403 要重试，不能直接留灰格。"""
+        calls = {'n': 0}
+        image = self.image
+
+        async def handler(request):
+            calls['n'] += 1
+            if calls['n'] < 3:
+                return web.Response(status=403, text='<html>403</html>',
+                                    content_type='text/html')
+            return web.Response(body=image, content_type='image/jpeg')
+
+        app = web.Application()
+        app.router.add_get('/p.jpeg', handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '127.0.0.1', 0)
+        await site.start()
+        port = runner.addresses[0][1]
+        try:
+            got = await self.bridge._cover_bytes(
+                f'http://127.0.0.1:{port}/p.jpeg', {}, label='图文预览',
+            )
+            self.assertEqual(got, image)
+            self.assertEqual(calls['n'], 3)
+        finally:
+            await runner.cleanup()
+
+    async def test_repeat_forward_reuses_every_preview(self):
+        """同一条图文再次转发时每张预览都命中缓存，卡片和第一次一致。"""
+        first = await self.bridge._cover_bytes(
+            f'{self.base}?x-signature=AAA', {}, label='图文预览',
+        )
+        self.deny_after = 0  # CDN 之后一律拒绝
+        second = await self.bridge._cover_bytes(
+            f'{self.base}?x-signature=ZZZ', {}, label='图文预览',
+        )
+        self.assertEqual(second, first)
+        self.assertEqual(len(self.hits), 1)
+
     async def test_cache_is_bounded(self):
         for index in range(namespace['COVER_CACHE_MAX_ENTRIES'] + 10):
             self.bridge._remember_cover(f'https://cdn.example/{index}.jpeg', b'x')

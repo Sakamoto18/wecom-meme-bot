@@ -142,13 +142,19 @@ GALLERY_SCRIPT = r'''() => {
         const matched=src.match(/\/([A-Za-z0-9]+)~tplv/);
         if (matched) items.push({id: matched[1], url: src});
     }
-    const counter=(document.body?.innerText || '').match(/\b(\d+)\s*\/\s*(\d+)\b/);
-    return {items, current: counter ? Number(counter[1]) : 0,
-            total: counter ? Number(counter[2]) : 0, path: location.pathname};
+    // 轮播计数器渲染前页面上会先有一个 "00 / 00" 占位，和真正的 "1/7" 同时
+    // 存在，取第一个匹配会拿到 0；只认总数大于 0 的那个。
+    const pairs=[...(document.body?.innerText || '').matchAll(/\b(\d+)\s*\/\s*(\d+)\b/g)]
+        .map(m=>({current: Number(m[1]), total: Number(m[2])}))
+        .filter(p=>p.total > 0 && p.current > 0 && p.current <= p.total);
+    const counter=pairs[0] || {current: 0, total: 0};
+    return {items, current: counter.current, total: counter.total, path: location.pathname};
    }'''
 MAX_GALLERY_IMAGES = 18
 GALLERY_PAGING_BUDGET = 8.0
 GALLERY_STEP_TIMEOUT_MS = 700
+GALLERY_READY_ATTEMPTS = 4
+GALLERY_READY_INTERVAL_MS = 800
 
 
 async def collect_gallery(page, state):
@@ -162,6 +168,13 @@ async def collect_gallery(page, state):
     origin_path = first.get('path') or ''
     if '/note/' not in origin_path:
         return [], 0
+    # 首屏图片和计数器都是异步渲染的，实测 5 秒时可能两者都还是空。等到任
+    # 意一个就绪再开始，否则会当成“没有图片”直接判失败。
+    for _ in range(GALLERY_READY_ATTEMPTS):
+        if (first.get('items') or []) or int(first.get('total') or 0) > 1:
+            break
+        await page.wait_for_timeout(GALLERY_READY_INTERVAL_MS)
+        first = await page.evaluate(GALLERY_SCRIPT)
     ordered = {}
     for item in first.get('items') or []:
         ordered.setdefault(item['id'], item['url'])
