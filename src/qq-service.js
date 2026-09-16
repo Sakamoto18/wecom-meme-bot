@@ -2825,10 +2825,13 @@ export class QqBotService {
         });
         this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0} title=${String(resolved.title || '').slice(0, 120)} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} duration_ms=${Date.now() - startedAt}`);
         if (!resolved.url && resolved.images?.length) {
+          // 图集的兜底标题按来源平台走：抖音图文不能顶着“小红书图文”发出去。
+          const galleryFallbackTitle = candidate.provider === 'douyin'
+            ? '抖音图文' : '小红书图文';
           return {
             mode: 'media-gallery',
             messages: [{
-              type: 'forward', title: resolved.title || '小红书图文',
+              type: 'forward', title: resolved.title || galleryFallbackTitle,
               description: resolved.description || '', images: resolved.images,
               coverUrl: resolved.images[0] || '', author: resolved.author || '',
               avatarUrl: resolved.avatarUrl || '', tags: resolved.tags || [], provider: candidate.provider,

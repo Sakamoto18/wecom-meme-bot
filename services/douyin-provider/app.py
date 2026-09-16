@@ -128,6 +128,67 @@ EXTRACT_SCRIPT = r'''() => {
    }'''
 
 
+# 图文（/note/）页面的图集：内容图走 tos-cn-i-0813c000-ce 路径，表情、头像、
+# 特效和站点 UI 素材各有自己的路径，按路径排除比按尺寸可靠。轮播只渲染当前
+# 附近几张，其余要翻页才会加载，所以这里同时读出轮播计数器的总数。
+GALLERY_SCRIPT = r'''() => {
+    const items=[];
+    for (const img of document.images) {
+        const src=img.currentSrc || img.src || '';
+        if (!/douyinpic\.com/.test(src)) continue;
+        // 图集图片带 aweme_images 标记；封面走 pcweb_cover、表情和头像各有
+        // 自己的路径，都和图集共用图片域名，只按域名或尺寸筛会混进来。
+        if (!/tplv-dy-aweme-images|biz_tag=aweme_images/.test(src)) continue;
+        const matched=src.match(/\/([A-Za-z0-9]+)~tplv/);
+        if (matched) items.push({id: matched[1], url: src});
+    }
+    const counter=(document.body?.innerText || '').match(/\b(\d+)\s*\/\s*(\d+)\b/);
+    return {items, current: counter ? Number(counter[1]) : 0,
+            total: counter ? Number(counter[2]) : 0, path: location.pathname};
+   }'''
+MAX_GALLERY_IMAGES = 18
+GALLERY_PAGING_BUDGET = 8.0
+GALLERY_STEP_TIMEOUT_MS = 700
+
+
+async def collect_gallery(page, state):
+    """收集图文页的图集，按轮播计数器翻页补齐懒加载的图片。
+
+    只在同一个作品内翻页：抖音的方向键翻到最后一张还会继续滑进推荐流，
+    URL 一变就必须停，否则会把别人的作品混进这一条分享里。
+    """
+    state['stage'] = 'gallery'
+    first = await page.evaluate(GALLERY_SCRIPT)
+    origin_path = first.get('path') or ''
+    if '/note/' not in origin_path:
+        return [], 0
+    ordered = {}
+    for item in first.get('items') or []:
+        ordered.setdefault(item['id'], item['url'])
+    total = int(first.get('total') or 0)
+    # 计数器读不到时不翻页：宁可只发首屏几张，也不能翻进推荐流。
+    if total <= 1:
+        return list(ordered.values())[:MAX_GALLERY_IMAGES], total
+    target = min(total, MAX_GALLERY_IMAGES)
+    deadline = time.monotonic() + GALLERY_PAGING_BUDGET
+    for _ in range(target + 1):
+        if len(ordered) >= target or time.monotonic() > deadline:
+            break
+        await page.keyboard.press('ArrowRight')
+        await page.wait_for_timeout(GALLERY_STEP_TIMEOUT_MS)
+        current = await page.evaluate(GALLERY_SCRIPT)
+        # 计数器总数变了就说明已经滑进了推荐流的下一个作品，比只看 URL 灵敏：
+        # 抖音在同一路径下就能换作品。
+        if (current.get('path') or '') != origin_path or int(current.get('total') or 0) != total:
+            logger.warning('Douyin gallery paging left the note; keeping %d images', len(ordered))
+            break
+        for item in current.get('items') or []:
+            ordered.setdefault(item['id'], item['url'])
+    # 轮播会预加载相邻几张，一次翻页可能多出好几个 id；按计数器截断，多出来
+    # 的一定是这条作品之外的。
+    return list(ordered.values())[:target], total
+
+
 async def read_page(page, url, video_requests, state):
     state['stage'] = 'navigation'
     try:
@@ -146,14 +207,26 @@ async def read_page(page, url, video_requests, state):
     data = await page.evaluate(EXTRACT_SCRIPT)
     if not is_real_video_url(data.get('video')):
         data['video'] = next((u for u in reversed(video_requests) if is_real_video_url(u)), '')
-    if not data.get('video'):
-        raise ValueError('no_video_resource: 页面未返回视频资源（需检查页面类型或登录验证）')
-    return {'status': 'success', 'data': {
-        'media_type': 'video', 'video_url': html.unescape(data['video']),
-        'cover': data.get('cover', ''), 'title': data.get('title', ''),
-        'description': data.get('desc', ''), 'author': data.get('author', ''),
-        'avatar_url': data.get('avatar', ''), 'tags': data.get('tags', []),
-    }}
+    common = {
+        'title': data.get('title', ''), 'description': data.get('desc', ''),
+        'author': data.get('author', ''), 'avatar_url': data.get('avatar', ''),
+        'tags': data.get('tags', []),
+    }
+    if data.get('video'):
+        return {'status': 'success', 'data': {
+            'media_type': 'video', 'video_url': html.unescape(data['video']),
+            'cover': data.get('cover', ''), **common,
+        }}
+    # 没有视频流时可能是图文笔记。抖音图文页也带一个 video 元素（推荐流），
+    # 所以只能靠视频地址是否可用来判断，不能数 video 标签。
+    images, total = await collect_gallery(page, state)
+    if images:
+        logger.info('Douyin gallery extracted images=%d counter_total=%d', len(images), total)
+        return {'status': 'success', 'data': {
+            'media_type': 'images', 'video_url': '', 'images': images,
+            'cover': images[0], **common,
+        }}
+    raise ValueError('no_video_resource: 页面未返回视频资源（需检查页面类型或登录验证）')
 
 
 @app.post('/resolve')
@@ -181,8 +254,10 @@ async def resolve(req: Req):
 
             page.on('response', capture)
             result = await read_page(page, req.url, video_requests, state)
-        logger.info('Douyin resolve ok source=%s duration_ms=%d cover=%s',
-                    label, (time.monotonic()-started)*1000, bool(result['data']['cover']))
+        logger.info('Douyin resolve ok source=%s duration_ms=%d kind=%s cover=%s images=%d',
+                    label, (time.monotonic()-started)*1000,
+                    result['data'].get('media_type', ''), bool(result['data']['cover']),
+                    len(result['data'].get('images') or []))
         return result
     except TimeoutError:
         logger.warning('Douyin resolve timeout source=%s stage=%s duration_ms=%d',
