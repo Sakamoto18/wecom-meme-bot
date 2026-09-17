@@ -2890,7 +2890,16 @@ export class QqBotService {
         // 不该混在需要排查的失败里。
         if (removedAtSource) {
           this.logger.info(`媒体源内容已删除：group=${payload.groupId || ''} provider=${candidate.provider} source=${candidateSummary} duration_ms=${Date.now() - startedAt} reason=${error.message}`);
-          return { mode: 'media-unavailable', messages: [] };
+          // Keep the failure reaction, but also return a user-visible result.
+          // Previously this branch returned no messages at all, so the Bridge
+          // could only add the failure reaction and the user saw no explanation.
+          return {
+            mode: 'media-unavailable',
+            messages: [{
+              type: 'text',
+              text: '这个分享的内容已被删除，无法抓取。',
+            }],
+          };
         }
         const stage = candidate.provider === 'xiaohongshu' && /图文详情|正文|图集/u.test(error.message)
           ? '小红书图文解析失败' : '媒体源解析失败';

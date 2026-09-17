@@ -123,6 +123,10 @@ test('qq-service 把已删除记成 removed 而不是 resolve 失败', async () 
       text: 'https://v.douyin.com/removed/', media_share: true,
     });
     assert.equal(result.mode, 'media-unavailable', '对用户仍是失败，会挂失败表情');
+    assert.deepEqual(result.messages, [{
+      type: 'text',
+      text: '这个分享的内容已被删除，无法抓取。',
+    }], '删除分支必须给用户明确提示');
     const failure = recorded.find((row) => row.status === 'failed');
     assert.ok(failure, '要记一条失败');
     assert.equal(failure.errorStage, 'removed', '阶段应为 removed，便于事后区分');
