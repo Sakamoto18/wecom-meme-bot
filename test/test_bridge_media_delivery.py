@@ -70,6 +70,15 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         chain = Bridge._reply_chain_from_backend(response)
         self.assertEqual([type(item) for item in chain], [Video])
 
+    def test_removed_share_message_is_kept_for_delivery(self):
+        response = {
+            'mode': 'media-unavailable',
+            'messages': [{'type': 'text', 'text': '这个分享的内容已被删除，无法抓取。'}],
+        }
+        chain = Bridge._reply_chain_from_backend(response)
+        self.assertEqual([type(item) for item in chain], [Plain])
+        self.assertEqual(chain[0].args, ('这个分享的内容已被删除，无法抓取。',))
+
     async def test_failed_forward_falls_back_to_images_not_links(self):
         event, calls = self.event(fail_forward=True)
         self.assertTrue(await Bridge()._send_forward_from_backend(event, self.gallery()))
