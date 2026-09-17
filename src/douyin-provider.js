@@ -1,4 +1,5 @@
 import { normalizeMediaUrl } from './media-link-extractor.js';
+import { looksRemoved, removedError } from './media-removed.js';
 
 // Cover the Provider's bounded queue (22s), resolve (20s), and page cleanup (2s).
 export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
@@ -13,7 +14,12 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
     if (!response.ok) throw new Error(`抖音 Provider HTTP ${response.status}`);
     const payload = await response.json();
     if (payload?.status !== 'success') {
-      throw new Error(String(payload?.msg || '抖音 Provider 解析失败'));
+      const message = String(payload?.msg || '抖音 Provider 解析失败');
+      // Provider 已判定源站把作品删了，或消息里带着源站的原话。
+      if (payload?.removed === true || message.includes('content_removed') || looksRemoved(message)) {
+        throw new Error(removedError('抖音', message.replace(/^.*content_removed:\s*/u, '')));
+      }
+      throw new Error(message);
     }
     const data = payload.data || payload;
     // 图文笔记没有视频流，走和小红书图集一样的 images 字段；两者互斥，

@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
+import { isRemovedError } from './media-removed.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -2871,6 +2872,7 @@ export class QqBotService {
           }],
         };
       } catch (error) {
+        const removedAtSource = isRemovedError(error);
         const sourceUrlHash = createHash('sha256')
           .update(candidate.url)
           .digest('hex');
@@ -2882,8 +2884,14 @@ export class QqBotService {
           sourceUrlHash,
           status: 'failed',
           durationMs: Date.now() - startedAt,
-          errorStage: 'resolve',
+          errorStage: removedAtSource ? 'removed' : 'resolve',
         });
+        // 源内容已删除单独一种说法，且用 info 而不是 warn：这不是我们的故障，
+        // 不该混在需要排查的失败里。
+        if (removedAtSource) {
+          this.logger.info(`媒体源内容已删除：group=${payload.groupId || ''} provider=${candidate.provider} source=${candidateSummary} duration_ms=${Date.now() - startedAt} reason=${error.message}`);
+          return { mode: 'media-unavailable', messages: [] };
+        }
         const stage = candidate.provider === 'xiaohongshu' && /图文详情|正文|图集/u.test(error.message)
           ? '小红书图文解析失败' : '媒体源解析失败';
         this.logger.warn(`${stage}：group=${payload.groupId || ''} provider=${candidate.provider} source=${candidateSummary} duration_ms=${Date.now() - startedAt} error=${error.message}`);
