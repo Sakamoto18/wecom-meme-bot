@@ -20,6 +20,24 @@ import requests
 
 NOTE_ID_PATTERN = re.compile(r"/(?:discovery/)?item/([a-zA-Z0-9]+)")
 DEFAULT_USER_AGENT = "LongtuShareResolver/1.0"
+# 笔记不存在/已删除时详情接口返回的业务码与文案。和签名失效分开，否则每次都
+# 要先怀疑一遍请求头配置。
+NOTE_REMOVED_CODES = {-510001, -510000, 4041}
+NOTE_REMOVED_MARKERS = (
+    "笔记不存在",
+    "内容不存在",
+    "已删除",
+    "状态异常",
+    "无法查看",
+    "已失效",
+)
+REMOVED_REASON_PREFIX = "content_removed"
+
+
+def removed_marker(text: Any) -> str:
+    """接口文案里是否有"内容不存在"的明确说法。"""
+    body = str(text or "")
+    return next((marker for marker in NOTE_REMOVED_MARKERS if marker in body), "")
 
 
 def emit(value: dict[str, Any]) -> None:
@@ -198,6 +216,12 @@ def resolve(
         payload = response.json()
     except requests.JSONDecodeError:
         return {"status": "failed", "msg": "详情接口返回非 JSON"}
+    # 笔记被作者删除或转私密时，接口给的是明确业务码/文案，不是签名问题。
+    # 混成"签名失效"会让人白查一遍配置。
+    if payload.get("code") in NOTE_REMOVED_CODES or removed_marker(payload.get("msg")):
+        detail = removed_marker(payload.get("msg")) or f"code={payload.get('code')}"
+        return {"status": "failed", "removed": True,
+                "msg": f"{REMOVED_REASON_PREFIX}: 小红书提示「{detail}」"}
     if payload.get("code") == -100 or not payload.get("data"):
         return {"status": "failed", "msg": "签名过期，请更新请求头配置"}
     data = parse_detail(payload.get("data"))

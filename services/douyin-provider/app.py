@@ -155,6 +155,24 @@ GALLERY_PAGING_BUDGET = 8.0
 GALLERY_STEP_TIMEOUT_MS = 700
 GALLERY_READY_ATTEMPTS = 4
 GALLERY_READY_INTERVAL_MS = 800
+# 作品被删或下架时，抖音整页只给一句提示。把这种情况和"我们没抓到"分开，
+# 否则每次都要人去翻页面才能确认不是解析逻辑坏了。
+REMOVED_MARKERS = (
+    '你要观看的图文不存在',
+    '你要观看的视频不存在',
+    '你要观看的内容不存在',
+    '作品不存在',
+    '视频不存在',
+    '已被作者删除',
+    '内容已被删除',
+)
+REMOVED_REASON_PREFIX = 'content_removed'
+
+
+def removed_marker(text):
+    """页面文案里是否有"内容不存在"的明确说法。"""
+    body = str(text or '')
+    return next((marker for marker in REMOVED_MARKERS if marker in body), '')
 
 
 async def collect_gallery(page, state):
@@ -248,6 +266,13 @@ async def read_page(page, url, video_requests, state):
             'media_type': 'video', 'video_url': html.unescape(late),
             'cover': data.get('cover', ''), **common,
         }}
+    # 判"已删除"必须排在元数据兜底之前。被删的页面上仍会留下推荐位封面之类的
+    # 零碎元素，一旦先走了 metadata 分支，上游就会拿它去降级 yt-dlp，真正的原因
+    # 又被 Unsupported URL 盖掉。
+    marker = removed_marker(await page.evaluate('() => document.body?.innerText || ""'))
+    if marker:
+        logger.info('Douyin content removed at source: %s', marker)
+        raise ValueError(f'{REMOVED_REASON_PREFIX}: 抖音提示「{marker}」')
     # 既没视频也没图集，但标题/作者/封面这些页面元数据往往已经拿到了。带着
     # 它们返回，让上游用 yt-dlp 取到视频后仍能拼出完整卡片；全丢掉的话卡片
     # 上只剩一个标题。
@@ -295,9 +320,18 @@ async def resolve(req: Req):
                        label, state['stage'], (time.monotonic()-started)*1000)
         return {'status': 'failed', 'msg': f"抖音 Provider 超时 stage={state['stage']}"}
     except Exception as error:
-        logger.warning('Douyin resolve failed source=%s stage=%s error=%s',
-                       label, state['stage'], type(error).__name__)
-        return {'status': 'failed', 'msg': f"抖音 Provider 失败 stage={state['stage']} ({type(error).__name__})"}
+        # 原因要带出去。只回类型名的话，"作品被删了"和"页面没加载完"在上游
+        # 看起来都是 (ValueError)，排查时只能靠人去翻页面。
+        reason = str(error).strip() or type(error).__name__
+        removed = reason.startswith(REMOVED_REASON_PREFIX)
+        logger.warning('Douyin resolve %s source=%s stage=%s reason=%s',
+                       'removed' if removed else 'failed',
+                       label, state['stage'], reason[:160])
+        return {
+            'status': 'failed',
+            'removed': removed,
+            'msg': f"抖音 Provider 失败 stage={state['stage']}：{reason}"[:300],
+        }
     finally:
         if page is not None:
             with suppress(Exception):
