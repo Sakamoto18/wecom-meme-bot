@@ -239,6 +239,24 @@ async def read_page(page, url, video_requests, state):
             'media_type': 'images', 'video_url': '', 'images': images,
             'cover': images[0], **common,
         }}
+    # 视频地址常常比首屏晚到。收集图集期间网络请求仍在累积，这里再看一眼，
+    # 能把一部分"页面没加载完"的失败救回来，省掉 yt-dlp 那条降级路径。
+    late = next((u for u in reversed(video_requests) if is_real_video_url(u)), '')
+    if late:
+        logger.info('Douyin late video resource found after gallery wait')
+        return {'status': 'success', 'data': {
+            'media_type': 'video', 'video_url': html.unescape(late),
+            'cover': data.get('cover', ''), **common,
+        }}
+    # 既没视频也没图集，但标题/作者/封面这些页面元数据往往已经拿到了。带着
+    # 它们返回，让上游用 yt-dlp 取到视频后仍能拼出完整卡片；全丢掉的话卡片
+    # 上只剩一个标题。
+    if any(common.get(field) for field in ('title', 'author', 'description')) or data.get('cover'):
+        logger.info('Douyin metadata-only result (no playable media on page)')
+        return {'status': 'success', 'data': {
+            'media_type': 'metadata', 'video_url': '', 'images': [],
+            'cover': data.get('cover', ''), **common,
+        }}
     raise ValueError('no_video_resource: 页面未返回视频资源（需检查页面类型或登录验证）')
 
 
