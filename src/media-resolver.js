@@ -19,6 +19,17 @@ function positive(value) {
   return Number.isFinite(number) && number >= 0 ? number : 0;
 }
 
+// 只保留有值的字段，用于把权威来源覆盖到兜底来源上而不抹掉后者已有的内容。
+export function pruneEmpty(source) {
+  const result = {};
+  for (const [key, value] of Object.entries(source || {})) {
+    if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value) && !value.length) continue;
+    result[key] = value;
+  }
+  return result;
+}
+
 export function normalizeDownloadSource(value) {
   const normalized = normalizeMediaUrl(value);
   if (!normalized) return '';
@@ -487,6 +498,16 @@ export class MediaResolver {
                 downloadBytes: 0, outputBytes: 0, direct: true,
               };
             }
+            // Provider 拿不到可播媒体但取到了页面元数据。留给下面的 yt-dlp
+            // 路径补全卡片，否则同一条链接会时而完整、时而只剩一个标题。
+            if (provided?.metadataOnly) {
+              publicMetadata = {
+                title: provided.title || '', coverUrl: provided.coverUrl || '',
+                author: provided.author || '', avatarUrl: provided.avatarUrl || '',
+                description: provided.description || '', tags: provided.tags || [],
+              };
+              this.logger.info(`媒体 Provider 只返回元数据，转 yt-dlp 取流：cover=${provided.coverUrl ? 'yes' : 'no'} author=${provided.author ? 'yes' : 'no'}`);
+            }
           } catch (error) {
             this.logger.warn(`媒体 Provider 失败，尝试公开页面解析：${error.message}`);
           }
@@ -510,6 +531,9 @@ export class MediaResolver {
             this.logger.warn(`B站公开接口解析失败，转入通用兜底：${error.message}`);
           }
         }
+        // Provider 已给出的元数据是权威的（登录态下的真实页面），公开页面
+        // 只用来补它缺的字段，不能整份覆盖。
+        const providerMetadata = publicMetadata;
         if (this.publicResolverEnabled) {
           try {
             publicMetadata = await resolveSharedUrl(key, {
@@ -539,6 +563,8 @@ export class MediaResolver {
             }
             // Other platforms may still use yt-dlp as a fallback.
           }
+          // 公开页面拿到的字段只填 Provider 没给的那些。
+          publicMetadata = { ...publicMetadata, ...pruneEmpty(providerMetadata) };
         }
         // 小红书图文笔记没有视频流时，不应再交给 yt-dlp 当视频处理。
         // 没有 Provider 且公开页面没有图片元数据，就明确失败并等待授权 Provider。
