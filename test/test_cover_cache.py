@@ -10,6 +10,7 @@ import unittest
 import aiohttp
 from aiohttp import web
 from PIL import Image
+from yarl import URL as YarlURL
 
 main_path = Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu_bridge/main.py'
 source = ast.parse(main_path.read_text())
@@ -20,10 +21,14 @@ constants = [
     n for n in source.body
     if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '').startswith('COVER_')
 ]
+# 取图路径依赖 signed_url 冻结签名地址的编码，一起带进来。
+helper = next(n for n in source.body
+              if isinstance(n, ast.FunctionDef) and n.name == 'signed_url')
 namespace = {'asyncio': asyncio, 'aiohttp': aiohttp, 'time': time,
-             'logger': logging.getLogger('test')}
+             'YarlURL': YarlURL, 'logger': logging.getLogger('test')}
 module = ast.Module(
-    body=[*constants, ast.ClassDef(name='Bridge', bases=[], keywords=[], body=methods, decorator_list=[])],
+    body=[*constants, helper,
+          ast.ClassDef(name='Bridge', bases=[], keywords=[], body=methods, decorator_list=[])],
     type_ignores=[],
 )
 exec(compile(ast.fix_missing_locations(module), '<bridge-cover>', 'exec'), namespace)
