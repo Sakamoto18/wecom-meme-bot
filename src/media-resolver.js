@@ -8,6 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { resolveSharedUrl } from './share-resolver.js';
 import { warmRemoteMedia } from './media-stream-proxy.js';
+import { isRemovedError, removedError } from './media-removed.js';
 import {
   extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
 } from './bilibili-provider.js';
@@ -500,6 +501,11 @@ export class MediaResolver {
             }
             // Provider 拿不到可播媒体但取到了页面元数据。留给下面的 yt-dlp
             // 路径补全卡片，否则同一条链接会时而完整、时而只剩一个标题。
+            // 已删除的内容不走这里：那种页面也会残留零碎元数据，降级只会用
+            // yt-dlp 的报错盖掉真正的原因。
+            if (provided?.metadataOnly && isRemovedError(provided.title || '')) {
+              throw new Error(removedError(candidate?.provider || '源站', String(provided.title)));
+            }
             if (provided?.metadataOnly) {
               publicMetadata = {
                 title: provided.title || '', coverUrl: provided.coverUrl || '',
@@ -509,6 +515,12 @@ export class MediaResolver {
               this.logger.info(`媒体 Provider 只返回元数据，转 yt-dlp 取流：cover=${provided.coverUrl ? 'yes' : 'no'} author=${provided.author ? 'yes' : 'no'}`);
             }
           } catch (error) {
+            // 源站已明确说内容没了：再降级到 yt-dlp 只会得到一句无关的
+            // "Unsupported URL"，把真正的原因盖掉。直接把结论抛出去。
+            if (isRemovedError(error)) {
+              this.logger.info(`媒体源内容已删除，不再降级：${error.message}`);
+              throw error;
+            }
             this.logger.warn(`媒体 Provider 失败，尝试公开页面解析：${error.message}`);
           }
         }
@@ -528,6 +540,10 @@ export class MediaResolver {
               return this.registerRemoteMedia(bilibili);
             }
           } catch (error) {
+            if (isRemovedError(error)) {
+              this.logger.info(`B站稿件已不可见，不再降级：${error.message}`);
+              throw error;
+            }
             this.logger.warn(`B站公开接口解析失败，转入通用兜底：${error.message}`);
           }
         }
@@ -558,6 +574,10 @@ export class MediaResolver {
               };
             }
           } catch (error) {
+            if (isRemovedError(error)) {
+              this.logger.info(`媒体源内容已删除，不再降级：${error.message}`);
+              throw error;
+            }
             if (candidate?.provider === 'xiaohongshu') {
               throw new Error(`小红书图文解析失败：公开页面不可访问（${error.message}）`);
             }

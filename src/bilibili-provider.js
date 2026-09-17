@@ -1,4 +1,5 @@
 import { normalizeMediaUrl } from './media-link-extractor.js';
+import { isBilibiliRemovedCode, looksRemoved, removedError } from './media-removed.js';
 
 const HEADERS = {
   'user-agent': 'Mozilla/5.0 (compatible; LongtuQQBot/1.0)',
@@ -61,6 +62,10 @@ async function getJson(url, fetchImpl, timeoutMs) {
     if (!response.ok) throw new Error(`B站接口返回 HTTP ${response.status}`);
     const payload = await response.json();
     if (payload?.code !== 0 || !payload.data) {
+      // 稿件被删/不可见时 B站给的是明确业务码，别和网络错误混在一起。
+      if (isBilibiliRemovedCode(payload?.code) || looksRemoved(payload?.message)) {
+        throw new Error(removedError('B站', `code=${payload?.code} ${payload?.message || ''}`.trim()));
+      }
       throw new Error(`B站接口错误 ${payload?.code ?? 'unknown'}`);
     }
     return payload.data;
