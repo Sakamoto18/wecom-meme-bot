@@ -11,6 +11,7 @@ from .video_card import render_video_card
 
 import aiohttp
 from aiohttp import web
+from yarl import URL as YarlURL
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
@@ -46,6 +47,21 @@ ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/stop", "/usage-report",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
+
+
+def signed_url(value: str):
+    """把带签名的 CDN 地址交给 aiohttp 前先冻结它的编码。
+
+    aiohttp 会用 yarl 规范化 URL，其中 query 里的 %2F 会被解码成 /。抖音图片
+    的 x-signature 是 base64，约四分之一的签名含 /，被改写后签名不匹配、CDN
+    一律返回 403，而且同一个地址每次都被同样改写，重试也救不回来。
+    encoded=True 让 yarl 保持原样。
+    """
+    try:
+        return YarlURL(str(value), encoded=True)
+    except Exception:
+        # 极少数不规范地址交回字符串，让 aiohttp 按老路处理。
+        return str(value)
 MEDIA_SHARE_PATTERN = re.compile(r"https?://[^\s<>\u3000]+", re.IGNORECASE)
 NATIVE_QQ_VIDEO_PATTERN = re.compile(
     r"(?:(?:[^/]+\.)?multimedia\.nt\.qq\.com\.cn|gchat\.qpic\.cn|"
@@ -1485,7 +1501,7 @@ class LongtuQqBridge(Star):
                 return ""
             try:
                 async with self.session.get(
-                    reference,
+                    signed_url(reference),
                     timeout=aiohttp.ClientTimeout(total=20),
                 ) as response:
                     if response.status != 200:
@@ -1966,7 +1982,7 @@ class LongtuQqBridge(Star):
                 await asyncio.sleep(COVER_FETCH_RETRY_SECONDS)
             try:
                 async with self.session.get(
-                    cover_url, headers=headers,
+                    signed_url(cover_url), headers=headers,
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as response:
                     # 不看状态码的话，CDN 拒绝时返回的错误页 HTML 会被当成
@@ -2011,7 +2027,7 @@ class LongtuQqBridge(Star):
                     avatar_headers = {"User-Agent": "Mozilla/5.0"}
                     if message.get("provider") == "xiaohongshu":
                         avatar_headers["Referer"] = "https://www.xiaohongshu.com/"
-                    async with self.session.get(avatar_url, headers=avatar_headers, timeout=aiohttp.ClientTimeout(total=2)) as response:
+                    async with self.session.get(signed_url(avatar_url), headers=avatar_headers, timeout=aiohttp.ClientTimeout(total=2)) as response:
                         response.raise_for_status()
                         avatar_bytes = await response.read()
                 except Exception as error:
