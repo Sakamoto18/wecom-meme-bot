@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeMediaUrl } from './media-link-extractor.js';
+import { isXhsRemovedCode, looksRemoved, removedError } from './media-removed.js';
 
 const DEFAULT_SCRIPT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -78,7 +79,13 @@ export function createXhsProvider(options = {}) {
       });
       if (!response.ok) throw new Error(`Spider_XHS Provider HTTP ${response.status}`);
       const external = await response.json();
-      if (external?.status !== 'success') throw new Error(String(external?.msg || 'Spider_XHS Provider 解析失败'));
+      if (external?.status !== 'success') {
+        const message = String(external?.msg || 'Spider_XHS Provider 解析失败');
+        if (external?.removed === true || isXhsRemovedCode(external?.code) || looksRemoved(message)) {
+          throw new Error(removedError('小红书', message.replace(/^.*content_removed:\s*/u, '')));
+        }
+        throw new Error(message);
+      }
       return normalizeXhsProviderData(external.data || external);
     }
     const result = await runResolver(url, {
@@ -92,7 +99,11 @@ export function createXhsProvider(options = {}) {
       },
     });
     if (result?.status !== 'success') {
-      throw new Error(String(result?.msg || '小红书 Provider 解析失败'));
+      const message = String(result?.msg || '小红书 Provider 解析失败');
+      if (result?.removed === true || message.includes('content_removed') || looksRemoved(message)) {
+        throw new Error(removedError('小红书', message.replace(/^.*content_removed:\s*/u, '')));
+      }
+      throw new Error(message);
     }
     const mediaUrl = normalizeMediaUrl(result.data?.video_url);
     const images = [...new Set((Array.isArray(result.data?.images) ? result.data.images : [])
