@@ -47,3 +47,17 @@ proxy immediately at 720P. The proxy switches sources after 8 seconds without
 data, resumes interrupted transfers with validated byte ranges, and logs the
 CDN hostname, transferred bytes, and elapsed time without exposing signed URLs.
 The cover/avatar renderer and media resolution cache are independent of this.
+
+## Video delivery receipts
+
+The bridge sends a video through OneBot directly, after its independent card,
+and only marks the source share successful after receiving a video message ID.
+AstrBot's normal yielded response pipeline logs and swallows send exceptions;
+it cannot be used as proof of delivery. A failed or missing receipt produces a
+failure reaction and a short reply to the source share.
+
+Video calls get an eight-minute receipt wait using a private copy of the
+aiocqhttp transport wrappers. Ordinary messages retain their existing timeout.
+This wait is separate from the resolver's 500 MiB / eight-minute extraction
+guards. A receipt timeout does not cancel QQ's upload, so the notice says the
+video may still be sending; the bridge does not blindly retry and duplicate it.

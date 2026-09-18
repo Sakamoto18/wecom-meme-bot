@@ -5,11 +5,13 @@ handler under test is the deployed code path rather than a copy of it.
 """
 import asyncio
 import importlib
+import os
 import sys
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, '/AstrBot/data/plugins')
+sys.path.insert(0, os.getenv('LONGTU_BRIDGE_TEST_PLUGIN_ROOT', '/AstrBot/data/plugins'))
 main = importlib.import_module('astrbot_plugin_longtu_bridge.main')
 LongtuQqBridge = main.LongtuQqBridge
 
@@ -29,7 +31,7 @@ VIDEO = {
 }
 
 
-def build(response, forward_fails=False, image_fails=False):
+def build(response, forward_fails=False, image_fails=False, video_error=None, video_result=None):
     """Real instance with only the outside world stubbed out."""
     bridge = LongtuQqBridge.__new__(LongtuQqBridge)
     bridge.config = {}
@@ -40,6 +42,11 @@ def build(response, forward_fails=False, image_fails=False):
 
     async def call_action(action, **kwargs):
         actions.append(action)
+        if any(s.get('type') == 'video' for s in kwargs.get('message', [])):
+            if video_error:
+                raise video_error
+            if video_result is not None:
+                return video_result
         if 'forward' in action and forward_fails:
             return {'status': 'failed', 'retcode': 1200}
         if action.endswith(('send_group_msg', 'send_private_msg')) and image_fails:
@@ -158,6 +165,39 @@ class GalleryReactionTests(unittest.IsolatedAsyncioTestCase):
         bridge, event, reactions, actions = build(VIDEO)
         await drive(bridge, event)
         self.assertEqual(reactions, [True], '视频路径的回应不能被改动影响')
+
+    async def test_video_send_exception_must_not_be_swallowed_as_success(self):
+        bridge, event, reactions, actions = build(VIDEO, video_error=RuntimeError('terminated'))
+        yielded = await drive(bridge, event)
+        self.assertEqual(reactions, [False])
+        self.assertEqual(actions, ['send_group_msg', 'send_group_msg'])
+        self.assertEqual(yielded, [], '发送结果由真实回执判断，不依赖 yield')
+
+    async def test_video_timeout_sends_notice_without_resubmitting_video(self):
+        bridge, event, reactions, actions = build(VIDEO, video_error=RuntimeError('WebSocket API call timeout'))
+        await drive(bridge, event)
+        self.assertEqual(reactions, [False])
+        self.assertEqual(actions, ['send_group_msg', 'send_group_msg'])
+
+    async def test_video_failure_receipt_must_not_count_as_success(self):
+        bridge, event, reactions, actions = build(VIDEO, video_result={'status': 'failed', 'retcode': 1200})
+        await drive(bridge, event)
+        self.assertEqual(reactions, [False])
+
+    async def test_actual_aiocqhttp_video_wait_does_not_change_chat_timeout(self):
+        from aiocqhttp.api_impl import ResultStore, UnifiedApi, WebSocketReverseApi
+        socket = SimpleNamespace(send=AsyncMock())
+        transport = WebSocketReverseApi({'2170902293': socket}, set(), 180)
+        api = UnifiedApi(wsr_api=transport)
+        bot = SimpleNamespace(_api=api, call_action=api.call_action)
+        bridge = LongtuQqBridge.__new__(LongtuQqBridge)
+        with patch.object(ResultStore, 'fetch', new_callable=AsyncMock,
+                          return_value={'status': 'ok', 'data': {'message_id': 123}}) as receipt:
+            result = await bridge._call_video_send(bot, 'send_group_msg', {'group_id': 1109147947}, 'https://cdn/v.mp4')
+        self.assertEqual(result, {'message_id': 123})
+        self.assertEqual(receipt.await_args.args[1], 480)
+        self.assertEqual(transport._timeout_sec, 180)
+        socket.send.assert_awaited_once()
 
     async def test_media_unavailable_still_reacts_failure(self):
         bridge, event, reactions, actions = build({'mode': 'media-unavailable', 'messages': []})

@@ -85,6 +85,9 @@ MEDIA_PROVIDER_PATTERNS = {
 # \u53c2\u4e0e\u7684\u4f1a\u8bdd\u8303\u56f4\u4e0e\u89e3\u6790\u5f00\u5173\u4e00\u81f4\uff08_media_group_enabled\uff09\uff0c\u4e0d\u9650\u5b9a\u67d0\u4e2a\u4eba\u3002
 MEDIA_SUCCESS_EMOJI_ID = "478"
 MEDIA_FAILURE_EMOJI_ID = "479"
+# Video download + QQ upload can exceed the adapter's ordinary 180s timeout.
+# Override only this call; never extend waits for ordinary messages/reactions.
+VIDEO_SEND_TIMEOUT_SECONDS = 8 * 60
 # \u540c\u4e00\u6761\u89c6\u9891\u88ab\u518d\u6b21\u8f6c\u53d1\u65f6\uff0c\u5c01\u9762\u76f4\u63a5\u590d\u7528\u4e0a\u6b21\u4e0b\u8f7d\u5230\u7684\u5b57\u8282\uff0c\u5361\u7247\u56e0\u6b64\u548c\u7b2c\u4e00\u6b21
 # \u5b8c\u5168\u4e00\u81f4\uff0c\u4e5f\u4e0d\u518d\u5411 CDN \u91cd\u590d\u8bf7\u6c42\u3002\u6296\u97f3\u7b7e\u540d\u57df\u540d\u4f1a\u77ed\u65f6\u62d2\u7edd\u91cd\u590d\u8bf7\u6c42\uff0c\u5b9e\u6d4b\u540c
 # \u4e00\u4e2a\u5730\u5740\u5148 403\u3001\u5341\u5206\u949f\u540e\u53c8 200\uff0c\u6240\u4ee5\u9996\u6b21\u5931\u8d25\u8fd8\u8981\u91cd\u8bd5\u51e0\u6b21\u3002
@@ -259,6 +262,92 @@ class LongtuQqBridge(Star):
         logger.info(
             f'媒体结果回应：success={success} emoji={emoji_id} message_id={numeric_message_id}',
         )
+        return True
+
+    async def _call_video_send(self, bot, action: str, destination: dict, video_url: str):
+        """Wait for a real OneBot receipt, with a per-call video timeout."""
+        call_action = getattr(bot, 'call_action', None)
+        if not callable(call_action):
+            raise RuntimeError('QQ Bot API 不支持 call_action')
+        # aiocqhttp has no public per-call timeout. Copy its lightweight API
+        # wrappers while sharing the live connections and ResultStore. Changing
+        # bot._api in place would also change concurrent chat/card requests.
+        api = getattr(bot, '_api', None)
+        if api is not None and hasattr(api, '_wsr_api'):
+            def clone_wrapper(wrapper):
+                # AsyncApi.__getattr__ treats even __setstate__ as an API
+                # action, so copy.copy() invokes the wrong method. These
+                # wrappers only hold a small __dict__ of connection references.
+                cloned = object.__new__(type(wrapper))
+                cloned.__dict__.update(wrapper.__dict__)
+                return cloned
+            api = clone_wrapper(api)
+            for name in ('_wsr_api', '_http_api'):
+                transport = getattr(api, name, None)
+                if transport is not None:
+                    transport = clone_wrapper(transport)
+                    transport._timeout_sec = VIDEO_SEND_TIMEOUT_SECONDS
+                    setattr(api, name, transport)
+            call_action = api.call_action
+        result = await asyncio.wait_for(call_action(
+            action, **destination,
+            message=[{'type': 'video', 'data': {'file': video_url}}],
+            timeout=VIDEO_SEND_TIMEOUT_SECONDS * 1000,
+        ), timeout=VIDEO_SEND_TIMEOUT_SECONDS)
+        if not isinstance(result, dict):
+            raise RuntimeError('QQ 视频接口未返回消息回执')
+        if result.get('status') == 'failed' or result.get('retcode', 0) not in (0, None):
+            raise RuntimeError('QQ 视频接口返回失败：' + str(
+                result.get('wording') or result.get('message') or result.get('retcode')))
+        receipt = result.get('data') if isinstance(result.get('data'), dict) else result
+        if not receipt.get('message_id'):
+            raise RuntimeError('QQ 视频接口未返回消息回执')
+        return receipt
+
+    async def _send_video_from_backend(self, event: AstrMessageEvent, message: dict) -> bool:
+        """Send directly: RespondStage swallows errors raised after a yield."""
+        private = event.is_private_chat()
+        action = 'send_private_msg' if private else 'send_group_msg'
+        destination = ({'user_id': int(event.get_sender_id())} if private
+                       else {'group_id': int(event.get_group_id())})
+        source_id = str(getattr(getattr(event, 'message_obj', None), 'message_id', '') or '')
+        started = time.monotonic()
+        logger.info(f'视频发送开始：target={destination} source_message_id={source_id}')
+        try:
+            video_url = str(message.get('url') or '')
+            if not video_url:
+                raise RuntimeError('视频地址缺失')
+            receipt = await self._call_video_send(event.bot, action, destination, video_url)
+        except Exception as error:
+            timed_out = isinstance(error, asyncio.TimeoutError) or bool(
+                re.search(r'timeout|timed out|超时', str(error), re.IGNORECASE))
+            logger.warning(
+                f'视频发送未成功：target={destination} source_message_id={source_id} '
+                f'duration_ms={int((time.monotonic() - started) * 1000)} '
+                f'error={type(error).__name__}: {error}',
+            )
+            with contextlib.suppress(Exception):
+                await self._react_media_result(event, False)
+            # A client-side timeout does not cancel an upload already accepted
+            # by QQ. Do not retry blindly or falsely claim it was interrupted.
+            notice = ('视频发送等待超时，暂未收到 QQ 成功回执，可能仍在发送。建议点击分享前往平台观看。'
+                      if timed_out else '视频发送失败，未收到 QQ 成功回执。请稍后重试，或点击分享前往平台观看。')
+            try:
+                segments = [{'type': 'text', 'data': {'text': notice}}]
+                if source_id:
+                    segments.insert(0, {'type': 'reply', 'data': {'id': source_id}})
+                await asyncio.wait_for(event.bot.call_action(
+                    action, **destination, message=segments,
+                ), timeout=15)
+            except Exception as notice_error:
+                logger.warning(f'视频发送失败提示也未送达：{notice_error}')
+            return False
+        logger.info(
+            f'视频发送成功：target={destination} source_message_id={source_id} '
+            f'message_id={receipt["message_id"]} duration_ms={int((time.monotonic() - started) * 1000)}',
+        )
+        with contextlib.suppress(Exception):
+            await self._react_media_result(event, True)
         return True
 
     def _usage_api_url(self) -> str:
@@ -2620,19 +2709,8 @@ class LongtuQqBridge(Star):
                         f"视频分享数据：title={str(video_message.get('title') or '')[:80]} "
                         f"cover={'yes' if video_message.get('coverUrl') else 'no'}",
                     )
-                    # Video delivery is the primary result. Generate the card
-                    # in parallel, but never put a remote cover/image in the
-                    # same MessageChain: a 403 on a cover must not cancel the
-                    # video upload in NapCat.
-                    media_chain = [
-                        component for component in reply_chain
-                        if isinstance(component, Comp.Video)
-                    ]
-                    if not media_chain:
-                        media_chain = reply_chain
-                    if not bool(response.get("active_reply")):
-                        media_chain = self._reply_prefix(event, components) + media_chain
-                        media_chain = media_chain[len(self._reply_prefix(event, components)):]
+                    # Keep the card separate: a cover failure must not cancel
+                    # video delivery, and neither result proves video success.
                     async def _deliver_card() -> bool:
                         try:
                             card = await self._video_card(video_message)
@@ -2665,15 +2743,7 @@ class LongtuQqBridge(Star):
                         await asyncio.wait_for(_deliver_card(), timeout=12)
                     except Exception as error:
                         logger.warning(f"视频分享卡片等待失败（继续发送视频）：{error}")
-                    try:
-                        yield event.chain_result(media_chain)
-                    except Exception:
-                        with contextlib.suppress(Exception):
-                            await self._react_media_result(event, False)
-                        raise
-                    else:
-                        with contextlib.suppress(Exception):
-                            await self._react_media_result(event, True)
+                    await self._send_video_from_backend(event, video_message)
                     return
                 # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
                 # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
