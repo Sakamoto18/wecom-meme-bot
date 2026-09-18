@@ -11,8 +11,9 @@ import { resolveSharedUrl } from './share-resolver.js';
 import { warmRemoteMedia } from './media-stream-proxy.js';
 import { isRemovedError, removedError } from './media-removed.js';
 import {
-  MAX_MEDIA_BYTES, MAX_MEDIA_EXTRACTION_MS, isMediaExtractionTimeoutError, isMediaTooLargeError,
-  mediaExtractionTimeoutError, mediaTooLargeError,
+  MAX_MEDIA_BYTES, MAX_MEDIA_DURATION_SECONDS, MAX_MEDIA_EXTRACTION_MS,
+  isMediaDurationTooLongError, isMediaExtractionTimeoutError, isMediaTooLargeError,
+  mediaDurationTooLongError, mediaExtractionTimeoutError, mediaTooLargeError,
 } from './media-limits.js';
 import {
   extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
@@ -424,6 +425,7 @@ export class MediaResolver {
   }
 
   registerMedia(value) {
+    this.rejectIfTooLong(value);
     const id = randomBytes(24).toString('base64url');
     const expiresAt = Date.now() + this.cacheTtlMs;
     this.mediaFiles.set(id, { filePath: value.filePath, expiresAt, size: value.outputBytes || 0 });
@@ -435,6 +437,7 @@ export class MediaResolver {
   }
 
   registerRemoteMedia(value) {
+    this.rejectIfTooLong(value);
     if (positive(value.size) > MAX_MEDIA_BYTES) throw mediaTooLargeError(value.size);
     const id = randomBytes(24).toString('base64url');
     const expiresAt = Date.now() + this.cacheTtlMs;
@@ -495,6 +498,14 @@ export class MediaResolver {
     const size = await probeRemoteSize(value, 2_000);
     if (size > MAX_MEDIA_BYTES) throw mediaTooLargeError(size);
     return size;
+  }
+
+  rejectIfTooLong(value) {
+    const duration = positive(value?.duration);
+    if (duration > MAX_MEDIA_DURATION_SECONDS) {
+      throw mediaDurationTooLongError(duration);
+    }
+    return duration;
   }
 
   async getMediaFile(mediaId) {
@@ -599,6 +610,7 @@ export class MediaResolver {
               // directly and often gets HTTP 403. Keep the provider result
               // metadata, but send Douyin through our authenticated stream
               // proxy so the server fetches it with browser-like headers.
+              this.rejectIfTooLong(directMedia);
               await this.rejectIfTooLarge(directMedia);
               if (candidate?.provider === 'douyin') {
                 directMedia.requestHeaders = {
@@ -640,7 +652,8 @@ export class MediaResolver {
               this.logger.info(`媒体源内容已删除，不再降级：${error.message}`);
               throw error;
             }
-            if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
+            if (isMediaTooLargeError(error) || isMediaDurationTooLongError(error)
+              || isMediaExtractionTimeoutError(error)) throw error;
             this.logger.warn(`媒体 Provider 失败，尝试公开页面解析：${error.message}`);
           }
         }
@@ -657,6 +670,7 @@ export class MediaResolver {
               }),
             });
             if (bilibili?.mediaUrl) {
+              this.rejectIfTooLong(bilibili);
               await this.rejectIfTooLarge(bilibili);
               return this.registerRemoteMedia(bilibili);
             }
@@ -665,7 +679,8 @@ export class MediaResolver {
               this.logger.info(`B站稿件已不可见，不再降级：${error.message}`);
               throw error;
             }
-            if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
+            if (isMediaTooLargeError(error) || isMediaDurationTooLongError(error)
+              || isMediaExtractionTimeoutError(error)) throw error;
             this.logger.warn(`B站公开接口解析失败，转入通用兜底：${error.message}`);
           }
         }
@@ -701,7 +716,8 @@ export class MediaResolver {
               this.logger.info(`媒体源内容已删除，不再降级：${error.message}`);
               throw error;
             }
-            if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
+            if (isMediaTooLargeError(error) || isMediaDurationTooLongError(error)
+              || isMediaExtractionTimeoutError(error)) throw error;
             if (candidate?.provider === 'xiaohongshu') {
               throw new Error(`小红书图文解析失败：公开页面不可访问（${error.message}）`);
             }
@@ -734,6 +750,7 @@ export class MediaResolver {
             throw new Error(`${ytError.message}；网页兜底：${htmlError.message}`);
           }
         }
+        this.rejectIfTooLong(downloaded);
         // Generic direct-file extractors use the MP4 basename as a title.
         // XHS notes can intentionally have no title: retain their source title.
         if (candidate?.provider === 'xiaohongshu') downloaded.title = publicMetadata.title || '';

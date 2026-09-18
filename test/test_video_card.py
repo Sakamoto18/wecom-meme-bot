@@ -24,6 +24,15 @@ class CardTests(unittest.TestCase):
         bounds = tile.getbbox()
         self.assertTrue(bounds[0] > 0 or bounds[1] > 0 or bounds[2] < tile.width or bounds[3] < tile.height)
 
+    def test_private_use_emoji_uses_the_bundled_color_font(self):
+        # QQ native emoji commonly arrives as FE82C/FE82E-style private-use
+        # characters.  They must not go through the CJK font and become tofu.
+        private_emoji = "\U000fe82c"
+        self.assertTrue(is_emoji(private_emoji))
+        tile = emoji_tile(private_emoji, 22)
+        self.assertIsNotNone(tile)
+        self.assertIsNotNone(tile.getbbox())
+
     def test_grid_preserves_order_and_only_last_cell_has_overflow(self):
         colors = [(20 * i, 40, 60) for i in range(9)]
         previews = [png(color, (80, 120)) for color in colors]

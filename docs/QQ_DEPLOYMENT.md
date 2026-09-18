@@ -409,6 +409,8 @@ QQ_MEDIA_GROUP_ALLOWED_PROVIDERS=
 QQ_MEDIA_USAGE_DATABASE_FILE=data/qq-media-usage.sqlite
 ```
 
+媒体链路有两类独立限制：下载/解析过程最多运行 8 分钟；Provider 或 B 站播放接口已经返回视频时长时，超过 8 分钟的视频会在注册流式中转前直接拒绝，不会让 NapCat 开始下载长视频。视频大小上限仍为 500 MiB。对应提示会说明是视频过长、文件过大，还是实际提取超时。
+
 `QQ_MEDIA_EXCLUDED_GROUPS` 使用英文逗号分隔群号。配置后，指定群中的外部分享卡和分享链接会保持静默，不发送原生表情回应，也不会进入视频解析服务；例如 `QQ_MEDIA_EXCLUDED_GROUPS=239375116`。
 
 `QQ_MEDIA_GROUP_ALLOWED_PROVIDERS` 按群限定可解析的平台，格式 `群号:平台|平台,群号:平台`，平台取 `douyin`、`bilibili`、`xiaohongshu`、`kuaishou`。列进来的群只放行列出的平台，其余平台的分享按普通文本处理，既不解析也不挂表情。这条比 `QQ_MEDIA_EXCLUDED_GROUPS` 的整群开关更精确，因此优先生效——群号同时出现在两处时按白名单放行，不需要从排除名单里摘掉。例如 `QQ_MEDIA_GROUP_ALLOWED_PROVIDERS=821259340:douyin,239375116:douyin` 表示这两个群只开放抖音抓取。未列入的群沿用整群开关。插件侧同名配置项为 `media_group_allowed_providers`，两侧必须一致，否则插件放行的分享会被 Node 拦下（表现为挂了解析中的表情却没有结果）。

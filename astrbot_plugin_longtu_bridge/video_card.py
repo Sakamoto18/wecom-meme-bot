@@ -10,6 +10,16 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 ASSETS = Path(__file__).resolve().parent / "assets"
 LOGOS = {"bilibili": "bilibili.png", "xiaohongshu": "xiaohongshu.png", "douyin": "douyin.png"}
 
+# QQ and several mobile clients encode their built-in emoji in the Unicode
+# private-use area.  The bundled Noto Color Emoji font contains the relevant
+# glyphs, but a normal CJK font does not; sending these characters through the
+# CJK renderer produces the square placeholders seen in share cards.
+PRIVATE_USE_EMOJI_RANGES = (
+    (0xFE4E5, 0xFE4EE),
+    (0xFE82C, 0xFE82C),
+    (0xFE82E, 0xFE837),
+)
+
 
 @lru_cache(maxsize=4)
 def card_font(size):
@@ -50,6 +60,7 @@ def is_emoji(chunk):
         return False
     return any(0x1F000 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF
                or ord(c) in (0xFE0F, 0x20E3, 0x231A, 0x231B, 0x23F0, 0x23F3)
+               or any(start <= ord(c) <= end for start, end in PRIVATE_USE_EMOJI_RANGES)
                for c in chunk)
 
 
