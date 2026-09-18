@@ -29,9 +29,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { isRemovedError } from './media-removed.js';
-import {
-  isMediaDurationTooLongError, isMediaExtractionTimeoutError, isMediaTooLargeError,
-} from './media-limits.js';
+import { isMediaExtractionTimeoutError, isMediaTooLargeError } from './media-limits.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -2877,7 +2875,6 @@ export class QqBotService {
       } catch (error) {
         const removedAtSource = isRemovedError(error);
         const mediaTooLarge = isMediaTooLargeError(error);
-        const mediaDurationTooLong = isMediaDurationTooLongError(error);
         const mediaTimedOut = isMediaExtractionTimeoutError(error);
         const sourceUrlHash = createHash('sha256')
           .update(candidate.url)
@@ -2907,7 +2904,7 @@ export class QqBotService {
             }],
           };
         }
-        if (mediaTooLarge || mediaDurationTooLong || mediaTimedOut) {
+        if (mediaTooLarge || mediaTimedOut) {
           const limitMetadata = error?.mediaMetadata && typeof error.mediaMetadata === 'object'
             ? error.mediaMetadata : {};
           return {
@@ -2919,9 +2916,7 @@ export class QqBotService {
               type: 'media-limit',
               text: mediaTooLarge
                 ? '这个视频超过 500MB，建议点击分享前往平台观看。'
-                : mediaDurationTooLong
-                  ? '这个视频加载时长超过 8 分钟，建议点击分享前往平台观看。'
-                  : '视频提取超过 8 分钟，已中断，建议点击分享前往平台观看。',
+                : '视频提取超过 8 分钟，已中断，建议点击分享前往平台观看。',
               provider: candidate.provider,
               title: String(limitMetadata.title || ''),
               coverUrl: String(limitMetadata.coverUrl || limitMetadata.cover || ''),

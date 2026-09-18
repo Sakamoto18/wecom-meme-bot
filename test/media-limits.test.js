@@ -6,8 +6,7 @@ import path from 'node:path';
 import { MediaResolver } from '../src/media-resolver.js';
 import { QqBotService } from '../src/qq-service.js';
 import {
-  MAX_MEDIA_BYTES, MAX_MEDIA_DURATION_SECONDS, MAX_MEDIA_EXTRACTION_MS,
-  isMediaDurationTooLongError, isMediaTooLargeError,
+  MAX_MEDIA_BYTES, MAX_MEDIA_EXTRACTION_MS, isMediaTooLargeError,
   mediaExtractionTimeoutError,
 } from '../src/media-limits.js';
 
@@ -33,16 +32,15 @@ test('解析超时时间硬上限为 8 分钟，避免配置把并发槽永久�
   }
 });
 
-test('超过 8 分钟的视频在注册远程流前拒绝', () => {
+test('视频自身时长不作为拦截条件', () => {
   const resolver = new MediaResolver({ enabled: true });
   try {
-    assert.throws(
-      () => resolver.registerRemoteMedia({
-        mediaUrl: 'https://cdn.example/hour.mp4',
-        duration: MAX_MEDIA_DURATION_SECONDS + 1,
-      }),
-      (error) => isMediaDurationTooLongError(error),
-    );
+    const result = resolver.registerRemoteMedia({
+      mediaUrl: 'https://cdn.example/hour.mp4',
+      size: 1234,
+      duration: 60 * 60,
+    });
+    assert.equal(result.duration, 60 * 60);
   } finally { resolver.close(); }
 });
 
@@ -77,28 +75,5 @@ test('QQ 对超过 8 分钟的提取返回超时提示', async () => {
     });
     assert.equal(result.mode, 'media-unavailable');
     assert.equal(result.messages[0].text, '视频提取超过 8 分钟，已中断，建议点击分享前往平台观看。');
-  } finally { resolver.close(); }
-});
-
-test('QQ 对超过 8 分钟的视频时长返回可见提示', async () => {
-  const resolver = new MediaResolver({
-    enabled: true,
-    providerResolver: async () => ({
-      mediaUrl: 'https://cdn.example/hour.mp4',
-      duration: MAX_MEDIA_DURATION_SECONDS + 1,
-      title: '超长视频', coverUrl: 'https://cdn.example/hour.jpg', author: '原作者',
-    }),
-  });
-  try {
-    const service = new QqBotService({ mediaResolver: resolver });
-    const result = await service.handleMessage({
-      group_id: '1109147947', user_id: 'tester',
-      text: 'https://v.douyin.com/hour/', media_share: true,
-    });
-    assert.equal(result.mode, 'media-unavailable');
-    assert.equal(result.messages[0].text, '这个视频加载时长超过 8 分钟，建议点击分享前往平台观看。');
-    assert.equal(result.messages[0].type, 'media-limit');
-    assert.equal(result.messages[0].coverUrl, 'https://cdn.example/hour.jpg');
-    assert.equal(result.messages[0].author, '原作者');
   } finally { resolver.close(); }
 });
