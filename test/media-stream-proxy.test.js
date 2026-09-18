@@ -49,7 +49,10 @@ test('CDN 传输中断后按字节偏移续传，不重复写入开头', async (
       return new Response('456789', {status:206,headers:{'content-length':'6','content-range':'bytes 4-9/10'}});
     },
   });
-  assert.deepEqual(requests, [undefined, 'bytes=4-9']);
+  // The first request races the primary and backup CDN; the resumed request
+  // must still start exactly at the first missing byte.
+  assert.equal(requests.at(-1), 'bytes=4-9');
+  assert.equal(requests.slice(0, -1).every((range) => range === undefined), true);
   assert.equal(response.text(), '0123456789');
   assert.equal(response.status, 200);
   assert.equal(response.headers['content-length'], '10');

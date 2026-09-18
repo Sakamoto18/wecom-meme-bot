@@ -29,6 +29,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { isRemovedError } from './media-removed.js';
+import { isMediaExtractionTimeoutError, isMediaTooLargeError } from './media-limits.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -2873,6 +2874,8 @@ export class QqBotService {
         };
       } catch (error) {
         const removedAtSource = isRemovedError(error);
+        const mediaTooLarge = isMediaTooLargeError(error);
+        const mediaTimedOut = isMediaExtractionTimeoutError(error);
         const sourceUrlHash = createHash('sha256')
           .update(candidate.url)
           .digest('hex');
@@ -2898,6 +2901,17 @@ export class QqBotService {
             messages: [{
               type: 'text',
               text: '这个分享的内容已被删除，无法抓取。',
+            }],
+          };
+        }
+        if (mediaTooLarge || mediaTimedOut) {
+          return {
+            mode: 'media-unavailable',
+            messages: [{
+              type: 'text',
+              text: mediaTooLarge
+                ? '这个视频超过 500MB，建议点击分享前往平台观看。'
+                : '视频提取超过 8 分钟，已中断，建议点击分享前往平台观看。',
             }],
           };
         }

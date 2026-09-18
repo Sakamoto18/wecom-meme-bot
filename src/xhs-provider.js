@@ -22,6 +22,7 @@ export function normalizeXhsProviderData(data = {}) {
   const user = data.user || data.user_info || data.userInfo
     || (typeof data.author === 'object' ? data.author : null) || {};
   return { mediaUrl, images: mediaUrl ? [] : images, coverUrl: normalizeMediaUrl(data.cover || data.cover_url || data.coverUrl || images[0] || ''), title: String(data.title || ''),
+    size: Number(data.size || data.video_size || data.videoSize || 0) || 0,
     author: String((typeof data.author === 'string' ? data.author : '')
       || data.author_name || data.authorName || user.nickname || user.nickName || user.nick_name || ''),
     avatarUrl: normalizeMediaUrl(data.avatarUrl || data.author_avatar
@@ -112,6 +113,7 @@ export function createXhsProvider(options = {}) {
     const normalized = normalizeXhsProviderData(result.data || {});
     return {
       mediaUrl,
+      size: Number(result.data?.size || result.data?.video_size || result.data?.videoSize || normalized.size || 0) || 0,
       images,
       coverUrl: normalizeMediaUrl(result.data?.cover),
       title: String(result.data?.title || normalized.title || ''),

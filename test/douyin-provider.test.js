@@ -23,6 +23,7 @@ test('抖音 HTTP 响应经 Provider 和媒体解析器生成代理视频，跨�
     assert.deepEqual(JSON.parse(options.body), { url: 'https://v.douyin.com/example/' });
     return new Response(JSON.stringify({ status: 'success', data: {
       media_type: 'video', video_url: 'https://cdn.example/work.mp4',
+      size: 1234,
       cover: 'https://cdn.example/cover.jpg', title: '作品标题', description: '作品正文',
       author: '原作者', avatar_url: 'https://cdn.example/avatar.jpg', tags: ['话题'],
     } }));

@@ -220,7 +220,8 @@ async def collect_gallery(page, state):
     return list(ordered.values())[:target], total
 
 
-async def read_page(page, url, video_requests, state):
+async def read_page(page, url, video_requests, state, video_sizes=None):
+    video_sizes = video_sizes or {}
     state['stage'] = 'navigation'
     try:
         await page.goto(url, wait_until='domcontentloaded', timeout=NAVIGATION_TIMEOUT_MS)
@@ -246,6 +247,7 @@ async def read_page(page, url, video_requests, state):
     if data.get('video'):
         return {'status': 'success', 'data': {
             'media_type': 'video', 'video_url': html.unescape(data['video']),
+            'size': video_sizes.get(data['video'], 0),
             'cover': data.get('cover', ''), **common,
         }}
     # 没有视频流时可能是图文笔记。抖音图文页也带一个 video 元素（推荐流），
@@ -264,6 +266,7 @@ async def read_page(page, url, video_requests, state):
         logger.info('Douyin late video resource found after gallery wait')
         return {'status': 'success', 'data': {
             'media_type': 'video', 'video_url': html.unescape(late),
+            'size': video_sizes.get(late, 0),
             'cover': data.get('cover', ''), **common,
         }}
     # 判"已删除"必须排在元数据兜底之前。被删的页面上仍会留下推荐位封面之类的
@@ -302,14 +305,21 @@ async def resolve(req: Req):
             ctx = await get_context()
             page = await ctx.new_page()
             video_requests = []
+            video_sizes = {}
 
             def capture(response):
                 if 200 <= response.status < 400 and is_real_video_url(response.url):
                     if response.url not in video_requests:
                         video_requests.append(response.url)
+                    try:
+                        size = int(response.headers.get('content-length', '0'))
+                        if size > 0:
+                            video_sizes[response.url] = size
+                    except (TypeError, ValueError):
+                        pass
 
             page.on('response', capture)
-            result = await read_page(page, req.url, video_requests, state)
+            result = await read_page(page, req.url, video_requests, state, video_sizes)
         logger.info('Douyin resolve ok source=%s duration_ms=%d kind=%s cover=%s images=%d',
                     label, (time.monotonic()-started)*1000,
                     result['data'].get('media_type', ''), bool(result['data']['cover']),
@@ -323,7 +333,7 @@ async def resolve(req: Req):
         # 原因要带出去。只回类型名的话，"作品被删了"和"页面没加载完"在上游
         # 看起来都是 (ValueError)，排查时只能靠人去翻页面。
         reason = str(error).strip() or type(error).__name__
-        removed = reason.startswith(REMOVED_REASON_PREFIX)
+        removed = reason.startswith('content_removed')
         logger.warning('Douyin resolve %s source=%s stage=%s reason=%s',
                        'removed' if removed else 'failed',
                        label, state['stage'], reason[:160])

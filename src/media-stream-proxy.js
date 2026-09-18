@@ -1,4 +1,5 @@
 import { once } from 'node:events';
+import { MAX_MEDIA_BYTES, isMediaTooLargeError, mediaTooLargeError } from './media-limits.js';
 
 // Every URL is an alternative for the same MP4 from the playback API.
 // Keep the client response open while resuming a stalled CDN from its byte offset.
@@ -77,6 +78,9 @@ export async function proxyRemoteMedia(request, response, media, {
             : (length !== null && /^\d+$/u.test(length) ? Number(length) : null);
           rangeEnd = expectedBytes === null ? null : rangeStart + expectedBytes - 1;
           totalBytes = contentRange ? Number(contentRange[3]) : expectedBytes;
+          if (totalBytes !== null && totalBytes > MAX_MEDIA_BYTES) {
+            throw mediaTooLargeError(totalBytes);
+          }
         }
         reader = upstream.body.getReader();
         while (true) {
@@ -89,6 +93,9 @@ export async function proxyRemoteMedia(request, response, media, {
             response.end();
             logger.info('视频传输完成：host=' + host + ' bytes=' + bytes + ' duration_ms=' + (Date.now() - started));
             return;
+          }
+          if (bytes + value.length > MAX_MEDIA_BYTES) {
+            throw mediaTooLargeError(bytes + value.length);
           }
           if (expectedBytes !== null && bytes + value.length > expectedBytes) {
             throw new Error('视频源超出声明长度');
@@ -125,8 +132,13 @@ export async function proxyRemoteMedia(request, response, media, {
       + ' reason=' + (lastError?.message || '没有视频源'));
     if (response.headersSent) response.destroy();
     else {
-      response.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
-      response.end(JSON.stringify({ ok: false, error: '视频源暂时不可用' }));
+      const tooLarge = isMediaTooLargeError(lastError);
+      response.writeHead(tooLarge ? 413 : 502, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({
+        ok: false,
+        error: tooLarge ? 'MEDIA_TOO_LARGE' : 'MEDIA_UNAVAILABLE',
+        message: tooLarge ? '这个视频超过 500MB，建议点击分享前往平台观看。' : '视频源暂时不可用',
+      }));
     }
   } finally {
     response.removeListener('close', onClose);
