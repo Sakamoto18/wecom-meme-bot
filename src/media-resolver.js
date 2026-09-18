@@ -5,19 +5,36 @@ import { mkdir, readdir, stat, unlink, readFile, writeFile } from 'node:fs/promi
 import path from 'node:path';
 import os from 'node:os';
 import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { resolveSharedUrl } from './share-resolver.js';
 import { warmRemoteMedia } from './media-stream-proxy.js';
 import { isRemovedError, removedError } from './media-removed.js';
 import {
+  MAX_MEDIA_BYTES, MAX_MEDIA_EXTRACTION_MS, isMediaExtractionTimeoutError, isMediaTooLargeError,
+  mediaExtractionTimeoutError, mediaTooLargeError,
+} from './media-limits.js';
+import {
   extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
 } from './bilibili-provider.js';
-
-const MAX_MEDIA_BYTES = 256 * 1024 * 1024;
 
 function positive(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+async function raceExtraction(task, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(mediaExtractionTimeoutError()), timeoutMs);
+    timer.unref?.();
+    Promise.resolve(task).then((value) => {
+      clearTimeout(timer);
+      resolve(value);
+    }, (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
 }
 
 // 只保留有值的字段，用于把权威来源覆盖到兜底来源上而不抹掉后者已有的内容。
@@ -53,7 +70,7 @@ function runCommand(command, args, { timeoutMs = 120_000, cwd } = {}) {
     let stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error('媒体下载超时'));
+      reject(mediaExtractionTimeoutError());
     }, timeoutMs);
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString();
@@ -76,6 +93,62 @@ function runCommand(command, args, { timeoutMs = 120_000, cwd } = {}) {
       resolve({ stdout, stderr });
     });
   });
+}
+
+function limitedFileTransform() {
+  let bytes = 0;
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      bytes += chunk.length;
+      if (bytes > MAX_MEDIA_BYTES) {
+        callback(mediaTooLargeError(bytes));
+        return;
+      }
+      callback(null, chunk, encoding);
+    },
+  });
+}
+
+function contentLength(response) {
+  const direct = Number(response.headers.get('content-length') || 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const range = response.headers.get('content-range')?.match(/\/([0-9]+)$/u);
+  return range ? Number(range[1]) : 0;
+}
+
+async function probeRemoteSize(value, timeoutMs = 8_000) {
+  const known = Number(value?.size || 0);
+  if (known > 0) return known;
+  const url = String(value?.mediaUrl || '').trim();
+  if (!url) return 0;
+  const headers = value.requestHeaders || {};
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    try {
+      const head = await fetch(url, { method: 'HEAD', headers, signal: controller.signal });
+      const size = head.ok ? contentLength(head) : 0;
+      await head.body?.cancel().catch(() => {});
+      if (size > 0) return size;
+    } catch { /* Some signed CDNs reject HEAD; use a one-byte range below. */ }
+    const ranged = await fetch(url, {
+      headers: { ...headers, Range: 'bytes=0-0' }, signal: controller.signal,
+    });
+    const size = ranged.ok ? contentLength(ranged) : 0;
+    await ranged.body?.cancel().catch(() => {});
+    return size;
+  } catch {
+    return 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function cleanupYtDlpOutputs(outputDirectory, basename) {
+  const entries = await readdir(outputDirectory).catch(() => []);
+  await Promise.all(entries
+    .filter((entry) => entry.startsWith(`${basename}.`))
+    .map((entry) => unlink(path.join(outputDirectory, entry)).catch(() => {})));
 }
 
 async function probeBilibiliShortLink(url, { command, timeoutMs }) {
@@ -146,39 +219,40 @@ export async function runYtDlp(url, {
   if (cookie) args.push('--add-header', `Cookie: ${cookie}`);
   args.push(url);
   let stdout;
+  let succeeded = false;
   try {
     ({ stdout } = await runCommand(command, args, { timeoutMs, cwd: outputDirectory }));
+    const info = parsePrintedJson(stdout);
+    const printedPath = String(stdout).split(/\r?\n/gu)
+      .map((line) => line.trim())
+      .reverse()
+      .find((line) => line.startsWith(outputDirectory) && line.endsWith('.mp4'));
+    const filePath = printedPath || path.join(outputDirectory, `${basename}.mp4`);
+    const fileInfo = await stat(filePath).catch(() => null);
+    if (!fileInfo?.isFile() || fileInfo.size <= 0) {
+      throw new Error('yt-dlp 未生成可发送的 MP4 文件');
+    }
+    if (fileInfo.size > MAX_MEDIA_BYTES) {
+      throw mediaTooLargeError(fileInfo.size);
+    }
+    succeeded = true;
+    return {
+      filePath,
+      title: String(info.title || '').slice(0, 200),
+      duration: positive(info.duration),
+      extractor: String(info.extractor_key || info.extractor || '').slice(0, 80),
+      downloadBytes: fileInfo.size,
+      outputBytes: fileInfo.size,
+    };
   } finally {
     if (normalizedCookiesFile) await unlink(normalizedCookiesFile).catch(() => {});
+    if (!succeeded) await cleanupYtDlpOutputs(outputDirectory, basename);
   }
-
-  const info = parsePrintedJson(stdout);
-  const printedPath = String(stdout).split(/\r?\n/gu)
-    .map((line) => line.trim())
-    .reverse()
-    .find((line) => line.startsWith(outputDirectory) && line.endsWith('.mp4'));
-  const filePath = printedPath || path.join(outputDirectory, `${basename}.mp4`);
-  const fileInfo = await stat(filePath).catch(() => null);
-  if (!fileInfo?.isFile() || fileInfo.size <= 0) {
-    throw new Error('yt-dlp 未生成可发送的 MP4 文件');
-  }
-  if (fileInfo.size > MAX_MEDIA_BYTES) {
-    await unlink(filePath).catch(() => {});
-    throw new Error('视频文件超过 256 MiB，已跳过发送');
-  }
-  return {
-    filePath,
-    title: String(info.title || '').slice(0, 200),
-    duration: positive(info.duration),
-    extractor: String(info.extractor_key || info.extractor || '').slice(0, 80),
-    downloadBytes: fileInfo.size,
-    outputBytes: fileInfo.size,
-  };
 }
 
 async function extractHtmlVideo(url, timeoutMs, outputDirectory) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(mediaExtractionTimeoutError()), timeoutMs);
   try {
     const response = await fetch(url, {
       signal: controller.signal,
@@ -194,6 +268,8 @@ async function extractHtmlVideo(url, timeoutMs, outputDirectory) {
     for (const match of matches) {
       const candidate = normalizeMediaUrl(String(match[1]).replaceAll('\\/', '/'));
       if (!candidate) continue;
+      const declaredSize = await probeRemoteSize({ mediaUrl: candidate }, 2_000);
+      if (declaredSize > MAX_MEDIA_BYTES) throw mediaTooLargeError(declaredSize);
       const mediaResponse = await fetch(candidate, {
         signal: controller.signal,
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; QQMediaResolver/1.0)' },
@@ -201,7 +277,12 @@ async function extractHtmlVideo(url, timeoutMs, outputDirectory) {
       if (!mediaResponse.ok || !mediaResponse.body) continue;
       await mkdir(outputDirectory, { recursive: true });
       const filePath = path.join(outputDirectory, `${Date.now()}-${randomBytes(8).toString('hex')}.mp4`);
-      await pipeline(mediaResponse.body, createWriteStream(filePath));
+      try {
+        await pipeline(mediaResponse.body, limitedFileTransform(), createWriteStream(filePath));
+      } catch (error) {
+        await unlink(filePath).catch(() => {});
+        throw error;
+      }
       const fileInfo = await stat(filePath).catch(() => null);
       if (fileInfo?.isFile() && fileInfo.size > 0 && fileInfo.size <= MAX_MEDIA_BYTES) {
         return { filePath, title: '', duration: 0, extractor: 'html-meta', downloadBytes: fileInfo.size, outputBytes: fileInfo.size };
@@ -216,22 +297,26 @@ async function extractHtmlVideo(url, timeoutMs, outputDirectory) {
 
 async function downloadDirectMedia(value, timeoutMs, outputDirectory) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(mediaExtractionTimeoutError()), timeoutMs);
+  const signal = value.signal
+    ? AbortSignal.any([controller.signal, value.signal])
+    : controller.signal;
   let filePath = '';
   try {
     const response = await fetch(value.mediaUrl, {
-      signal: controller.signal,
+      signal,
       headers: value.requestHeaders || {},
     });
     if (!response.ok || !response.body) throw new Error(`视频流返回 HTTP ${response.status}`);
     const declaredSize = Number(response.headers.get('content-length') || 0);
-    if (declaredSize > MAX_MEDIA_BYTES) throw new Error('视频文件超过 256 MiB，已跳过发送');
+    if (declaredSize > MAX_MEDIA_BYTES) throw mediaTooLargeError(declaredSize);
     await mkdir(outputDirectory, { recursive: true });
     filePath = path.join(outputDirectory, `${Date.now()}-${randomBytes(8).toString('hex')}.mp4`);
-    await pipeline(response.body, createWriteStream(filePath));
+    await pipeline(response.body, limitedFileTransform(), createWriteStream(filePath));
     const info = await stat(filePath);
     if (!info.isFile() || info.size <= 0 || info.size > MAX_MEDIA_BYTES) {
-      throw new Error('下载的视频文件为空或超过 256 MiB');
+      if (info?.size > MAX_MEDIA_BYTES) throw mediaTooLargeError(info.size);
+      throw new Error('下载的视频文件为空');
     }
     return {
       filePath, title: value.title || '', duration: positive(value.duration),
@@ -252,6 +337,10 @@ export class MediaResolver {
     this.cookiesFile = String(options.cookiesFile || '').trim();
     this.cookie = String(options.cookie || '').trim();
     this.timeoutMs = options.timeoutMs ?? 120_000;
+    // A configured provider/download timeout must never hold a media slot for
+    // longer than the user-facing eight-minute extraction deadline.
+    this.timeoutMs = Math.min(Math.max(1_000, Number(this.timeoutMs) || 120_000), MAX_MEDIA_EXTRACTION_MS);
+    this.maxExtractionMs = MAX_MEDIA_EXTRACTION_MS;
     this.cacheTtlMs = Math.max(0, Number(options.cacheTtlMs ?? 10 * 60 * 1000));
     this.cacheDirectory = options.cacheDirectory || path.join(os.tmpdir(), 'longtu-media-cache');
     this.maxCacheBytes = Math.max(0, Number(options.maxCacheBytes ?? 512 * 1024 * 1024));
@@ -331,6 +420,7 @@ export class MediaResolver {
   close() {
     clearInterval(this.cleanupTimer);
     this.cleanupTimer = null;
+    for (const item of this.mediaFiles.values()) item.prefetchController?.abort();
   }
 
   registerMedia(value) {
@@ -345,6 +435,7 @@ export class MediaResolver {
   }
 
   registerRemoteMedia(value) {
+    if (positive(value.size) > MAX_MEDIA_BYTES) throw mediaTooLargeError(value.size);
     const id = randomBytes(24).toString('base64url');
     const expiresAt = Date.now() + this.cacheTtlMs;
     const item = {
@@ -357,7 +448,11 @@ export class MediaResolver {
     this.mediaFiles.set(id, item);
     // Download in the background while the share card is rendered. The proxy
     // will await this promise and stream the completed local file to NapCat.
-    item.prefetchPromise = downloadDirectMedia({ mediaUrl: value.mediaUrl, requestHeaders: value.requestHeaders || {} }, this.timeoutMs, this.cacheDirectory)
+    item.prefetchController = new AbortController();
+    item.prefetchPromise = downloadDirectMedia({
+      mediaUrl: value.mediaUrl, requestHeaders: value.requestHeaders || {},
+      signal: item.prefetchController.signal,
+    }, this.timeoutMs, this.cacheDirectory)
       .then((downloaded) => {
         item.filePath = downloaded.filePath;
         item.size = downloaded.outputBytes;
@@ -372,7 +467,9 @@ export class MediaResolver {
       });
     // Start DNS/TLS/CDN negotiation immediately; card rendering can overlap
     // with this warm-up before QQ requests the proxy URL.
-    warmRemoteMedia(item, { logger: this.logger }).catch(() => {});
+    // The proxy races all signed CDN candidates on the first request. Avoid a
+    // separate warm request here: it consumes a connection and can compete
+    // with NapCat's first range request instead of reducing latency.
     return {
       url: `${this.publicBaseUrl}/v1/qq/media/${id}`,
       mediaId: id,
@@ -394,6 +491,12 @@ export class MediaResolver {
     };
   }
 
+  async rejectIfTooLarge(value) {
+    const size = await probeRemoteSize(value, 2_000);
+    if (size > MAX_MEDIA_BYTES) throw mediaTooLargeError(size);
+    return size;
+  }
+
   async getMediaFile(mediaId) {
     const normalizedId = String(mediaId || '');
     const item = this.mediaFiles.get(normalizedId);
@@ -404,7 +507,15 @@ export class MediaResolver {
       }
       return null;
     }
-    if (item.prefetchPromise) await Promise.race([item.prefetchPromise, new Promise((resolve) => setTimeout(resolve, Math.max(100, this.timeoutMs)))]);
+    // The prefetch is an optimization only. Never make NapCat wait for a full
+    // remote download: return the signed stream after a short head start and
+    // let the proxy race the CDN while the local copy continues in background.
+    if (item.prefetchPromise) {
+      await Promise.race([
+        item.prefetchPromise,
+        new Promise((resolve) => setTimeout(resolve, Math.min(500, this.timeoutMs))),
+      ]);
+    }
     if (item.filePath) {
       const info = await stat(item.filePath).catch(() => null);
       if (info?.isFile()) return { ...item, size: info.size };
@@ -439,22 +550,28 @@ export class MediaResolver {
 
     const task = (async () => {
       await this.acquireSlot();
+      const deadline = Date.now() + this.maxExtractionMs;
+      const remainingTimeout = () => {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw mediaExtractionTimeoutError();
+        return Math.min(this.timeoutMs, remaining);
+      };
       try {
         let sourceKey = normalizeDownloadSource(key) || key;
         let publicMetadata = {};
         if (this.providerResolver) {
           try {
-            const provided = await this.providerResolver({
+            const provided = await raceExtraction(this.providerResolver({
               url: key,
               platform: candidate?.provider || 'unknown',
-            });
+            }), remainingTimeout());
             if (provided?.mediaUrl) {
               let title = provided.title || '';
               let coverUrl = provided.coverUrl || '';
               let cardMetadata = provided;
               if ((!title || !coverUrl) && candidate?.provider === 'xiaohongshu') {
                 try {
-                  const fallback = await resolveSharedUrl(key, { timeoutMs: Math.min(this.timeoutMs, 5_000) });
+                  const fallback = await resolveSharedUrl(key, { timeoutMs: Math.min(remainingTimeout(), 5_000) });
                   title ||= fallback.title || '';
                   coverUrl ||= fallback.coverUrl || '';
                   cardMetadata = { ...fallback, ...provided,
@@ -472,6 +589,7 @@ export class MediaResolver {
                 description: cardMetadata.description || '', tags: cardMetadata.tags || [],
                 images: cardMetadata.images || [], provider: candidate?.provider || '',
                 duration: positive(provided.duration),
+                size: positive(provided.size),
                 extractor: 'provider-direct',
                 downloadBytes: 0,
                 outputBytes: 0,
@@ -481,6 +599,7 @@ export class MediaResolver {
               // directly and often gets HTTP 403. Keep the provider result
               // metadata, but send Douyin through our authenticated stream
               // proxy so the server fetches it with browser-like headers.
+              await this.rejectIfTooLarge(directMedia);
               if (candidate?.provider === 'douyin') {
                 directMedia.requestHeaders = {
                   'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
@@ -521,6 +640,7 @@ export class MediaResolver {
               this.logger.info(`媒体源内容已删除，不再降级：${error.message}`);
               throw error;
             }
+            if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
             this.logger.warn(`媒体 Provider 失败，尝试公开页面解析：${error.message}`);
           }
         }
@@ -531,12 +651,13 @@ export class MediaResolver {
         if (bilibiliSource || candidate?.provider === 'bilibili') {
           try {
             const bilibili = await resolveBilibiliMedia(sourceKey, {
-              timeoutMs: Math.min(this.timeoutMs, 15_000),
+              timeoutMs: Math.min(remainingTimeout(), 15_000),
               shortLinkIdResolver: (url) => probeBilibiliShortLink(url, {
-                command: this.command, timeoutMs: Math.min(this.timeoutMs, 15_000),
+                command: this.command, timeoutMs: Math.min(remainingTimeout(), 15_000),
               }),
             });
             if (bilibili?.mediaUrl) {
+              await this.rejectIfTooLarge(bilibili);
               return this.registerRemoteMedia(bilibili);
             }
           } catch (error) {
@@ -544,6 +665,7 @@ export class MediaResolver {
               this.logger.info(`B站稿件已不可见，不再降级：${error.message}`);
               throw error;
             }
+            if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
             this.logger.warn(`B站公开接口解析失败，转入通用兜底：${error.message}`);
           }
         }
@@ -553,9 +675,10 @@ export class MediaResolver {
         if (this.publicResolverEnabled) {
           try {
             publicMetadata = await resolveSharedUrl(key, {
-              timeoutMs: Math.min(this.timeoutMs, 15_000),
+              timeoutMs: Math.min(remainingTimeout(), 15_000),
             });
             if (publicMetadata.mediaUrl) {
+              await this.rejectIfTooLarge({ mediaUrl: publicMetadata.mediaUrl });
               sourceKey = normalizeDownloadSource(publicMetadata.mediaUrl)
                 || publicMetadata.mediaUrl;
             } else if (publicMetadata.canonicalUrl) {
@@ -578,6 +701,7 @@ export class MediaResolver {
               this.logger.info(`媒体源内容已删除，不再降级：${error.message}`);
               throw error;
             }
+            if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
             if (candidate?.provider === 'xiaohongshu') {
               throw new Error(`小红书图文解析失败：公开页面不可访问（${error.message}）`);
             }
@@ -597,14 +721,15 @@ export class MediaResolver {
         try {
           downloaded = await runYtDlp(sourceKey, {
             command: this.command,
-            timeoutMs: this.timeoutMs,
+            timeoutMs: remainingTimeout(),
             outputDirectory: this.cacheDirectory,
             cookiesFile: this.cookiesFile,
             cookie: this.cookie,
           });
         } catch (ytError) {
           try {
-            downloaded = await extractHtmlVideo(sourceKey, this.timeoutMs, this.cacheDirectory);
+            if (ytError?.code === 'MEDIA_EXTRACTION_TIMEOUT') throw ytError;
+            downloaded = await extractHtmlVideo(sourceKey, remainingTimeout(), this.cacheDirectory);
           } catch (htmlError) {
             throw new Error(`${ytError.message}；网页兜底：${htmlError.message}`);
           }

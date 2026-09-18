@@ -116,6 +116,18 @@ test('B站单文件 MP4 注册为流式中转，不等待完整下载', async ()
   resolver.close();
 });
 
+test('已知超过 500 MiB 的远程视频在注册代理前拒绝', () => {
+  const resolver = new MediaResolver({ enabled: true });
+  try {
+    assert.throws(
+      () => resolver.registerRemoteMedia({
+        mediaUrl: 'https://cdn.example/huge.mp4', size: 500 * 1024 * 1024 + 1,
+      }),
+      /视频文件超过 500 MiB/u,
+    );
+  } finally { resolver.close(); }
+});
+
 test('B站优先 API 返回的 UPOS 备用 CDN，保留主地址且去重', async () => {
   const primary = 'https://edge.example/video.mp4?token=original';
   const fast = 'https://upos-sz-mirrorcos.bilivideo.com/video.mp4?token=backup';

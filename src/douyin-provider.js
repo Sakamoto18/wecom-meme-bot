@@ -53,6 +53,7 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
       .trim();
     return {
       mediaUrl,
+      size: Number(data.size || data.video_size || data.videoSize || 0) || 0,
       images: mediaUrl ? [] : images,
       metadataOnly,
       coverUrl: normalizeMediaUrl(data.coverUrl || data.cover_url || data.cover) || images[0] || '',
