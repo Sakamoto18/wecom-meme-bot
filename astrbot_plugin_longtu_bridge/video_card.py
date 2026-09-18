@@ -1,6 +1,7 @@
 """Render platform metadata without mixing in the QQ sharer's identity."""
 import io
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -19,6 +20,7 @@ PRIVATE_USE_EMOJI_RANGES = (
     (0xFE82C, 0xFE82C),
     (0xFE82E, 0xFE837),
 )
+TEXT_SYMBOLS = {0x2661}
 
 
 @lru_cache(maxsize=4)
@@ -35,6 +37,57 @@ def card_font(size):
 @lru_cache(maxsize=1)
 def emoji_font():
     return ImageFont.truetype(str(ASSETS / "NotoColorEmoji.ttf"), 109)
+
+
+@lru_cache(maxsize=16)
+def symbol_font(name, size):
+    """Load an open fallback font for symbols absent from the CJK face.
+
+    Pillow returns a perfectly valid bounding box for a missing glyph (the
+    tofu box), so selecting fallbacks by ``getbbox`` is not reliable.  These
+    faces are scoped to the Unicode blocks they cover and are only used for
+    the blocks where share titles commonly contain symbols or nickname
+    ornamentation.
+    """
+    paths = {
+        "sans": ASSETS / "NotoSans-Regular.ttf",
+        "symbols": ASSETS / "NotoSansSymbols2-Regular.ttf",
+        "canadian": ASSETS / "NotoSansCanadianAboriginal-Regular.ttf",
+    }
+    return ImageFont.truetype(str(paths[name]), size)
+
+
+def text_fallback_font(chunk, size, primary):
+    codepoints = [ord(char) for char in chunk if char not in "\ufe0e\ufe0f"]
+    if not codepoints:
+        return primary
+    if any(0x1400 <= cp <= 0x167F for cp in codepoints):
+        return symbol_font("canadian", size)
+    # Mathematical/compatibility punctuation such as ‧₊˚﹢⁺ is not present
+    # in the bundled Chinese face and otherwise becomes a square placeholder.
+    if any(0x0200 <= cp <= 0x02FF or 0x2000 <= cp <= 0x21FF or
+           0xFE00 <= cp <= 0xFEFF for cp in codepoints):
+        return symbol_font("sans", size)
+    # Dingbats, geometric symbols and text-presentation emoji use the
+    # monochrome Symbols 2 face. Color emoji continue through emoji_tile().
+    if any(0x25A0 <= cp <= 0x27BF or 0x2B00 <= cp <= 0x2BFF or
+           0x1F000 <= cp <= 0x1FAFF for cp in codepoints):
+        return symbol_font("symbols", size)
+    return primary
+
+
+def renderable_text(chunk):
+    """Use canonical compatibility forms when a source uses a private glyph.
+
+    Share providers frequently return full-width compatibility punctuation
+    such as U+FE62 (﹢).  It has no stable glyph in the small open fallback
+    fonts, while its NFKC form is the same visible plus sign.
+    """
+    normalized = unicodedata.normalize("NFKC", chunk)
+    # NFKC represents U+02DA as a space plus a combining ring. That
+    # combining sequence is not positioned consistently by Pillow, so keep
+    # the visible ring as a regular degree-sign glyph instead.
+    return normalized.replace(" \u030a", "\u00b0")
 
 
 def text_clusters(text):
@@ -57,6 +110,8 @@ def text_clusters(text):
 
 def is_emoji(chunk):
     if "\ufe0e" in chunk or chunk.rstrip("\ufe0f") in ("▪", "▫"):
+        return False
+    if any(ord(char) in TEXT_SYMBOLS for char in chunk):
         return False
     return any(0x1F000 <= ord(c) <= 0x1FAFF or 0x2600 <= ord(c) <= 0x27BF
                or ord(c) in (0xFE0F, 0x20E3, 0x231A, 0x231B, 0x23F0, 0x23F3)
@@ -81,7 +136,9 @@ def emoji_tile(chunk, size):
 
 def text_width(text, font):
     return sum(font.size * 0.55 if c.rstrip("\ufe0f") in ("▪", "▫") else
-               font.size if is_emoji(c) else font.getlength(c.rstrip("\ufe0f")) for c in text_clusters(text))
+               font.size if is_emoji(c) else
+               text_fallback_font(renderable_text(c), font.size, font).getlength(renderable_text(c).rstrip("\ufe0f"))
+               for c in text_clusters(text))
 
 
 def draw_rich_text(card, xy, text, font, fill, max_width=None):
@@ -106,7 +163,9 @@ def draw_rich_text(card, xy, text, font, fill, max_width=None):
             else:
                 draw.text((x, y), chunk, font=font, fill=fill)
         else:
-            draw.text((x, y), chunk.rstrip("\ufe0f"), font=font, fill=fill)
+            rendered = renderable_text(chunk)
+            draw.text((x, y), rendered.rstrip("\ufe0f"),
+                      font=text_fallback_font(rendered, size, font), fill=fill)
         x += advance
 
 

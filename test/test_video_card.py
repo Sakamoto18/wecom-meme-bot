@@ -7,7 +7,9 @@ from pathlib import Path
 from PIL import Image, ImageChops
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "astrbot_plugin_longtu_bridge"))
-from video_card import render_video_card, card_footer, card_font, wrap_text, text_clusters, text_width, gallery_grid, is_emoji, emoji_tile
+from video_card import (render_video_card, card_footer, card_font, wrap_text,
+                        text_clusters, text_width, gallery_grid, is_emoji,
+                        emoji_tile, renderable_text)
 
 
 def png(color, size):
@@ -32,6 +34,13 @@ class CardTests(unittest.TestCase):
         tile = emoji_tile(private_emoji, 22)
         self.assertIsNotNone(tile)
         self.assertIsNotNone(tile.getbbox())
+
+    def test_symbol_fallback_does_not_send_text_symbols_to_color_emoji(self):
+        # These characters occur in Douyin/Xiaohongshu titles and nicknames;
+        # treating the hollow heart as a color emoji produces a tofu square.
+        self.assertFalse(is_emoji("♡"))
+        self.assertEqual(renderable_text("﹢"), "+")
+        self.assertEqual(renderable_text("˚"), "°")
 
     def test_grid_preserves_order_and_only_last_cell_has_overflow(self):
         colors = [(20 * i, 40, 60) for i in range(9)]
