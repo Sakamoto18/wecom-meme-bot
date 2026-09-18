@@ -2048,12 +2048,54 @@ class LongtuQqBridge(Star):
             logger.warning(f"视频分享卡片生成失败：{error}")
             return ""
 
+    async def _send_media_limit_card(self, event: AstrMessageEvent, response: dict) -> bool:
+        """Send a source cover before a size/duration limit explanation.
+
+        The resolver deliberately refuses to register long media, so this
+        path cannot use the regular video card delivery branch. Cover delivery
+        remains independent and best effort: a CDN failure must not hide the
+        precise limit message.
+        """
+        message = next((item for item in response.get("messages", [])
+                        if item.get("type") == "media-limit"), None)
+        if not message or not message.get("coverUrl"):
+            return False
+        try:
+            card = await asyncio.wait_for(self._video_card(message), timeout=12)
+            if not card:
+                return False
+            bot = getattr(event, "bot", None)
+            call_action = getattr(bot, "call_action", None)
+            if not callable(call_action):
+                return False
+            private = event.is_private_chat()
+            action = "send_private_msg" if private else "send_group_msg"
+            destination = ({"user_id": int(event.get_sender_id())} if private
+                            else {"group_id": int(event.get_group_id())})
+            result = await call_action(
+                action, **destination,
+                message=[{"type": "image", "data": {"file": f"base64://{card}"}}],
+            )
+            if isinstance(result, dict) and (result.get("status") == "failed"
+                                              or result.get("retcode", 0) not in (0, None)):
+                return False
+            logger.info(f"媒体限制卡片：独立封面已发送 target={destination} result={result!r}")
+            return True
+        except Exception as error:
+            logger.warning(f"媒体限制卡片发送失败（继续发送限制提示）：{error}")
+            return False
+
     @staticmethod
     def _reply_chain_from_backend(response: dict) -> list:
         reply_chain = []
         for message in response.get("messages", []):
             message_type = message.get("type")
             if message_type == "text" and message.get("text"):
+                reply_chain.append(Comp.Plain(str(message["text"])))
+            elif message_type == "media-limit" and message.get("text"):
+                # A long/oversize video has no playable URL, but its source
+                # metadata may still include a valid cover. The cover is sent
+                # independently; keep this explanation in the normal chain.
                 reply_chain.append(Comp.Plain(str(message["text"])))
             elif message_type == "image" and message.get("base64"):
                 reply_chain.append(
@@ -2541,6 +2583,11 @@ class LongtuQqBridge(Star):
             if response.get("mode") == "media-unavailable":
                 with contextlib.suppress(Exception):
                     await self._react_media_result(event, False)
+                # A known cover is still useful when the video is rejected by
+                # the size/duration guard. Send it before the textual reason;
+                # failures here must not suppress that reason.
+                with contextlib.suppress(Exception):
+                    await self._send_media_limit_card(event, response)
 
             # 图文分享（小红书图集）在这里就把结果发完了，和视频一样要给出
             # 结果回应。判据用 _send_forward_from_backend 的返回值：它是照

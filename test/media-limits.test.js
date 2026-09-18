@@ -86,6 +86,7 @@ test('QQ 对超过 8 分钟的视频时长返回可见提示', async () => {
     providerResolver: async () => ({
       mediaUrl: 'https://cdn.example/hour.mp4',
       duration: MAX_MEDIA_DURATION_SECONDS + 1,
+      title: '超长视频', coverUrl: 'https://cdn.example/hour.jpg', author: '原作者',
     }),
   });
   try {
@@ -95,6 +96,9 @@ test('QQ 对超过 8 分钟的视频时长返回可见提示', async () => {
       text: 'https://v.douyin.com/hour/', media_share: true,
     });
     assert.equal(result.mode, 'media-unavailable');
-    assert.equal(result.messages[0].text, '这个视频时长超过 8 分钟，建议点击分享前往平台观看。');
+    assert.equal(result.messages[0].text, '这个视频加载时长超过 8 分钟，建议点击分享前往平台观看。');
+    assert.equal(result.messages[0].type, 'media-limit');
+    assert.equal(result.messages[0].coverUrl, 'https://cdn.example/hour.jpg');
+    assert.equal(result.messages[0].author, '原作者');
   } finally { resolver.close(); }
 });
