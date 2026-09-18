@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily NapCat temporary media cleanup at 09:00 Beijing time
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1min
+Unit=longtu-napcat-temp-cleanup.service
+
+[Install]
+WantedBy=timers.target
