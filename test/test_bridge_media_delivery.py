@@ -1,5 +1,6 @@
 """Execute the actual bridge methods with a recording OneBot client."""
 import ast
+import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ class Image(Component): pass
 class Video(Component): pass
 class Plain(Component): pass
 
-namespace = {'AstrMessageEvent': object, 'logger': logging.getLogger('test'),
+namespace = {'AstrMessageEvent': object, 'logger': logging.getLogger('test'), 'asyncio': asyncio,
              'Comp': SimpleNamespace(Image=Image, Video=Video, Plain=Plain)}
 exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(name='Bridge', bases=[], keywords=[], body=methods, decorator_list=[])], type_ignores=[])), '<bridge-methods>', 'exec'), namespace)
 Bridge = namespace['Bridge']
@@ -84,6 +85,28 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await Bridge()._send_forward_from_backend(event, self.gallery()))
         self.assertEqual([c[0] for c in calls], ['send_group_msg', 'send_group_forward_msg', 'send_group_msg', 'send_group_msg'])
         self.assertEqual(calls[-1][1]['message'][0]['type'], 'image')
+
+    async def test_transient_forward_timeout_is_retried(self):
+        calls = []
+        failed_once = True
+
+        async def call_action(action, **kwargs):
+            nonlocal failed_once
+            calls.append((action, kwargs))
+            if action == 'send_group_forward_msg' and failed_once:
+                failed_once = False
+                raise RuntimeError('WebSocket API call timeout')
+            return {'message_id': 123}
+
+        event = SimpleNamespace(
+            bot=SimpleNamespace(call_action=call_action),
+            is_private_chat=lambda: False, get_group_id=lambda: '361522110',
+            get_sender_id=lambda: '1079175957', get_self_id=lambda: '2170902293',
+        )
+        self.assertTrue(await Bridge()._send_forward_from_backend(event, self.gallery()))
+        self.assertEqual([action for action, _ in calls], [
+            'send_group_msg', 'send_group_forward_msg', 'send_group_forward_msg',
+        ])
 
     def test_final_gallery_fallback_uses_native_images(self):
         chain = Bridge._reply_chain_from_backend(self.gallery())
