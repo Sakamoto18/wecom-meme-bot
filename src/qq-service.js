@@ -29,7 +29,9 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { isRemovedError } from './media-removed.js';
-import { isMediaExtractionTimeoutError, isMediaTooLargeError } from './media-limits.js';
+import {
+  isMediaDurationTooLongError, isMediaExtractionTimeoutError, isMediaTooLargeError,
+} from './media-limits.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -2841,7 +2843,7 @@ export class QqBotService {
           downloadBytes: resolved.downloadBytes,
           outputBytes: resolved.outputBytes,
         });
-        this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0} title=${String(resolved.title || '').slice(0, 120)} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} duration_ms=${Date.now() - startedAt}`);
+        this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0} title=${String(resolved.title || '').slice(0, 120)} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} media_duration_s=${resolved.duration || 0} duration_ms=${Date.now() - startedAt}`);
         if (!resolved.url && resolved.images?.length) {
           // 图集的兜底标题按来源平台走：抖音图文不能顶着“小红书图文”发出去。
           const galleryFallbackTitle = candidate.provider === 'douyin'
@@ -2875,6 +2877,7 @@ export class QqBotService {
       } catch (error) {
         const removedAtSource = isRemovedError(error);
         const mediaTooLarge = isMediaTooLargeError(error);
+        const mediaDurationTooLong = isMediaDurationTooLongError(error);
         const mediaTimedOut = isMediaExtractionTimeoutError(error);
         const sourceUrlHash = createHash('sha256')
           .update(candidate.url)
@@ -2904,14 +2907,16 @@ export class QqBotService {
             }],
           };
         }
-        if (mediaTooLarge || mediaTimedOut) {
+        if (mediaTooLarge || mediaDurationTooLong || mediaTimedOut) {
           return {
             mode: 'media-unavailable',
             messages: [{
               type: 'text',
               text: mediaTooLarge
                 ? '这个视频超过 500MB，建议点击分享前往平台观看。'
-                : '视频提取超过 8 分钟，已中断，建议点击分享前往平台观看。',
+                : mediaDurationTooLong
+                  ? '这个视频时长超过 8 分钟，建议点击分享前往平台观看。'
+                  : '视频提取超过 8 分钟，已中断，建议点击分享前往平台观看。',
             }],
           };
         }
