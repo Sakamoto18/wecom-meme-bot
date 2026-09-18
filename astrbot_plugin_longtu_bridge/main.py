@@ -2110,9 +2110,32 @@ class LongtuQqBridge(Star):
             "content": [{"type": "image", "data": {"file": url}}]},
         } for url in images]
         try:
-            result = await call_action(forward_action, **destination, messages=nodes)
-            if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
-                raise RuntimeError("QQ 合并转发接口返回失败")
+            # NapCat's first request after a reconnect can race the QQ Highway
+            # session refresh.  A timeout here is transient; retry the same
+            # forward once after a short pause before falling back to separate
+            # images.  Explicit OneBot failures are deterministic and should
+            # not duplicate a rejected send.
+            result = None
+            for attempt in range(2):
+                try:
+                    result = await call_action(forward_action, **destination, messages=nodes)
+                except Exception as error:
+                    error_text = str(error).lower()
+                    transient = any(marker in error_text for marker in (
+                        "timeout", "timed out", "websocket", "highway",
+                        "connection reset", "connection refused",
+                    ))
+                    if attempt == 0 and transient:
+                        logger.warning(
+                            f"小红书图文合并转发暂时失败，刷新 QQ 上传会话后重试："
+                            f"group={event.get_group_id()} error={error}"
+                        )
+                        await asyncio.sleep(1.5)
+                        continue
+                    raise
+                if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
+                    raise RuntimeError("QQ 合并转发接口返回失败")
+                break
             logger.info(f"小红书图文合并转发已发送：target={destination} images={len(images)} result={result!r}")
             return True
         except Exception as error:
