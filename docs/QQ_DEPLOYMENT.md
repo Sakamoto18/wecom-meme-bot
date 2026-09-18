@@ -19,7 +19,7 @@ QQ → NapCat（OneBot v11）→ AstrBot → 龙图 Bridge 插件 → QQ Bot HTT
 进入项目目录：
 
 ```bash
-cd /Users/lvyuning/Desktop/code/wecom-meme-bot
+cd /你的项目路径/wecom-meme-bot
 cp .env.qq.example .env.qq
 ```
 
@@ -40,9 +40,9 @@ openssl rand -hex 32
 - `LONGTU_QQ_ADMIN_USERS` 填允许管理图库的 QQ 号，多个用英文逗号分隔。
 - `LONGTU_QQ_PROTECTED_ROLES` 可写不可被群聊覆盖的身份钢印，例如 `QQ号=至高无上的真龙王`。
 
-## 2. 启动三个服务
+## 2. 启动完整 QQ 环境
 
-三个服务都由本仓库的 Compose 启动时，不需要设置 Docker 网络变量。如果 AstrBot/NapCat 已由另一套 Compose 运行，请先用 `docker inspect astrbot` 确认其网络名，然后在 `.env.qq` 中设置：
+AstrBot、NapCat 和 QQ 后端都由本仓库的 Compose 启动时，不需要设置 Docker 网络变量。如果 AstrBot/NapCat 已由另一套 Compose 运行，请先用 `docker inspect astrbot` 确认其网络名，然后在 `.env.qq` 中设置：
 
 ```dotenv
 LONGTU_QQ_DOCKER_NETWORK=现有的_AstrBot_Docker_网络名
@@ -81,7 +81,7 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 - `LONGTU_QQ_ALLOWED_GROUPS` 留空时允许所有群；填写后只处理白名单群。
 - 默认不发送“处理中”占位消息，因此明确龙图指令仍然只回图片；需要时可在插件配置中开启。
 - 插件处理消息后会停止 AstrBot 默认 LLM 流程，避免同一条消息回复两次。
-- Bridge 会在收到任何 QQ 消息时先无条件停止 AstrBot 后续事件链；禁用群、关闭旁观、空消息及后端异常等提前返回路径也不会进入默认 LLM。允许群中的普通消息会先交给 Node 服务“读空气”，判定不回复时静默进入角色/语境记忆，判定回复时仍由现有人格、搜索和记忆链路生成。
+- Bridge 在入口标记事件由本插件接管，阻止 AstrBot 默认 LLM；在正常发送流程结束后停止后续事件链，禁用群、关闭旁观、空消息及后端异常等提前返回路径也有拦截。不要在正常产出回复前一律停止事件链，否则框架可能跳过本插件的发送阶段。允许群中的普通消息会先交给 Node 服务“读空气”，判定不回复时静默进入角色/语境记忆，判定回复时仍由现有人格、搜索和记忆链路生成。
 - 群内只有 `/add`、`/tag`、`/del`、超管硬终止命令 `/stop` 和日报 `/usage-report` 会进入本项目；其中 `/usage-report YYYY-MM-DD` 仅限超管回捞指定日期并私聊自己，其他以 `/` 开头的 AstrBot/插件指令都会被 Bridge 停止。
 - 被动群聊回复会引用原消息。原消息明确 `@` 第三人时，回复优先 `@` 这些目标（最多 3 人）；如果只 `@机器人`，回复会 `@` 发令者。机器人自身、发送者自艾特和 `@全体成员` 不会被当成第三方目标，私聊不附加引用或艾特。Node 判定产生的主动插话不引用触发消息，表现为机器人自己发送的一条群消息。若消息同时 `@机器人` 并明确要求攻击某位群友（例如“请攻击张三”“骂一下张三”），后端会优先把攻击目标解析为被点名群友，即使该成员还没有完成昵称确认；不会再默认攻击指令发送者。
 - 纯 `@机器人` 没有附加文字时会进入独立 QQ 服务的快速人格模式，强制关闭 thinking，并对客服式草稿使用角色招呼兜底；Bridge 会先停止 AstrBot 默认 LLM。
@@ -95,7 +95,6 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 ```dotenv
 LONGTU_QQ_ACTIVE_REPLY_ENABLED=true
 LONGTU_QQ_REPEAT_ENABLED=true
-LONGTU_QQ_REPEAT_WINDOW_SECONDS=30
 LONGTU_QQ_REPEAT_MAX_TEXT_CHARACTERS=500
 LONGTU_QQ_REPEAT_MAX_GROUPS=1000
 LONGTU_QQ_ACTIVE_REPLY_GROUPS=
@@ -419,15 +418,21 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs --tail=200 qq-bo
 ### Apple Silicon 启动 NapCat 很慢
 
 NapCat 容器需要模拟 amd64，首次启动较慢是正常现象。若 Docker Desktop 未启用 Rosetta，可在 Docker Desktop 设置中开启相关选项后重试。
-# QQ 小程序 / 小红书视频源提取
+## QQ 分享解析：B 站、小红书、抖音
 
-Bridge 会主动处理群友发送的外部分享卡片和 HTTPS 分享文本，不要求额外 `@` 机器人。它保留 OneBot 原始 `json/xml` 卡片中的跳转地址，也支持从引用卡片中回捞地址，再交给 `yt-dlp` 判断是否为可提取的视频。解析开始时通过 NapCat 的 `set_msg_emoji_like` 给原分享消息挂一个 QQ 原生表情回应，不发送“收到分享”之类的普通消息。视频出结果后再给同一条分享消息挂一个结果表情：成功用 `QQ_MEDIA_SUCCESS_EMOJI_ID`（默认 `478`），失败用 `QQ_MEDIA_FAILURE_EMOJI_ID`（默认 `479`）。结果表情和解析开关同范围，群聊和私聊都会挂，被 `QQ_MEDIA_EXCLUDED_GROUPS` 排除的群不挂。Node 服务会先把视频下载并生成标准 MP4，再通过短期随机媒体地址返回 QQ 视频消息，避免把带鉴权/防盗链的原站临时直链直接交给 QQ。视频不经过 48 MiB 的 JSON/Base64 接口。媒体事件单独写入 `QQ_MEDIA_USAGE_DATABASE_FILE`，记录平台、成功/失败、耗时和下载/输出字节数，和 LLM Token 日报分开。文章、图片等非视频外链解析失败后会静默跳过。
+Bridge 会主动处理支持平台的分享卡片和 HTTPS 分享文本，不要求额外 `@` 机器人。它保留 OneBot 原始 `json/xml` 卡片中的跳转地址，也支持从引用卡片中回捞地址。Node 根据平台使用 provider、公开页面解析或 `yt-dlp`，不是把任意外链都当成视频。
+
+正常视频输出为“独立简介卡片 + 视频”；卡片包含源平台作者的圆形头像、昵称、原生 logo、标题、封面、正文/标签，B 站还显示发布时间。图文则为“独立简介卡片 + 只含图片的合并聊天记录”，多图卡片最多展示九张预览，超出用 `+N` 表示。卡片失败继续视频，不单独补发标题。
+
+解析开始时，NapCat 的 `set_msg_emoji_like` 给原分享挂一个原生表情回应。视频拿到有效 OneBot `message_id` 回执后才回应成功表情（`QQ_MEDIA_SUCCESS_EMOJI_ID`，默认 `478`）；失败用 `QQ_MEDIA_FAILURE_EMOJI_ID`（默认 `479`）。视频发送失败还会尝试发送引用提示；普通解析失败的部分分支只有失败表情。结果表情与解析开关同范围，适用于群聊和私聊，按有效配置排除的分享保持静默。
+
+B 站、抖音常用 Node 临时媒体地址代理；小红书常用探测大小后的 provider 直链，交给 NapCat 拉取。Node 代理可以后台预下载，文件就绪时提供本地文件，否则流式转发，**不要求每次先完整下载再返回**。视频不经过 JSON/Base64 接口。`QQ_MEDIA_USAGE_DATABASE_FILE` 记录平台、解析成功/失败、耗时和相关字节数，与 LLM Token 日报分开，也不代表 QQ 最终送达。逐层解释见[QQ 架构指南](node-service-architecture-and-learning-guide.md#5-分享解析卡片和真正的视频发送)。
 
 前置条件：
 
 - NapCat/OneBot v11 必须保留 `json/xml` 原始段；若适配器已把卡片丢弃，Node 无法从 `appid/path` 推导视频地址。
 - `qq-bot` 容器安装 `yt-dlp`；需要合并 HLS/DASH 时同时安装 `ffmpeg`。小红书登录内容还需要合法的浏览器 cookies，公开短链不保证永久可用。
-- NapCat 必须能通过 Compose 网络访问 `QQ_MEDIA_PUBLIC_BASE_URL`（默认 `http://qq-bot:8787`）；视频文件只保存在 `qq-bot` 的临时缓存目录，过期自动清理。
+- NapCat 必须能通过 Compose 网络访问 `QQ_MEDIA_PUBLIC_BASE_URL`（默认 `http://qq-bot:8787`），直链路线还需能访问平台 CDN。Node 和 NapCat 都可能留下临时视频，两个目录分别清理，见上方每日清理说明。
 - 仅处理用户有权访问的公开内容；程序拒绝 `file://`、回环和私网地址。不要尝试绕过 DRM、登录限制或平台风控。
 
 启用配置：
@@ -448,10 +453,12 @@ QQ_MEDIA_GROUP_ALLOWED_PROVIDERS=
 QQ_MEDIA_USAGE_DATABASE_FILE=data/qq-media-usage.sqlite
 ```
 
-媒体链路有两类独立限制：下载/解析过程最多运行 8 分钟，视频文件大小上限为 500 MiB。视频自身时长不作为拒绝条件，只要在解析截止时间内完成且不超过大小上限就会继续发送。已拿到的封面、作者和标题会先生成独立卡片；只有实际解析超时或文件过大时才发送限制提示，封面失败不影响提示发送。
+单视频上限为 500 MiB（提示写作 500MB）。解析到可靠的文件大小或通过探测取得大小后，先判断再完整下载；未知大小的下载路径按累计字节等方式兜底，不能由播放时长推算大小，也不能认为交给 NapCat 的直链都经过 Node 全程计数。图文不走视频大小拦截，视频自身播放时长不作为拒绝条件。
+
+提取阶段的总上限为 480 秒，从解析器取得并发名额后计时，配置的更短 provider/下载超时仍可能先触发。同群排队和后续 QQ 上传不统一包含在这个 deadline 中。Bridge 发送视频另有 480 秒回执等待；等待超时不等于 QQ 上传已取消，因此提示会注明可能仍在发送，不盲目自动重发。已取得的封面、作者、标题会尽量生成卡片，卡片失败不阻断视频或限制提示。
 
 `QQ_MEDIA_EXCLUDED_GROUPS` 使用英文逗号分隔群号。配置后，指定群中的外部分享卡和分享链接会保持静默，不发送原生表情回应，也不会进入视频解析服务；例如 `QQ_MEDIA_EXCLUDED_GROUPS=239375116`。
 
 `QQ_MEDIA_GROUP_ALLOWED_PROVIDERS` 按群限定可解析的平台，格式 `群号:平台|平台,群号:平台`，平台取 `douyin`、`bilibili`、`xiaohongshu`、`kuaishou`。列进来的群只放行列出的平台，其余平台的分享按普通文本处理，既不解析也不挂表情。这条比 `QQ_MEDIA_EXCLUDED_GROUPS` 的整群开关更精确，因此优先生效——群号同时出现在两处时按白名单放行，不需要从排除名单里摘掉。例如 `QQ_MEDIA_GROUP_ALLOWED_PROVIDERS=821259340:douyin,239375116:douyin` 表示这两个群只开放抖音抓取。未列入的群沿用整群开关。插件侧同名配置项为 `media_group_allowed_providers`，两侧必须一致，否则插件放行的分享会被 Node 拦下（表现为挂了解析中的表情却没有结果）。
 
-媒体解析会先尝试通用公开分享解析：跟随短链并读取公开页面的 `og:video`、Twitter Player 或 JSON-LD 视频元数据，再回退到 `yt-dlp`。媒体统计可用同一 Bearer Token 查询：`GET /v1/qq/media-usage?start_at=<毫秒时间戳>&end_at=<毫秒时间戳>`。
+媒体解析会按平台选择 provider；必要时尝试通用公开分享页面中的 `og:video`、Twitter Player 或 JSON-LD 元数据及 `yt-dlp` 回退。媒体统计可用同一 Bearer Token 查询：`GET /v1/qq/media-usage?start_at=<毫秒时间戳>&end_at=<毫秒时间戳>`。

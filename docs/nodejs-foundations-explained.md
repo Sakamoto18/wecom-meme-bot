@@ -1,7 +1,21 @@
-# 从零看懂这个项目需要的 Node.js 基础概念
+# 从零看懂 QQ 机器人：Node.js 基础与消息输出
 
 > 这不是一份把名词罗列出来的速查表，而是面向第一次接触 Node.js 服务的解释文档。  
 > 建议先读本文，再读[项目架构、设计与学习指南](node-service-architecture-and-learning-guide.md)。
+> 按 2026-09-18 的 QQ 实现整理。文中的默认值用于理解代码，线上配置可能覆盖它们。
+
+本文以 QQ 群里实际看到的结果为线索。仓库仍叫 `wecom-meme-bot`，也保留企业微信入口，但两种平台的入口、协议和发送方式不同，不能把企微的说明直接套到 QQ 上。
+
+| QQ 里的输入 | 正常情况下看到什么 | 背后主要做了什么 |
+| --- | --- | --- |
+| 明确 `@机器人` 提问或私聊 | 文本回复，按回复路径搭配龙图 | Node 回复引擎读取记忆、调用模型，Bridge 发回 QQ |
+| 群友普通聊天 | 可能静默，也可能独立接一句话 | 旁观记录与“是否值得接话”的判定 |
+| 两个不同群友连续发送同一句纯文本 | 机器人在这一轮只复读一次 | 本地规则判断，不调用模型生成复读 |
+| B 站、小红书、抖音视频分享 | 一张简介卡片，然后视频；卡片失败仍继续视频 | 平台解析、卡片绘制、下载/转发、QQ 发送 |
+| 支持的图文分享 | 独立简介卡片，然后只含图片的合并聊天记录 | 首图或多图预览绘制成卡片，原图组成转发节点 |
+| 超大视频或提取超时 | 尽量保留简介卡片，再提示前往平台观看 | 视频大小或提取时间限制 |
+
+这些是业务结果，不是每条消息都必然触发的承诺。群权限、主动回复开关、节流、平台登录态和发送失败都会影响结果。第 18 节会沿具体消息走完整条链路，第 19 节提供不连接 QQ 的本地实验。
 
 ## 0. 先建立三个最重要的认识
 
@@ -24,22 +38,30 @@ Node.js 是一个让 JavaScript 可以在浏览器之外运行的运行环境。
 
 服务是一个长期运行、持续完成某类任务的程序。很多 Node.js 教程从 Express 开始，所以容易形成“Node 服务就是监听 3000 端口”的印象。
 
-这个项目没有启动 HTTP 服务器。它主动连接企业微信 WebSocket，然后等待企业微信沿这条连接推送消息。因此它仍然是服务，只是接收工作的方式不同：
+当前 QQ 后端确实启动了 HTTP 服务，使用 Node 自带的 `node:http`，没有使用 Express。QQ 的长连接由 NapCat 和 AstrBot 负责，Python Bridge 插件再通过 HTTP 请求 Node 后端：
 
-```text
-普通 Web 服务：别人主动请求我的 HTTP 端口
-这个机器人：我主动连上企业微信，企业微信从现有长连接推送事件
+```mermaid
+flowchart LR
+    Q[QQ 消息] <--> N[NapCat]
+    N <-->|OneBot v11 反向 WebSocket| A[AstrBot / Python Bridge]
+    A <-->|HTTP / JSON| B[Node QQ 后端]
+    B --> M[模型 / 搜索 / 视频 provider]
+    B <--> D[(SQLite / 本地图库)]
 ```
+
+NapCat 负责接收和发送 QQ 消息；AstrBot 是承载插件的机器人框架；Bridge 意为“桥”，把 QQ 消息和 Node 返回的数据互相转换；Node 后端负责业务判断。视频 provider 是提供平台解析能力的模块或服务，不是聊天模型。
+
+另一个入口 `src/index.js` 才是直接连接企业微信的版本。理解“服务”的关键是持续处理任务，而不是是否采用某个框架。
 
 ### 0.3 源代码、进程和服务实例是三个层次
 
 - 源代码：磁盘上的 `.js` 文件；
-- 进程：执行 `node src/index.js` 后，操作系统中正在运行的一份程序；
+- 进程：执行 `npm run start:qq` 后，操作系统中正在运行的 Node 程序；
 - 服务实例：对外提供能力的那一个运行中进程或容器。
 
-每执行一次 `npm start`，通常会创建一个新的 Node.js 进程。两个进程有各自独立的内存，彼此的 `Map`、`Set` 和变量并不共享。
+每执行一次启动命令，通常会创建一个新的 Node.js 进程。两个进程有各自独立的内存，彼此的 `Map`、`Set` 和变量并不共享。AstrBot 的 Python 进程也不能直接读取 Node 的变量，因此双方需要通过 JSON 交换数据。
 
-企业微信同一机器人只允许一个有效长连接，所以这个项目通常只能运行一个有效实例。
+当前 QQ 的去重、排队和部分缓存属于进程内状态，不能靠多启动几个 Node 实例就得到可靠的扩容；端口和 SQLite 文件的使用方式也需要一起设计。日常更新应替换既有服务实例。
 
 ## 1. `node`、`npm` 和一个 Node.js 项目
 
@@ -48,16 +70,16 @@ Node.js 是一个让 JavaScript 可以在浏览器之外运行的运行环境。
 `node` 是运行 JavaScript 文件的程序：
 
 ```bash
-node src/index.js
+node src/qq-api.js
 ```
 
-可以把它类比为“把 `src/index.js` 交给 Node.js 执行”。查看版本：
+可以把它类比为“把 `src/qq-api.js` 交给 Node.js 执行”。这是正式服务入口，需要先配置；第一次学习先查看版本，不必立即启动服务：
 
 ```bash
 node --version
 ```
 
-本项目要求 Node.js 20 或更高，因为它使用了全局 `fetch`、ESM 和其他较新的运行时能力。
+本项目要求 Node.js **22.5 或更高**，尤其因为 QQ 记忆和图库使用内置的 `node:sqlite`。`fetch` 和 ESM 可用于更早版本，不能据此认为 Node 20 足够运行当前项目。
 
 ### 1.2 `npm` 是什么
 
@@ -69,22 +91,25 @@ npm 主要做两件事：
 例如：
 
 ```bash
-npm install   # 安装依赖
-npm start     # 执行 scripts.start
-npm test      # 执行 scripts.test
+npm ci             # 按锁文件安装依赖
+npm run start:qq   # 启动 QQ 的 Node HTTP 后端，需要 .env.qq
+npm test           # 执行测试
 ```
 
-`npm start` 不是 JavaScript 语法。npm 会打开 [`package.json`](../package.json)，找到：
+`npm run start:qq` 不是 JavaScript 语法。npm 会打开 [`package.json`](../package.json)，找到对应脚本（以下仅摘录两项）：
 
 ```json
 {
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "start:qq": "node --disable-warning=ExperimentalWarning src/qq-api.js"
   }
 }
 ```
 
 然后替你执行右侧的 shell 命令。
+
+`npm start` 启动的是企业微信，`npm run start:qq` 才是 QQ 后端；后者也不会替你启动 AstrBot、NapCat 或登录 QQ。`npm run dev:qq` 是监视文件变化并自动重启的开发命令。
 
 ### 1.3 `package.json` 是什么
 
@@ -102,17 +127,19 @@ npm test      # 执行 scripts.test
 
 “包”是一组可以被其他项目复用的代码。这个项目直接依赖：
 
-- `@wecom/aibot-node-sdk`：企业微信机器人 SDK；
-- `dotenv`：读取 `.env`；
+- `@wecom/aibot-node-sdk`：保留的企业微信入口使用，QQ 不通过它发消息；
+- `dotenv`：读取配置文件，QQ 入口明确选择 `.env.qq`；
 - `jimp`：处理图片。
 
 `npm install` 会把依赖安装到 `node_modules/`。源码通过包名导入它们：
 
 ```js
-import AiBot from '@wecom/aibot-node-sdk';
+import dotenv from 'dotenv';
 ```
 
 `node_modules` 通常不提交 Git，因为它可以根据依赖清单重新安装。
+
+`node:http`、`node:sqlite` 属于 Node 内置模块，不需要单独安装 npm 包。Bridge 和卡片绘制属于 Python 环境，不能用 `npm ci` 安装它们的依赖。
 
 ### 1.5 `package-lock.json` 是什么
 
@@ -162,10 +189,10 @@ import { isLongtuRequest } from './triggers.js';
 import path from 'node:path';
 
 // npm 安装的第三方包
-import AiBot from '@wecom/aibot-node-sdk';
+import dotenv from 'dotenv';
 
 // 项目自己的相对路径模块
-import { MemeStore } from './meme-store.js';
+import { RepeatDetector } from './repeat-detector.js';
 ```
 
 `node:` 前缀明确表示这是 Node.js 自带模块，不需要 `npm install`。
@@ -181,7 +208,7 @@ ESM 是 ECMAScript Modules 的缩写，即 `import`/`export` 模块系统。本�
 因此 `.js` 文件按 ESM 处理。项目内的相对导入通常要写完整扩展名：
 
 ```js
-import { ConversationStore } from './conversation-store.js';
+import { QqMemoryStore } from './qq-memory-store.js';
 ```
 
 另一种旧模块系统叫 CommonJS，使用 `require()` 和 `module.exports`。初学时不要在同一文件中随意混用两套语法。
@@ -326,13 +353,13 @@ const nextResult = {
 外部消息可能缺少某一层字段。直接访问会报错：
 
 ```js
-message.from.userid // from 不存在时抛出错误
+message.sender.user_id // sender 不存在时抛出错误
 ```
 
 可选链会在中途遇到 `null` 或 `undefined` 时返回 `undefined`：
 
 ```js
-message?.from?.userid
+message?.sender?.user_id
 ```
 
 它只避免“访问空值属性”的异常，不代表数据一定合法。
@@ -445,7 +472,7 @@ counter.increment();
 - `this`：当前实例；
 - `increment`：实例方法。
 
-本项目的 `new ConversationStore(...)`、`new MemeStore(...)` 和 `new OpenAICompatibleChatClient(...)` 都是这个模式。
+本项目的 `new QqMemoryStore(...)`、`new LongtuLibrary(...)` 和 `new OpenAICompatibleChatClient(...)` 都是这个模式。
 
 ### 3.14 getter
 
@@ -571,18 +598,22 @@ const [a, b] = await Promise.all([
 ### 4.7 为什么不能漏掉 `await` 或 `.catch`
 
 ```js
-handleIncomingMessage(frame); // 如果内部失败，可能形成未处理拒绝
+service.handleMessage(payload); // 如果内部失败且无人等待，可能形成未处理拒绝
 ```
 
-本项目入口这样处理：
+QQ HTTP 入口在 `try/catch` 中等待业务函数。下面是简化示意：
 
 ```js
-handleIncomingMessage(frame).catch((error) => {
+try {
+  const result = await service.handleMessage(payload);
+  sendJson(response, 200, { ok: true, ...result });
+} catch (error) {
   console.error('处理消息失败：', error.message);
-});
+  sendJson(response, 500, { ok: false, error: 'QQ Bot 服务暂时不可用' });
+}
 ```
 
-因为 SDK 的事件回调本身没有等待这个 Promise，代码要显式接住失败结果。
+如果漏掉 `await`，`try/catch` 可能已经执行完，异步错误才发生。对于确实要放在后台运行的任务，也应显式挂 `.catch(...)` 并记录失败。
 
 ### 4.8 `try`、`catch` 和 `finally`
 
@@ -633,7 +664,7 @@ try {
 
 I/O 密集：大部分时间在等待外部系统。
 
-- 等企业微信消息；
+- 等 Bridge 的 HTTP 请求、平台视频数据或 QQ 发送回执；
 - 等大模型响应；
 - 等文件读取。
 
@@ -643,7 +674,7 @@ CPU 密集：大部分时间在本机做计算。
 - 压缩大图片；
 - 超大循环或复杂计算。
 
-本项目把图片索引和审核放在离线脚本中，避免在消息回调中执行重 CPU 工作。
+本项目有离线图库索引脚本，也有运行时 OCR、视频处理和 Python 卡片绘制。它们常交给子进程或其他服务执行，但仍会消耗同一台机器的 CPU、内存和磁盘；写了 `async` 并不会消除这部分成本。
 
 ### 5.4 定时器和 `unref()`
 
@@ -700,7 +731,7 @@ WebSocket 常见模型：
 直到断开
 ```
 
-这个项目通过企业微信 SDK 建立 WebSocket 长连接。SDK 内部负责协议细节、认证、心跳和重连，项目只监听更高层的消息事件。
+QQ 链路中的 WebSocket 位于 NapCat 与 AstrBot 之间。所谓“反向 WebSocket”，是 NapCat 主动连接 AstrBot 提供的地址。Bridge 到 Node 则是一次次 HTTP 请求；Node 后端本身不负责登录 QQ。
 
 ### 6.4 长连接、心跳和重连
 
@@ -709,17 +740,16 @@ WebSocket 常见模型：
 - 重连：网络断开后重新建立连接；
 - 认证：证明这个连接属于配置的机器人。
 
-项目配置 `maxReconnectAttempts: -1`，表示让 SDK 持续重试。
+连接参数要在 NapCat/AstrBot 中检查。Node 的 `/healthz` 正常，只能说明后端可访问，不能证明 OneBot 已连接或 QQ 登录有效。
 
 ### 6.5 SDK 和 API 有什么区别
 
 API 是系统暴露给其他程序使用的接口规范，例如“上传图片需要什么参数”。
 
-SDK 是某种语言中的工具包，它把 API 或协议封装成更容易调用的方法：
+SDK 是某种语言中的工具包，它把 API 或协议封装成更容易调用的方法。例如 OneBot 定义了发送群消息的 action，Python 客户端封装了调用方式（示意，不是在 Node 里运行）：
 
-```js
-await client.uploadMedia(buffer, options);
-await client.replyMedia(frame, 'image', mediaId);
+```python
+result = await client.call_action('send_group_msg', group_id=group_id, message=segments)
 ```
 
 你可以不用 SDK 而直接实现底层协议，但通常更复杂，也更容易出错。
@@ -807,7 +837,7 @@ if (!response.ok) {
 
 ### 7.6 `fetch`
 
-Node.js 20 中可以直接：
+当前要求的 Node.js 22.5+ 中可以直接：
 
 ```js
 const response = await fetch(url, options);
@@ -851,9 +881,9 @@ stream: false
 
 说明模型响应不是 token 流式返回，而是等待完整正文。
 
-`index.js` 的 `client.replyStream(...)` 是企业微信 SDK 的回复形式。这个项目先发占位文本，拿到完整模型回答后再完成企业微信流式回复。
+视频代理的“流式”则是不断把视频字节从平台传给 NapCat，不必把整个文件塞进一个 JSON 或一个巨大 `Buffer`。这里传输的是文件，不是模型文字。
 
-所以“模型请求是否流式”和“企微回复是否使用流式消息”是两个独立概念。
+QQ 当前不是一边收到模型 token 一边更新聊天气泡。卡片先出现，也不代表视频上传已经完成。
 
 ## 8. 状态、内存、`Map`、`Set` 和缓存
 
@@ -863,7 +893,7 @@ stream: false
 
 - 哪些消息 ID 已经处理；
 - 某个会话以前说过什么；
-- 某张图片上传后的 `media_id`；
+- 某个分享链接最近解析出的可播放地址；
 - 某个搜索词最近的结果。
 
 只根据本次输入立即计算、之后完全不记忆的程序叫无状态。这个机器人显然是有状态的。
@@ -910,11 +940,22 @@ conversations.delete('group:123');
 缓存保存一份可以重新计算或重新获取的数据副本，用空间换时间或网络费用。例如：
 
 ```text
-第一次发图片 -> 上传企微 -> 得到 media_id -> 放进缓存
-48 小时内再发 -> 直接复用 media_id
+群 A 分享一个链接 -> 解析出标题、作者、封面、视频地址 -> 保存解析结果
+群 B 再分享同一内容 -> 有效期内尽量复用解析结果 -> 仍需要发送到群 B
 ```
 
 缓存不等于可靠存储。缓存丢失后，程序应能回源或重新计算。
+
+这里至少有四种容易混淆的“缓存”：
+
+| 名称 | 保存什么、解决什么问题 | 不代表什么 |
+| --- | --- | --- |
+| 模型输入缓存 | 模型供应商复用相同请求前缀的计算，命中量写入 token 日报 | 不是把旧回答原样再发一次 |
+| 媒体解析缓存 | 复用分享元数据和媒体地址，默认 TTL 600 秒，也能跨群复用 | 不代表 QQ 已有这份视频，不免除发送 |
+| 卡片相关缓存 | Bridge 复用封面图片等数据，减少重复取图 | 卡片缺头像不应该使可用视频失效 |
+| 临时视频文件 | Node 或 NapCat 下载、发送时落盘的文件 | 不是聊天记忆，也不是模型缓存 |
+
+SQLite 中的会话和成员画像是持久化业务数据，不能作为这些缓存一起清空。模型缓存命中率低，应检查稳定提示前缀和请求构造，而不是删除视频目录。
 
 ### 8.6 TTL
 
@@ -941,9 +982,11 @@ if (entry.expiresAt > Date.now()) {
 
 幂等表示同一个操作执行多次，最终效果和执行一次相同。
 
-网络系统可能重复投递消息。项目用 `msgid` 做十分钟去重，避免短时间内重复回复。它是“尽力而为”的进程内去重：重启后记录丢失，十分钟后也会再次允许处理。
+网络系统可能重复投递消息。QQ 后端用“消息类型 + 群号或私聊 QQ 号 + `message_id`”组成去重键，默认保留十分钟。它是“尽力而为”的进程内去重：重启后记录丢失，过期后也会再次允许处理。抛出异常的处理会移除对应键，正常返回一个失败业务结果则不一定移除。
 
 严格幂等通常需要持久化消息 ID，并明确保存多久。
+
+“同一事件重复投递”和“群友重复说同一句话”是两回事：后一种有不同的消息 ID，由 `RepeatDetector` 管。两个不同真人连续说相同纯文本后，机器人只复读一次；第三个人再跟同一句也不会再触发。这一轮没有 30 秒之类的到期时间，直到其他内容打断；状态只在内存中，重启会丢失。
 
 ## 9. 并发、并行、竞态和 Promise 队列
 
@@ -995,6 +1038,10 @@ queues.set(conversationId, current);
 
 群 A 内部有顺序，群 B 内部有顺序；A 与 B 仍可并发。
 ```
+
+当前代码有群级的 `QqBotService.runGroupExclusive` 和记忆层的 `QqMemoryStore.runExclusive`。前者覆盖该群 Node 处理阶段，包括媒体解析，所以慢解析可能使同群下一条请求排队。
+
+但 Node 返回视频地址后，Bridge/NapCat 的发送不属于这条 Node 队列。不同分享的传输可能交错；当前保证的是一次分享先尝试发卡片再发它的视频，不能据此推导整个群所有视频严格按分享顺序送达。媒体解析默认最多并发两项，也不等于所有下载和 QQ 上传加起来最多两项。
 
 ### 9.4 为什么有 `.catch(() => {})`
 
@@ -1095,20 +1142,22 @@ const sha256 = createHash('sha256')
 
 ### 10.8 持久化
 
-持久化是把内存数据保存到进程退出后仍存在的介质。本项目把会话写入 JSON 文件。
+持久化是把内存数据保存到进程退出后仍存在的介质。当前 QQ 会话使用 **SQLite**，默认文件是 `data/qq-memory.sqlite`，由 `QqMemoryStore` 管理。
 
 ```text
-内存 Map -> JSON.stringify -> 磁盘文件
-磁盘文件 -> readFile -> JSON.parse -> 内存 Map
+QQ 输入 -> 会话和成员记录 -> SQLite 表 -> 磁盘上的数据库文件
+进程重启 -> 打开同一数据库 -> 查询历史、摘要和成员信息
 ```
 
-JSON 文件适合单进程、小数据量和简单恢复，不适合高并发查询、复杂事务或多实例同时写入。
+SQLite 是嵌入式数据库，不必再启动一个 MySQL 服务。表可以理解为有列名和记录的数据集合；SQL 用来查询和更新；事务让一组相关修改一起成功或失败。
+
+近期原文默认保留最多 30 天，还会按数量裁剪；成员画像独立保存，不跟随每一条原文一起过期。`data/longtu-library.sqlite` 保存图库信息，`data/qq-usage.sqlite` 保存模型/搜索用量，`data/qq-media-usage.sqlite` 保存媒体解析统计。旧 QQ JSON 记忆文件属于迁移来源，已经不是主存储。
 
 ### 10.9 为什么先写临时文件再 `rename`
 
 如果直接写正式文件，程序在写到一半时崩溃，可能留下残缺 JSON。
 
-项目先完整写临时文件，再重命名替换：
+这是旧会话文件及一般 JSON 文件常用的办法，仍值得理解，但不是当前 QQ SQLite 的写入流程：先完整写临时文件，再重命名替换。
 
 ```text
 写 conversation-memory.json.<pid>.tmp
@@ -1117,6 +1166,8 @@ JSON 文件适合单进程、小数据量和简单恢复，不适合高并发查
 ```
 
 在同一文件系统中，rename 通常提供接近原子的替换效果：其他读取者看到的更可能是完整旧文件或完整新文件，而不是半个文件。
+
+SQLite 使用自身的事务和日志机制。你可能在数据库旁看到 `-wal`、`-shm` 文件，其中可能有尚未合并回主文件的数据或协调信息；不能把它们当成没用的缓存随意删除。备份数据库也不能只在服务运行时随手复制其中一个文件。
 
 ## 11. 环境变量、配置和 `process`
 
@@ -1127,23 +1178,26 @@ JSON 文件适合单进程、小数据量和简单恢复，不适合高并发查
 Node.js 通过：
 
 ```js
-process.env.WECOM_BOT_ID
+process.env.QQ_API_TOKEN
 ```
 
 读取环境变量。
 
 ### 11.2 `.env` 和 dotenv
 
-本地开发时，可以把配置写进 `.env`：
+QQ 本地开发把配置写进 `.env.qq`，字段从 [`.env.qq.example`](../.env.qq.example) 查阅。下面只是格式示意，令牌要自行生成：
 
 ```dotenv
-WECOM_BOT_ID=...
-WECOM_BOT_SECRET=...
+QQ_API_HOST=127.0.0.1
+QQ_API_PORT=8787
+QQ_API_TOKEN=替换为至少32字符的随机令牌
 ```
 
-`import 'dotenv/config'` 会读取文件并补充到 `process.env`。
+`src/qq-api.js` 通过 dotenv 明确加载项目根目录的 `.env.qq`，也可用 `QQ_ENV_FILE` 指定文件。单独写 `import 'dotenv/config'` 通常读取的是 `.env`，两者不能混淆。QQ 启动时会拒绝过短或以“请替换”开头的示例令牌。
 
-`.env` 只是本地便利文件，不是 Node.js 自带标准。生产平台也可以直接注入真正的环境变量。
+配置文件是 dotenv 的便利机制，不是 Node.js 自己自动寻找的文件。Compose 还会通过 `env_file` 注入环境变量。修改宿主机文件不会自动改变已运行进程的环境，通常需要按部署方式重建相应容器；本机 `.env.qq.example` 也不会修改云服务器的 `.env.qq`。
+
+`QQ_API_TOKEN` 认证 Bridge 到 Node；`ONEBOT_TOKEN` 认证 NapCat 到 AstrBot；`LLM_API_KEY` 用于模型；平台 cookie/浏览器登录态用于视频 provider。它们不是同一个凭证。详细配置和启动步骤见 [QQ 部署文档](QQ_DEPLOYMENT.md)。
 
 ### 11.3 环境变量都是字符串
 
@@ -1242,14 +1296,16 @@ await work(); // 这里抛出
 项目中有多层边界：
 
 ```text
-具体外部请求：转换 HTTP/超时错误
-回复引擎：决定是否降级或复核
-单次消息：返回用户可读的失败提示
-最外事件入口：防止未处理拒绝
-进程级 SDK error：记录连接错误
+Node 平台/模型请求：转换 HTTP、大小、超时错误
+Node 业务层：决定降级，返回 mode 和 messages
+Node HTTP 入口：异常转成状态码和 JSON
+Python Bridge：解释结果，允许卡片失败后继续视频
+OneBot 发送调用：检查真正的 message_id 回执，失败时反馈
 ```
 
 不要在每层都无脑打印同一错误，否则日志会重复；也不要空 `catch` 所有错误，否则问题会被隐藏。
+
+尤其要区分“函数返回成功”和“外部动作成功”。把视频交给框架后，框架可能在另一层捕获发送异常；上层没收到异常，并不能证明 QQ 已发出。当前普通分享的视频发送直接等待 OneBot 回执，拿到有效的 `message_id` 才标记成功。失败会尝试回应失败表情和提示；连提示本身也可能因 QQ 连接异常发送失败，需要保留日志。
 
 ### 12.4 Node.js 文件错误码
 
@@ -1371,7 +1427,7 @@ test('说明要验证的行为', () => {
 - 集成测试：让多个真实模块一起工作；
 - 端到端测试：从用户入口一直走到真实或接近真实的系统出口。
 
-本项目主要是单元测试和小范围集成测试，没有连接真实企业微信做自动化端到端测试。
+本项目有 Node 的规则、服务和存储测试，也有 Python Bridge 的媒体发送测试。`npm test` 不是同时启动 NapCat、登录 QQ、往群里发视频的端到端验收。涉及 AstrBot 行为还需要其运行环境中的集成验证；涉及真实送达，要核对 QQ 消息回执及实际消息。
 
 ### 15.4 测试替身
 
@@ -1396,15 +1452,15 @@ test('说明要验证的行为', () => {
 - 镜像：包含运行环境和项目文件的只读模板；
 - 容器：根据镜像启动的一个隔离进程环境。
 
-同一个镜像可以启动多个容器，但这个项目受企业微信单连接限制，通常不应同时运行多个有效容器。
+同一个镜像可以启动多个容器。QQ 部署中 Node 后端、AstrBot、NapCat 分工运行；抖音 provider 等还可以有独立容器。一个容器显示 `running` 只说明进程没退出，不代表整条 QQ 链路已连通。
 
 ### 16.2 Dockerfile 每行在做什么
 
 ```dockerfile
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 ```
 
-以预装 Node.js 20 的精简 Debian 镜像为基础。
+以预装 Node.js 22 的精简 Debian 镜像为基础。真实 Dockerfile 还安装 OCR、Python 和媒体处理工具，这里只解释几个基础指令。
 
 ```dockerfile
 WORKDIR /app
@@ -1424,7 +1480,7 @@ COPY . .
 CMD ["npm", "start"]
 ```
 
-复制项目，其后容器默认执行 `npm start`。
+复制项目，其后容器默认执行 `npm start`，也就是企业微信入口。QQ Compose 用 `command: ["npm", "run", "start:qq"]` 覆盖它，因此阅读 Dockerfile 时还要一起看 Compose。
 
 ### 16.3 容器不自动保存重要数据
 
@@ -1432,54 +1488,98 @@ CMD ["npm", "start"]
 
 图片目录以只读卷挂载，可以减少运行时意外修改素材的风险。
 
+服务器 QQ Compose 把 `./data` 挂到 `/app/data`，使 SQLite、动态图库等跨容器重建保留。抖音 provider 的 `data/douyin-profile` 保存浏览器登录态，也不能当构建缓存删除。NapCat 的临时视频又在另一处目录；项目提供每天北京时间 9 点清理前一天临时视频的 systemd timer，安装方式见 [QQ 部署文档](QQ_DEPLOYMENT.md#napcat-临时视频每日清理)。
+
 ## 17. 把基础概念对应回项目节点
 
 | 项目节点 | 先掌握哪些概念 | 再观察什么 |
 | --- | --- | --- |
-| `package.json` | Node、npm、依赖、脚本、ESM | `npm start` 如何映射到入口 |
-| `index.js` 顶部 | 模块、环境变量、路径、类实例 | 所有依赖如何被创建和连接 |
-| SDK 事件注册 | 回调、事件、WebSocket、事件循环 | 四类消息如何共用入口 |
-| `message-utils.js` | 对象、数组、可选链、纯函数、哈希 | 外部 frame 如何变成内部输入 |
-| `triggers.js` | 字符串、正则、布尔逻辑 | 为什么先规范化再匹配 |
-| `reply-engine.js` | `async/await`、分支、错误降级 | 一条消息为何可能调用模型两次 |
-| `chat-client.js` | HTTP、JSON、fetch、AbortController | 请求和错误如何被统一封装 |
-| `web-search.js` | URL、缓存、TTL、回退 | 主端点失败后如何换备用端点 |
-| `conversation-store.js` | 类、Map、Promise 队列、文件 I/O | 同一会话串行与持久化如何配合 |
-| `meme-store.js` | Buffer、路径、哈希、Set、缓存 | 文件怎样经过校验后变成 media_id |
-| `test/` | 断言、假依赖、临时文件 | 如何在不连接真实服务时验证行为 |
-| `Dockerfile` | 镜像、容器、层、工作目录 | 项目如何得到一致运行环境 |
+| [`package.json`](../package.json) | npm、依赖、脚本、ESM | `start:qq` 如何选择入口 |
+| [`src/qq-api.js`](../src/qq-api.js) | HTTP、配置、实例、进程信号 | 如何组装依赖、认证请求并返回 JSON |
+| [`src/qq-service.js`](../src/qq-service.js) | 对象、分支、Promise 队列 | QQ 消息如何变成不同 mode 和 messages |
+| [`src/repeat-detector.js`](../src/repeat-detector.js) | Map、Set、文本规范化 | 一轮复读为什么只处理一次 |
+| [`src/active-reply.js`](../src/active-reply.js) | 条件判断、限流、时间 | 是否参与群聊和怎么回答为何分开 |
+| [`src/qq-memory-store.js`](../src/qq-memory-store.js) | SQLite、队列、生命周期 | 原文、摘要、成员画像如何保存 |
+| [`src/reply-engine.js`](../src/reply-engine.js) | async/await、策略、降级 | 如何组织检索、模型调用与人格质检 |
+| [`src/chat-client.js`](../src/chat-client.js) | fetch、JSON、AbortController | 如何构造提示前缀、读取正文和用量 |
+| [`src/longtu-library.js`](../src/longtu-library.js) | Buffer、哈希、SQLite | 图库与关键词、抽图进度如何保存 |
+| [`src/media-resolver.js`](../src/media-resolver.js) | 缓存、并发限制、子进程 | 链接如何变成媒体元数据和可发送地址 |
+| [`astrbot_plugin_longtu_bridge/main.py`](../astrbot_plugin_longtu_bridge/main.py) | Python 异步、协议转换、错误边界 | Node 返回后怎么生成卡片、发送视频、验证回执 |
+| [`astrbot_plugin_longtu_bridge/video_card.py`](../astrbot_plugin_longtu_bridge/video_card.py) | 图像尺寸、字体、布局 | 作者头像、简介和多图预览怎样画出来 |
+| [`test/`](../test/) | 断言、假依赖、临时文件 | 不连接真实服务时能验证什么 |
+| [`docker-compose.server.yml`](../docker-compose.server.yml) | 容器、网络、挂载 | 已有 AstrBot 环境如何接入 QQ 后端 |
 
-## 18. 用一条消息把概念串起来
+## 18. 用 QQ 中的输出把概念串起来
 
-假设群里发送“龙图是什么”：
+### 18.1 明确 @ 后的一条普通回答
 
-1. 企业微信通过 WebSocket 推送 `message.text` 事件；
-2. SDK 调用注册的 `receiveMessage` 回调；
-3. 回调启动 `handleIncomingMessage`，得到一个 Promise，并给它挂 `.catch`；
-4. `Set` 检查 `msgid` 是否重复；
-5. 纯函数从嵌套对象中提取文本；
-6. 正则和路由规则判断这是知识问题，不是单纯发图指令；
-7. `ConversationStore` 的 Promise 队列等待同一群前一条消息完成；
-8. 先通过 SDK 发企业微信流式占位文本；
-9. 从内存 `Map` 读取该群历史；
-10. `reply-engine` 判断需要本地知识、网页检索和模型思考；
-11. `web-search` 按龙图固定查询或普通时效查询发 HTTP 请求，并按 TTL 缓存结果；
-12. `chat-client` 用 `fetch` POST JSON，`AbortController` 负责超时；
-13. 等网络时，事件循环仍能开始处理其他群的消息；
-14. 模型返回后，程序把本轮对话追加到 `Map`；
-15. 持久化 Promise 队列把会话 JSON 写临时文件，再 rename；
-16. SDK 完成企业微信文本回复；
-17. `MemeStore` 从 manifest 候选读取图片 `Buffer`；
-18. SHA-256、文件签名和大小检查通过后上传图片；
-19. 上传得到的 `media_id` 写入 48 小时缓存；
-20. SDK 再主动发送一条图片消息；
-21. 当前会话任务结束，队列中的下一条消息才开始。
+假设群友发“@机器人 龙图是什么”：
 
-这 21 步基本覆盖了本项目使用的 Node.js 核心概念。
+1. NapCat 收到 QQ 消息，通过 OneBot 把消息段交给 AstrBot。
+2. Bridge 提取文本、群号、QQ 号、消息 ID、艾特和引用，向 Node 发 `POST /v1/qq/message`。
+3. Node 检查令牌，解析 JSON，规范化字段，进行去重和群权限判断。
+4. 该群的处理进入 Promise 队列；明确点名进入相应回复路由。
+5. 记忆模块提供近期上下文、摘要和相关成员信息。
+6. 现有回复引擎按问题组织本地知识、检索和模型请求，继续使用既有角色设定。
+7. 等待外部网络时，事件循环仍能处理其他可运行任务。
+8. Node 记录本轮记忆和用量，返回包含文本及可能附图的结构化结果。
+9. Bridge 把结果转换成 OneBot 消息；被动群聊回复带引用/艾特，主动插话则独立发送。
+
+用户看到的是 QQ 消息，Node 返回的是 JSON。两者之间还有一个真正的发送动作。普通群聊也可能只返回空 `messages`：它可以表示记录了旁观、判定不接话、被去重或被配置排除，并不自动等于服务坏了。
+
+### 18.2 视频分享：卡片出来以后还在等什么
+
+一次成功分享大致经过：
+
+```text
+识别分享平台 → 解析作者、封面、标题与媒体地址 → 检查视频大小
+    → Node 返回媒体结果 → Bridge 尝试发独立卡片
+    → NapCat 获取视频并上传 QQ → 返回视频 message_id → 回应成功表情
+```
+
+卡片显示的是**视频作者**的圆形头像和昵称，不是转发这条链接的 QQ 用户。平台 logo 来自项目中的原生平台素材；B 站还显示发布时间；标题、正文和标签都属于卡片内容，不再另外补发一条标题消息。卡片失败不应挡住视频，卡片等待目前有 12 秒上限。
+
+不同平台的获取路线并不完全相同：
+
+| 平台 | 常用路线 | 初学者要注意什么 |
+| --- | --- | --- |
+| B 站 | 原生播放接口选取 MP4，常用 720P，经 Node 媒体代理交给 NapCat | 有备用 CDN；接口返回快不代表视频字节传输快 |
+| 小红书 | provider 返回媒体信息，探测大小后通常把直链交给 NapCat | provider 登录态和临时直链有效期都会影响结果 |
+| 抖音 | provider 使用持久化 Chromium 登录态解析，经 Node 代理交给 NapCat | 浏览器登录态和视频缓存不是一回事 |
+
+配置、格式和上游失败可能让请求进入公开页面解析或 `yt-dlp` 回退。Node 代理还能后台预下载：文件已就绪就读取本地文件，否则流式代理。这些都不代表“解析接口返回时已经下载完”。
+
+**大小和时间是不同限制：**
+
+- 单视频上限为 `500 × 1024 × 1024` 字节，即 500 MiB，群内提示写作 500MB。已知源文件大小时先判断，超过就不开始完整下载。
+- 源站没有可靠大小字段时，不能只凭时长推算；代码会尝试探测，支持的本地下载路径还会检查累计字节。直接交给 NapCat 的地址不经过 Node 全程计数，不能把这项兜底理解为所有路线完全相同。
+- 提取阶段上限为 480 秒，从媒体解析取得并发名额后计时。配置的较短下载/provider 超时也可能先触发；同群排队和之后的 QQ 上传不是都包含在这一段计时里。
+- 视频自身播放时长没有限制。一小时的视频也可能很小，四分钟的高码率视频也可能很大。
+- Bridge 发送视频另有 480 秒的回执等待。只有拿到有效 `message_id` 才回应成功表情；没有回执会尝试发送失败/超时提示。超时只说明还没等到确认，QQ 端可能仍在上传，不能承诺已取消，也不会盲目重发造成重复。
+
+所以不能用“卡片 2 秒出来、视频 5 分钟出来”推断解析用了 5 分钟。要分开看解析日志、媒体下载/代理日志，以及 Bridge 的“视频发送开始/成功/未成功”日志。媒体日报记录的是解析阶段，不能独自证明 QQ 视频送达。
+
+### 18.3 图文分享：卡片和聊天记录为什么分开
+
+支持的图文分享走 `media-gallery` 路由，绕过**视频**的 500 MiB 判断。卡片用首图或多图预览作封面区域，把作者、标题、正文和标签放在一张图中；多图最多展示九张预览，超过用 `+N` 表示未展示数量。
+
+卡片作为独立图片先发。后面的合并聊天记录只放图片节点，不重复标题正文，也不把卡片再塞进去。转发失败会重试，并可降级为逐张图片。平台解析返回的图片数量仍有自身上限，不等于任意长度相册都会完整返回。
+
+### 18.4 同一句为什么不会一直复读
+
+```text
+甲：好好好          → 记录这一轮，还不复读
+乙：好好好          → 达到两个不同真人，机器人复读一次
+丙：好好好          → 同一轮已处理，不再复读
+丁：换个话题        → 打断原有这一轮
+甲、乙再次连续重复  → 新一轮可再次触发
+```
+
+同一人刷多遍不算两个真人。文本会先统一全半角和空白；图片、引用、艾特、命令等不作为普通复读票数。这个小功能能同时说明规范化、Set 去重、Map 保存群状态，以及“规则判断不需要模型”。
 
 ## 19. 可以亲手运行的最小实验
 
-这些实验都不连接企业微信，也不会调用大模型。
+在项目根目录使用 Node.js 22.5+ 运行。19.1～19.4 只用内置能力；其余实验先执行 `npm ci`。它们都不登录 QQ，不发送群消息，也不调用大模型。
 
 ### 19.1 Promise 和 `await`
 
@@ -1533,10 +1633,65 @@ console.log(signature.toString("hex"));
 ### 19.5 只运行一个测试文件
 
 ```bash
-node --test test/message-utils.test.js
+node --test test/repeat-detector.test.js
 ```
 
 然后打开测试和源码，逐条对照输入、调用和断言。
+
+### 19.6 用真实复读模块观察一轮状态
+
+```bash
+node --input-type=module <<'JS'
+import { RepeatDetector } from './src/repeat-detector.js';
+const detector = new RepeatDetector({ logger: { log() {} } });
+for (const userId of ['alice', 'bob', 'carol']) {
+  const result = detector.detect({
+    messageType: 'group', groupId: 'demo', userId, text: '好好好',
+  });
+  console.log(userId, result?.text ?? '静默');
+}
+JS
+```
+
+预期依次输出 `alice 静默`、`bob 好好好`、`carol 静默`。试着把三个 userId 都改成 `alice`，会全部静默；再给第三次输入换一句话，观察新一轮状态如何开始。
+
+### 19.7 跑一次本机 HTTP 请求，不连接真实 QQ
+
+这里使用真实 HTTP 接口工厂，但注入假的业务服务。端口 `0` 表示让系统分配空闲端口；`127.0.0.1` 只监听本机。示例令牌只用于这次实验，不能用作部署凭证。
+
+```bash
+node --disable-warning=ExperimentalWarning --input-type=module <<'JS'
+import { createQqApiServer } from './src/qq-api.js';
+const token = 'local-demo-token-not-for-production';
+const service = {
+  async handleMessage(payload) {
+    return {
+      mode: 'demo',
+      messages: [{ type: 'text', text: `收到：${payload.text}` }],
+    };
+  },
+};
+const server = createQqApiServer({ service, apiToken: token });
+await new Promise((resolve, reject) => {
+  server.once('error', reject);
+  server.listen(0, '127.0.0.1', resolve);
+});
+try {
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/qq/message`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message_type: 'group', group_id: 'demo', text: '你好' }),
+  });
+  console.log(response.status, await response.json());
+} finally {
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+JS
+```
+
+预期 HTTP 状态为 `200`，JSON 含 `ok: true`、`mode: 'demo'` 和“收到：你好”。脚本随后关闭服务。它没有创建真实记忆库或模型客户端，也没有调用 Bridge；因此终端有结果而 QQ 没消息正是预期行为。
+
+把请求头里的令牌改错，会返回 `401`。这能帮你区分“接口认证失败”和“QQ 登录失败”：两者发生在不同服务之间。
 
 ## 20. 初学者常见误区
 
@@ -1580,6 +1735,22 @@ Base64 可以直接解码；哈希也不是加密。敏感凭证必须使用合�
 
 不一定。要从 `process.env` 的读取位置和调用链确认。这个仓库就存在示例配置与当前实现漂移的情况。
 
+### “Node 返回 ok 或卡片发出来了，视频就算成功”
+
+不是。Node 返回表示业务处理完成到某个阶段；卡片和视频有独立发送过程。视频成功要等 OneBot 的有效消息回执。
+
+### “八分钟限制就是不发超过八分钟的视频”
+
+不是。限制的是提取耗时，另有发送回执等待；视频自身的播放时长不作为拒绝条件。`duration`、文件字节数和请求耗时是三个量。
+
+### “缓存命中以后就不用上传 QQ”
+
+解析缓存可以省掉重复解析，但新群仍要收到自己的消息，视频下载/上传可能仍需执行。模型输入缓存则是另一条计费链路。
+
+### “等待超时就是远端任务已经取消”
+
+不是。本地不再等，并不保证所有外部服务都收到了取消信号。发送超时后立即重发，可能造成原任务稍后完成时重复出现视频。
+
 ## 21. 建议的学习节奏
 
 第一轮不要追求记住全部 API，只建立执行模型：
@@ -1589,10 +1760,10 @@ Base64 可以直接解码；哈希也不是加密。敏感凭证必须使用合�
 3. 外部事件触发回调；
 4. 异步 I/O 返回 Promise；
 5. `await` 暂停当前函数，事件循环继续处理其他任务；
-6. 内存状态用 Map/Set 保存，重要数据写文件；
+6. 内存状态用 Map/Set 保存，QQ 重要数据写入 SQLite；
 7. 外部请求必须处理超时和错误；
 8. 测试用假依赖稳定复现行为。
 
-第二轮再沿一条真实消息追踪函数调用。第三轮开始自己加小测试，不要直接修改最复杂的入口。
+第二轮先跑第 19 节的复读和 HTTP 实验，再沿 `qq-api.js → qq-service.js → Bridge` 追踪一条真实消息。第三轮开始自己加小测试，不要直接修改最复杂的入口。完整部署按 [QQ 部署文档](QQ_DEPLOYMENT.md) 操作，遇到线上无响应时按[架构指南的排障顺序](node-service-architecture-and-learning-guide.md#11-从-qq-表现开始排障)逐层检查。
 
 当你能不用背代码、用自己的话解释“为什么同一会话要排队”和“为什么等待模型时其他群还能继续进消息”，就真正理解了这个项目最核心的 Node.js 部分。
