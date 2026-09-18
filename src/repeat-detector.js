@@ -41,11 +41,20 @@ export class RepeatDetector {
     if (key) this.groups.delete(key);
   }
 
+  hasHandledRun(payload) {
+    if (!this.enabled || payload?.messageType !== 'group') return false;
+    const state = this.groups.get(String(payload.groupId ?? '').trim());
+    return Boolean(state?.handled && state.fingerprint === this.normalize(payload.text));
+  }
+
   detect(payload, now = this.now()) {
     if (!this.enabled || payload?.messageType !== 'group') return null;
     const groupId = String(payload?.groupId ?? '').trim();
     const userId = String(payload?.userId ?? '').trim();
     if (!groupId || !userId) return null;
+    // An echo of our own +1 is part of the same run, not a new human vote.
+    if (payload?.botUserId && userId === String(payload.botUserId)
+      && this.hasHandledRun(payload)) return null;
     if (payload?.isPeerBot) {
       this.reset(groupId);
       return null;
