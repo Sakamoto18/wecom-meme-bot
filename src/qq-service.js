@@ -2908,15 +2908,28 @@ export class QqBotService {
           };
         }
         if (mediaTooLarge || mediaDurationTooLong || mediaTimedOut) {
+          const limitMetadata = error?.mediaMetadata && typeof error.mediaMetadata === 'object'
+            ? error.mediaMetadata : {};
           return {
             mode: 'media-unavailable',
             messages: [{
-              type: 'text',
+              // Keep the source metadata even though the video itself is not
+              // registered.  The Bridge can still show the fetched cover and
+              // author before the user-facing limit/timeout text.
+              type: 'media-limit',
               text: mediaTooLarge
                 ? '这个视频超过 500MB，建议点击分享前往平台观看。'
                 : mediaDurationTooLong
-                  ? '这个视频时长超过 8 分钟，建议点击分享前往平台观看。'
+                  ? '这个视频加载时长超过 8 分钟，建议点击分享前往平台观看。'
                   : '视频提取超过 8 分钟，已中断，建议点击分享前往平台观看。',
+              provider: candidate.provider,
+              title: String(limitMetadata.title || ''),
+              coverUrl: String(limitMetadata.coverUrl || limitMetadata.cover || ''),
+              author: String(limitMetadata.author || ''),
+              avatarUrl: String(limitMetadata.avatarUrl || ''),
+              description: String(limitMetadata.description || ''),
+              tags: Array.isArray(limitMetadata.tags) ? limitMetadata.tags : [],
+              publishedAt: Number(limitMetadata.publishedAt || 0) || 0,
             }],
           };
         }

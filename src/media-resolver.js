@@ -495,17 +495,27 @@ export class MediaResolver {
   }
 
   async rejectIfTooLarge(value) {
-    const size = await probeRemoteSize(value, 2_000);
-    if (size > MAX_MEDIA_BYTES) throw mediaTooLargeError(size);
-    return size;
+    try {
+      const size = await probeRemoteSize(value, 2_000);
+      if (size > MAX_MEDIA_BYTES) throw mediaTooLargeError(size);
+      return size;
+    } catch (error) {
+      if (isMediaTooLargeError(error)) error.mediaMetadata = value;
+      throw error;
+    }
   }
 
   rejectIfTooLong(value) {
-    const duration = positive(value?.duration);
-    if (duration > MAX_MEDIA_DURATION_SECONDS) {
-      throw mediaDurationTooLongError(duration);
+    try {
+      const duration = positive(value?.duration);
+      if (duration > MAX_MEDIA_DURATION_SECONDS) {
+        throw mediaDurationTooLongError(duration);
+      }
+      return duration;
+    } catch (error) {
+      if (isMediaDurationTooLongError(error)) error.mediaMetadata = value;
+      throw error;
     }
-    return duration;
   }
 
   async getMediaFile(mediaId) {
