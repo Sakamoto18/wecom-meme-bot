@@ -8,7 +8,9 @@ import unittest
 
 source = ast.parse((Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu_bridge/main.py').read_text())
 bridge = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'LongtuQqBridge')
-methods = [n for n in bridge.body if getattr(n, 'name', '') in ('_reply_chain_from_backend', '_send_forward_from_backend')]
+methods = [n for n in bridge.body if getattr(n, 'name', '') in (
+    '_reply_chain_from_backend', '_send_forward_from_backend', '_send_media_limit_card',
+)]
 
 class Component:
     def __init__(self, *args, **kwargs): self.args, self.kwargs = args, kwargs
@@ -21,7 +23,8 @@ namespace = {'AstrMessageEvent': object, 'logger': logging.getLogger('test'), 'a
 exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(name='Bridge', bases=[], keywords=[], body=methods, decorator_list=[])], type_ignores=[])), '<bridge-methods>', 'exec'), namespace)
 Bridge = namespace['Bridge']
 async def fake_card(self, message):
-    assert message['coverUrl'] == message['images'][0]
+    if message.get('images'):
+        assert message['coverUrl'] == message['images'][0]
     assert message['title'] == '测试'
     assert message['description'] == '#英语#'
     return 'card-png-base64'
@@ -107,6 +110,19 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([action for action, _ in calls], [
             'send_group_msg', 'send_group_forward_msg', 'send_group_forward_msg',
         ])
+
+    async def test_media_limit_sends_cover_before_limit_text(self):
+        event, calls = self.event()
+        response = {'mode': 'media-unavailable', 'messages': [{
+            'type': 'media-limit', 'text': '视频提取超过 8 分钟，已中断。',
+            'title': '测试', 'description': '#英语#',
+            'coverUrl': 'https://cdn.example/cover.jpg', 'provider': 'bilibili',
+        }]}
+        self.assertTrue(await Bridge()._send_media_limit_card(event, response))
+        self.assertEqual(calls[0][0], 'send_group_msg')
+        self.assertEqual(calls[0][1]['message'][0]['data']['file'], 'base64://card-png-base64')
+        chain = Bridge._reply_chain_from_backend(response)
+        self.assertEqual(chain[0].args, ('视频提取超过 8 分钟，已中断。',))
 
     def test_final_gallery_fallback_uses_native_images(self):
         chain = Bridge._reply_chain_from_backend(self.gallery())
