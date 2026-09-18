@@ -2250,6 +2250,11 @@ export class QqBotService {
         active_reply_priority: 'may',
       };
     }
+    // Once we have joined a repeat run, further copies are observations only,
+    // even after the passive decision cooldown expires.
+    if (this.repeatDetector?.hasHandledRun?.(payload)) {
+      return this.observeMessage(payload, message);
+    }
     if (!this.activeReplyDecider) {
       return this.observeMessage(payload, message);
     }
@@ -2725,9 +2730,12 @@ export class QqBotService {
           return { mode: 'admin-stop-preempted', messages: [] };
         }
         if (payload.messageType === 'group' && result?.messages?.length > 0) {
-          // A bot message breaks the human-to-human run; the next matching
-          // text must start a fresh repeat sequence.
-          this.repeatDetector?.reset?.(payload.groupId);
+          // Joining a repeat belongs to the current run. Clearing its handled
+          // flag here would make every next pair of users trigger another +1.
+          // Other bot replies still interrupt the repeat sequence.
+          if (result.mode !== 'repeat-reply') {
+            this.repeatDetector?.reset?.(payload.groupId);
+          }
           this.activeReplyDecider?.recordBotReply?.(payload.groupId);
           if (this.isPeerBotMessage(payload)) {
             this.recordPeerBotReply(payload);

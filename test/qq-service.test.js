@@ -504,9 +504,74 @@ test('群友连续复读时机器人只主动复读一次且不调用模型', as
     active_reply_priority: 'may',
   });
   assert.deepEqual(third, { mode: 'observed', messages: [] });
+  // A reply must not clear the run: the fourth message used to trigger again.
+  for (const [index, userId] of ['u4', 'u1', 'u2', 'u5'].entries()) {
+    const continued = await service.handleMessage({
+      ...base, message_id: `repeat-continued-${index}`, user_id: userId,
+      text: '这也太巧了',
+    });
+    assert.deepEqual(continued, { mode: 'observed', messages: [] });
+  }
   // Only the first message may enter the existing passive read-air gate;
   // the actual repeat reply itself must not invoke the model.
   assert.equal(callCount, 1);
+});
+
+test('同一复读轮次超过主动判定冷却仍然只旁观，换内容后允许新轮次', async () => {
+  let decisions = 0;
+  const { service, calls } = createService({
+    groupPassiveDecisionCooldownMs: 0,
+    activeReplyDecider: {
+      async shouldReply() {
+        decisions++;
+        return { reply: false, reason: 'skip' };
+      },
+    },
+  });
+  const base = { group_id: 'repeat-after-cooldown', observe_only: true, text: '？' };
+  await service.handleMessage({ ...base, user_id: 'u1' });
+  assert.equal((await service.handleMessage({ ...base, user_id: 'u2' })).mode, 'repeat-reply');
+  const decisionsBefore = decisions;
+  // Force eligibility without waiting; handled copies must bypass the LLM gate.
+  service.shouldRunPassiveDecision = () => true;
+  for (const user_id of ['u3', 'u4', 'u1', 'u2']) {
+    assert.equal((await service.handleMessage({ ...base, user_id })).mode, 'observed');
+  }
+  assert.equal(decisions, decisionsBefore);
+  await service.handleMessage({ ...base, user_id: 'u3', text: '新话题' });
+  assert.equal(decisions, decisionsBefore + 1);
+  assert.equal((await service.handleMessage({ ...base, user_id: 'u1' })).mode, 'observed');
+  assert.equal((await service.handleMessage({ ...base, user_id: 'u2' })).mode, 'repeat-reply');
+  assert.equal(calls.length, 0);
+});
+
+test('同群并发接龙只复读一次，不同群分别计数', async () => {
+  const { service, calls } = createService();
+  const groups = ['repeat-concurrent-a', 'repeat-concurrent-b'];
+  const results = await Promise.all(groups.flatMap(group_id =>
+    Array.from({ length: 8 }, (_, i) => service.handleMessage({
+      group_id, observe_only: true, user_id: `user-${i % 3}`,
+      message_id: `msg-${i}`, text: '？',
+    })).map(task => task.then(result => ({ group_id, ...result }))),
+  ));
+  for (const group of groups) {
+    assert.equal(results.filter(r => r.group_id === group && r.mode === 'repeat-reply').length, 1);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('非复读的机器人回复仍然中断原轮次', async () => {
+  const { service } = createService();
+  const base = { group_id: 'repeat-interruption', observe_only: true, text: '？' };
+  await service.handleMessage({ ...base, user_id: 'u1' });
+  assert.equal((await service.handleMessage({ ...base, user_id: 'u2' })).mode, 'repeat-reply');
+  const direct = await service.handleMessage({
+    ...base, user_id: 'u1', observe_only: false, text: '发张龙图',
+  });
+  assert.notEqual(direct.mode, 'repeat-reply');
+  assert.ok(direct.messages.length > 0);
+  assert.equal((await service.handleMessage({ ...base, user_id: 'u3' })).mode, 'observed');
+  assert.equal((await service.handleMessage({ ...base, user_id: 'u4' })).mode, 'repeat-reply');
 });
 
 test('QQ 只有图片标记但没有图片数据时不会伪造随机龙图', async () => {

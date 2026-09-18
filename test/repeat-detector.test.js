@@ -59,3 +59,17 @@ test('同一用户连续发送不会被当成群体复读，格式空白会归�
   assert.equal(detector.detect(payload({ userId: 'u1', text: 'Hello' })), null);
   assert.equal(detector.detect(payload({ userId: 'u2', text: 'Hello' })).reason, 'cross-user-repeat');
 });
+
+test('机器人自己的复读回显不清空轮次，也不计作群友', () => {
+  const detector = new RepeatDetector();
+  const own = payload({ userId: 'bot', botUserId: 'bot' });
+  detector.detect(own);
+  assert.equal(detector.detect(payload()), null);
+  assert.equal(detector.detect(payload({ userId: 'u2' }))?.reason, 'cross-user-repeat');
+  assert.equal(detector.detect(own), null);
+  assert.equal(detector.detect(payload({ userId: 'u3' })), null);
+  assert.equal(detector.detect(payload({ userId: 'u4' })), null);
+  assert.equal(detector.hasHandledRun(payload()), true);
+  detector.detect({ ...own, text: '换个话题' });
+  assert.equal(detector.hasHandledRun(payload()), false);
+});
