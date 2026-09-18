@@ -355,6 +355,45 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml down
 
 NapCat 登录数据在 `deploy/qq/napcat/`，AstrBot 数据在 `deploy/qq/astrbot-data/`，QQ 长期记忆在 `data/qq-memory.sqlite`，动态图库和手动文字别名在 `data/longtu-library/` 与 `data/longtu-library.sqlite`。第一次更新会自动迁移旧的 `data/qq-conversation-memory.json`，运行数据均已加入 `.gitignore`。
 
+### NapCat 临时视频每日清理
+
+腾讯云临时目录为 `/opt/qqbot/ntqq/NapCat/temp`。独立 systemd timer 在北京时间
+每天 09:00 清理当天 00:00 之前的文件；昨天及更早的遗留文件都会处理。
+当日新增或修改、正在被进程打开的文件保留，不跟随符号链接，也不删除目录。
+任务不涉及 QQ 登录态、聊天数据库、`nt_data/Video` 或 Provider 缓存。
+
+在服务器项目目录安装并启用：
+
+```bash
+sudo install -m 0755 scripts/cleanup-napcat-temp.py /usr/local/sbin/longtu-napcat-temp-cleanup.py
+sudo install -m 0644 services/systemd/longtu-napcat-temp-cleanup.service /etc/systemd/system/
+sudo install -m 0644 services/systemd/longtu-napcat-temp-cleanup.timer /etc/systemd/system/
+sudo /usr/local/sbin/longtu-napcat-temp-cleanup.py --dry-run
+sudo systemctl daemon-reload
+sudo systemctl enable --now longtu-napcat-temp-cleanup.timer
+```
+
+预览命令只统计待清理数量，不删除文件。服务器关机错过执行时会补跑一次，
+以补跑当天的 00:00 为界。查看下次执行时间、历史结果和暂停任务：
+
+```bash
+systemctl list-timers --all longtu-napcat-temp-cleanup.timer
+sudo journalctl -u longtu-napcat-temp-cleanup.service --no-pager -n 20
+sudo systemctl disable --now longtu-napcat-temp-cleanup.timer
+```
+
+修改时间使用 `sudo systemctl edit longtu-napcat-temp-cleanup.timer`，填写：
+
+```ini
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 09:00:00 Asia/Shanghai
+```
+
+保存后执行 `sudo systemctl daemon-reload` 和
+`sudo systemctl restart longtu-napcat-temp-cleanup.timer`。
+手动执行 `sudo systemctl start longtu-napcat-temp-cleanup.service` 会立即按相同规则删除旧文件。
+
 ## 排查
 
 ### AstrBot 没显示 OneBot 已连接

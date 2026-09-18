@@ -1,0 +1,9 @@
+[Unit]
+Description=Clean previous-day NapCat temporary media
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n /run/longtu-napcat-temp-cleanup.lock /usr/bin/python3 /usr/local/sbin/longtu-napcat-temp-cleanup.py
+TimeoutStartSec=10min
+Nice=10
+IOSchedulingClass=idle
