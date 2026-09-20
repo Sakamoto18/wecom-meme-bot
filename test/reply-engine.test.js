@@ -33,7 +33,11 @@ test('引用评价、识图和转发总结保留龙图知识，不自动攻击�
     assert.match(calls[0].stableSystemPrompt, /本地龙图知识/);
     assert.match(calls[0].stableSystemPrompt, /短、嘴欠、会接梗/);
     assert.match(calls[0].additionalSystemPrompt, /引用作者 甲 只是内容来源/);
-    assert.match(calls[0].additionalSystemPrompt, /只有本轮明确要求攻击或调侃某人/);
+    if (scenario.content.startsWith('调侃')) {
+      assert.match(calls[0].additionalSystemPrompt, /本轮明确要求贫嘴或调侃/);
+    } else {
+      assert.match(calls[0].additionalSystemPrompt, /只有本轮明确要求攻击或调侃某人/);
+    }
   }
 });
 

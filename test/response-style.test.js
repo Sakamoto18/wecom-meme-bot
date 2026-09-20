@@ -23,6 +23,7 @@ import {
   shouldSearchCurrentInformation,
   shouldUseThinking,
   shouldUseAttackStyle,
+  isExplicitBanterRequest,
 } from '../src/response-style.js';
 
 test('发送回复前隐藏内部群成员编号', () => {
@@ -342,6 +343,14 @@ test('引用和评价不是攻击授权，明确命令仍可进入对线', () =>
   assert.match(normalPrompt, /当前发言者只是提问者/);
   const attackPrompt = buildAttackPrompt('把他骂一顿', { interactionContext });
   assert.match(attackPrompt, /只有当前用户明确要求攻击该作者/);
+});
+
+test('只有明确的贫嘴请求才开放针对对象的轻量调侃', () => {
+  assert.equal(isExplicitBanterRequest('调侃一下他这操作'), true);
+  assert.equal(isExplicitBanterRequest('请跟他互损几句'), true);
+  assert.equal(isExplicitBanterRequest('如何评价他这句话'), false);
+  assert.equal(isExplicitBanterRequest('这张图是什么意思'), false);
+  assert.equal(isExplicitBanterRequest('不要贫嘴，评价事情本身'), false);
 });
 
 test('识图、主动插话和引用历史中的辱骂不能自动让作者成为攻击对象', () => {

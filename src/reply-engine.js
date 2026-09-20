@@ -20,6 +20,7 @@ import {
   shouldSearchLongtuKnowledge,
   shouldSearchMemeKnowledge,
   shouldSearchCurrentInformation,
+  isExplicitBanterRequest,
   shouldUseThinking,
   shouldUseAttackStyle,
 } from './response-style.js';
@@ -413,6 +414,7 @@ export async function generateConversationReply(options) {
 
   const compactActiveReply = activeReply && activeReplyPriority !== 'must';
   const thinkingEnabled = !compactActiveReply && shouldUseThinking(content);
+  const allowPersonalBanter = !activeReply && !recordSummary && isExplicitBanterRequest(content);
   const webSearchStatus = buildWebSearchStatus({
     requested: imageSearch ? queries.length > 0
       : (useCurrentInformation || useMemeKnowledge || searchMode === 'general'),
@@ -424,6 +426,7 @@ export async function generateConversationReply(options) {
   });
   const normalPromptOptions = {
     thinkingEnabled,
+    allowPersonalBanter,
     interactionContext,
     activeReply,
     activeReplyPriority,

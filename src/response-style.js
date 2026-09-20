@@ -14,6 +14,7 @@ const SENSITIVE_SUPPORT_PATTERN = /(?:我(?:的)?(?:妈|爸|父亲|母亲|家人
 const ADVERSARIAL_FOLLOWUP_PATTERN = /(?:回答我|哪(?:里)?来的|你(?:妈|🐎|呢)|咋(?:了|地|么)|干什么|凭什么|不服|然后呢|就这|继续|有种|笑死)/i;
 // 只保留明确的指令入口，普通‘评价’或叙述某人在骂人不直接启动攻击。
 const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /^(?:@[^\s]+\s+)*(?:(?:请|帮我|给我|麻烦你|你)\s*)*(?:把[^，。！？\n]{1,30})?(?:骂|攻击|怼|喷|拷打|羞辱|嘲讽|对线)/i;
+const EXPLICIT_BANTER_REQUEST_PATTERN = /(?:(?:请|帮我|给我|来|继续|跟|和|陪)?\s*(?:贫嘴|嘴贫|调侃|互损|吐槽)(?:一下|下|几句|一顿)?(?:他|她|它|这个人|这(?:个|种)|我)?|(?:损|阴阳)(?:一下|下|几句|一顿)\s*(?:他|她|它|这个人|我))/i;
 const LONGTU_TOPIC_PATTERN = /(?:龙图|龙玉涛|老冯)/i;
 const KNOWLEDGE_INTENT_PATTERN = /(?:是什么|是谁|什么意思|哪里来|来源|出处|由来|什么梗|语录|搜索|联网|资料|历史|评价|看待|怎么看|如何看)/i;
 const MEME_KNOWLEDGE_PATTERN = /(?:(?:什么|啥|这个|这|该)(?:网络)?梗|(?:查|搜|搜索|查询|科普|解释|讲讲|说说).{0,28}梗|(?:网络|网上|热|流行|抽象|贴吧|B站|抖音).{0,8}梗|梗.{0,10}(?:意思|含义|来源|出处|由来|怎么火)|(?:网络用语|网络流行语|流行语|黑话).{0,10}(?:意思|含义|来源|出处|由来))/i;
@@ -95,6 +96,13 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
     && shouldUseAttackStyle(styleRequestText(previousUserMessage), [], options)
     && ADVERSARIAL_FOLLOWUP_PATTERN.test(normalized),
   );
+}
+
+export function isExplicitBanterRequest(content) {
+  const normalized = styleRequestText(content);
+  return !DEESCALATION_PATTERN.test(normalized)
+    && !SENSITIVE_SUPPORT_PATTERN.test(normalized)
+    && EXPLICIT_BANTER_REQUEST_PATTERN.test(normalized);
 }
 
 export function shouldSearchLongtuKnowledge(content) {
@@ -261,7 +269,9 @@ export function buildNormalReplyContextPrompt(options = {}) {
     ...(interaction.quotedAuthorLabel
       ? [`引用作者 ${interaction.quotedAuthorLabel} 只是内容来源；优先分析引用内容的事实、逻辑和依据，当前发言者只是提问者。`]
       : []),
-    '按当前用户的实际意图确定靶子：识图、总结、评价默认只谈内容本身；只有本轮明确要求攻击或调侃某人时才按其指定对象接梗。不要因为引用、点名、旧互损记录或材料中的辱骂就认定用户要求攻击作者。',
+    options.allowPersonalBanter
+      ? '本轮明确要求贫嘴或调侃：可以围绕指定对象的具体言行接梗，保持虚构、轻量和有依据；不要扩大到亲属、人格或无关群友。'
+      : '按当前用户的实际意图确定靶子：识图、总结、评价默认只谈内容本身；只有本轮明确要求攻击或调侃某人时才按其指定对象接梗。不要因为引用、点名、旧互损记录或材料中的辱骂就认定用户要求攻击作者。',
   ].join('\n');
 }
 
