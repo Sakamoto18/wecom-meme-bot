@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { isRemovedError } from './media-removed.js';
 import { isMediaExtractionTimeoutError, isMediaTooLargeError } from './media-limits.js';
+import { isBilibiliPartError } from './bilibili-provider.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -2849,7 +2850,8 @@ export class QqBotService {
           downloadBytes: resolved.downloadBytes,
           outputBytes: resolved.outputBytes,
         });
-        this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0} title=${String(resolved.title || '').slice(0, 120)} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} media_duration_s=${resolved.duration || 0} duration_ms=${Date.now() - startedAt}`);
+        const partLog = resolved.page ? ` page=${resolved.page} cid=${resolved.cid || ''}` : '';
+        this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0}${partLog} title=${String(resolved.title || '').slice(0, 120)} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} media_duration_s=${resolved.duration || 0} duration_ms=${Date.now() - startedAt}`);
         if (!resolved.url && resolved.images?.length) {
           // 图集的兜底标题按来源平台走：抖音图文不能顶着“小红书图文”发出去。
           const galleryFallbackTitle = candidate.provider === 'douyin'
@@ -2895,7 +2897,7 @@ export class QqBotService {
           sourceUrlHash,
           status: 'failed',
           durationMs: Date.now() - startedAt,
-          errorStage: removedAtSource ? 'removed' : 'resolve',
+          errorStage: removedAtSource ? 'removed' : (isBilibiliPartError(error) ? 'part' : 'resolve'),
         });
         // 源内容已删除单独一种说法，且用 info 而不是 warn：这不是我们的故障，
         // 不该混在需要排查的失败里。
@@ -2911,6 +2913,10 @@ export class QqBotService {
               text: '这个分享的内容已被删除，无法抓取。',
             }],
           };
+        }
+        if (isBilibiliPartError(error)) {
+          this.logger.info(`B站分 P 无法解析：group=${payload.groupId || ''} reason=${error.message}`);
+          return { mode: 'media-unavailable', messages: [{ type: 'text', text: error.message }] };
         }
         if (mediaTooLarge || mediaTimedOut) {
           const limitMetadata = error?.mediaMetadata && typeof error.mediaMetadata === 'object'

@@ -17,6 +17,7 @@ import {
 } from './media-limits.js';
 import {
   extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
+  normalizeBilibiliSource, isBilibiliPartError,
 } from './bilibili-provider.js';
 
 function positive(value) {
@@ -52,16 +53,7 @@ export function pruneEmpty(source) {
 export function normalizeDownloadSource(value) {
   const normalized = normalizeMediaUrl(value);
   if (!normalized) return '';
-  const parsed = new URL(normalized);
-  if (parsed.hostname.toLowerCase() === 'player.bilibili.com') {
-    const bvid = String(parsed.searchParams.get('bvid') || '').trim();
-    if (/^BV[0-9A-Za-z]+$/u.test(bvid)) {
-      return `https://www.bilibili.com/video/${bvid}`;
-    }
-    const aid = String(parsed.searchParams.get('aid') || '').trim();
-    if (/^\d+$/u.test(aid)) return `https://www.bilibili.com/video/av${aid}`;
-  }
-  return normalized;
+  return normalizeBilibiliSource(normalized);
 }
 
 function runCommand(command, args, { timeoutMs = 120_000, cwd } = {}) {
@@ -155,10 +147,12 @@ async function cleanupYtDlpOutputs(outputDirectory, basename) {
 async function probeBilibiliShortLink(url, { command, timeoutMs }) {
   try {
     const output = await runCommand(command, [
-      '--skip-download', '--no-playlist', '--no-warnings', '--print', 'id', url,
+      '--skip-download', '--no-playlist', '--no-warnings',
+      '--print', 'id', '--print', 'webpage_url', url,
     ], { timeoutMs });
     return extractBilibiliVideoIdFromToolOutput(`${output.stdout}\n${output.stderr}`);
   } catch (error) {
+    if (isBilibiliPartError(error)) throw error;
     return extractBilibiliVideoIdFromToolOutput(`${error.stdout || ''}\n${error.stderr || ''}`);
   }
 }
@@ -484,6 +478,7 @@ export class MediaResolver {
       publishedAt: positive(value.publishedAt),
       description: value.description || '',
       duration: positive(value.duration),
+      ...(value.page ? { page: value.page, cid: value.cid } : {}),
       extractor: value.extractor || 'remote-stream-proxy',
       downloadBytes: 0,
       outputBytes: positive(value.size),
@@ -654,7 +649,8 @@ export class MediaResolver {
         try {
           bilibiliSource = extractBilibiliVideoId(sourceKey);
         } catch { /* sourceKey is validated later by the generic fallback */ }
-        if (bilibiliSource || candidate?.provider === 'bilibili') {
+        const isBilibili = Boolean(bilibiliSource || candidate?.provider === 'bilibili');
+        if (isBilibili) {
           try {
             const bilibili = await resolveBilibiliMedia(sourceKey, {
               timeoutMs: Math.min(remainingTimeout(), 15_000),
@@ -667,18 +663,25 @@ export class MediaResolver {
               return this.registerRemoteMedia(bilibili);
             }
           } catch (error) {
+            if (isBilibiliPartError(error)) throw error;
             if (isRemovedError(error)) {
               this.logger.info(`B站稿件已不可见，不再降级：${error.message}`);
               throw error;
             }
             if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
+            // A short link may already have resolved to ?p=2. Keep that exact
+            // part for yt-dlp even when the native playurl API fails.
+            sourceKey = error.sourceUrl || sourceKey;
+            publicMetadata = error.mediaMetadata || publicMetadata;
             this.logger.warn(`B站公开接口解析失败，转入通用兜底：${error.message}`);
           }
         }
         // Provider 已给出的元数据是权威的（登录态下的真实页面），公开页面
         // 只用来补它缺的字段，不能整份覆盖。
         const providerMetadata = publicMetadata;
-        if (this.publicResolverEnabled) {
+        // Generic OG/video metadata does not identify a Bilibili part and can
+        // point to P1 even on a P2 URL. Only the part-aware extractor may fall back.
+        if (this.publicResolverEnabled && !isBilibili) {
           try {
             publicMetadata = await resolveSharedUrl(key, {
               timeoutMs: Math.min(remainingTimeout(), 15_000),
@@ -733,12 +736,16 @@ export class MediaResolver {
             cookie: this.cookie,
           });
         } catch (ytError) {
+          if (isBilibili) throw ytError;
           try {
             if (ytError?.code === 'MEDIA_EXTRACTION_TIMEOUT') throw ytError;
             downloaded = await extractHtmlVideo(sourceKey, remainingTimeout(), this.cacheDirectory);
           } catch (htmlError) {
             throw new Error(`${ytError.message}；网页兜底：${htmlError.message}`);
           }
+        }
+        if (isBilibili && publicMetadata.page) {
+          downloaded = { ...downloaded, ...publicMetadata };
         }
         // Generic direct-file extractors use the MP4 basename as a title.
         // XHS notes can intentionally have no title: retain their source title.
