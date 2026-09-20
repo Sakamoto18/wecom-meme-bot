@@ -1936,6 +1936,19 @@ class LongtuQqBridge(Star):
         ).strip()
         return user_id, name
 
+    @classmethod
+    def _quoted_visual_chain(cls, event, reply_component, chain: list, text: str) -> list:
+        """Bot reply attachments are decorations, not a new user image request."""
+        quoted_user_id, _ = cls._quoted_author(reply_component)
+        bot_user_id = str(event.get_self_id() or "").strip()
+        if not bot_user_id or quoted_user_id != bot_user_id:
+            return list(chain or [])
+        # Keep the original bytes available for explicit library operations.
+        # The Node management branch handles them without calling vision.
+        if re.match(r"^(?:/(?:add|tag|del)(?:\s|$)|(?:检查|查看|查询|确认)|(?:这张|这个).*(?:图库|标记|标签|关键词))", str(text or "").strip()):
+            return list(chain or [])
+        return [component for component in (chain or []) if not isinstance(component, Comp.Image)]
+
     @staticmethod
     async def _image_base64(image_component) -> str:
         if not image_component:
@@ -2430,12 +2443,13 @@ class LongtuQqBridge(Star):
                     reply_component,
                     quoted_chain,
                 )
+            quoted_visual_chain = self._quoted_visual_chain(event, reply_component, quoted_chain, text)
             has_image = any(
                 isinstance(component, Comp.Image)
                 for component in components
             ) or any(
                 isinstance(component, Comp.Image)
-                for component in quoted_chain
+                for component in quoted_visual_chain
             )
             has_forward = bool(
                 self._forward_components(components)
@@ -2571,7 +2585,7 @@ class LongtuQqBridge(Star):
             if has_image:
                 try:
                     image_base64s = await self._image_base64s(components)
-                    quoted_image_base64s = await self._image_base64s(quoted_chain)
+                    quoted_image_base64s = await self._image_base64s(quoted_visual_chain)
                 except Exception as error:
                     logger.warning(f"QQ 图片读取失败：{type(error).__name__}")
 
@@ -2587,7 +2601,7 @@ class LongtuQqBridge(Star):
 
             # QQ 中常见的“上一条先发图，下一条再 @ 机器人”不会携带引用组件；
             # 用户明确指向上文图片时，把短时缓存的图片带入本轮视觉请求。
-            if should_reply and not (
+            if should_reply and reply_component is None and not (
                 image_base64s
                 or quoted_image_base64s
                 or forward_image_base64s

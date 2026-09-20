@@ -875,11 +875,12 @@ test('多张图片视觉分析会保留逐图顺序并附带整体总结', async
   assert.match(finalModelInput, /第2张图片：/);
   assert.ok(finalModelInput.indexOf('第1张图片：')
     < finalModelInput.indexOf('第2张图片：'));
-  assert.match(finalModelInput, /必须按照第 1 张到最后一张依次覆盖全部图片/);
+  assert.doesNotMatch(finalModelInput, /回复时必须按照第 1 张到最后一张/);
+  assert.match(calls[2].options.additionalSystemPrompt, /只有用户要求逐张或按顺序总结时才逐张列出/);
   assert.equal(typeof calls[2].modelInput, 'string');
 });
 
-test('图片总结默认不联网，明确要求查背景时允许联网解释', async () => {
+test('图片默认按识别出的具体线索联网，无需用户额外要求搜索', async () => {
   const png = (await createPng()).toString('base64');
   let searchCalls = 0;
   const webSearch = {
@@ -894,7 +895,15 @@ test('图片总结默认不联网，明确要求查背景时允许联网解释',
       };
     },
   };
-  const first = createService({ webSearch, webSearchEnabled: true });
+  const queries = [];
+  const originalSearch = webSearch.search;
+  webSearch.search = async (query) => { queries.push(query); return originalSearch(); };
+  const chatClient = { isConfigured: true, async complete(_history, _input, options) {
+    return options.usageSource === 'image-understanding'
+      ? JSON.stringify({ description: '标准越统一反而越多的漫画', keywords: ['xkcd'], search_queries: ['xkcd Standards 927'] })
+      : '这是在讽刺重复造标准，你这蠢货又准备发明第十五套了。';
+  } };
+  const first = createService({ webSearch, webSearchEnabled: true, chatClient });
   await first.service.handleMessage({
     message_id: 'vision-no-search',
     message_type: 'private',
@@ -902,9 +911,11 @@ test('图片总结默认不联网，明确要求查背景时允许联网解释',
     text: '总结这张图片的内容',
     image_base64s: [png],
   });
-  assert.equal(searchCalls, 0);
+  assert.equal(searchCalls, 1);
+  assert.match(queries[0], /xkcd Standards 927/);
+  assert.doesNotMatch(queries[0], /总结这张图片|vision-search-user/);
 
-  const second = createService({ webSearch, webSearchEnabled: true });
+  const second = createService({ webSearch, webSearchEnabled: true, chatClient });
   await second.service.handleMessage({
     message_id: 'vision-with-search',
     message_type: 'private',
@@ -912,7 +923,37 @@ test('图片总结默认不联网，明确要求查背景时允许联网解释',
     text: '先读图，再联网核实这是什么新闻并解释背景',
     image_base64s: [png],
   });
-  assert.equal(searchCalls, 1);
+  assert.equal(searchCalls, 2);
+  assert.match(queries[1], /事实核查/);
+});
+
+test('引用 Bot 自己的表情包只保留文字；用户新图和引用真人图片仍走视觉', async () => {
+  const png = (await createPng()).toString('base64');
+  const base = { message_type: 'private', user_id: 'user', bot_user_id: 'bot',
+    quoted_user_id: 'bot', quoted_text: '这是机器人刚刚的回答',
+    quoted_image_base64: png, has_image: true, text: '你刚刚这句为什么这么说' };
+  const own = normalizeQqPayload(base);
+  assert.equal(own.quotedText, base.quoted_text);
+  assert.equal(own.hasImage, false);
+  assert.deepEqual((await prepareImageBlocks(own)).blocks, []);
+  const calls = [];
+  const { service } = createService({ chatClient: { isConfigured: true,
+    async complete(_history, input, options) {
+      calls.push({ input, options });
+      return '我在接你刚才的话，你这蠢货别自己换了问题。';
+    } } });
+  await service.handleMessage(base);
+  assert.ok(calls.length > 0);
+  assert.ok(calls.every(call => call.options.usageSource !== 'image-understanding'));
+  assert.match(String(calls[0].input), /机器人刚刚的回答/);
+  assert.doesNotMatch(String(calls[0].input), /图片理解结果|没有收到可用的图片/);
+  const current = await prepareImageBlocks(normalizeQqPayload({ ...base, image_base64: png }));
+  assert.equal(current.imageCount, 1);
+  assert.equal(current.blocks[0].text, '当前消息图片 1');
+  const human = await prepareImageBlocks(normalizeQqPayload({ ...base, quoted_user_id: 'human' }));
+  assert.equal(human.imageCount, 1);
+  const management = normalizeQqPayload({ ...base, text: '/del' });
+  assert.equal(management.quotedImageBase64, png, '引用 Bot 的图库管理仍可读取图片字节');
 });
 
 test('合并转发图片会和普通图片一起进入视觉链路', async () => {

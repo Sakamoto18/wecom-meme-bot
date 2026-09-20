@@ -24,6 +24,7 @@ import {
   shouldUseThinking,
   shouldUseAttackStyle,
 } from './response-style.js';
+import { IMAGE_MEANING_PROMPT } from './image-reply-context.js';
 
 const PURE_MENTION_FALLBACK = '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。';
 const IMAGE_INPUT_SAFETY_PROMPT = [
@@ -213,6 +214,8 @@ export async function generateConversationReply(options) {
     activeReplyPriority = '',
     secondaryReviewDecider,
     imageBlocks = [],
+    hasImageContext = imageBlocks.length > 0,
+    imageSearchQueries,
     videoBlocks = [],
   } = options;
 
@@ -220,7 +223,8 @@ export async function generateConversationReply(options) {
   // 图片只在首轮生成时上传一次；重写、质量复核和思考降级使用已经注入的
   // OCR/场景摘要，避免重复消耗视觉 Token 和请求体体积。
   const revisionUserContent = modelInput;
-  const imageSafetyPrompt = imageBlocks.length > 0 ? IMAGE_INPUT_SAFETY_PROMPT : '';
+  const imageSafetyPrompt = hasImageContext
+    ? `${IMAGE_INPUT_SAFETY_PROMPT}\n\n${IMAGE_MEANING_PROMPT}` : '';
 
   const memoryContext = buildMemoryContext(memorySummary);
 
@@ -358,25 +362,52 @@ export async function generateConversationReply(options) {
   const useMemeKnowledge = !useLongtuKnowledge && shouldSearchMemeKnowledge(content);
   const useCurrentInformation = !useLongtuKnowledge
     && shouldSearchCurrentInformation(content);
-  const searchMode = useLongtuKnowledge
+  const imageSearch = Array.isArray(imageSearchQueries);
+  const queries = imageSearch ? imageSearchQueries.slice(0, 3) : [content];
+  const searchMode = imageSearch ? 'general' : useLongtuKnowledge
     ? 'longtu'
     : (useCurrentInformation ? 'current' : 'general');
   const searchAttempted = Boolean(
     webSearchEnabled
     && webSearch
-    && searchMode,
+    && searchMode
+    && queries.length > 0,
   );
   let searchResult = emptySearchResult();
   let searchError = null;
 
   if (searchAttempted) {
-    try {
-      searchResult = await webSearch.search(content, {
-        mode: searchMode,
-        usageSource: `web-search-${searchMode}`,
-      });
-    } catch (error) {
-      searchError = error;
+    if (imageSearch) {
+      // At most three focused lookups; a failed topic must not discard the
+      // evidence returned for the others or prevent the picture explanation.
+      const outcomes = await Promise.allSettled(queries.map(query => webSearch.search(query, {
+        mode: searchMode, usageSource: 'web-search-image',
+      })));
+      const successes = outcomes.flatMap((outcome, index) => outcome.status === 'fulfilled'
+        ? [{ ...outcome.value, clue: queries[index] }] : []);
+      searchError = outcomes.find(outcome => outcome.status === 'rejected')?.reason ?? null;
+      searchResult = {
+        ...emptySearchResult(),
+        query: queries.join(' | '),
+        context: successes.filter(result => result.context).map(result =>
+          `【图片检索线索（待核实）：${result.clue}】\n${result.context}`).join('\n\n'),
+        resultCount: successes.reduce((sum, result) => sum + (result.resultCount || 0), 0),
+        results: successes.flatMap(result => result.results || []),
+        endpoint: successes.find(result => result.endpoint)?.endpoint || '',
+        fromCache: successes.length === queries.length && successes.every(result => result.fromCache),
+      };
+      if (searchResult.context && successes.length < queries.length) {
+        searchResult.context += '\n另有图片线索检索失败，不要将以上证据套用到未核实的其他图片。';
+      }
+    } else {
+      try {
+        searchResult = await webSearch.search(content, {
+          mode: searchMode,
+          usageSource: `web-search-${searchMode}`,
+        });
+      } catch (error) {
+        searchError = error;
+      }
     }
   }
 
@@ -384,7 +415,8 @@ export async function generateConversationReply(options) {
   const thinkingEnabled = !compactActiveReply && shouldUseThinking(content);
   const requirePersonaBite = shouldRequireNormalPersonaBite(content);
   const webSearchStatus = buildWebSearchStatus({
-    requested: useCurrentInformation || useMemeKnowledge || searchMode === 'general',
+    requested: imageSearch ? queries.length > 0
+      : (useCurrentInformation || useMemeKnowledge || searchMode === 'general'),
     mode: searchMode,
     enabled: webSearchEnabled,
     webSearchAvailable: Boolean(webSearch),
@@ -401,6 +433,8 @@ export async function generateConversationReply(options) {
   const stableSystemPrompt = buildNormalReplyStablePrompt(normalPromptOptions);
   const additionalSystemPrompt = [
     imageSafetyPrompt,
+    imageSearch && queries.length === 0
+      ? '本轮没有合适的公开检索线索或用户要求不联网，未进行图片联网查询；按可见内容解释，缺少背景时明说，不要声称已搜索。' : '',
     protectedIdentityContext,
     memoryContext,
     buildNormalReplyContextPrompt(normalPromptOptions),
