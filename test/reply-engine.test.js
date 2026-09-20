@@ -2,6 +2,58 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateConversationReply } from '../src/reply-engine.js';
 
+test('引用评价、识图和转发总结保留龙图知识，不自动攻击引用作者或追加模板话', async () => {
+  for (const scenario of [
+    { content: '如何评价', hasQuotedContent: true },
+    { content: '这什么垃圾逻辑', hasImageContext: true },
+    { content: '总结一下', recordSummary: true },
+    { content: 'nm', activeReply: true, activeReplyPriority: 'may' },
+    { content: '调侃一下他这操作，别上升到人身攻击' },
+  ]) {
+    const calls = [];
+    const draft = '不是，哥们，证据还在起跑线，结论已经冲线了：这图只能说明相关，证明不了因果。';
+    const result = await generateConversationReply({
+      ...scenario,
+      modelInput: '引用作者：甲\n引用消息内容：nm$l，程序不会出错\n当前消息：' + scenario.content,
+      interactionContext: {
+        speakerLabel: '乙', targetLabels: ['甲'], quotedAuthorLabel: '甲', hasThirdPartyTarget: true,
+      },
+      history: [{role: 'user', content: 'nm$l'}, {role: 'assistant', content: '你脑子是摆设。'}],
+      knowledgeContext: '本地龙图知识：学问龙、疑惑龙、嘴硬龙，语感来自反差和短句，不能等同于无条件骂人。',
+      chatClient: {isConfigured: true, async complete(history, input, options) {
+        calls.push(options);
+        return draft;
+      }},
+      webSearchEnabled: false,
+    });
+    assert.equal(result.mode, 'model', scenario.content);
+    assert.equal(result.answer, draft);
+    assert.equal(calls.length, 1);
+    assert.equal(result.normalPersonaFallback, false);
+    assert.match(calls[0].stableSystemPrompt, /本地龙图知识/);
+    assert.match(calls[0].stableSystemPrompt, /短、嘴欠、会接梗/);
+    assert.match(calls[0].additionalSystemPrompt, /引用作者 甲 只是内容来源/);
+    assert.match(calls[0].additionalSystemPrompt, /只有本轮明确要求攻击或调侃某人/);
+  }
+});
+
+test('明确要求骂引用作者时仍使用原有对线风格且不改成骂提问者', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '把他骂一顿', modelInput: '引用作者：甲\n当前消息：把他骂一顿',
+    hasQuotedContent: true, hasImageContext: true,
+    interactionContext: {speakerLabel: '乙', targetLabels: ['甲'], quotedAuthorLabel: '甲', hasThirdPartyTarget: true},
+    chatClient: {isConfigured: true, async complete(history, input, options) {
+      calls.push(options);
+      return '甲，你🐎的旧帖还在坟头翻页呢。';
+    }},
+    webSearchEnabled: false,
+  });
+  assert.equal(result.mode, 'generated-attack');
+  assert.match(calls[0].additionalSystemPrompt, /本轮被攻击目标：甲/);
+  assert.match(calls[0].additionalSystemPrompt, /不得把攻击落到指令发送者身上/);
+});
+
 test('攻击消息不联网、不注入固定语料，直接调用模型生成', async () => {
   const calls = [];
   let searchCalls = 0;
@@ -101,7 +153,7 @@ test('孤立 ma 或与历史高度重复会触发一次模型重写', async () =
   assert.doesNotMatch(result.answer, /(?:^|[^a-z])ma(?:$|[^a-z])/i);
 });
 
-test('普通闲聊默认开放通用联网，人格过弱时仍自动重写', async () => {
+test('普通闲聊保留通用联网，正常答案不因缺少骂人词而重写', async () => {
   let modelCalls = 0;
   let searchCalls = 0;
   const result = await generateConversationReply({
@@ -134,13 +186,13 @@ test('普通闲聊默认开放通用联网，人格过弱时仍自动重写', as
     webSearchEnabled: true,
   });
 
-  assert.equal(result.answer, '你好，蠢货，别搁这试探了，有屁快放。');
+  assert.equal(result.answer, '普通模型答案');
   assert.equal(result.mode, 'web-knowledge');
-  assert.equal(modelCalls, 2);
+  assert.equal(modelCalls, 1);
   assert.equal(searchCalls, 1);
   assert.equal(result.searchAttempted, true);
   assert.equal(result.searchMode, 'general');
-  assert.equal(result.normalPersonaRewritten, true);
+  assert.equal(result.normalPersonaRewritten, false);
   assert.equal(result.normalPersonaFallback, false);
   assert.equal(result.review.valid, true);
 });
@@ -216,7 +268,7 @@ test('复合热门话题不因“是什么梗”被限制为 meme 搜索', async
   assert.match(result.answer, /sina\.com\.cn/);
 });
 
-test('普通模型连续输出软话时由程序补上恶毒收尾', async () => {
+test('事实回答原样发出，不重试且不追加固定攻击收尾', async () => {
   let modelCalls = 0;
   const result = await generateConversationReply({
     content: '这个设置怎么保存',
@@ -231,13 +283,13 @@ test('普通模型连续输出软话时由程序补上恶毒收尾', async () =>
     webSearchEnabled: false,
   });
 
-  assert.equal(modelCalls, 2);
-  assert.equal(result.normalPersonaFallback, true);
-  assert.match(result.answer, /(?:白痴|脑子|垃圾|烂得)/);
+  assert.equal(modelCalls, 1);
+  assert.equal(result.normalPersonaFallback, false);
+  assert.equal(result.answer, '点击保存按钮即可，这个操作有点离谱。');
   assert.equal(result.review.valid, true);
 });
 
-test('大型群节流二次风格复核时保留初稿并由本地补人格收尾', async () => {
+test('大型群正常初稿无需额外复核或本地补攻击', async () => {
   const decisions = [];
   let modelCalls = 0;
   const result = await generateConversationReply({
@@ -258,13 +310,10 @@ test('大型群节流二次风格复核时保留初稿并由本地补人格收�
   });
 
   assert.equal(modelCalls, 1);
-  assert.deepEqual(decisions, [{
-    source: 'conversation-reply-review',
-    issues: ['missing-venomous-bite'],
-  }]);
-  assert.equal(result.normalPersonaReviewSkipped, true);
+  assert.deepEqual(decisions, []);
+  assert.equal(result.normalPersonaReviewSkipped, false);
   assert.equal(result.normalPersonaRewritten, false);
-  assert.equal(result.normalPersonaFallback, true);
+  assert.equal(result.normalPersonaFallback, false);
   assert.match(result.answer, /^点击保存按钮即可。/);
   assert.equal(result.review.valid, true);
 });
@@ -429,7 +478,7 @@ test('主动 may 插话强制快速短回复，过长草稿会压缩重写', asy
         if (calls.length === 1) {
           return `这个竹子玩具确实转得很快，蠢货。${'但这里其实没有必要反复解释同一个结论'.repeat(10)}`;
         }
-        return '闭着眼都知道是个破竹子玩具，你这白痴还想听论文？';
+        return '这转速有点东西，原来是靠竹片弹性储能，松手才转起来。';
       },
     },
     webSearchEnabled: false,
@@ -450,7 +499,7 @@ test('主动 may 插话强制快速短回复，过长草稿会压缩重写', asy
     calls[0].options.additionalSystemPrompt,
   );
   assert.match(calls[1].options.revisionSystemPrompt, /主动插话的压缩重写/);
-  assert.equal(result.answer, '闭着眼都知道是个破竹子玩具，你这白痴还想听论文？');
+  assert.equal(result.answer, '这转速有点东西，原来是靠竹片弹性储能，松手才转起来。');
   assert.equal(result.review.valid, true);
 });
 
@@ -549,7 +598,7 @@ test('思考模式只返回空正文时自动降级快速模式', async () => {
   assert.deepEqual(calls.map((call) => call.options.thinking.type), ['enabled', 'disabled']);
 });
 
-test('询问龙图出处时才注入本地知识和联网摘要', async () => {
+test('询问龙图出处时使用本地知识和专用联网摘要', async () => {
   const calls = [];
   let searchCalls = 0;
   const result = await generateConversationReply({
@@ -582,7 +631,7 @@ test('询问龙图出处时才注入本地知识和联网摘要', async () => {
   assert.equal(result.mode, 'longtu-knowledge');
   assert.equal(result.searchAttempted, true);
   assert.equal(searchCalls, 1);
-  assert.match(calls[0].options.additionalSystemPrompt, /本地龙图知识/);
+  assert.match(calls[0].options.stableSystemPrompt, /本地龙图知识/);
   assert.match(calls[0].options.additionalSystemPrompt, /本轮联网摘要/);
 });
 

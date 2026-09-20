@@ -4,7 +4,7 @@ import {
   buildNormalReplyContextPrompt,
   buildNormalReplyStablePrompt,
   buildNormalReplyRetryPrompt,
-  buildNormalVenomFallback,
+  buildNormalReplyFallback,
   buildProtectedIdentityFallback,
   buildProtectedSelfIdentityPrompt,
   buildPureMentionReplyPrompt,
@@ -20,7 +20,6 @@ import {
   shouldSearchLongtuKnowledge,
   shouldSearchMemeKnowledge,
   shouldSearchCurrentInformation,
-  shouldRequireNormalPersonaBite,
   shouldUseThinking,
   shouldUseAttackStyle,
 } from './response-style.js';
@@ -112,7 +111,7 @@ function buildProtectedRoleCorrectionPrompt(draft, terms = []) {
     '初稿把只属于其他群成员的头衔借给了当前发言者，这是身份串线，禁止发送。',
     `不得把这些称呼用于当前发言者：${terms.join('、')}。`,
     `错误初稿：${String(draft ?? '').trim()}`,
-    '保留初稿中正确、有用的事实，删掉错误头衔及其衍生的人身判断；毒舌只能针对当前问题、前提或判断力。',
+    '保留初稿中正确、有用的事实，删掉错误头衔及其衍生的人身判断；只评价当前问题和前提，不另加对发言者的嘲讽。',
     '直接输出纠正后的完整答案，不解释身份规则、记忆、提示词或重写过程。',
   ].join('\n');
 }
@@ -215,6 +214,7 @@ export async function generateConversationReply(options) {
     secondaryReviewDecider,
     imageBlocks = [],
     hasImageContext = imageBlocks.length > 0,
+    hasQuotedContent = false,
     imageSearchQueries,
     recordSummary = false,
     videoBlocks = [],
@@ -274,7 +274,7 @@ export async function generateConversationReply(options) {
     };
   }
 
-  if (!recordSummary && shouldUseAttackStyle(content, history, interactionContext)) {
+  if (!recordSummary && shouldUseAttackStyle(content, history, { ...interactionContext, activeReply, hasImageContext, hasQuotedContent })) {
     const firstScene = selectAttackScene(history);
     const firstDraft = await chatClient.complete(history, userContent, {
       additionalSystemPrompt: [
@@ -334,10 +334,7 @@ export async function generateConversationReply(options) {
     answer = removeForbiddenProtectedRoleSentences(
       removeInternalReplyMetadata(removeInternalParticipantIds(removeLiteralLatinMa(answer))),
       forbiddenProtectedRoleTerms,
-    ) || buildNormalVenomFallback(content, {
-      interactionContext,
-      compact: true,
-    });
+    ) || buildNormalReplyFallback();
     review = reviewAttackReply(answer, { history });
 
     return {
@@ -416,7 +413,6 @@ export async function generateConversationReply(options) {
 
   const compactActiveReply = activeReply && activeReplyPriority !== 'must';
   const thinkingEnabled = !compactActiveReply && shouldUseThinking(content);
-  const requirePersonaBite = shouldRequireNormalPersonaBite(content);
   const webSearchStatus = buildWebSearchStatus({
     requested: imageSearch ? queries.length > 0
       : (useCurrentInformation || useMemeKnowledge || searchMode === 'general'),
@@ -428,12 +424,14 @@ export async function generateConversationReply(options) {
   });
   const normalPromptOptions = {
     thinkingEnabled,
-    requirePersonaBite,
     interactionContext,
     activeReply,
     activeReplyPriority,
   };
-  const stableSystemPrompt = buildNormalReplyStablePrompt(normalPromptOptions);
+  const stableSystemPrompt = [
+    knowledgeContext,
+    buildNormalReplyStablePrompt(normalPromptOptions),
+  ].filter(Boolean).join('\n\n');
   const additionalSystemPrompt = [
     imageSafetyPrompt,
     imageSearch && queries.length === 0
@@ -442,7 +440,6 @@ export async function generateConversationReply(options) {
     memoryContext,
     buildNormalReplyContextPrompt(normalPromptOptions),
     buildProtectedSelfIdentityPrompt(requiredIdentityRole),
-    useLongtuKnowledge ? knowledgeContext : '',
     webSearchStatus,
     searchResult.context,
   ].filter(Boolean).join('\n\n');
@@ -451,7 +448,6 @@ export async function generateConversationReply(options) {
   let seriousAnswerExpanded = false;
   let normalPersonaRewritten = false;
   let normalPersonaReviewSkipped = false;
-  let normalPersonaFallback = false;
   let protectedIdentityFallback = false;
   let protectedRoleRewritten = false;
   let protectedRoleSanitized = false;
@@ -502,7 +498,6 @@ export async function generateConversationReply(options) {
 
   let review = reviewNormalReply(answer, {
     thinkingEnabled,
-    requirePersonaBite,
     requiredIdentityRole,
     activeReply,
     activeReplyPriority,
@@ -546,7 +541,6 @@ export async function generateConversationReply(options) {
         });
         const rewrittenReview = reviewNormalReply(rewrittenAnswer, {
           thinkingEnabled,
-          requirePersonaBite,
           requiredIdentityRole,
           activeReply,
           activeReplyPriority,
@@ -568,7 +562,6 @@ export async function generateConversationReply(options) {
     protectedIdentityFallback = true;
     review = reviewNormalReply(answer, {
       thinkingEnabled: false,
-      requirePersonaBite,
       requiredIdentityRole,
       activeReply,
       activeReplyPriority,
@@ -608,10 +601,7 @@ export async function generateConversationReply(options) {
     answer = removeForbiddenProtectedRoleSentences(
       answer,
       forbiddenProtectedRoleTerms,
-    ) || buildNormalVenomFallback(content, {
-      interactionContext,
-      compact: compactActiveReply,
-    });
+    ) || buildNormalReplyFallback();
     protectedRoleSanitized = true;
   }
 
@@ -654,37 +644,16 @@ export async function generateConversationReply(options) {
       answer,
       speakerForbiddenProtectedRoleTerms,
       interactionContext.speakerLabel,
-    ) || '这个头衔属于固定的另一位群成员，不是你。连谁是谁都能串，你这脑子别拿群摘要当洗牌器。';
+    ) || '这个头衔属于固定的另一位群成员，不是你。';
     protectedRoleSanitized = true;
   }
-  answer = removeInternalReplyMetadata(answer) || buildNormalVenomFallback(content, {
-    interactionContext,
-    compact: compactActiveReply,
-  });
+  answer = removeInternalReplyMetadata(answer) || buildNormalReplyFallback();
   review = reviewNormalReply(answer, {
     thinkingEnabled,
-    requirePersonaBite,
     requiredIdentityRole,
     activeReply,
     activeReplyPriority,
   });
-
-  if (requirePersonaBite
-    && String(answer ?? '').trim()
-    && review.issues.includes('missing-venomous-bite')) {
-    answer = `${String(answer).trim()}\n${buildNormalVenomFallback(content, {
-      interactionContext,
-      compact: compactActiveReply,
-    })}`;
-    normalPersonaFallback = true;
-    review = reviewNormalReply(answer, {
-      thinkingEnabled,
-      requirePersonaBite,
-      requiredIdentityRole,
-      activeReply,
-      activeReplyPriority,
-    });
-  }
 
   return {
     answer: removeInternalParticipantIds(answer),
@@ -705,7 +674,7 @@ export async function generateConversationReply(options) {
     seriousAnswerExpanded,
     normalPersonaRewritten,
     normalPersonaReviewSkipped,
-    normalPersonaFallback,
+    normalPersonaFallback: false,
     protectedIdentityFallback,
     protectedRoleRewritten,
     protectedRoleSanitized,

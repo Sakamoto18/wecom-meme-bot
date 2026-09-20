@@ -73,7 +73,7 @@ const DEFAULT_PEER_BOT_LOOP_WINDOW_MS = 5 * 60 * 1000;
 const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
 const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
 const MEMBER_HISTORY_INTENT_PATTERN = /(?:之前|以前|历史|上次|上回|曾经|说过|提过|聊过|记得|原话|哪次|什么时候)/;
-const EXPLICIT_TARGETED_ATTACK_PATTERN = /(?:骂|攻击|怼|喷|拷打|锐评|羞辱|嘲讽|对线|输出)(?:一下|一顿|几句|他|她|它|这个人)?/i;
+const EXPLICIT_TARGETED_ATTACK_PATTERN = /(?:骂|攻击|怼|喷|拷打|羞辱|嘲讽|对线)(?:一下|一顿|几句|他|她|它|这个人)?/i;
 const PROTECTED_SELF_IDENTITY_PATTERN = /(?:我是谁|知道我是谁|还(?:认得|认识|记得)我|不认识(?:你的)?超管|认不出我)/i;
 const MEMORY_SUMMARIZER_SYSTEM_PROMPT = [
   '你是 QQ 对话长期记忆整理器。',
@@ -1908,6 +1908,7 @@ export class QqBotService {
         modelInput: input,
         imageBlocks: blocks,
         hasImageContext,
+        hasQuotedContent: Boolean(message?.quote || recordContext),
         imageSearchQueries,
         recordSummary,
         videoBlocks: (Array.isArray(message.videoUrls) ? message.videoUrls : [])
