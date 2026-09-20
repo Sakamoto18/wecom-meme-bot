@@ -1464,6 +1464,8 @@ export class QqBotService {
     this.logger.log(`QQ 接话判定：${JSON.stringify({
       group: payload.groupId, user: payload.userId, message: payload.messageId,
       reply: decision.reply, reason: decision.reason, engaged, discussion,
+      peerBot: this.isPeerBotMessage(payload),
+      humanBusy: this.activeReplyDecider?.isBusy?.(payload.groupId, this.now(), { humanOnly: true }) ?? false,
     })}`);
   }
 
@@ -2437,7 +2439,11 @@ export class QqBotService {
       inferredFromText: participant.inferred_from_text === true,
     }));
     let passiveImage;
-    if (payload.hasImage && this.activeReplyDecider.isEligible?.({ ...decisionPayload, hasImage: false,
+    // A bare image sent to a specific person has no public text to assess.
+    // Keep its existing quiet path instead of starting OCR on their behalf.
+    const directedBareImage = !payload.text?.trim()
+      && this.activeReplyDecider.addressesOthers?.(decisionPayload);
+    if (payload.hasImage && !directedBareImage && this.activeReplyDecider.isEligible?.({ ...decisionPayload, hasImage: false,
       text: payload.text || '（当前群友发图）',
     })) {
       passiveImage = await this.preparePassiveImage(payload);
@@ -2457,9 +2463,10 @@ export class QqBotService {
       return this.observeMessage(payload, message);
     }
     const directHumanEngagement = this.isDirectHumanEngagementTrigger(payload)
-      || (!peerBotMessage && this.activeReplyDecider.isNamed?.(payload));
+      || (!peerBotMessage && !this.activeReplyDecider.addressesOthers?.(payload)
+        && this.activeReplyDecider.isNamed?.(payload));
     const discussion = Boolean(passiveImage?.text || this.activeReplyDecider.isExplicitQuestion?.(payload)
-      || this.activeReplyDecider.isBusy?.(payload.groupId, this.now()));
+      || this.activeReplyDecider.isBusy?.(payload.groupId, this.now(), { humanOnly: !peerBotMessage }));
     if (!peerBotMessage
       && !directHumanEngagement
       && !this.shouldRunPassiveDecision(payload.groupId, {

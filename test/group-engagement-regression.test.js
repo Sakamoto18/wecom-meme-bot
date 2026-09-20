@@ -64,9 +64,9 @@ test('无关、附和、转向他人和停止指令不续期；peer bot 不继�
   const expires = f.decider.getGroupEngagement('g').expiresAt;
   f.tick(); f.classify('no');
   assert.equal((await f.send('哈哈哈哈')).messages.length, 0);
-  f.classify('followup');
   assert.equal((await f.send('你怎么看', { mentions: [{ user_id: 'u2' }] })).messages.length, 0);
   assert.equal(f.decider.getGroupEngagement('g').expiresAt, expires);
+  f.classify('followup');
   f.service.peerBotUsers.add('peer');
   assert.equal((await f.send('继续', { user_id: 'peer' })).messages.length, 0);
   await f.send('不用回复了');

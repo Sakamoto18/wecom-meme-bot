@@ -189,7 +189,7 @@ test('may 在冷却期与每小时上限内不会连续主动插话', async () =
   assert.deepEqual(limited, { reply: false, reason: 'hourly-limit' });
 });
 
-test('群聊在 20 秒内由多人连续发言时阻止 may 抢话', async () => {
+test('关闭价值复核时，热聊 may 仍不能免筛选抢话', async () => {
   let currentTime = 10_000;
   const decider = new ActiveReplyDecider({
     chatClient: {
@@ -207,13 +207,10 @@ test('群聊在 20 秒内由多人连续发言时阻止 may 抢话', async () =>
   });
 
   for (let index = 0; index < 3; index += 1) {
-    await decider.shouldReply({
-      payload: groupPayload({
-        userId: index % 2 === 0 ? 'u1' : 'u2',
-        mentions: [{ userId: 'u3', name: '群友丙' }],
-      }),
-      history: [],
-    });
+    decider.recordIncomingMessage(groupPayload({
+      userId: index % 2 === 0 ? 'u1' : 'u2',
+      mentions: [{ userId: 'u3', name: '群友丙' }],
+    }), currentTime);
     currentTime += 1_000;
   }
   const result = await decider.shouldReply({
@@ -247,12 +244,9 @@ test('机器人发言后连续三条没人接话，may 进入主动静默', asyn
 
   for (let index = 0; index < 2; index += 1) {
     currentTime += 1_000;
-    await decider.shouldReply({
-      payload: groupPayload({
-        mentions: [{ userId: 'u2', name: '群友乙' }],
-      }),
-      history: [],
-    });
+    decider.recordIncomingMessage(groupPayload({
+      mentions: [{ userId: 'u2', name: '群友乙' }],
+    }), currentTime);
   }
   currentTime += 1_000;
   const result = await decider.shouldReply({ payload: groupPayload(), history: [] });
@@ -280,12 +274,9 @@ test('无人接话退场只暂停一段时间，不会永久关闭主动回复',
 
   for (let index = 0; index < 3; index += 1) {
     currentTime += 1_000;
-    await decider.shouldReply({
-      payload: groupPayload({
-        mentions: [{ userId: 'u2', name: '群友乙' }],
-      }),
-      history: [],
-    });
+    decider.recordIncomingMessage(groupPayload({
+      mentions: [{ userId: 'u2', name: '群友乙' }],
+    }), currentTime);
   }
   const disengaged = await decider.shouldReply({ payload: groupPayload(), history: [] });
   currentTime = 20_001;
@@ -815,12 +806,12 @@ test('普通公开问句属于可选插话，必须经过概率与频率限制',
   assert.deepEqual(result, { reply: false, reason: 'probability' });
 });
 
-test('消息明确发给其他群友、带图片或来自机器人自身时保持沉默但仍计入群聊热度', async () => {
+test('真人引用和艾特他人进入语义判定，图片及自身消息仍排除', async () => {
   let calls = 0;
   const decider = new ActiveReplyDecider({
     chatClient: {
       isConfigured: true,
-      async complete() { calls += 1; return 'must'; },
+      async complete() { calls += 1; return 'no'; },
     },
     enabled: true,
     candidateProbability: 1,
@@ -837,8 +828,8 @@ test('消息明确发给其他群友、带图片或来自机器人自身时保�
     results.push(await decider.shouldReply({ payload, history: [] }));
   }
 
-  assert.ok(results.every((result) => result.reason === 'ineligible'));
-  assert.equal(calls, 0);
+  assert.deepEqual(results.map(result => result.reason), ['ai-no', 'ai-no', 'ineligible', 'ineligible']);
+  assert.equal(calls, 2);
   assert.equal(decider.groupActivity.get('g1').length, 3);
 });
 
