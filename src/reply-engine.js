@@ -215,6 +215,7 @@ export async function generateConversationReply(options) {
     pureBotMention = false,
     activeReply = false,
     activeReplyPriority = '',
+    replySequence = false,
     secondaryReviewDecider,
     imageBlocks = [],
     hasImageContext = imageBlocks.length > 0,
@@ -439,6 +440,7 @@ export async function generateConversationReply(options) {
     interactionContext,
     activeReply,
     activeReplyPriority,
+    replySequence,
     passiveImageComment,
   };
   const stableSystemPrompt = [

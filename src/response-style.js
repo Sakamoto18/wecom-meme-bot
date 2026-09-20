@@ -273,6 +273,11 @@ export function buildNormalReplyStablePrompt(options = {}) {
       '这是群友间的接话或续聊。未明确要求详细时只写 1～2 句、约 30～120 字：第一句直接给当前要用的答案或操作，第二句只补一个不可缺少的条件。前面已经解释过的背景、原理、注意事项和来源不再复述；这一轮只问一处细节，就只补这一处细节，不重讲整套方案。主动接话只谈事情本身，不加入对人的嘲讽。',
     );
   }
+  if (options.replySequence && !compactActiveReply && !options.passiveImageComment) {
+    lines.push(
+      '本轮允许连续发送多条短消息：如果有多个独立信息点，先发直接结论，再按“关键依据/限制”和“下一步”分成 2～4 个换行段；每段都要能单独读懂，不重复上一段。简单问题仍只写一条。',
+    );
+  }
   return lines.join('\n');
 }
 

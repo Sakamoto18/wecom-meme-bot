@@ -962,6 +962,42 @@ function imageMessage(meme) {
   };
 }
 
+// Keep each outbound text message complete in itself.  Paragraphs are the
+// model's preferred boundaries; a model that returns one long paragraph is
+// grouped by sentence so QQ can show the answer as a short sequence of
+// follow-ups instead of one wall of text.  The final part keeps any remainder
+// together, so splitting never drops a condition or caveat.
+export function splitReplyText(value, options = {}) {
+  const normalized = String(value ?? '').replace(/\r\n?/g, '\n').trim();
+  if (!normalized) return [];
+  const maxPartCharacters = Math.max(1, Number(options.maxPartCharacters ?? 180));
+  const maxParts = Math.max(1, Number(options.maxParts ?? 4));
+  const paragraphs = normalized.split(/\n{2,}/u).map((part) => part.trim()).filter(Boolean);
+  const parts = [];
+  for (const paragraph of paragraphs) {
+    if (paragraph.length <= maxPartCharacters) {
+      parts.push(paragraph);
+      continue;
+    }
+    const sentences = paragraph.split(/(?<=[。！？!?；;])\s*/u).filter(Boolean);
+    let current = '';
+    for (const sentence of sentences) {
+      const candidate = current ? `${current}${sentence}` : sentence;
+      if (current && candidate.length > maxPartCharacters) {
+        parts.push(current.trim());
+        current = sentence;
+      } else {
+        current = candidate;
+      }
+    }
+    if (current.trim()) parts.push(current.trim());
+  }
+  if (parts.length <= maxParts) return parts;
+  const compact = parts.slice(0, maxParts - 1);
+  compact.push(parts.slice(maxParts - 1).join(''));
+  return compact;
+}
+
 function buildMemorySummaryInput(snapshot) {
   const previousSummary = snapshot.previousSummary
     ? snapshot.previousSummary
@@ -1986,6 +2022,7 @@ export class QqBotService {
         pureBotMention: options.pureBotMention === true,
         activeReply: options.activeReply === true,
         activeReplyPriority: options.activeReplyPriority,
+        replySequence: options.pureBotMention !== true,
         secondaryReviewDecider: typeof this.usageTracker?.shouldRunSecondaryReview === 'function'
           ? ({ source, issues }) => this.usageTracker.shouldRunSecondaryReview({
             source,
@@ -2089,17 +2126,18 @@ export class QqBotService {
       )) {
         this.scheduleMemorySummary(conversationId);
       }
-      const messages = [{ type: 'text', text: answer }];
+      const messages = splitReplyText(answer).map((text) => ({ type: 'text', text }));
 
       try {
         const selectionOptions = {
           allowedExtensions: ['.png', '.jpg'],
           selectionScope: this.selectionScope(message),
         };
-        let attachedMeme;
         const attachmentSha256s = Array.isArray(options.attachmentSha256s)
           ? [...new Set(options.attachmentSha256s.filter(Boolean))]
           : (options.attachmentSha256 ? [options.attachmentSha256] : []);
+        const forceMeme = generated.mode === 'generated-attack'
+          || generated.mode === 'pure-mention';
         const sceneAliasMatches = attachmentSha256s.length > 0
           ? []
           : matchLongtuSceneAliases(
@@ -2113,6 +2151,15 @@ export class QqBotService {
             answer,
             options.longtuAliases ?? [],
           );
+        const shouldAttachMeme = forceMeme || attachmentSha256s.length > 0
+          || sceneAliasMatches.length > 0;
+        if (!shouldAttachMeme) {
+          return {
+            mode: generated.mode,
+            messages,
+          };
+        }
+        let attachedMeme;
         if (attachmentSha256s.length > 0) {
           try {
             attachedMeme = attachmentSha256s.length === 1
@@ -2139,9 +2186,16 @@ export class QqBotService {
             this.logger.warn(`QQ 场景关键词附图不可用，回退随机龙图：${error.message}`);
           }
         }
-        attachedMeme ??= await this.memeStore.pick('longtu', selectionOptions);
-        messages.push(imageMessage(attachedMeme));
-        this.logger.log(`QQ 普通对话已附图：${attachedMeme.filename}`);
+        // Ordinary answers only attach a semantically matched candidate. A
+        // random meme is still required for explicit banter/pure mentions,
+        // while a missing contextual match simply leaves text by itself.
+        if (!attachedMeme && forceMeme) {
+          attachedMeme = await this.memeStore.pick('longtu', selectionOptions);
+        }
+        if (attachedMeme) {
+          messages.push(imageMessage(attachedMeme));
+          this.logger.log(`QQ 普通对话已附图：${attachedMeme.filename}`);
+        }
       } catch (error) {
         this.logger.warn(`QQ 普通回复附图失败，文本不受影响：${error.message}`);
       }

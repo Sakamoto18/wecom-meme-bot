@@ -2237,37 +2237,49 @@ class LongtuQqBridge(Star):
             return False
 
     @staticmethod
-    def _reply_chain_from_backend(response: dict) -> list:
-        reply_chain = []
+    def _reply_chains_from_backend(response: dict) -> list[list]:
+        """Convert backend messages to separate QQ sends.
+
+        Backend text parts are already complete semantic units. Keep each part
+        in its own chain so the bridge can yield them one after another; an
+        optional meme/image therefore remains a final standalone message.
+        """
+        chains = []
         for message in response.get("messages", []):
             message_type = message.get("type")
             if message_type == "text" and message.get("text"):
-                reply_chain.append(Comp.Plain(str(message["text"])))
+                chains.append([Comp.Plain(str(message["text"]))])
             elif message_type == "media-limit" and message.get("text"):
                 # A long/oversize video has no playable URL, but its source
                 # metadata may still include a valid cover. The cover is sent
                 # independently; keep this explanation in the normal chain.
-                reply_chain.append(Comp.Plain(str(message["text"])))
+                chains.append([Comp.Plain(str(message["text"]))])
             elif message_type == "image" and message.get("base64"):
-                reply_chain.append(
-                    Comp.Image.fromBase64(str(message["base64"])),
-                )
+                chains.append([Comp.Image.fromBase64(str(message["base64"]))])
             elif message_type == "video" and message.get("url"):
                 # OneBot accepts an HTTPS URL for video; keep it out of the
                 # JSON bridge body as base64 because videos exceed API limits.
                 video_url = str(message["url"])
                 try:
-                    reply_chain.append(Comp.Video(file=video_url))
+                    chains.append([Comp.Video(file=video_url)])
                 except TypeError:
-                    reply_chain.append(Comp.Plain(video_url))
+                    chains.append([Comp.Plain(video_url)])
             elif message_type == "forward":
+                forward_chain = []
                 for url in message.get("images", [])[:18]:
                     if str(url).startswith(("http://", "https://")):
                         try:
-                            reply_chain.append(Comp.Image(file=str(url)))
+                            forward_chain.append(Comp.Image(file=str(url)))
                         except TypeError:
-                            reply_chain.append(Comp.Image(url=str(url)))
-        return reply_chain
+                            forward_chain.append(Comp.Image(url=str(url)))
+                if forward_chain:
+                    chains.append(forward_chain)
+        return chains
+
+    @classmethod
+    def _reply_chain_from_backend(cls, response: dict) -> list:
+        return [component for chain in cls._reply_chains_from_backend(response)
+                for component in chain]
 
     async def _send_forward_from_backend(self, event: AstrMessageEvent, response: dict) -> bool:
         message = next((item for item in response.get("messages", []) if item.get("type") == "forward"), None)
@@ -2759,12 +2771,11 @@ class LongtuQqBridge(Star):
                 with contextlib.suppress(Exception):
                     await self._react_media_result(event, False)
 
-            reply_chain = self._reply_chain_from_backend(response)
+            reply_chains = self._reply_chains_from_backend(response)
 
-            # AstrBot only consumes one result from this handler in the normal
-            # response pipeline. Keep text and the attached meme in one chain so
-            # the image is not dropped after the text response has been sent.
-            if reply_chain:
+            # Send each backend part in order. This lets a complete answer read
+            # like a short group conversation and keeps the optional meme last.
+            if reply_chains:
                 if response.get("mode") == "media":
                     video_message = next((item for item in response.get("messages", [])
                                           if item.get("type") == "video"), {})
@@ -2814,11 +2825,15 @@ class LongtuQqBridge(Star):
                 # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
                 # 媒体结果直接发成可播放视频，不再挂引用；普通对话继续保留
                 # 原有引用和 @ 送达前缀。
-                if not bool(response.get("active_reply")):
-                    reply_chain = self._reply_prefix(event, components) + reply_chain
-                    if response.get("mode") == "media":
-                        reply_chain = reply_chain[len(self._reply_prefix(event, components)):]
-                yield event.chain_result(reply_chain)
+                prefix = [] if bool(response.get("active_reply")) else self._reply_prefix(event, components)
+                for index, chain in enumerate(reply_chains):
+                    if index == 0 and prefix:
+                        chain = prefix + chain
+                    yield event.chain_result(chain)
+                    if index + 1 < len(reply_chains):
+                        # Let NapCat flush one message before the next part so
+                        # the group sees a natural short follow-up sequence.
+                        await asyncio.sleep(0.12)
         finally:
             event.stop_event()
 

@@ -9,12 +9,14 @@ import unittest
 source = ast.parse((Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu_bridge/main.py').read_text())
 bridge = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'LongtuQqBridge')
 methods = [n for n in bridge.body if getattr(n, 'name', '') in (
-    '_reply_chain_from_backend', '_send_forward_from_backend', '_send_media_limit_card',
+    '_reply_chain_from_backend', '_reply_chains_from_backend', '_send_forward_from_backend', '_send_media_limit_card',
 )]
 
 class Component:
     def __init__(self, *args, **kwargs): self.args, self.kwargs = args, kwargs
-class Image(Component): pass
+class Image(Component):
+    @classmethod
+    def fromBase64(cls, value): return cls(value)
 class Video(Component): pass
 class Plain(Component): pass
 
@@ -127,5 +129,17 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
     def test_final_gallery_fallback_uses_native_images(self):
         chain = Bridge._reply_chain_from_backend(self.gallery())
         self.assertEqual([type(c) for c in chain], [Image, Image])
+
+    def test_text_parts_stay_separate_and_image_is_last_part(self):
+        response = {'messages': [
+            {'type': 'text', 'text': '第一条结论'},
+            {'type': 'text', 'text': '第二条条件'},
+            {'type': 'image', 'base64': 'dragon'},
+        ]}
+        chains = Bridge._reply_chains_from_backend(response)
+        self.assertEqual(len(chains), 3)
+        self.assertEqual(chains[0][0].args, ('第一条结论',))
+        self.assertEqual(chains[1][0].args, ('第二条条件',))
+        self.assertIsInstance(chains[2][0], Image)
 
 if __name__ == '__main__': unittest.main()

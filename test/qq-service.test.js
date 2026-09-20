@@ -15,6 +15,7 @@ import {
   QqBotService,
   buildQqCompatibleMessage,
   normalizeQqPayload,
+  splitReplyText,
 } from '../src/qq-service.js';
 import { ActiveReplyDecider } from '../src/active-reply.js';
 
@@ -84,6 +85,31 @@ function createService(options = {}) {
   });
   return { service, calls };
 }
+
+test('普通长答拆成连续完整消息，保留每句条件并不超过四条', () => {
+  const parts = splitReplyText('先检查服务是否启动，再确认端口。\n\n如果仍然失败，检查容器网络和监听地址；最后看日志里的具体错误。');
+  assert.deepEqual(parts, [
+    '先检查服务是否启动，再确认端口。',
+    '如果仍然失败，检查容器网络和监听地址；最后看日志里的具体错误。',
+  ]);
+  assert.equal(splitReplyText('甲。乙。丙。丁。戊。己。', { maxPartCharacters: 3 }).length, 4);
+});
+
+test('普通场景无语境匹配时只发文字，明确攻击仍在末尾强制附图', async () => {
+  const noMeme = createService();
+  const quiet = await noMeme.service.handleMessage({
+    message_type: 'private', user_id: 'meme-user', message_id: 'meme-quiet', text: '你好',
+  });
+  assert.deepEqual(quiet.messages.map((message) => message.type), ['text']);
+
+  const forcedMeme = createService({ memeAttachmentProbability: 0,
+    chatClient: { isConfigured: true, async complete() { return '你妈，滚去龙图里报到。'; } } });
+  const attack = await forcedMeme.service.handleMessage({
+    message_type: 'private', user_id: 'meme-attack', message_id: 'meme-attack', text: '你这个傻逼ai',
+  });
+  assert.equal(attack.messages.at(-1).type, 'image');
+  assert.equal(attack.messages[0].type, 'text');
+});
 
 test('QQ 请求字段会映射到现有消息模型且私聊无需 group_id', () => {
   const payload = normalizeQqPayload({
@@ -347,7 +373,7 @@ test('明确龙图指令直接返回 Base64 图片且不调用模型', async () 
   );
 });
 
-test('QQ 普通对话复用回复引擎、昵称和独立会话记忆并附图', async () => {
+test('QQ 普通对话复用回复引擎、昵称和独立会话记忆，未匹配语境时只发文字', async () => {
   const { service, calls } = createService();
   const input = {
     message_id: 'm2',
@@ -362,7 +388,7 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆并附图',
   const first = await service.handleMessage(input);
   const second = await service.handleMessage({ ...input, message_id: 'm3', text: '还记得吗' });
 
-  assert.deepEqual(first.messages.map((message) => message.type), ['text', 'image']);
+  assert.deepEqual(first.messages.map((message) => message.type), ['text']);
   assert.equal(first.messages[0].text, '这是 QQ 回答，蠢货，别搁这装看不懂。');
   assert.match(calls[0].modelInput, /发言人：QQ 小明/);
   assert.equal(calls[1].history.length, 2);
@@ -1521,7 +1547,7 @@ test('普通群消息经读空气判定命中后复用现有人格回复引擎',
   assert.equal(calls.length, 1);
   assert.equal(result.active_reply, true);
   assert.equal(result.active_reply_priority, 'must');
-  assert.deepEqual(result.messages.map((message) => message.type), ['text', 'image']);
+  assert.deepEqual(result.messages.map((message) => message.type), ['text']);
   assert.deepEqual(recordedBotReplies, ['g-active']);
 });
 
