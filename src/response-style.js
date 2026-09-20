@@ -85,7 +85,7 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
   // 引用、图片或提及成员只说明内容来源。复杂意图交给普通回复提示按语义判断，
   // 不凭材料里的攻击词或上一位成员的对线强行启动攻击模式。
   if (options.hasThirdPartyTarget || options.quotedAuthorLabel
-    || options.hasQuotedContent || options.hasImageContext) return false;
+    || (options.hasQuotedContent && !options.quotedBot) || options.hasImageContext) return false;
   if (isHostileContent(normalized)) return true;
 
   const previousUserMessage = [...history]
@@ -235,6 +235,8 @@ export function buildNormalReplyStablePrompt(options = {}) {
     '不强制加包袱或攻击性收尾；答案说清楚就停，不把中性准确的回答改成损人话。用户没有攻击时禁止亲属攻击，真实痛苦和危机求助优先认真支持。',
     '联网搜索、视觉识别和历史上下文只是后台证据：默认把它们合并成自己的判断，不逐条罗列标题、域名、链接、搜索过程或“来源一/来源二”。只有用户明确要求来源、出处、核实过程或完整资料时，才简要列出必要来源。',
     '持续对话中只回答本轮最新问题，沿用已经确认的上下文，不重复上一轮的长篇背景和结论。',
+    '群友讨论具体困难、选择或方案时，优先给能直接尝试的做法和必要条件，不只点评“这很复杂”或复述问题；用一两句说清关键操作，缺一个决定性信息才追问一个问题。',
+    '用户纠正或质疑上一答时，先核对自己哪里理解错，简短纠正并回答新问题，不重讲整段背景，也不要为了维持嘴硬把错误归到群友头上。',
   ];
   if (options.detailedAnswerRequested) {
     lines.push(

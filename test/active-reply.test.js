@@ -367,6 +367,58 @@ test('群级话题窗口允许其他真人承接，但按 18 秒节流且只有�
   assert.deepEqual(expired, { reply: false, reason: 'probability' });
 });
 
+test('连续话题里的追问和纠正不再走概率阀门，最多补三轮', async () => {
+  let currentTime = 10_000;
+  const outputs = ['followup', 'followup', 'followup', 'followup'];
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return outputs.shift(); },
+    },
+    enabled: true,
+    engagementWindowMs: 100_000,
+    engagementReplyCooldownMs: 60_000,
+    engagementReplyProbability: 0,
+    engagementMaxReplies: 4,
+    now: () => currentTime,
+    random: () => 1,
+  });
+  decider.openEngagement(groupPayload({ userId: 'u1', text: '@龙玉涛 先说说这个方案', mentions: [{ userId: 'bot' }] }));
+  for (let index = 0; index < 3; index += 1) {
+    currentTime += 1_000;
+    const result = await decider.shouldReply({
+      payload: groupPayload({ userId: 'u1', text: index === 1 ? '你刚刚理解反了' : '那下一步呢？' }),
+      history: [{ role: 'assistant', content: '机器人上一轮回答' }],
+    });
+    assert.deepEqual(result, { reply: true, reason: 'engagement-followup-must' });
+  }
+  currentTime += 1_000;
+  const stopped = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u1', text: '再补一句' }),
+    history: [{ role: 'assistant', content: '机器人上一轮回答' }],
+  });
+  assert.deepEqual(stopped, { reply: false, reason: 'engagement-followup-limit' });
+});
+
+test('help 主动接话绕过普通概率，但仍保持群聊热度保护', async () => {
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return 'help'; },
+    },
+    enabled: true,
+    candidateProbability: 0,
+    semanticValueGateEnabled: false,
+    now: () => 10_000,
+    random: () => 1,
+  });
+  const result = await decider.shouldReply({
+    payload: groupPayload({ text: '迁移后还是报同一个错误，下一步怎么排？' }),
+    history: [],
+  });
+  assert.deepEqual(result, { reply: true, reason: 'ai-help' });
+});
+
 test('群话题中的无关消息保持静默但不替其他参与者关闭话题', async () => {
   let currentTime = 10_000;
   const decisions = ['no', 'may'];

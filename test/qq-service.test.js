@@ -155,31 +155,20 @@ test('大型群按群号标记并把大型群上下文传给用量追踪器', as
   assert.equal(capturedContext.largeGroup, true);
 });
 
-test('大型群自动判定必须同时满足群员上限超过 120 和活跃成员门槛', () => {
-  const conversationStore = {
-    getGroupMembers: () => Array.from({ length: 40 }, (_, index) => ({
-      userId: `user-${index}`,
-    })),
-  };
-  const { service } = createService({ conversationStore });
+test('大型群自动判定使用当前群员数，不把群容量当作人数', () => {
+  const { service } = createService();
 
-  assert.equal(service.isLargeGroup('limit-120', { groupMemberLimit: 120 }), false);
-  assert.equal(service.isLargeGroup('limit-121', { groupMemberLimit: 121 }), true);
-  assert.equal(service.isLargeGroup('missing-limit'), false);
+  assert.equal(service.isLargeGroup('count-120', { groupMemberCount: 120, groupMemberLimit: 500 }), false);
+  assert.equal(service.isLargeGroup('count-121', { groupMemberCount: 121, groupMemberLimit: 500 }), true);
+  assert.equal(service.isLargeGroup('capacity-only', { groupMemberLimit: 500 }), false);
 });
 
-test('群员上限满足时仍需达到活跃成员门槛，显式大型群可强制覆盖', () => {
-  const conversationStore = {
-    getGroupMembers: () => Array.from({ length: 10 }, (_, index) => ({
-      userId: `user-${index}`,
-    })),
-  };
+test('实际人数不足时保持普通群，显式大型群仍可强制覆盖', () => {
   const { service } = createService({
-    conversationStore,
     largeGroupIds: new Set(['forced-group']),
   });
 
-  assert.equal(service.isLargeGroup('quiet-large', { groupMemberLimit: 200 }), false);
+  assert.equal(service.isLargeGroup('quiet-large', { groupMemberCount: 10, groupMemberLimit: 500 }), false);
   assert.equal(service.isLargeGroup('forced-group'), true);
 });
 

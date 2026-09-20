@@ -1235,10 +1235,6 @@ export class QqBotService {
       instanceof Map ? options.mediaGroupAllowedProviders : new Map();
     this.largeGroupIds = new Set(options.largeGroupIds ?? []);
     this.largeGroupExcludedIds = new Set(options.largeGroupExcludedIds ?? []);
-    this.largeGroupMemberThreshold = Math.max(
-      1,
-      Number(options.largeGroupMemberThreshold ?? 40),
-    );
     this.largeGroupMemberLimitThreshold = Math.max(
       0,
       Number(options.largeGroupMemberLimitThreshold ?? 120),
@@ -1259,7 +1255,7 @@ export class QqBotService {
     );
     this.imageOcrRecognizer = options.imageOcrRecognizer ?? recognizeImageText;
     this.imageOcrUnavailableLogged = false;
-    this.groupMemberLimits = new Map();
+    this.groupMemberCounts = new Map();
     this.largeGroupDecisionLogged = new Set();
     // Passive “read the air” checks are intentionally throttled for every
     // group.  The legacy large-group option remains a fallback so existing
@@ -1271,6 +1267,14 @@ export class QqBotService {
           ?? options.largeGroupPassiveDecisionCooldownMs
           ?? 180_000,
       ),
+    );
+    // Public questions and multi-person discussions need a much shorter
+    // sampling interval than idle chatter. Eligibility is checked first.
+    this.discussionDecisionCooldownMs = Math.max(
+      0, Number(options.discussionDecisionCooldownMs ?? 15_000),
+    );
+    this.peakDiscussionDecisionCooldownMs = Math.max(
+      0, Number(options.peakDiscussionDecisionCooldownMs ?? 30_000),
     );
     // 高峰时段（工作日 09:00-12:00、14:00-18:00 北京时间）DeepSeek 单价翻倍，
     // 大型群的静默读空气在这几个小时里额外降频，明确 @/引用不走这条路径。
@@ -1349,34 +1353,26 @@ export class QqBotService {
     if (this.largeGroupExcludedIds.has(normalizedGroupId)) return false;
     if (this.largeGroupIds.has(normalizedGroupId)) return true;
 
-    const reportedMemberLimit = normalizeOptionalNonnegativeInteger(
-      metadata?.groupMemberLimit,
+    const reportedMemberCount = normalizeOptionalNonnegativeInteger(
+      metadata?.groupMemberCount,
     );
-    if (reportedMemberLimit !== null) {
-      this.groupMemberLimits.set(normalizedGroupId, reportedMemberLimit);
+    if (reportedMemberCount !== null) {
+      this.groupMemberCounts.set(normalizedGroupId, reportedMemberCount);
     }
-    const memberLimit = this.groupMemberLimits.get(normalizedGroupId);
-    // 自动判定必须先确认 QQ 群员上限严格超过配置阈值。没有真实上限数据
-    // 时保持普通群，避免仅凭本地观察成员数误判。
-    if (memberLimit === undefined || memberLimit <= this.largeGroupMemberLimitThreshold) {
+    const memberCount = this.groupMemberCounts.get(normalizedGroupId);
+    // max_member_count 是群容量，不是当前人数，不能拿它判断大型群。
+    // 没有实际 member_count 时保持普通群，避免把小群误套大型群策略。
+    if (memberCount === undefined || memberCount <= this.largeGroupMemberLimitThreshold) {
       return false;
     }
-    const members = this.conversationStore.getGroupMembers?.(
-      normalizedGroupId,
-      this.largeGroupMemberThreshold,
-    ) ?? [];
-    if (members.length >= this.largeGroupMemberThreshold) {
-      if (!this.largeGroupDecisionLogged.has(normalizedGroupId)) {
-        this.largeGroupDecisionLogged.add(normalizedGroupId);
-        this.logger.log(
-          `QQ 大型群策略已启用：${normalizedGroupId}`
-          + `（群员上限 ${memberLimit}，已识别成员不少于 `
-          + `${this.largeGroupMemberThreshold} 人）`,
-        );
-      }
-      return true;
+    if (!this.largeGroupDecisionLogged.has(normalizedGroupId)) {
+      this.largeGroupDecisionLogged.add(normalizedGroupId);
+      this.logger.log(
+        `QQ 大型群策略已启用：${normalizedGroupId}`
+        + `（当前群员 ${memberCount} 人）`,
+      );
     }
-    return false;
+    return true;
   }
 
   historyForGroup(groupId, history, { passiveDecision = false } = {}) {
@@ -1393,25 +1389,30 @@ export class QqBotService {
     );
   }
 
-  passiveDecisionCooldownMs(groupId, { engaged = false } = {}) {
+  passiveDecisionCooldownMs(groupId, { engaged = false, discussion = false } = {}) {
     const peakLargeGroup = this.isLargeGroup(groupId)
       && isDeepSeekPeakTime(this.now());
     if (engaged) {
-      // 连续话题窗口内平时不设冷却，只有大型群高峰时段加一条下限。
-      return peakLargeGroup ? this.peakLargeGroupEngagementDecisionCooldownMs : 0;
+      // A human continuation must reach the semantic classifier even at peak
+      // pricing. Optional interjections still have their own rhythm gates.
+      return 0;
     }
+    if (discussion) return Math.min(
+      this.groupPassiveDecisionCooldownMs,
+      peakLargeGroup ? this.peakDiscussionDecisionCooldownMs : this.discussionDecisionCooldownMs,
+    );
     return peakLargeGroup
       ? this.groupPassiveDecisionCooldownMs
         * this.peakLargeGroupPassiveDecisionMultiplier
       : this.groupPassiveDecisionCooldownMs;
   }
 
-  shouldRunPassiveDecision(groupId, { engaged = false } = {}) {
+  shouldRunPassiveDecision(groupId, { engaged = false, discussion = false } = {}) {
     const normalizedGroupId = String(groupId ?? '').trim();
     if (!normalizedGroupId) return false;
     const now = this.now();
     const cooldownMs = this.passiveDecisionCooldownMs(normalizedGroupId, {
-      engaged,
+      engaged, discussion,
     });
     const lastAt = this.lastGroupPassiveDecisionAt.get(normalizedGroupId) ?? 0;
     if (lastAt && now - lastAt < cooldownMs) {
@@ -1419,6 +1420,13 @@ export class QqBotService {
     }
     this.lastGroupPassiveDecisionAt.set(normalizedGroupId, now);
     return true;
+  }
+
+  logActiveDecision(payload, decision, { engaged = false, discussion = false } = {}) {
+    this.logger.log(`QQ 接话判定：${JSON.stringify({
+      group: payload.groupId, user: payload.userId, message: payload.messageId,
+      reply: decision.reply, reason: decision.reason, engaged, discussion,
+    })}`);
   }
 
   backgroundSummariesEnabled(groupId, { passive = false } = {}) {
@@ -2316,25 +2324,38 @@ export class QqBotService {
       ...payload,
       isPeerBot: this.isPeerBotMessage(payload),
     });
-    const directHumanEngagement = this.isDirectHumanEngagementTrigger(payload);
+    // Use real QQ mentions for routing. Inferred names identify people in the
+    // content, but do not mean the speaker addressed those people.
+    const decisionPayload = { ...payload, isPeerBot: peerBotMessage };
+    decisionPayload.mentions = (message.mentions ?? []).map((participant) => ({
+      userId: participant.user_id ?? participant.userid,
+      name: participant.name,
+      inferredFromText: participant.inferred_from_text === true,
+    }));
+    this.activeReplyDecider.recordIncomingMessage?.(
+      decisionPayload, this.now(), Boolean(engagement),
+    );
+    if (this.activeReplyDecider.isEligible?.(decisionPayload) === false) {
+      this.logActiveDecision(payload, { reply: false, reason: 'ineligible' }, { engaged: Boolean(engagement) });
+      return this.observeMessage(payload, message);
+    }
+    const directHumanEngagement = this.isDirectHumanEngagementTrigger(payload)
+      || (!peerBotMessage && this.activeReplyDecider.isNamed?.(payload));
+    const discussion = Boolean(this.activeReplyDecider.isExplicitQuestion?.(payload)
+      || this.activeReplyDecider.isBusy?.(payload.groupId, this.now()));
     if (!peerBotMessage
       && !directHumanEngagement
       && !this.shouldRunPassiveDecision(payload.groupId, {
-        engaged: Boolean(engagement),
+        engaged: Boolean(engagement), discussion,
       })) {
+      this.logActiveDecision(payload, { reply: false, reason: 'passive-decision-cooldown' }, {
+        engaged: Boolean(engagement), discussion,
+      });
       return this.observeMessage(payload, message);
     }
-
-    const decisionPayload = {
-      ...payload,
-      isPeerBot: this.isPeerBotMessage(payload),
-      mentions: (message.mentions ?? []).map((participant) => ({
-        userId: participant.user_id ?? participant.userid,
-        name: participant.name,
-      })),
-    };
     const decision = await this.activeReplyDecider.shouldReply({
       payload: decisionPayload,
+      activityRecorded: true,
       currentContent: conversationContent,
       history: this.historyForGroup(
         payload.groupId,
@@ -2342,13 +2363,16 @@ export class QqBotService {
         { passiveDecision: true },
       ),
     });
+    this.logActiveDecision(payload, decision, { engaged: Boolean(engagement), discussion });
     if (!decision.reply) {
       return this.observeMessage(payload, message);
     }
 
     this.logger.log(`QQ 主动回复已触发：${payload.groupId}/${payload.userId}`);
     const preparedImages = await prepareImageBlocks(payload, this.logger);
-    const result = await this.replyConversation(
+    const activeReplyPriority = String(decision.reason).includes('must')
+      || decision.reason === 'ai-help' ? 'must' : 'may';
+    const reply = () => this.replyConversation(
       message,
       conversationContent,
       payload.senderName,
@@ -2360,17 +2384,15 @@ export class QqBotService {
           .map((url) => ({ type: 'video_url', video_url: { url } })),
         imageNotice: preparedImages.notice,
         activeReply: true,
-        activeReplyPriority: String(decision.reason).includes('must')
-          ? 'must'
-          : 'may',
+        activeReplyPriority,
       },
     );
+    const result = await reply();
     return {
       ...result,
       active_reply: true,
-      active_reply_priority: String(decision.reason).includes('must')
-        ? 'must'
-        : 'may',
+      active_reply_priority: activeReplyPriority,
+      active_reply_reason: decision.reason,
     };
   }
 
@@ -2797,6 +2819,10 @@ export class QqBotService {
             this.recordPeerBotReply(payload);
           } else if (this.isDirectHumanEngagementTrigger(payload)) {
             this.activeReplyDecider?.openEngagement?.(payload);
+          } else if (result.active_reply && result.mode !== 'repeat-reply') {
+            this.activeReplyDecider?.confirmReply?.(payload, {
+              reply: true, reason: result.active_reply_reason,
+            });
           }
         }
         return result;

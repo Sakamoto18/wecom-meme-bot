@@ -697,9 +697,6 @@ export async function createQqRuntime() {
     largeGroupExcludedIds: parseIdentifierSet(
       process.env.QQ_USAGE_LARGE_GROUP_EXCLUDES,
     ),
-    largeGroupMemberThreshold: parsePositiveInteger(
-      process.env.QQ_USAGE_LARGE_GROUP_MEMBER_THRESHOLD,
-    ) ?? 40,
     largeGroupMemberLimitThreshold: parseNonnegativeInteger(
       process.env.QQ_USAGE_LARGE_GROUP_MEMBER_LIMIT_THRESHOLD,
       120,
@@ -708,6 +705,12 @@ export async function createQqRuntime() {
       process.env.QQ_USAGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS
         ?? process.env.QQ_USAGE_LARGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS,
     ) ?? 180) * 1000,
+    discussionDecisionCooldownMs: (parseNonnegativeInteger(
+      process.env.QQ_USAGE_DISCUSSION_DECISION_COOLDOWN_SECONDS, 15,
+    )) * 1000,
+    peakDiscussionDecisionCooldownMs: (parseNonnegativeInteger(
+      process.env.QQ_USAGE_PEAK_DISCUSSION_DECISION_COOLDOWN_SECONDS, 30,
+    )) * 1000,
     peakLargeGroupPassiveDecisionMultiplier: parsePositiveNumber(
       process.env.QQ_USAGE_PEAK_LARGE_GROUP_PASSIVE_DECISION_MULTIPLIER,
     ) ?? 3,

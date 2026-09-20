@@ -99,6 +99,7 @@ export function getGroupInteractionContext(message, memberAliases = {}) {
     memberAliases,
   ));
   const quotedAuthorId = String(message?.quote?.from?.userid ?? '').trim();
+  const quotedBot = Boolean(quotedAuthorId && quotedAuthorId === botUserId);
   const quotedAuthorLabel = quotedAuthorId && quotedAuthorId !== botUserId
     ? getParticipantLabel(
       quotedAuthorId,
@@ -115,6 +116,7 @@ export function getGroupInteractionContext(message, memberAliases = {}) {
     speakerLabel,
     targetLabels,
     quotedAuthorLabel,
+    quotedBot,
     hasThirdPartyTarget: targetLabels.length > 0,
   };
 }
