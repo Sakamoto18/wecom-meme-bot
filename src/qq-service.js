@@ -1905,6 +1905,7 @@ export class QqBotService {
         .join('\n\n');
       const generateReply = (input, blocks) => generateConversationReply({
         content,
+        currentQuestion: options.imageQuestion ?? content,
         modelInput: input,
         imageBlocks: blocks,
         hasImageContext,

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildImageSearchQueries } from '../src/image-reply-context.js';
 import { generateConversationReply } from '../src/reply-engine.js';
 
-const answer = '这张图是在讽刺各自发明新标准反而制造更多标准，你这蠢货再造一个就凑齐第十五套了。';
+const answer = '这图是在讽刺各自发明新标准反而制造更多标准，再统一一次就凑齐第十五套了。';
 
 test('图片检索限定具体线索，去重并限制最多三条，不把整段 OCR 发给搜索', () => {
   const queries = buildImageSearchQueries({ items: [
@@ -73,4 +73,21 @@ test('无可靠图片线索时不回退搜索“看看这图”，也不宣称�
   });
   assert.equal(result.searchAttempted, false);
   assert.match(prompt, /未进行图片联网查询/);
+});
+
+
+test('带图的选择题直接回答，识别资料不变成必输出的描述', async () => {
+  const calls = [];
+  const choice = '我选学校，联网当工具就行；别把刷资料当成亲自学会了。';
+  const result = await generateConversationReply({
+    content: '你怎么选', modelInput: '图片描述：左边是学校，右边是网吧。当前消息：你怎么选',
+    hasImageContext: true, imageSearchQueries: [],
+    chatClient: {isConfigured:true, async complete(h, i, o) {calls.push(o); return choice;}},
+    webSearchEnabled: false,
+  });
+  assert.equal(result.answer, choice);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].additionalSystemPrompt, /图片只是证据/);
+  assert.match(calls[0].additionalSystemPrompt, /本轮用户当前问题.*你怎么选/);
+  assert.doesNotMatch(calls[0].additionalSystemPrompt, /默认解释这张图在表达/);
 });

@@ -2,6 +2,58 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateConversationReply } from '../src/reply-engine.js';
 
+test('技术问题允许内部推理，但正确短答不自动扩写', async () => {
+  const calls = [];
+  const answer = '用五口千兆交换机就行，四台设备接进去，再留一口接路由器；先确认网线和设备端口也都是千兆。';
+  const result = await generateConversationReply({
+    content: '我有四个千兆设备，应该使用什么网络方案', modelInput: '四台设备联网',
+    chatClient: {isConfigured: true, async complete(h, i, o) {calls.push(o); return answer;}},
+    webSearchEnabled: false,
+  });
+  assert.equal(result.thinkingEnabled, true);
+  assert.equal(result.detailedAnswerRequested, false);
+  assert.equal(result.seriousAnswerExpanded, false);
+  assert.equal(calls.length, 1);
+  assert.equal(result.answer, answer);
+  assert.equal(result.review.valid, true);
+});
+
+test('默认长草稿压缩成短答，保留检索证据和连续对话上下文', async () => {
+  const history = [{role: 'user', content: '详细介绍千兆交换机'}, {role: 'assistant', content: '五口交换机即可连接四台设备。'}];
+  const calls = [];
+  const answer = '五口就够了，四台设备占四口，最后一口接路由器。';
+  const result = await generateConversationReply({
+    content: '那买几口的', modelInput: '当前问题：那买几口的', history,
+    chatClient: {isConfigured: true, async complete(h, i, o) {
+      calls.push({h, o});
+      return calls.length === 1 ? '先回顾一下。' + '根据各家检索资料，端口数量要考虑设备和上联。'.repeat(22) : answer;
+    }},
+    webSearch: {async search() {return {context: '厂商资料：每台设备占用一口，上联路由器占一口。', resultCount: 1};}},
+  });
+  assert.equal(result.answer, answer);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].h, history);
+  assert.deepEqual(calls[1].h, history);
+  assert.equal(result.detailedAnswerRequested, false);
+  assert.match(calls[1].o.additionalSystemPrompt, /厂商资料/);
+  assert.match(calls[1].o.revisionSystemPrompt, /默认群聊短答的压缩重写/);
+  assert.equal(result.review.valid, true);
+});
+
+test('长答只按当前请求开启，引用资料和旧长答要求不能打开本轮长答', async () => {
+  for (const [question, expected] of [['你怎么选', false], ['详细对比两种方式', true], ['不用详细，给结论', false]]) {
+    const result = await generateConversationReply({
+      content: '原图文字：请完整详细介绍。当前问题：' + question,
+      currentQuestion: question, modelInput: question,
+      history: [{role: 'user', content: '上回请你写长报告'}],
+      hasImageContext: true,
+      chatClient: {isConfigured: true, async complete() {return '学校优先，联网查资料作辅助。';}},
+      webSearchEnabled: false,
+    });
+    assert.equal(result.detailedAnswerRequested, expected, question);
+  }
+});
+
 test('引用评价、识图和转发总结保留龙图知识，不自动攻击引用作者或追加模板话', async () => {
   for (const scenario of [
     { content: '如何评价', hasQuotedContent: true },
@@ -33,11 +85,7 @@ test('引用评价、识图和转发总结保留龙图知识，不自动攻击�
     assert.match(calls[0].stableSystemPrompt, /本地龙图知识/);
     assert.match(calls[0].stableSystemPrompt, /短、嘴欠、会接梗/);
     assert.match(calls[0].additionalSystemPrompt, /引用作者 甲 只是内容来源/);
-    if (scenario.content.startsWith('调侃')) {
-      assert.match(calls[0].additionalSystemPrompt, /本轮明确要求贫嘴或调侃/);
-    } else {
-      assert.match(calls[0].additionalSystemPrompt, /只有本轮明确要求攻击或调侃某人/);
-    }
+    assert.match(calls[0].additionalSystemPrompt, /只有本轮明确要求攻击或调侃某人/);
   }
 });
 
@@ -436,11 +484,11 @@ test('更早的 QQ 记忆摘要会作为不可信背景注入回复提示词', a
   assert.match(calls[0].options.additionalSystemPrompt, /喜欢蓝色/);
 });
 
-test('正经问题开启思考并提高输出预算', async () => {
+test('明确要求详细方案时保留思考和完整输出预算', async () => {
   const calls = [];
   const result = await generateConversationReply({
-    content: '我有四个千兆设备，应该使用什么网络方案',
-    modelInput: '我有四个千兆设备，应该使用什么网络方案',
+    content: '详细解释四个千兆设备应该使用什么网络方案',
+    modelInput: '详细解释四个千兆设备应该使用什么网络方案',
     history: [],
     chatClient: {
       isConfigured: true,
@@ -507,7 +555,7 @@ test('主动 may 插话强制快速短回复，过长草稿会压缩重写', asy
   assert.equal(result.review.valid, true);
 });
 
-test('主动 must 遇到复杂技术问题仍允许详细回答', async () => {
+test('主动 must 的技术推理不要求扩写普通问题', async () => {
   const calls = [];
   const answer = [
     '先隔离写操作并检查参数来源，避免继续影响生产数据。',
@@ -533,12 +581,12 @@ test('主动 must 遇到复杂技术问题仍允许详细回答', async () => {
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].options.thinking, { type: 'enabled' });
   assert.equal(calls[0].options.maxTokens, 20_000);
-  assert.match(calls[0].options.stableSystemPrompt, /确实需要方案、步骤或证据时才详细展开/);
+  assert.match(calls[0].options.stableSystemPrompt, /普通追问只补充当前需要的一点/);
   assert.equal(result.answer, answer);
   assert.equal(result.review.valid, true);
 });
 
-test('正经答案过短时再次开启思考做完整性复核', async () => {
+test('明确要求详细的答案过短时才开启完整性复核', async () => {
   const calls = [];
   const longAnswer = [
     '结论：跨 Windows、Linux 和 macOS 交换文件时通常优先选择 exFAT。',
@@ -549,7 +597,7 @@ test('正经答案过短时再次开启思考做完整性复核', async () => {
     '这破兼容性别瞎赌，笨蛋翻车了硬盘可不会替你哭。',
   ].join('。');
   const result = await generateConversationReply({
-    content: '硬盘需要在 Windows、Linux 和 macOS 之间交换文件，应该格式化成什么文件系统',
+    content: '详细比较硬盘在 Windows、Linux 和 macOS 之间交换文件，应该格式化成什么文件系统',
     modelInput: '硬盘需要在 Windows、Linux 和 macOS 之间交换文件，应该格式化成什么文件系统',
     history: [],
     chatClient: {
