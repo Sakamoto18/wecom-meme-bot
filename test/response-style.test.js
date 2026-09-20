@@ -62,6 +62,7 @@ test('识别明确辱骂和 ma 音变体', () => {
     '卧槽丝你的吗',
     '我草死你🐎',
     '@真正的龙玉涛 卧槽丝你的吗',
+    'nm nm$l',
   ]) {
     assert.equal(isHostileContent(content), true, content);
   }
@@ -85,6 +86,18 @@ test('不把普通同音词、历史人物和丧亲陈述当成攻击', () => {
   ]) {
     assert.equal(isHostileContent(content), false, content);
   }
+});
+
+test('识别 nm 和 nmsl 规避写法，同时保留单位、英文和释义提问', () => {
+  for (const text of ['nm', 'nm$l', 'NM$L', 'n m $ l', 'n-m-s-l', 'n.m.5.l', 'ｎｍ＄ｌ', 'n\u200bm$l', '你nm离谱']) {
+    assert.equal(isHostileContent(text), true, text);
+    assert.equal(shouldUseAttackStyle(text), true, text);
+  }
+  for (const text of ['5nm 工艺', '波长 532 nm', 'environment', 'npm install', 'nmcli']) {
+    assert.equal(isHostileContent(text), false, text);
+  }
+  assert.equal(shouldUseAttackStyle('nm$l 是什么意思'), false);
+  assert.equal(shouldUseAttackStyle('nm 是什么意思'), false);
 });
 
 test('对线语境可延续一轮，但明确降级时停止攻击', () => {

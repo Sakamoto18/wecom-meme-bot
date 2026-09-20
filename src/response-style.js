@@ -1,4 +1,6 @@
 const HOSTILE_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|nmsl|cnm|操你|草你|艹你|去死|死妈|没妈|妈的|妈卖批|装逼|闭嘴|菜狗|蠢货|老登|小丑)/i;
+// 识别独立的 nm / nmsl 缩写及空格、符号变体，不匹配普通英文单词内部。
+const OBFUSCATED_NMSL_PATTERN = /(?<![a-z0-9])n[\s._-]*m(?:[\s._-]*[s$5][\s._-]*[l1])?(?![a-z0-9])/i;
 const DISMISSIVE_PATTERN = /(?:^|[，。！？!?\s])滚(?:蛋|开|远点)?(?:$|[，。！？!?\s])/i;
 const FAMILY_ATTACK_PATTERN = /(?:死老冯|老冯|辱母|亲妈|族谱|户口本|全家|你麻痹|尼玛|泥妈|泥马|nima|ni[\s._-]*ma|\bma\b|🐎)/i;
 const DIRECT_MA_SOUND_PATTERN = /(?:你|他|她|它)(?:的)?(?:妈|麻|码|马|🐎)(?=$|[\s，。！？!?、…]|的|逼|批|死|没|呢|呀|啊|哦|了|个)/i;
@@ -48,12 +50,16 @@ const ATTACK_SCENES = [
 
 export function isHostileContent(content) {
   const normalized = String(content ?? '').trim();
+  const shorthand = normalized.normalize('NFKC').replace(/[\u200b-\u200d\ufeff]/gu, '')
+    // nm 也是纳米单位；数字加单位不属于攻击缩写。
+    .replace(/\b\d+(?:\.\d+)?\s*nm\b/gi, '');
   const motherDeathAttack = MOTHER_DEATH_PATTERN.test(normalized)
     && !FIRST_PERSON_LOSS_PATTERN.test(normalized);
   const simaAttack = SIMA_PATTERN.test(normalized)
     && !SIMA_NEUTRAL_PATTERN.test(normalized);
 
   return HOSTILE_PATTERN.test(normalized)
+    || OBFUSCATED_NMSL_PATTERN.test(shorthand)
     || DISMISSIVE_PATTERN.test(normalized)
     || FAMILY_ATTACK_PATTERN.test(normalized)
     || DIRECT_MA_SOUND_PATTERN.test(normalized)

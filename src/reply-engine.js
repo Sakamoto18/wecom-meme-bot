@@ -24,7 +24,7 @@ import {
   shouldUseThinking,
   shouldUseAttackStyle,
 } from './response-style.js';
-import { IMAGE_MEANING_PROMPT } from './image-reply-context.js';
+import { IMAGE_MEANING_PROMPT, FORWARD_SUMMARY_PROMPT } from './image-reply-context.js';
 
 const PURE_MENTION_FALLBACK = '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。';
 const IMAGE_INPUT_SAFETY_PROMPT = [
@@ -216,6 +216,7 @@ export async function generateConversationReply(options) {
     imageBlocks = [],
     hasImageContext = imageBlocks.length > 0,
     imageSearchQueries,
+    recordSummary = false,
     videoBlocks = [],
   } = options;
 
@@ -223,8 +224,10 @@ export async function generateConversationReply(options) {
   // 图片只在首轮生成时上传一次；重写、质量复核和思考降级使用已经注入的
   // OCR/场景摘要，避免重复消耗视觉 Token 和请求体体积。
   const revisionUserContent = modelInput;
-  const imageSafetyPrompt = hasImageContext
-    ? `${IMAGE_INPUT_SAFETY_PROMPT}\n\n${IMAGE_MEANING_PROMPT}` : '';
+  const imageSafetyPrompt = [
+    hasImageContext ? `${IMAGE_INPUT_SAFETY_PROMPT}\n\n${IMAGE_MEANING_PROMPT}` : '',
+    recordSummary ? FORWARD_SUMMARY_PROMPT : '',
+  ].filter(Boolean).join('\n\n');
 
   const memoryContext = buildMemoryContext(memorySummary);
 
@@ -271,7 +274,7 @@ export async function generateConversationReply(options) {
     };
   }
 
-  if (shouldUseAttackStyle(content, history, interactionContext)) {
+  if (!recordSummary && shouldUseAttackStyle(content, history, interactionContext)) {
     const firstScene = selectAttackScene(history);
     const firstDraft = await chatClient.complete(history, userContent, {
       additionalSystemPrompt: [

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import contextlib
+import copy
 import hmac
 from datetime import datetime, time as datetime_time, timedelta
 import os
@@ -19,9 +20,9 @@ import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 
 
-MAX_FORWARD_NODES = 30
-MAX_FORWARD_CHARACTERS = 8000
-MAX_FORWARD_NODE_CHARACTERS = 600
+MAX_FORWARD_NODES = 80
+MAX_FORWARD_CHARACTERS = 16000
+MAX_FORWARD_NODE_CHARACTERS = 800
 MAX_FORWARD_DEPTH = 3
 MAX_QUOTED_REPLY_DEPTH = 3
 FORWARD_CACHE_TTL_SECONDS = 60 * 60
@@ -29,6 +30,8 @@ FORWARD_CACHE_MAX_ENTRIES = 128
 GROUP_INFO_CACHE_TTL_SECONDS = 10 * 60
 GROUP_INFO_CACHE_MAX_ENTRIES = 512
 MAX_IMAGE_COMPONENTS = 12
+# 合并转发通常是图文串，单独给它更大的图片预算，避免后半段图片被静默截掉。
+MAX_FORWARD_IMAGE_COMPONENTS = 24
 MAX_FORWARD_IMAGE_BYTES = 32 * 1024 * 1024
 # get_image 只是为了拿原图而非缩略图，失败时直接下载同样能取到内容。
 # NapCat 这个 action 一旦不响应，每张图都白等满超时：12 张图能拖到 4 分钟，
@@ -1491,14 +1494,22 @@ class LongtuQqBridge(Star):
             elif segment_type in {"node", "nodes"}:
                 nested = data.get("content") or data.get("message") or data.get("messages")
                 nested_text = cls._format_forward_nodes(
-                    nested if isinstance(nested, list) else [],
+                    [segment] if segment_type == "node" else (nested if isinstance(nested, list) else []),
                     depth + 1,
                     budget,
                 )
                 if nested_text:
                     parts.append(nested_text.replace("\n", " / "))
             elif segment_type in placeholders:
-                parts.append(placeholders[segment_type])
+                placeholder = placeholders[segment_type]
+                if segment_type == "image":
+                    budget["images"] = budget.get("images", 0) + 1
+                    image_index = data.get("_longtu_image_index", budget["images"])
+                    placeholder = (
+                        f"[图片#{image_index}]" if image_index
+                        else f"[图片未读取：{data.get('_longtu_image_error', '下载失败')}]"
+                    )
+                parts.append(placeholder)
             else:
                 summary = cls._compact_forward_value(
                     data.get("summary") or data.get("text"),
@@ -1522,7 +1533,7 @@ class LongtuQqBridge(Star):
         if not isinstance(nodes, list) or depth > MAX_FORWARD_DEPTH:
             return ""
         if budget is None:
-            budget = {"nodes": 0, "truncated": False}
+            budget = {"nodes": 0, "truncated": False, "images": 0}
         lines = []
         for node in nodes:
             if budget["nodes"] >= MAX_FORWARD_NODES:
@@ -1595,10 +1606,17 @@ class LongtuQqBridge(Star):
                 ) as response:
                     if response.status != 200:
                         return ""
-                    body = await response.content.read(MAX_FORWARD_IMAGE_BYTES + 1)
-                    if len(body) > MAX_FORWARD_IMAGE_BYTES:
+                    if response.content_length and response.content_length > MAX_FORWARD_IMAGE_BYTES:
                         logger.warning("合并转发图片超过 32 MiB，已跳过")
                         return ""
+                    # StreamReader.read(n) 只保证返回当前可用的数据，并不会等到
+                    # n 字节或 EOF。以前只读一次经常拿到 16 KiB 的半张 JPEG。
+                    body = bytearray()
+                    async for chunk in response.content.iter_chunked(64 * 1024):
+                        body.extend(chunk)
+                        if len(body) > MAX_FORWARD_IMAGE_BYTES:
+                            logger.warning("合并转发图片超过 32 MiB，已跳过")
+                            return ""
                     return base64.b64encode(body).decode("ascii")
             except Exception as error:
                 logger.warning(f"合并转发图片下载失败：{type(error).__name__}")
@@ -1666,6 +1684,13 @@ class LongtuQqBridge(Star):
             if image:
                 candidates.append(image)
 
+        # 原消息的 CDN URL 通常就是原图。完整读取成功后无需逐张等待
+        # 不可用的 get_image；过期时再由 API 提供有效地址。
+        await collect(data.get("url"))
+        expected_size = int(data.get("file_size") or 0) if str(data.get("file_size") or "0").isdigit() else 0
+        if candidates and (not expected_size or len(base64.b64decode(candidates[0])) >= expected_size):
+            return candidates[0]
+
         if (file_ref
                 and not file_ref.startswith(("http://", "https://", "base64://", "data:"))
                 and bot
@@ -1685,11 +1710,14 @@ class LongtuQqBridge(Star):
             else:
                 self.get_image_failures = 0
                 if isinstance(result, dict):
+                    result = result.get("data") if isinstance(result.get("data"), dict) else result
                     for key in ("base64", "file", "url"):
                         await collect(result.get(key))
 
         # NapCat/OneBot 也可能直接给 URL 或内联 base64。
         for key in ("url", "file", "file_id"):
+            if key == "url":
+                continue
             await collect(data.get(key))
         # 同一图片可能同时提供缩略图 URL 和原图 file_id；选择体积最大的
         # 候选，避免先命中的低清预览遮蔽后续原图。
@@ -1699,13 +1727,14 @@ class LongtuQqBridge(Star):
         self,
         event: AstrMessageEvent,
         forward_id: str,
+        refresh: bool = False,
     ) -> list:
         normalized_id = str(forward_id or "").strip()
         if not normalized_id:
             return []
         now = time.monotonic()
         cached = self.forward_nodes_cache.get(normalized_id)
-        if cached and now - cached[0] <= FORWARD_CACHE_TTL_SECONDS:
+        if not refresh and cached and now - cached[0] <= FORWARD_CACHE_TTL_SECONDS:
             return cached[1]
 
         bot = getattr(event, "bot", None)
@@ -1727,12 +1756,14 @@ class LongtuQqBridge(Star):
             )
         except Exception as error:
             logger.warning(f"合并转发内容展开失败：{type(error).__name__}")
-            return []
+            return cached[1] if cached else []
 
+        if isinstance(result, dict) and isinstance(result.get("data"), dict):
+            result = result["data"]
         nodes = result.get("messages") if isinstance(result, dict) else None
         if not isinstance(nodes, list):
             logger.warning("合并转发 API 未返回可解析的消息节点")
-            return []
+            return cached[1] if cached else []
         self.forward_nodes_cache[normalized_id] = (now, nodes)
         if len(self.forward_nodes_cache) > FORWARD_CACHE_MAX_ENTRIES:
             oldest_id = min(
@@ -1752,12 +1783,17 @@ class LongtuQqBridge(Star):
     ) -> list[str]:
         if not isinstance(nodes, list) or depth > MAX_FORWARD_DEPTH:
             return []
-        budget = budget or {"images": 0}
-        seen_forward_ids = seen_forward_ids or set()
+        if budget is None:
+            budget = {"images": 0, "nodes": 0, "characters": 0}
+        if seen_forward_ids is None:
+            seen_forward_ids = set()
         images = []
         for node in nodes:
-            if budget["images"] >= MAX_IMAGE_COMPONENTS or not isinstance(node, dict):
+            if budget["nodes"] >= MAX_FORWARD_NODES:
                 break
+            if not isinstance(node, dict):
+                continue
+            budget["nodes"] += 1
             node_data = node.get("data") if isinstance(node.get("data"), dict) else {}
             segments = (
                 node_data.get("message")
@@ -1769,24 +1805,33 @@ class LongtuQqBridge(Star):
             if not isinstance(segments, list):
                 segments = []
             for segment in segments:
-                if budget["images"] >= MAX_IMAGE_COMPONENTS or not isinstance(segment, dict):
-                    break
+                if not isinstance(segment, dict):
+                    continue
                 segment_type = str(segment.get("type") or "").lower()
                 data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
                 if segment_type == "image":
+                    data["_longtu_image_index"] = None
+                    if budget["images"] >= MAX_FORWARD_IMAGE_COMPONENTS:
+                        data["_longtu_image_error"] = f"超过 {MAX_FORWARD_IMAGE_COMPONENTS} 张图片的处理上限"
+                        continue
                     image = await self._forward_image_base64(event, data)
-                    if image:
+                    if image and budget["characters"] + len(image) <= 40 * 1024 * 1024:
                         images.append(image)
                         budget["images"] += 1
+                        budget["characters"] += len(image)
+                        data["_longtu_image_index"] = budget["images"]
                         logger.info(
                             f"合并转发图片已读取：第 {budget['images']} 张，"
                             f"约 {len(image) * 3 / 4 / 1024 / 1024:.2f} MiB",
                         )
+                    else:
+                        data["_longtu_image_error"] = "下载失败" if not image else "图片总大小超过处理上限"
+                        logger.warning(f"合并转发图片未读取：{data['_longtu_image_error']}")
                 elif segment_type in {"node", "nodes"}:
                     nested = data.get("content") or data.get("message") or data.get("messages")
                     images.extend(await self._collect_forward_images(
                         event,
-                        nested if isinstance(nested, list) else [],
+                        [segment] if segment_type == "node" else (nested if isinstance(nested, list) else []),
                         depth + 1,
                         budget,
                         seen_forward_ids,
@@ -1804,7 +1849,9 @@ class LongtuQqBridge(Star):
                         ))
                     elif nested_id and depth < MAX_FORWARD_DEPTH and nested_id not in seen_forward_ids:
                         seen_forward_ids.add(nested_id)
-                        nested_nodes = await self._fetch_forward_nodes(event, nested_id)
+                        nested_nodes = await self._fetch_forward_nodes(event, nested_id, refresh=True)
+                        # 图文共用同一棵展开树，避免识别了嵌套图片却丢掉对应文字。
+                        data["content"] = nested_nodes
                         images.extend(await self._collect_forward_images(
                             event,
                             nested_nodes,
@@ -1812,36 +1859,30 @@ class LongtuQqBridge(Star):
                             budget,
                             seen_forward_ids,
                         ))
-        return images[:MAX_IMAGE_COMPONENTS]
+        return images[:MAX_FORWARD_IMAGE_COMPONENTS]
 
     async def _fetch_forward_content(
         self,
         event: AstrMessageEvent,
         forward_id: str,
         include_images: bool = True,
+        refresh: bool = False,
     ) -> tuple[str, list[str]]:
         normalized_id = str(forward_id or "").strip()
         if not normalized_id:
             return "", []
-        cached = self.forward_cache.get(normalized_id)
         now = time.monotonic()
-        if cached and now - cached[0] <= FORWARD_CACHE_TTL_SECONDS:
-            nodes = await self._fetch_forward_nodes(event, normalized_id)
-            images = await self._collect_forward_images(
-                event,
-                nodes,
-                seen_forward_ids={normalized_id},
-            ) if include_images else []
-            return cached[1], images
-        nodes = await self._fetch_forward_nodes(event, normalized_id)
+        # 同一条记录可在多个群同时被引用；读取状态标记只属于当前请求。
+        nodes = copy.deepcopy(await self._fetch_forward_nodes(event, normalized_id, refresh=refresh))
         if not nodes:
             return "", []
-        formatted = self._format_forward_nodes(nodes)
         images = await self._collect_forward_images(
             event,
             nodes,
             seen_forward_ids={normalized_id},
         ) if include_images else []
+        # 读取后再格式化，成功图片用实际传输编号，失败图片明确标记，不能错位。
+        formatted = self._format_forward_nodes(nodes)
         if not formatted and not images:
             logger.warning("合并转发 API 未返回可解析的消息节点")
             return "", []
@@ -1853,7 +1894,8 @@ class LongtuQqBridge(Star):
             )
             self.forward_cache.pop(oldest_id, None)
         logger.info(
-            f"已展开合并转发内容，共 {formatted.count(chr(10)) + 1 if formatted else 0} 行，"
+            f"已展开合并转发内容：group={event.get_group_id()} forward={normalized_id} "
+            f"共 {formatted.count(chr(10)) + 1 if formatted else 0} 行，"
             f"读取图片 {len(images)} 张",
         )
         return formatted, images
@@ -1874,6 +1916,7 @@ class LongtuQqBridge(Star):
         self,
         event: AstrMessageEvent,
         components: list,
+        refresh: bool = False,
     ) -> tuple[str, list[str]]:
         texts = []
         images = []
@@ -1883,11 +1926,17 @@ class LongtuQqBridge(Star):
             if not forward_id or forward_id in seen:
                 continue
             seen.add(forward_id)
-            text, nested_images = await self._fetch_forward_content(event, forward_id)
+            text, nested_images = await self._fetch_forward_content(event, forward_id, refresh=refresh)
+            offset = len(images)
+            text = re.sub(r"\[图片#(\d+)\]", lambda match: (
+                f"[图片#{offset + int(match.group(1))}]"
+                if offset + int(match.group(1)) <= MAX_FORWARD_IMAGE_COMPONENTS
+                else "[图片未读取：图片数量超过处理上限]"
+            ), text)
             if text:
                 texts.append(text)
             for image in nested_images:
-                if len(images) >= MAX_IMAGE_COMPONENTS:
+                if len(images) >= MAX_FORWARD_IMAGE_COMPONENTS:
                     break
                 images.append(image)
         return "\n\n".join(texts)[:MAX_FORWARD_CHARACTERS], images
@@ -2559,10 +2608,12 @@ class LongtuQqBridge(Star):
                 forwarded_text, forward_image_base64s = await self._forwarded_content(
                     event,
                     components,
+                    refresh=True,
                 )
                 quoted_forwarded_text, quoted_forward_image_base64s = await self._forwarded_content(
                     event,
                     quoted_chain,
+                    refresh=True,
                 )
             else:
                 # 旁观消息仍不把图片上传给 Node，但先提取并缓存合并转发中的

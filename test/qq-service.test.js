@@ -982,6 +982,61 @@ test('合并转发图片会和普通图片一起进入视觉链路', async () =>
   );
 });
 
+test('32 条合并转发中的 19 张图片全部提取并与原文一起汇总，受控并发保留来源顺序', async () => {
+  const png = (await createPng()).toString('base64');
+  const calls = [];
+  let active = 0;
+  let peak = 0;
+  let searched = false;
+  const { service } = createService({
+    webSearchEnabled: true,
+    webSearch: { async search() { searched = true; throw new Error('不应搜索私聊记录'); } },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, input, options) {
+        calls.push({ input, options });
+        if (options.usageSource === 'image-understanding') {
+          const index = Number(input[0].text.match(/第 (\d+) 张图片/u)[1]);
+          active += 1; peak = Math.max(peak, active);
+          await new Promise(resolve => setTimeout(resolve, index % 3));
+          active -= 1;
+          return JSON.stringify({ description: `讨论事项${index}`, visible_text: [`图内正文${index}`], search_queries: [] });
+        }
+        return '记录讨论了多个方案及各方反应，最后决定周五执行。蠢货，别把分类标签当作全部内容。';
+      },
+    },
+  });
+  const record = ['原帖内容', ...Array.from({ length: 19 }, (_, i) => `甲：分类${i + 1} [图片#${i + 1}]`), '最后结论：周五执行，nm$l 是转发中的原话'];
+  const result = await service.handleMessage({
+    message_type: 'private', user_id: 'record-user', text: '总结下聊天记录的内容',
+    forwarded_text: record.join('\n'), forward_image_base64s: Array(19).fill(png),
+  });
+  assert.equal(calls.filter(c => c.options.usageSource === 'image-understanding').length, 19);
+  assert.equal(peak, 3);
+  assert.equal(searched, false);
+  const final = calls.find(c => c.options.usageSource === 'conversation-reply');
+  assert.ok(final, '转发中的攻击词不应该覆盖用户的总结请求');
+  assert.match(final.input, /图内正文19/);
+  assert.match(final.input, /最后结论：周五执行/);
+  assert.match(final.input, /图片来源：合并转发图片 19/);
+  assert.ok(final.input.indexOf('图内正文1') < final.input.indexOf('图内正文19'));
+  assert.match(final.options.additionalSystemPrompt, /总结用户提供的聊天记录/);
+  assert.match(result.messages[0].text, /周五执行/);
+});
+
+test('引用转发记录的图片保留引用来源，超出图片预算时明确提示不完整', async () => {
+  const png = (await createPng()).toString('base64');
+  const payload = normalizeQqPayload({
+    message_type: 'private', user_id: 'quote-user', text: '总结聊天记录',
+    quoted_forwarded_text: '甲：[图片#1]\n乙：最后的内容',
+    quoted_forward_image_base64s: Array(25).fill(png),
+  });
+  const prepared = await prepareImageBlocks(payload);
+  assert.equal(prepared.imageCount, 24);
+  assert.match(prepared.notice, /不能将本轮结果视为全部图片的完整总结/);
+  assert.equal(prepared.blocks[0].text, '引用合并转发图片 1');
+});
+
 test('单张图片被上游拒绝时会隔离该图并继续读取其余图片', async () => {
   const png = (await createPng()).toString('base64');
   const calls = [];
