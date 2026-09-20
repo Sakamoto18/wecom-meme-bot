@@ -1,3 +1,5 @@
+import { normalizeDomains, matchesSearchDomains } from './search-scope.js';
+
 const DEFAULT_ENDPOINT = 'https://www.bing.com/search';
 const DEFAULT_EXA_ENDPOINT = 'https://api.exa.ai/search';
 const DEFAULT_FALLBACK_ENDPOINT = '';
@@ -415,11 +417,14 @@ export class LongtuWebSearch {
 
   async fetchResults(endpoint, query, options = {}) {
     const url = new URL(endpoint);
+    const includeDomains = normalizeDomains(options.includeDomains);
     const usesExa = /(?:^|\.)exa\.ai$/i.test(url.hostname);
     const usesBaidu = /(?:^|\.)baidu\.com$/i.test(url.hostname);
     const usesSo = /(?:^|\.)so\.com$/i.test(url.hostname);
     if (!usesExa) {
-      url.searchParams.set(usesBaidu ? 'wd' : 'q', query);
+      const scopedQuery = includeDomains.length
+        ? `${query} (${includeDomains.map(domain => `site:${domain}`).join(' OR ')})` : query;
+      url.searchParams.set(usesBaidu ? 'wd' : 'q', scopedQuery);
     }
     const usesRss = /(?:^|\.)bing\.com$/i.test(url.hostname);
     if (usesRss) {
@@ -452,6 +457,7 @@ export class LongtuWebSearch {
           },
           body: JSON.stringify({
             query,
+            ...(includeDomains.length ? { includeDomains } : {}),
             numResults: this.maxResults,
             type: this.exaSearchType,
             contents: {
@@ -475,7 +481,7 @@ export class LongtuWebSearch {
       }
 
       const responseBody = await response.text();
-      const results = usesExa
+      const parsedResults = usesExa
         ? parseExaSearchJson(JSON.parse(responseBody), this.maxResults, {
           ...options,
           maxContentCharacters: this.exaMaxContentCharacters,
@@ -485,6 +491,7 @@ export class LongtuWebSearch {
           : (usesSo
             ? parseSoSearchHtml(responseBody, this.maxResults, options)
             : parseBaiduSearchHtml(responseBody, this.maxResults, options)));
+      const results = parsedResults.filter(result => matchesSearchDomains(result.url, includeDomains));
       succeeded = true;
       resultCount = results.length;
       return {
@@ -539,7 +546,8 @@ export class LongtuWebSearch {
       .replace(/[?？!！。，,;；:：]+$/g, '')
       .replace(/\s+/g, ' ')
       .trim();
-    const cacheKey = `${this.provider}:${mode}:${normalizedCacheQuery}`;
+    const includeDomains = normalizeDomains(options.includeDomains);
+    const cacheKey = `${this.provider}:${mode}:${includeDomains.join(",")}:${normalizedCacheQuery}`;
     const cached = this.cache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return { ...cached.value, fromCache: true };
@@ -564,6 +572,7 @@ export class LongtuWebSearch {
         for (const candidateQuery of queries) {
           const fetched = await this.fetchResults(endpoint, candidateQuery, {
             mode,
+            includeDomains,
             relevanceTerms,
             onBeforeUpstreamRequest: options.onBeforeUpstreamRequest,
             onUpstreamRequest: options.onUpstreamRequest,

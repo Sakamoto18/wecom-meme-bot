@@ -674,6 +674,8 @@ export async function createQqRuntime() {
       process.env.QQ_IMAGE_OCR_TIMEOUT_MS,
       20_000,
     ),
+    passiveImageEnabled: process.env.QQ_PASSIVE_IMAGE_ENABLED?.trim() !== 'false',
+    passiveImageCooldownMs: parseNonnegativeInteger(process.env.QQ_PASSIVE_IMAGE_COOLDOWN_SECONDS, 60) * 1000,
     activeReplyDecider,
     repeatDetector,
     peerBotContinuationDecider,
@@ -714,10 +716,6 @@ export async function createQqRuntime() {
     peakLargeGroupPassiveDecisionMultiplier: parsePositiveNumber(
       process.env.QQ_USAGE_PEAK_LARGE_GROUP_PASSIVE_DECISION_MULTIPLIER,
     ) ?? 3,
-    peakLargeGroupEngagementDecisionCooldownMs: (parseNonnegativeInteger(
-      process.env.QQ_USAGE_PEAK_LARGE_GROUP_ENGAGEMENT_DECISION_COOLDOWN_SECONDS,
-      30,
-    )) * 1000,
     largeGroupHistoryMessages: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_HISTORY_MESSAGES,
     ) ?? 20,
@@ -820,7 +818,7 @@ export async function startQqApi() {
     ? `QQ 联网检索已启用：${runtime.webSearch.provider}；普通模型回复默认先检索，其余查询走 general 模式`
     : 'QQ 联网检索已关闭');
   console.log(runtime.activeReplyEnabled
-    ? 'QQ 群主动回复已启用：must/may/no 优先级 + 热度与退场判定，回复仍走现有 Node 引擎'
+    ? 'QQ 群主动回复已启用：语义续聊 / 具体帮助 / 可选插话 + 热度与退场判定，回复仍走现有 Node 引擎'
     : 'QQ 群主动回复已关闭');
   console.log(runtime.repeatEnabled
     ? 'QQ 群复读检测已启用：两位不同群友重复相同文字时只主动复读一次'

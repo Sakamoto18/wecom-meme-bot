@@ -55,7 +55,7 @@ test('两层中立判定复用真实请求前缀，保留全部上下文且不�
     assert.equal(JSON.stringify(request).split('HISTORY_SENTINEL').length - 1, 1);
     assert.doesNotMatch(JSON.stringify(request), /PERSONALITY_MUST_NOT_LEAK/);
   }
-  assert.match(requests[0].messages[2].content, /must、may 或 no/);
+  assert.match(requests[0].messages[2].content, /must、followup、help、may 或 no/);
   assert.match(requests[1].messages[2].content, /speak 或 skip/);
 });
 
@@ -88,7 +88,7 @@ test('主动回复判定使用中立规则和近期群聊，AI 返回 must 时�
   assert.equal(calls.length, 1);
   assert.doesNotMatch(calls[0].options.systemPrompt, /互联网文化/);
   assert.match(calls[0].options.systemPrompt, /不加载机器人聊天人格/);
-  assert.match(calls[0].options.systemPrompt, /must、may 或 no/);
+  assert.match(calls[0].options.systemPrompt, /must、followup、help、may 或 no/);
   assert.match(calls[0].options.sharedContext, /最近群聊/);
   assert.match(calls[0].options.sharedContext, /当前消息/);
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
@@ -348,6 +348,7 @@ test('群级话题窗口允许其他真人承接，但按 18 秒节流且只有�
   currentTime += 18_000;
   const participant = groupPayload({ userId: 'u2', text: '那数据库迁移怎么办？' });
   const joined = await decider.shouldReply({ payload: participant, history: [] });
+  decider.confirmReply(participant, joined);
   currentTime += 1_000;
   const cooledDown = await decider.shouldReply({
     payload: groupPayload({ userId: 'u3', text: '回滚方案也得补吧？' }),
@@ -391,6 +392,7 @@ test('连续话题里的追问和纠正不再走概率阀门，最多补三轮',
       history: [{ role: 'assistant', content: '机器人上一轮回答' }],
     });
     assert.deepEqual(result, { reply: true, reason: 'engagement-followup-must' });
+    decider.confirmReply(groupPayload(), result);
   }
   currentTime += 1_000;
   const stopped = await decider.shouldReply({
@@ -400,7 +402,7 @@ test('连续话题里的追问和纠正不再走概率阀门，最多补三轮',
   assert.deepEqual(stopped, { reply: false, reason: 'engagement-followup-limit' });
 });
 
-test('help 主动接话绕过普通概率，但仍保持群聊热度保护', async () => {
+test('具体求助 help 绕过普通概率', async () => {
   const decider = new ActiveReplyDecider({
     chatClient: {
       isConfigured: true,
@@ -681,7 +683,9 @@ test('群话题达到补充上限后，窗口内再次艾特只续期且受短�
   decider.openEngagement(owner);
 
   const first = await decider.shouldReply({ payload: participant, history: [] });
+  decider.confirmReply(participant, first);
   const second = await decider.shouldReply({ payload: participant, history: [] });
+  decider.confirmReply(participant, second);
   const limited = await decider.shouldReply({ payload: participant, history: [] });
   currentTime += 5_000;
   const nextMention = groupPayload({

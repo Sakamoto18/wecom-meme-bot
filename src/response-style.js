@@ -1,4 +1,7 @@
 const HOSTILE_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|nmsl|cnm|操你|草你|艹你|去死|死妈|没妈|妈的|妈卖批|装逼|闭嘴|菜狗|蠢货|老登|小丑)/i;
+const DIRECT_BOT_INSULT_PATTERN = new RegExp(
+  `^你(?:这(?:个|种)|个|就是|真是|是个|是不是个)?\\s*${HOSTILE_PATTERN.source}`, 'i',
+);
 // 识别独立的 nm / nmsl 缩写及空格、符号变体，不匹配普通英文单词内部。
 const OBFUSCATED_NMSL_PATTERN = /(?<![a-z0-9])n[\s._-]*m(?:[\s._-]*[s$5][\s._-]*[l1])?(?![a-z0-9])/i;
 const DISMISSIVE_PATTERN = /(?:^|[，。！？!?\s])滚(?:蛋|开|远点)?(?:$|[，。！？!?\s])/i;
@@ -86,6 +89,13 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
   // 不凭材料里的攻击词或上一位成员的对线强行启动攻击模式。
   if (options.hasThirdPartyTarget || options.quotedAuthorLabel
     || (options.hasQuotedContent && !options.quotedBot) || options.hasImageContext) return false;
+  if (options.hasQuotedContent && options.quotedBot) {
+    const current = normalized.replace(/^(?:@\S+\s+)*/, '').trim();
+    // Quoting our reply does not make a complaint about its subject an attack
+    // on the bot. Only the current direct address or a standalone insult counts.
+    return isHostileContent(current) && (DIRECT_BOT_INSULT_PATTERN.test(current)
+      || /^(?:nm(?:sl|\$l)?|nmsl|cnm|傻[逼比]|煞笔|废物|蠢货)[！!？?。\s]*$/iu.test(current));
+  }
   if (isHostileContent(normalized)) return true;
 
   const previousUserMessage = [...history]
@@ -223,7 +233,9 @@ export function buildNormalReplyStablePrompt(options = {}) {
   const lines = [
     '【本轮模式：普通对话】',
     '先准确回答用户真正的问题，不确定就明说不确定。',
-    options.detailedAnswerRequested
+    options.passiveImageComment
+      ? '本轮信息图片短评用 2～3 句、约 100～220 字，保留关键事实、数字、条件与不确定性，再给有依据的判断，不压成只有一句情绪评价。'
+      : options.detailedAnswerRequested
       ? '用户明确要求展开：完整回答，但删掉重复和检索来源平铺，只保留会影响结论的依据、步骤、限制和例子。'
       : '这是群聊默认短答：先给结论，通常 1～3 句、约 30～180 个汉字；只补充当前问题所需的一个依据或下一步。除非用户明确要求详细、展开、完整步骤或报告，不要写成长文。',
     '保持龙玉涛知识中的语言风格：短、嘴欠、会接梗、口语化，有反差和荒诞感；根据场景用学问龙、疑惑龙、嘴硬龙等语感自然表达，不套固定台词，不逐条报角色名，不变成客服或一本正经的报告。',
@@ -256,9 +268,9 @@ export function buildNormalReplyStablePrompt(options = {}) {
       '这是机器人自己选择加入的主动插话，不是被点名后的正式答题。最终只发 1 句，通常 15～70 个汉字，最多不超过 100 个汉字。',
       '直接补充一个有依据的新信息或判断，不引用、不复述上一条消息，不说“你问得好”“总结一下”等铺垫。不能只是顺势挤兑群友，也不因看到群友互骂就加入攻击。',
     );
-  } else if (options.activeReply) {
+  } else if (options.activeReply && !options.passiveImageComment) {
     lines.push(
-      '这是由公开提问或重要信息触发的主动接话。简单问题保持 1～3 句；用户明确要求展开才详细回答，普通追问只补充当前需要的一点。主动接话只补充事情本身的信息，不加入对人的嘲讽。',
+      '这是群友间的接话或续聊。未明确要求详细时只写 1～2 句、约 30～120 字：第一句直接给当前要用的答案或操作，第二句只补一个不可缺少的条件。前面已经解释过的背景、原理、注意事项和来源不再复述；这一轮只问一处细节，就只补这一处细节，不重讲整套方案。主动接话只谈事情本身，不加入对人的嘲讽。',
     );
   }
   return lines.join('\n');
@@ -323,7 +335,7 @@ export function reviewNormalReply(answer, options = {}) {
       || (normalized.match(/[。！？!?；;]/g) ?? []).length > 3)) {
     issues.push('too-long-for-active');
   }
-  if (options.compactResponse && (normalized.length > 320
+  if (options.compactResponse && (normalized.length > (options.passiveImageComment ? 260 : options.activeReply ? 180 : 320)
     || (normalized.match(/[。！？!?；;]/g) ?? []).length > 5)) {
     issues.push('too-long-for-chat');
   }
@@ -348,10 +360,12 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
     ...(options.requiredIdentityRole
       ? [`必须直接、肯定地称当前发言者为“${options.requiredIdentityRole}”；不许用段子或其他身份替代。`]
       : []),
-    options.activeReply && options.activeReplyPriority !== 'must'
+    options.passiveImageComment
+      ? `初稿共 ${String(draft ?? '').trim().length} 字。把信息图片短评重写为最多 180 字、2～3 句：合并重复主张，删掉“第一条说/下面的回复说”这类逐条转述，不重复长英文名，只留核心事实、改变结论的数字/条件与一个判断。核实程度有必要时用短语交代，不另写一段免责声明。禁止继续扩写。`
+      : options.activeReply && options.activeReplyPriority !== 'must'
       ? '这是主动插话的压缩重写：最终只发 1 句、15～70 个汉字，最多 100 个汉字；留下一个关于事情本身的最有价值的信息或判断，不复述上下文，不挤兑群友。'
       : (options.compactResponse
-        ? '这是默认群聊短答的压缩重写：只保留当前问题的结论和一个必要依据，最终 1～3 句、约 30～180 个汉字；不要平铺搜索来源，不重复上下文，不攻击引用作者或提问者。'
+        ? '这是默认群聊短答的压缩重写：只保留本轮新问的结论或操作，必要时补一个条件，最终 1～2 句、约 30～120 个汉字；不要平铺搜索来源，不重讲上一轮已解释的步骤，不攻击引用作者或提问者。'
         : (options.thinkingEnabled
         ? '这是深度答案的风格重写：保留会改变结论的关键信息，删掉复述和重复，答案说清楚就结束。'
         : '这是群聊短回复的风格重写：保持 1～3 句，直接说内容，不写成客服或正式总结。')),
