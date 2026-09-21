@@ -383,6 +383,12 @@ test('识图、主动插话和引用历史中的辱骂不能自动让作者成�
   );
 });
 
+test('问题窗口内的明确攻击仍进入对线，普通攻击词不误触发', () => {
+  assert.equal(shouldUseAttackStyle('你这个傻逼', [], { activeReply: true }), true);
+  assert.equal(shouldUseAttackStyle('请攻击张三', [], { activeReply: true }), true);
+  assert.equal(shouldUseAttackStyle('nm', [], { activeReply: true }), false);
+});
+
 test('攻击画面会排除近期已经用过的截图意象', () => {
   const selected = selectAttackScene([
     { role: 'assistant', content: '你🐎的骨灰盒上还刻着源码呢。' },
