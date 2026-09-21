@@ -76,7 +76,18 @@ function createService(options = {}) {
     largeGroupMemberLimitThreshold: options.largeGroupMemberLimitThreshold,
     groupPassiveDecisionCooldownMs: options.groupPassiveDecisionCooldownMs,
     largeGroupPassiveDecisionCooldownMs: options.largeGroupPassiveDecisionCooldownMs,
+    peakGroupPassiveDecisionMultiplier: options.peakGroupPassiveDecisionMultiplier,
+    discussionDecisionCooldownMs: options.discussionDecisionCooldownMs,
+    peakDiscussionDecisionCooldownMs: options.peakDiscussionDecisionCooldownMs,
     groupBackgroundSummariesEnabled: options.groupBackgroundSummariesEnabled,
+    groupHistoryMessages: options.groupHistoryMessages,
+    groupHistoryCharacters: options.groupHistoryCharacters,
+    peakGroupHistoryMessages: options.peakGroupHistoryMessages,
+    peakGroupHistoryCharacters: options.peakGroupHistoryCharacters,
+    observationHistoryMessages: options.observationHistoryMessages,
+    observationHistoryCharacters: options.observationHistoryCharacters,
+    peakObservationHistoryMessages: options.peakObservationHistoryMessages,
+    peakObservationHistoryCharacters: options.peakObservationHistoryCharacters,
     largeGroupHistoryMessages: options.largeGroupHistoryMessages,
     largeGroupHistoryCharacters: options.largeGroupHistoryCharacters,
     largeGroupObservationHistoryMessages: options.largeGroupObservationHistoryMessages,
@@ -407,6 +418,44 @@ test('普通群旁观判定和主动插话使用短上下文，明确问答保�
   assert.ok(direct.length <= 40);
   assert.ok(direct.reduce((sum, message) => sum + message.content.length, 0) <= 12_000);
   assert.match(direct.at(-1).content, /^59:/);
+});
+
+test('普通群在工作日峰时收紧明确回复窗口和读空气频率', () => {
+  let now = Date.parse('2026-09-21T00:00:00Z'); // 北京时间 08:00，谷时
+  const { service } = createService({
+    groupHistoryMessages: 16,
+    groupHistoryCharacters: 6_000,
+    peakGroupHistoryMessages: 8,
+    peakGroupHistoryCharacters: 3_000,
+    groupPassiveDecisionCooldownMs: 600_000,
+    peakGroupPassiveDecisionMultiplier: 2,
+    discussionDecisionCooldownMs: 60_000,
+    peakDiscussionDecisionCooldownMs: 120_000,
+    now: () => now,
+  });
+  const history = Array.from({ length: 30 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    content: `${index}:`.padEnd(500, '字'),
+  }));
+
+  const offPeak = service.historyForGroup('normal-group-id', history);
+  assert.ok(offPeak.length <= 16);
+  assert.ok(offPeak.reduce((sum, message) => sum + message.content.length, 0) <= 6_000);
+  assert.equal(service.passiveDecisionCooldownMs('normal-group-id'), 600_000);
+  assert.equal(
+    service.passiveDecisionCooldownMs('normal-group-id', { discussion: true }),
+    60_000,
+  );
+
+  now = Date.parse('2026-09-21T03:00:00Z'); // 北京时间 11:00，峰时
+  const peak = service.historyForGroup('normal-group-id', history);
+  assert.ok(peak.length <= 8);
+  assert.ok(peak.reduce((sum, message) => sum + message.content.length, 0) <= 3_000);
+  assert.equal(service.passiveDecisionCooldownMs('normal-group-id'), 1_200_000);
+  assert.equal(
+    service.passiveDecisionCooldownMs('normal-group-id', { discussion: true }),
+    120_000,
+  );
 });
 
 test('Bridge 显示出来的纯 At 昵称仍走短回复并拦截客服话术', async () => {

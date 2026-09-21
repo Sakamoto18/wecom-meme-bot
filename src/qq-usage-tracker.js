@@ -338,7 +338,7 @@ export class QqUsageTracker {
       options.largeGroupSecondaryReviewPercent,
       DEFAULT_LARGE_GROUP_SECONDARY_REVIEW_PERCENT,
     );
-    // 高峰时段单价是空闲时段的两倍，大型群的后台/静默调用另用一条更低的
+    // 高峰时段单价是空闲时段的两倍，所有群的后台/静默调用都使用更低的
     // 预留线，把可延后的观测支出挤到空闲时段。
     this.peakPassiveTokenBudgetPercent = percentage(
       options.peakPassiveTokenBudgetPercent,
@@ -765,8 +765,7 @@ export class QqUsageTracker {
         startOfShanghaiDay(now),
         startOfShanghaiDay(now) + DAY_MS,
       ).total);
-      const peakPassive = context.largeGroup
-        && isDeepSeekPeakTime(now)
+      const peakPassive = isDeepSeekPeakTime(now)
         && this.peakPassiveTokenBudgetPercent < this.passiveTokenBudgetPercent;
       const passiveLimit = Math.floor(
         tokenLimit * (peakPassive
