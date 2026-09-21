@@ -116,7 +116,7 @@ test('引用机器人遭攻击时走统一回答并保留回击状态，普通�
   await f.send('@龙玉涛 你这个傻逼ai', quoted);
   const firstReply = f.calls.find(c => c.options.usageSource === 'conversation-reply');
   assert.ok(firstReply);
-  assert.match(firstReply.options.stableSystemPrompt, /有明确攻击或挑衅信号/);
+  assert.match(firstReply.options.stableSystemPrompt, /龙玉涛统一角色基座/);
   for (const [text, overrides] of [
     ['？是我说的他是小处男吗', {}],
     ['如何评价', { quoted_text: '你这个傻逼ai' }],

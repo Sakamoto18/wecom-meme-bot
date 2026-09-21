@@ -259,7 +259,7 @@ test('问题窗口遭攻击时必须保留直接回击，不能只写软性评�
   assert.equal(reviewNormalReply('先把链接后的 p=2 补上；你这个傻逼开场，和错参数一样都得收一收。', {
     attackDuringAnswer: true,
   }).valid, true);
-  assert.match(buildNormalReplyStablePrompt({ attackDuringAnswer: true }), /真正接住这句骂/);
+  assert.match(buildNormalReplyStablePrompt({ attackDuringAnswer: true }), /先把问题答完/);
   assert.match(buildNormalReplyRetryPrompt('你这个傻逼，P2 怎么抓？', '先补 p=2。', ['missing-direct-rebuttal'], {
     attackDuringAnswer: true,
   }), /必须补一句直接、明确的回击/);
