@@ -80,7 +80,7 @@ export function isHostileContent(content) {
     || simaAttack;
 }
 
-function isDirectBotAttack(content) {
+export function isDirectBotAttack(content) {
   const current = String(content ?? '').normalize('NFKC')
     .replace(/[\u200b-\u200d\ufeff]/gu, '')
     .replace(/^(?:@\S+\s+)*/, '').trim();
@@ -96,11 +96,20 @@ function isDirectBotAttack(content) {
     if (/^(?:(?:我|窝|卧)?(?:操|草|艹|槽)(?:死|丝|撕|斯|似)?(?:你|尼)|(?:带上|带着)你(?:的)?(?:妈|🐎))/u.test(clause)) return true;
     if (/^你\s*n[\s._-]*m(?:[\s._-]*[s$5][\s._-]*[l1])?(?![a-z0-9])/iu.test(clause)) return true;
     if (/^(?:傻[逼比]|煞笔|沙比|废物|弱智|智障|脑残|狗东西|畜生|nmsl|cnm|蠢货|垃圾|小丑|老登)[！!？?。\s]*$/iu.test(clause)) return true;
+    // 群里常见的“臭傻逼/臭废物”开头没有“你”字，但在 @机器人
+    // 或引用机器人回复的上下文里仍然是直接对线，不能退回说教式回答。
+    if (/^臭\s*(?:傻[逼比]|煞笔|沙比|废物|弱智|智障|脑残|狗东西|畜生|蠢货|垃圾|小丑|老登)/iu.test(clause)) return true;
     const remainder = [HOSTILE_PATTERN, OBFUSCATED_NMSL_PATTERN, DISMISSIVE_PATTERN,
       FAMILY_ATTACK_PATTERN, MOTHER_DEATH_PATTERN]
       .reduce((text, pattern) => text.replace(new RegExp(pattern.source, 'giu'), ''), clause);
     return /^[\s，。！？!?、~～啊呀吧哦呢了]*$/u.test(remainder);
   });
+}
+
+const ANSWER_REQUEST_PATTERN = /[?？]|(?:怎么|如何|为什么|为何|请问|帮我|能不能|可不可以|是否|是什么|啥意思|哪里|哪个|多少)/i;
+
+export function hasAnswerRequest(content) {
+  return ANSWER_REQUEST_PATTERN.test(styleRequestText(content));
 }
 
 export function shouldUseAttackStyle(content, history = [], options = {}) {
@@ -110,7 +119,10 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
     && !options.hasThirdPartyTarget
     && (!options.quotedAuthorLabel || options.quotedBot)
     && (!options.hasQuotedContent || options.quotedBot)
-    && !options.hasImageContext;
+    // An attached/quoted image must not hide a direct insult at the bot, but
+    // generic hostility about the pictured subject still remains content
+    // commentary rather than an attack turn.
+    && (!options.hasImageContext || isDirectBotAttack(normalized));
   const explicitAttackInQuestionWindow = THIRD_PARTY_ATTACK_REQUEST_PATTERN.test(normalized)
     || currentMessageAttack
     || (/^(?:你|龙玉涛)/u.test(normalized) && isDirectBotAttack(normalized));
@@ -135,6 +147,7 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
   }
   // 引用、图片或提及成员只说明内容来源。复杂意图交给普通回复提示按语义判断，
   // 不凭材料里的攻击词或上一位成员的对线强行启动攻击模式。
+  if (currentMessageAttack) return true;
   if (options.hasThirdPartyTarget || options.quotedAuthorLabel
     || (options.hasQuotedContent && !options.quotedBot) || options.hasImageContext) return false;
   if (options.hasQuotedContent && options.quotedBot) {

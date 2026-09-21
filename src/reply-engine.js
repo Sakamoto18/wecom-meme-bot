@@ -27,6 +27,8 @@ import {
   shouldUseThinking,
   shouldUseAttackStyle,
   isExplicitThirdPartyAttackRequest,
+  isDirectBotAttack,
+  hasAnswerRequest,
 } from './response-style.js';
 import { IMAGE_MEANING_PROMPT, FORWARD_SUMMARY_PROMPT } from './image-reply-context.js';
 
@@ -294,7 +296,11 @@ export async function generateConversationReply(options) {
   // unified answer-plus-rebuttal path below.
   const pureThirdPartyAttack = attackStyle && !activeReply
     && isExplicitThirdPartyAttackRequest(content, interactionContext);
-  if (pureThirdPartyAttack) {
+  const pureDirectBotAttack = attackStyle
+    && isDirectBotAttack(content)
+    && !hasAnswerRequest(content);
+  const pureAttack = pureThirdPartyAttack || pureDirectBotAttack;
+  if (pureAttack) {
     const firstScene = selectAttackScene(history);
     const firstDraft = await chatClient.complete(history, userContent, {
       additionalSystemPrompt: [
@@ -458,7 +464,7 @@ export async function generateConversationReply(options) {
     activeReplyPriority,
     replySequence,
     passiveImageComment,
-    attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
+    attackDuringAnswer: attackStyle && !pureAttack,
   };
   // Put the invariant persona and knowledge before the live mode/history suffix.
   // DeepSeek can reuse this prefix across ordinary replies, active replies and
@@ -547,7 +553,7 @@ export async function generateConversationReply(options) {
     activeReply,
     activeReplyPriority,
     passiveImageComment,
-    attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
+    attackDuringAnswer: attackStyle && !pureAttack,
   });
   if (!review.valid && attempts < 2) {
     const needsSeriousExpansion = review.issues.includes('too-thin-for-serious');
@@ -583,7 +589,7 @@ export async function generateConversationReply(options) {
               activeReply,
               activeReplyPriority,
               passiveImageComment,
-              attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
+              attackDuringAnswer: attackStyle && !pureAttack,
             }),
           maxTokens: responseMaxTokens,
           ...(passiveImageComment ? { temperature: 0.2 } : {}),
@@ -598,7 +604,7 @@ export async function generateConversationReply(options) {
           activeReply,
           activeReplyPriority,
         passiveImageComment,
-        attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
+        attackDuringAnswer: attackStyle && !pureAttack,
         });
         attempts += 1;
         normalPersonaRewritten = !needsSeriousExpansion;
@@ -622,7 +628,7 @@ export async function generateConversationReply(options) {
       activeReply,
       activeReplyPriority,
       passiveImageComment,
-      attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
+      attackDuringAnswer: attackStyle && !pureAttack,
       requireRoleVoice: false,
     });
   }
@@ -731,7 +737,7 @@ export async function generateConversationReply(options) {
     activeReply,
     activeReplyPriority,
     passiveImageComment,
-    attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
+    attackDuringAnswer: attackStyle && !pureAttack,
   });
 
   // A unified role prompt should produce the whole answer, but a model can
@@ -740,7 +746,7 @@ export async function generateConversationReply(options) {
   // rebuttal generated with the same attack-scene vocabulary used by the
   // original role when the final quality check proves there is no direct
   // second-person comeback.
-  if (attackStyle && !pureThirdPartyAttack
+  if (attackStyle && !pureAttack
     && review.issues.includes('missing-direct-rebuttal')) {
     try {
       const rebuttalScene = selectAttackScene(history);
@@ -777,8 +783,16 @@ export async function generateConversationReply(options) {
       const rebuttalReview = reviewNormalReply(cleanRebuttal, {
         attackDuringAnswer: true,
       });
-      if (cleanRebuttal && !rebuttalReview.issues.includes('missing-direct-rebuttal')) {
-        answer = `${answer}\n${cleanRebuttal}`.trim();
+      const localRebuttalFallbacks = [
+        '你这个傻逼，脑子空成回音壁还学人对线，丢人都丢得没新意。',
+        '你这傻逼先把嘴闭上，连骂人都只会复读，还拿什么跟我对线？',
+        '你这个废物，张嘴就是家属套餐，脑子里连一句新话都没有。',
+      ];
+      const rebuttal = cleanRebuttal && !rebuttalReview.issues.includes('missing-direct-rebuttal')
+        ? cleanRebuttal
+        : localRebuttalFallbacks[rebuttalScene.id.length % localRebuttalFallbacks.length];
+      if (rebuttal) {
+        answer = `${answer}\n${rebuttal}`.trim();
         review = reviewNormalReply(answer, {
           thinkingEnabled,
           compactResponse,

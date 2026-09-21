@@ -14,6 +14,7 @@ import {
   hasRequiredIdentityRole,
   isThinSeriousReply,
   isHostileContent,
+  isDirectBotAttack,
   isInvalidPureMentionReply,
   removeInternalParticipantIds,
   reviewAttackReply,
@@ -393,6 +394,11 @@ test('评价第三方时不把攻击落到提问者身上', () => {
 
 test('识图、主动插话和引用历史中的辱骂不能自动让作者成为攻击对象', () => {
   assert.equal(shouldUseAttackStyle('这什么垃圾', [], {hasImageContext: true}), false);
+  assert.equal(shouldUseAttackStyle('你这个傻逼，滚一边去', [], {
+    hasImageContext: true,
+    quotedBot: true,
+    hasQuotedContent: true,
+  }), true);
   assert.equal(shouldUseAttackStyle('nm', [], {activeReply: true}), false);
   assert.equal(shouldUseAttackStyle('nm', [], {hasQuotedContent: true}), false);
   assert.equal(shouldUseAttackStyle('继续', [{role: 'user', content: '引用消息内容：nm$l\n当前消息：这是什么'}]), false);
@@ -406,6 +412,8 @@ test('识图、主动插话和引用历史中的辱骂不能自动让作者成�
 
 test('问题窗口内的明确攻击仍进入对线，普通攻击词不误触发', () => {
   assert.equal(shouldUseAttackStyle('你这个傻逼', [], { activeReply: true }), true);
+  assert.equal(shouldUseAttackStyle('@龙玉涛 臭傻逼你妈死了', []), true);
+  assert.equal(isDirectBotAttack('@龙玉涛 臭傻逼你妈死了'), true);
   assert.equal(shouldUseAttackStyle('这个傻逼，B站 P2 怎么抓', [], { activeReply: true }), true);
   assert.equal(shouldUseAttackStyle('请攻击张三', [], { activeReply: true }), true);
   assert.equal(shouldUseAttackStyle('nm', [], { activeReply: true }), false);

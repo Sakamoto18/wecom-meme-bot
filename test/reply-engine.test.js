@@ -106,7 +106,7 @@ test('明确要求骂引用作者时仍使用原有对线风格且不改成骂�
   assert.match(calls[0].additionalSystemPrompt, /不得把攻击落到指令发送者身上/);
 });
 
-test('攻击消息不联网，仍走统一角色回复生成', async () => {
+test('纯直接攻击不联网，恢复龙图临场对线生成', async () => {
   const calls = [];
   let searchCalls = 0;
   const result = await generateConversationReply({
@@ -128,7 +128,7 @@ test('攻击消息不联网，仍走统一角色回复生成', async () => {
     },
   });
 
-  assert.equal(result.mode, 'model');
+  assert.equal(result.mode, 'generated-attack');
   assert.equal(result.usedModel, true);
   assert.equal(result.attempts, 1);
   assert.equal(result.review.valid, true);
@@ -136,10 +136,32 @@ test('攻击消息不联网，仍走统一角色回复生成', async () => {
   assert.equal(result.searchAttempted, false);
   assert.equal(searchCalls, 0);
   assert.equal(calls.length, 1);
-  assert.match(calls[0].options.stableSystemPrompt, /龙玉涛统一角色基座/);
-  assert.match(calls[0].options.stableSystemPrompt, /先把问题答完/);
+  assert.match(calls[0].options.additionalSystemPrompt, /群聊临场回击/);
   assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /公开龙图语料参考/);
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
+});
+
+test('@机器人后直接接“臭傻逼你妈死了”仍走临场对线，不退回说教式回答', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '@龙玉涛 臭傻逼你妈死了',
+    modelInput: '@龙玉涛 臭傻逼你妈死了',
+    chatClient: {
+      isConfigured: true,
+      complete: async (history, input, options) => {
+        calls.push({ history, input, options });
+        return '你🐎的遗照还在墙上当背景板呢，急着来给自己加戏？';
+      },
+    },
+    webSearchEnabled: true,
+    webSearch: { search: async () => { throw new Error('should-not-search'); } },
+  });
+
+  assert.equal(result.mode, 'generated-attack');
+  assert.equal(result.attempts, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.usageSource, 'attack-reply');
+  assert.match(calls[0].options.additionalSystemPrompt, /群聊临场回击/);
 });
 
 test('对线语境中的追问仍保留回击状态但统一回答', async () => {
@@ -229,7 +251,7 @@ test('模型复述群聊历史的内部回复标签时只保留答案正文', as
   assert.doesNotMatch(result.answer, /机器人群聊回复记录|本轮回复对象|机器人回复：/);
 });
 
-test('孤立 ma 或与历史高度重复会触发一次模型重写', async () => {
+test('纯攻击中的孤立 ma 会触发一次模型重写', async () => {
   const drafts = [
     '你🐎的 ma 还在坟头笑呢。',
     '你🐎在贴吧旧帖里当封面呢，还让我给你翻第二页？',
@@ -245,8 +267,8 @@ test('孤立 ma 或与历史高度重复会触发一次模型重写', async () =
     webSearchEnabled: false,
   });
 
-  assert.equal(modelCalls, 1);
-  assert.equal(result.attempts, 1);
+  assert.equal(modelCalls, 2);
+  assert.equal(result.attempts, 2);
   assert.equal(result.review.valid, true);
   assert.doesNotMatch(result.answer, /(?:^|[^a-z])ma(?:$|[^a-z])/i);
 });
