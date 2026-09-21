@@ -443,6 +443,13 @@ export async function generateConversationReply(options) {
     replySequence,
     passiveImageComment,
   };
+  // Put the invariant persona and knowledge before the live mode/history suffix.
+  // DeepSeek can reuse this prefix across ordinary replies, active replies and
+  // review attempts even when the current question or search result changes.
+  const cachePrefixSystemPrompt = [
+    knowledgeContext,
+    buildNormalReplyStablePrompt({}),
+  ].filter(Boolean).join('\n\n');
   const stableSystemPrompt = [
     knowledgeContext,
     buildNormalReplyStablePrompt(normalPromptOptions),
@@ -473,6 +480,7 @@ export async function generateConversationReply(options) {
   try {
     answer = await chatClient.complete(history, userContent, {
       stableSystemPrompt,
+      cachePrefixSystemPrompt,
       additionalSystemPrompt,
       maxTokens: thinkingEnabled ? 20_000 : responseMaxTokens,
       usageSource: activeReply ? 'active-reply' : 'conversation-reply',
@@ -485,6 +493,7 @@ export async function generateConversationReply(options) {
     attempts += 1;
     answer = await chatClient.complete(history, revisionUserContent, {
       stableSystemPrompt,
+      cachePrefixSystemPrompt,
       additionalSystemPrompt,
       maxTokens: responseMaxTokens,
       usageSource: activeReply ? 'active-reply-thinking-fallback' : 'conversation-thinking-fallback',
@@ -497,6 +506,7 @@ export async function generateConversationReply(options) {
     try {
       const expandedAnswer = await chatClient.complete(history, revisionUserContent, {
         stableSystemPrompt,
+        cachePrefixSystemPrompt,
         additionalSystemPrompt,
         revisionSystemPrompt: buildSeriousReplyRetryPrompt(content, answer),
         maxTokens: 20_000,
@@ -544,6 +554,7 @@ export async function generateConversationReply(options) {
       try {
         const rewrittenAnswer = await chatClient.complete(history, revisionUserContent, {
           stableSystemPrompt,
+        cachePrefixSystemPrompt,
           additionalSystemPrompt,
           revisionSystemPrompt: needsSeriousExpansion
             ? buildSeriousReplyRetryPrompt(content, answer)
@@ -599,6 +610,7 @@ export async function generateConversationReply(options) {
     try {
       const correctedAnswer = await chatClient.complete(history, revisionUserContent, {
         stableSystemPrompt,
+        cachePrefixSystemPrompt,
         additionalSystemPrompt,
         revisionSystemPrompt: buildProtectedRoleCorrectionPrompt(
           answer,
@@ -636,6 +648,7 @@ export async function generateConversationReply(options) {
     try {
       const semanticallyReviewedAnswer = await chatClient.complete(history, revisionUserContent, {
         stableSystemPrompt,
+        cachePrefixSystemPrompt,
         additionalSystemPrompt,
         revisionSystemPrompt: buildProtectedRoleSemanticReviewPrompt(
           answer,

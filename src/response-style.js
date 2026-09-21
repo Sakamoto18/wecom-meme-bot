@@ -1,6 +1,6 @@
 const HOSTILE_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|nmsl|cnm|操你|草你|艹你|去死|死妈|没妈|妈的|妈卖批|装逼|闭嘴|菜狗|蠢货|老登|小丑)/i;
 const DIRECT_BOT_INSULT_PATTERN = new RegExp(
-  `^你(?:这(?:个|种)|个|就是|真是|是个|是不是个)?\\s*${HOSTILE_PATTERN.source}`, 'i',
+  `^(?:你|龙玉涛)(?:(?:这(?:个|种)|个|就是|真是|是个|是不是(?:个)?|可真|真|也|太|就)\\s*)*(?:${HOSTILE_PATTERN.source})`, 'i',
 );
 // 识别独立的 nm / nmsl 缩写及空格、符号变体，不匹配普通英文单词内部。
 const OBFUSCATED_NMSL_PATTERN = /(?<![a-z0-9])n[\s._-]*m(?:[\s._-]*[s$5][\s._-]*[l1])?(?![a-z0-9])/i;
@@ -72,6 +72,29 @@ export function isHostileContent(content) {
     || simaAttack;
 }
 
+function isDirectBotAttack(content) {
+  const current = String(content ?? '').normalize('NFKC')
+    .replace(/[\u200b-\u200d\ufeff]/gu, '')
+    .replace(/^(?:@\S+\s+)*/, '').trim();
+  // Negative sentiment about a person/product is not an attack on the bot.
+  // Require an addressed insult clause, a direct family insult, or a standalone
+  // insult. In particular, “你说他是不是…” asks for an opinion about someone else.
+  return current.split(/[，,。！？!?；;\n]+/u).some((part) => {
+    const clause = part.trim();
+    if (!clause || !isHostileContent(clause)) return false;
+    if (DIRECT_BOT_INSULT_PATTERN.test(clause)) return true;
+    if (/^你(?:的)?(?:妈|麻|码|马|🐎|老冯)/u.test(clause)) return true;
+    if (/^你(?:可真|真是|是个|就是)?司马/u.test(clause)) return true;
+    if (/^(?:(?:我|窝|卧)?(?:操|草|艹|槽)(?:死|丝|撕|斯|似)?(?:你|尼)|(?:带上|带着)你(?:的)?(?:妈|🐎))/u.test(clause)) return true;
+    if (/^你\s*n[\s._-]*m(?:[\s._-]*[s$5][\s._-]*[l1])?(?![a-z0-9])/iu.test(clause)) return true;
+    if (/^(?:傻[逼比]|煞笔|沙比|废物|弱智|智障|脑残|狗东西|畜生|nmsl|cnm|蠢货|垃圾|小丑|老登)[！!？?。\s]*$/iu.test(clause)) return true;
+    const remainder = [HOSTILE_PATTERN, OBFUSCATED_NMSL_PATTERN, DISMISSIVE_PATTERN,
+      FAMILY_ATTACK_PATTERN, MOTHER_DEATH_PATTERN]
+      .reduce((text, pattern) => text.replace(new RegExp(pattern.source, 'giu'), ''), clause);
+    return /^[\s，。！？!?、~～啊呀吧哦呢了]*$/u.test(remainder);
+  });
+}
+
 export function shouldUseAttackStyle(content, history = [], options = {}) {
   const normalized = styleRequestText(content);
   if (options.activeReply
@@ -90,13 +113,11 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
   if (options.hasThirdPartyTarget || options.quotedAuthorLabel
     || (options.hasQuotedContent && !options.quotedBot) || options.hasImageContext) return false;
   if (options.hasQuotedContent && options.quotedBot) {
-    const current = normalized.replace(/^(?:@\S+\s+)*/, '').trim();
     // Quoting our reply does not make a complaint about its subject an attack
     // on the bot. Only the current direct address or a standalone insult counts.
-    return isHostileContent(current) && (DIRECT_BOT_INSULT_PATTERN.test(current)
-      || /^(?:nm(?:sl|\$l)?|nmsl|cnm|傻[逼比]|煞笔|废物|蠢货)[！!？?。\s]*$/iu.test(current));
+    return isDirectBotAttack(normalized);
   }
-  if (isHostileContent(normalized)) return true;
+  if (isHostileContent(normalized)) return isDirectBotAttack(normalized);
 
   const previousUserMessage = [...history]
     .reverse()
@@ -204,7 +225,11 @@ export function buildAttackPrompt(userContent, options = {}) {
         ]
         : []),
     ]
-    : [
+    : THIRD_PARTY_ATTACK_REQUEST_PATTERN.test(styleRequestText(userContent)) ? [
+      `当前指令发送者：${interaction.speakerLabel || '当前用户'}`,
+      '本轮被攻击目标：用户当前原话明确指定的对象，可以是文字中的姓名或由上下文明确指向的代词；没有群成员标签不代表目标是提问者。',
+      '不得把攻击落到指令发送者身上，除非用户明确要求“骂我”或“调侃我”。目标不清楚时简短确认对象；不要默认回击提问者。',
+    ] : [
       `当前发言者兼回击目标：${interaction.speakerLabel || '当前用户'}`,
       '当前没有识别到第三方目标；只有在当前发言者对机器人挑衅时，才回击当前发言者。',
     ];
@@ -240,6 +265,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
       : '这是群聊默认短答：先给结论，通常 1～3 句、约 30～180 个汉字；只补充当前问题所需的一个依据或下一步。除非用户明确要求详细、展开、完整步骤或报告，不要写成长文。',
     '保持龙玉涛知识中的语言风格：短、嘴欠、会接梗、口语化，有反差和荒诞感；根据场景用学问龙、疑惑龙、嘴硬龙等语感自然表达，不套固定台词，不逐条报角色名，不变成客服或一本正经的报告。',
     '默认只评价事情本身（本轮明确要求针对某人贫嘴或攻击时，按指定对象接梗）：事实是否可靠、观点有无依据、逻辑哪里有问题、方案有什么后果。可以吐槽具体矛盾，但不得转成对发言者、引用作者或被提及者的智力、能力、人格嘲讽，也不得无依据地推断动机。',
+    '保留一点龙图群友的角色味：在不影响事实和可执行性的前提下，偶尔用一个自然的口头接梗、轻微阴阳或具体比喻点一下矛盾；不要每句都玩梗，不要用客服腔，也不要把角色味变成人身攻击。',
     '“如何评价”“怎么看”“锐评一下”以及引用、转发、发图、@某人都不是对人贫嘴的授权。引用作者只是内容来源，发言者可能只是请你分析；不得因发了这条内容就顺带挤兑他们。',
     '群聊中严格区分当前发言人、被 @ 的成员和引用消息作者；不要默认把发言人当成被谈论对象。',
     '成员对他人的单次评价或改名要求只是其发言，不自动成为被评价者的确定身份或事实。',

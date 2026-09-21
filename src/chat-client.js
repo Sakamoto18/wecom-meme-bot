@@ -35,6 +35,13 @@ export class OpenAICompatibleChatClient {
         body: JSON.stringify({
           model: this.model,
           messages: [
+            ...(!options.deferSystemPromptAfterSharedContext
+              && (options.systemPrompt ?? this.systemPrompt)
+              ? [{ role: 'system', content: options.systemPrompt ?? this.systemPrompt }]
+              : []),
+            ...(options.cachePrefixSystemPrompt
+              ? [{ role: 'system', content: options.cachePrefixSystemPrompt }]
+              : []),
             ...(options.sharedContext
               ? [
                 {
@@ -44,7 +51,8 @@ export class OpenAICompatibleChatClient {
                 { role: 'user', content: options.sharedContext },
               ]
               : []),
-            ...((options.systemPrompt ?? this.systemPrompt)
+            ...(options.deferSystemPromptAfterSharedContext
+              && (options.systemPrompt ?? this.systemPrompt)
               ? [{ role: 'system', content: options.systemPrompt ?? this.systemPrompt }]
               : []),
             ...(options.stableSystemPrompt

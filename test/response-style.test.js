@@ -345,6 +345,18 @@ test('引用和评价不是攻击授权，明确命令仍可进入对线', () =>
   assert.match(attackPrompt, /只有当前用户明确要求攻击该作者/);
 });
 
+test('评价第三方时不把攻击落到提问者身上', () => {
+  const text = '@龙玉涛 张小龙产品垃圾，还监控大众信息，你说他是不是畜牲';
+  assert.equal(shouldUseAttackStyle(text, [], {
+    hasThirdPartyTarget: true,
+    targetLabels: ['张小龙'],
+  }), false);
+  assert.equal(shouldUseAttackStyle('你这个傻逼ai', [], {
+    hasQuotedContent: true,
+    quotedBot: true,
+  }), true);
+});
+
 test('识图、主动插话和引用历史中的辱骂不能自动让作者成为攻击对象', () => {
   assert.equal(shouldUseAttackStyle('这什么垃圾', [], {hasImageContext: true}), false);
   assert.equal(shouldUseAttackStyle('nm', [], {activeReply: true}), false);
