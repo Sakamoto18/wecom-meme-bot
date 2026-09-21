@@ -543,7 +543,10 @@ export class ActiveReplyDecider {
     const force = options.force === true;
     const isOwner = engagement.ownerUserId === String(payload?.userId ?? '').trim();
     if (!force) {
-      if (engagement.replyCount >= this.engagementMaxReplies) {
+      // One initial answer plus at most two follow-ups by default. Count both
+      // kinds globally so a busy question window cannot keep consuming tokens
+      // through an unbounded follow-up chain.
+      if (engagement.replyCount + (engagement.followupCount ?? 0) >= this.engagementMaxReplies) {
         return { reply: false, reason: 'engagement-reply-limit' };
       }
       if (engagement.lastReplyAt > 0
@@ -756,7 +759,7 @@ export class ActiveReplyDecider {
         );
       }
       if (decision === 'followup') {
-        if ((engagement.followupCount ?? 0) >= 3) {
+        if (engagement.replyCount + (engagement.followupCount ?? 0) >= this.engagementMaxReplies) {
           return { reply: false, reason: 'engagement-followup-limit' };
         }
         return { reply: true, reason: 'engagement-followup-must' };
