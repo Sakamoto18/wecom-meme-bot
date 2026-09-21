@@ -288,11 +288,16 @@ export async function generateConversationReply(options) {
     hasImageContext,
     hasQuotedContent,
   });
-  if (attackStyle && !activeReply) {
+  // A standalone attack remains a dedicated short attack turn. Once the
+  // message also belongs to an active question/engagement window, it uses the
+  // unified answer-plus-rebuttal path below.
+  const pureThirdPartyAttack = attackStyle && !activeReply;
+  if (pureThirdPartyAttack) {
     const firstScene = selectAttackScene(history);
     const firstDraft = await chatClient.complete(history, userContent, {
       additionalSystemPrompt: [
         imageSafetyPrompt,
+        knowledgeContext,
         protectedIdentityContext,
         memoryContext,
         buildAttackPrompt(content, {
@@ -317,7 +322,8 @@ export async function generateConversationReply(options) {
       });
       const secondDraft = await chatClient.complete(history, revisionUserContent, {
         additionalSystemPrompt: [
-          imageSafetyPrompt,
+        imageSafetyPrompt,
+        knowledgeContext,
           protectedIdentityContext,
           memoryContext,
           buildAttackRetryPrompt(
@@ -449,7 +455,7 @@ export async function generateConversationReply(options) {
     activeReplyPriority,
     replySequence,
     passiveImageComment,
-    attackDuringAnswer: attackStyle && activeReply,
+    attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
   };
   // Put the invariant persona and knowledge before the live mode/history suffix.
   // DeepSeek can reuse this prefix across ordinary replies, active replies and
