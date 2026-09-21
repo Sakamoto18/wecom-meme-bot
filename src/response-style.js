@@ -326,7 +326,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
   }
   if (options.attackDuringAnswer) {
     lines.push(
-      '本轮有明确攻击或挑衅信号，但回答任务仍然优先。先继续回答当前问题和可执行结论，再必须补一句有力度的自然回击，指出对方的攻击、态度或表达有多离谱；回击可以冲，但不要只骂不答、不要攻击无关第三方、不要编造现实亲属事实。用户回到讨论时，立即切回理性讨论格式。',
+      '本轮有明确攻击或挑衅信号，但回答任务仍然优先。先继续回答当前问题和可执行结论，再必须补一句直接、明确、带第二人称的回击；只说“离谱”“抽象”“态度不好”不算回击，要像之前对线一样真正接住这句骂，用一次冲一点的辱骂或荒诞画面收尾。回击对象只能是当前攻击者，不要攻击无关第三方，不要编造现实亲属事实。用户回到讨论时，立即切回理性讨论格式。',
     );
   }
   if (options.replySequence && !compactActiveReply && !options.passiveImageComment) {
@@ -403,6 +403,9 @@ export function reviewNormalReply(answer, options = {}) {
   if (NORMAL_FAMILY_ATTACK_PATTERN.test(normalized) && !options.attackDuringAnswer) {
     issues.push('family-attack-in-normal-mode');
   }
+  if (options.attackDuringAnswer && !isDirectBotAttack(normalized)) {
+    issues.push('missing-direct-rebuttal');
+  }
   if (options.requireRoleVoice
     && normalized.length >= 18
     && !ROLE_VOICE_PATTERN.test(normalized)
@@ -424,6 +427,9 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
     `未通过项：${(issues ?? []).join(', ')}`,
     buildNormalReplyContextPrompt(options),
     '保留初稿中的正确事实和必要信息，直接输出重写后的最终答案，不解释复核过程。删掉无关的人身嘲讽和强加的损人收尾；不能为了角色风格追加攻击。如果未通过项包含 missing-role-voice，只在事情本身上补一处自然口语或轻微阴阳，不攻击当前发言者、引用作者或第三方。',
+    options.attackDuringAnswer
+      ? '本轮明确是当前发言者在攻击机器人：回答问题之后必须补一句直接、明确的回击，不能只写“离谱”“不客气”或继续复述问题。回击对象只能是当前攻击者；可以用一次直接的第二人称辱骂和荒诞画面，但不能编造现实亲属事实，也不能把攻击落到无关第三方。'
+      : '',
     ...(options.requiredIdentityRole
       ? [`必须直接、肯定地称当前发言者为“${options.requiredIdentityRole}”；不许用段子或其他身份替代。`]
       : []),
