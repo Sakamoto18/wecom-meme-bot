@@ -100,12 +100,20 @@ function isDirectBotAttack(content) {
 
 export function shouldUseAttackStyle(content, history = [], options = {}) {
   const normalized = styleRequestText(content);
+  const currentMessageAttack = isHostileContent(normalized)
+    && !/^n[\s._-]*m(?:[\s._-]*[s$5][\s._-]*[l1])?$/iu.test(normalized)
+    && !options.hasThirdPartyTarget
+    && !options.quotedAuthorLabel
+    && !options.hasQuotedContent
+    && !options.hasImageContext;
   const explicitAttackInQuestionWindow = THIRD_PARTY_ATTACK_REQUEST_PATTERN.test(normalized)
+    || currentMessageAttack
     || (/^(?:你|龙玉涛)/u.test(normalized) && isDirectBotAttack(normalized));
   // An open question window must not turn every hostile-looking word into an
   // attack, but it also must not suppress an explicit attack request or a
   // direct insult aimed at the bot.
   if (options.activeReply && !explicitAttackInQuestionWindow) return false;
+  if (options.activeReply && currentMessageAttack) return true;
   // Active question-window replies still need to honor an explicit attack
   // request or a direct insult aimed at the bot.  The old unconditional
   // activeReply guard skipped all attack detection, so hostile follow-ups in
