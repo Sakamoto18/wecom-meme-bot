@@ -360,9 +360,9 @@ test('群级话题窗口允许其他真人承接，但按 18 秒节流且只有�
   assert.deepEqual(expired, { reply: false, reason: 'probability' });
 });
 
-test('连续话题里的追问和纠正不再走概率阀门，最多补三轮', async () => {
+test('连续话题里的追问和纠正不再走概率阀门，最多补两轮', async () => {
   let currentTime = 10_000;
-  const outputs = ['followup', 'followup', 'followup', 'followup'];
+  const outputs = ['followup', 'followup', 'followup'];
   const decider = new ActiveReplyDecider({
     chatClient: {
       isConfigured: true,
@@ -372,12 +372,13 @@ test('连续话题里的追问和纠正不再走概率阀门，最多补三轮',
     engagementWindowMs: 100_000,
     engagementReplyCooldownMs: 60_000,
     engagementReplyProbability: 0,
-    engagementMaxReplies: 4,
+    engagementMaxReplies: 3,
     now: () => currentTime,
     random: () => 1,
   });
   decider.openEngagement(groupPayload({ userId: 'u1', text: '@龙玉涛 先说说这个方案', mentions: [{ userId: 'bot' }] }));
-  for (let index = 0; index < 3; index += 1) {
+  decider.confirmReply(groupPayload({ userId: 'u1' }), { reply: true, reason: 'engagement-group-may' });
+  for (let index = 0; index < 2; index += 1) {
     currentTime += 1_000;
     const result = await decider.shouldReply({
       payload: groupPayload({ userId: 'u1', text: index === 1 ? '你刚刚理解反了' : '那下一步呢？' }),
