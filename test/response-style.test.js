@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildAttackPrompt,
   buildNormalReplyPrompt,
+  buildNormalReplyStablePrompt,
   buildNormalReplyRetryPrompt,
   buildNormalReplyFallback,
   buildProtectedIdentityFallback,
@@ -230,6 +231,13 @@ test('普通回复保留龙玉涛语感但不强制攻击任何参与者', () =>
   assert.match(prompt, /只有本轮明确要求攻击或调侃某人/);
   assert.doesNotMatch(prompt, /至少写一句.*损人话|温和吐槽不算完成/);
   assert.match(prompt, /至少保留一处自然的口头钩子/);
+});
+
+test('普通正经回答也明确要求带事情本身的贫嘴口吻', () => {
+  const prompt = buildNormalReplyStablePrompt({});
+  assert.match(prompt, /角色口吻是硬要求/);
+  assert.match(prompt, /普通答复必须在给出结论后至少保留一处自然的口头钩子/);
+  assert.match(prompt, /不要只发客服式结论/);
 });
 
 test('普通回复质量复核要求角色钩子但不把角色钩子等同于骂人', () => {
