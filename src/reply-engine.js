@@ -734,6 +734,66 @@ export async function generateConversationReply(options) {
     attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
   });
 
+  // A unified role prompt should produce the whole answer, but a model can
+  // still turn a direct insult into a lecture about the insult. Keep that
+  // answer instead of switching personas; only add the missing, short
+  // rebuttal generated with the same attack-scene vocabulary used by the
+  // original role when the final quality check proves there is no direct
+  // second-person comeback.
+  if (attackStyle && !pureThirdPartyAttack
+    && review.issues.includes('missing-direct-rebuttal')) {
+    try {
+      const rebuttalScene = selectAttackScene(history);
+      const rebuttalDraft = await chatClient.complete(
+        history,
+        '只输出最后一句直接回击，不重复前面的答案。',
+        {
+          stableSystemPrompt,
+          cachePrefixSystemPrompt,
+          additionalSystemPrompt: [
+            imageSafetyPrompt,
+            protectedIdentityContext,
+            memoryContext,
+            buildAttackPrompt(content, {
+              history,
+              attackScene: rebuttalScene,
+              interactionContext,
+              activeReply: true,
+            }),
+          ].filter(Boolean).join('\n\n'),
+          revisionSystemPrompt: [
+            '前面的统一角色回答已经完成问题，只补最后一句临场回击。',
+            '禁止解释骂人、评价词穷、劝对方文明或复述脏字；必须直接对当前攻击者说话，冲一点，短句收住。',
+          ].join('\n'),
+          maxTokens: 160,
+          usageSource: 'attack-rebuttal-fallback',
+          timeoutMs: 45_000,
+          thinking: { type: 'disabled' },
+        },
+      );
+      const cleanRebuttal = removeInternalReplyMetadata(
+        removeInternalParticipantIds(removeLiteralLatinMa(rebuttalDraft)),
+      );
+      const rebuttalReview = reviewNormalReply(cleanRebuttal, {
+        attackDuringAnswer: true,
+      });
+      if (cleanRebuttal && !rebuttalReview.issues.includes('missing-direct-rebuttal')) {
+        answer = `${answer}\n${cleanRebuttal}`.trim();
+        review = reviewNormalReply(answer, {
+          thinkingEnabled,
+          compactResponse,
+          requiredIdentityRole,
+          activeReply,
+          activeReplyPriority,
+          passiveImageComment,
+          attackDuringAnswer: true,
+        });
+      }
+    } catch {
+      // Keep the answered question if the optional rebuttal call fails.
+    }
+  }
+
   return {
     answer: removeInternalParticipantIds(answer),
     mode: requiredIdentityRole

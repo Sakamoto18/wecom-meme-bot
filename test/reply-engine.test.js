@@ -183,6 +183,30 @@ test('问题窗口内遭到攻击时仍先回答问题，再允许简短回击',
   assert.match(calls[0].stableSystemPrompt, /若当前发言者明确挑衅或攻击机器人/);
 });
 
+test('统一角色初稿把回击写成说教时，追加一次真正的临场对线句', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '你这个傻逼，P2 怎么抓？',
+    modelInput: '当前问题：你这个傻逼，P2 怎么抓？',
+    activeReply: true,
+    activeReplyPriority: 'must',
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push(options);
+        if (options.usageSource === 'attack-rebuttal-fallback') {
+          return '你这个傻逼，张嘴和错参数一样，先回炉重配去。';
+        }
+        return '先在链接后加 p=2；不要只会复读脏字。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.ok(calls.some((call) => call.usageSource === 'attack-rebuttal-fallback'));
+  assert.match(result.answer, /你这个傻逼，张嘴和错参数一样/);
+  assert.equal(result.review.valid, true);
+});
+
 test('模型复述群聊历史的内部回复标签时只保留答案正文', async () => {
   const result = await generateConversationReply({
     content: '上班时间打个蛋的游戏',
