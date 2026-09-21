@@ -103,8 +103,8 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
   const currentMessageAttack = isHostileContent(normalized)
     && !/^n[\s._-]*m(?:[\s._-]*[s$5][\s._-]*[l1])?$/iu.test(normalized)
     && !options.hasThirdPartyTarget
-    && !options.quotedAuthorLabel
-    && !options.hasQuotedContent
+    && (!options.quotedAuthorLabel || options.quotedBot)
+    && (!options.hasQuotedContent || options.quotedBot)
     && !options.hasImageContext;
   const explicitAttackInQuestionWindow = THIRD_PARTY_ATTACK_REQUEST_PATTERN.test(normalized)
     || currentMessageAttack
