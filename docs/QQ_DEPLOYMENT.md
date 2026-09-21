@@ -146,13 +146,13 @@ LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 
 ### 群级用量、缓存与日报
 
-读空气的初次判定（`active-reply-decision`）和发言价值复核（`active-value-gate`）先发送稳定的中立规则，再发送动态群聊上下文、引用和当前任务；普通回复也先发送稳定的龙图知识/角色规则，再发送历史、搜索摘要和本轮问题。这样供应商可以复用跨消息的稳定前缀，不会复用其他群的聊天内容，也不复用旧判定答案。角色规则保留短、嘴欠、会接梗的语气：普通事实回答最多自然带一处轻微口头接梗或针对事情的阴阳，不强行每句玩梗，不攻击当前发言者或引用作者。收益取决于供应商缓存写入时机与保留策略，需要比较改造前后的缓存输入 Token / 输入 Token；本地前缀一致性测试不能代表线上缓存已经命中。
+读空气的初次判定（`active-reply-decision`）和发言价值复核（`active-value-gate`）先发送稳定的中立规则，再发送动态群聊上下文、引用和当前任务；普通回复也先发送稳定的龙图知识/角色规则，再发送历史、搜索摘要和本轮问题。这样供应商可以复用跨消息的稳定前缀，不会复用其他群的聊天内容，也不复用旧判定答案。角色规则保留短、嘴欠、会接梗的语气：除敏感求助、纯确认和单个事实外，普通回答至少保留一处落在事情本身的口语钩子或轻微阴阳，可说“说白了”“这就有点离谱”“破方案/抽象”，但不攻击当前发言者或引用作者。收益取决于供应商缓存写入时机与保留策略，需要比较改造前后的缓存输入 Token / 输入 Token；本地前缀一致性测试不能代表线上缓存已经命中。
 
 QQ 后端把每次真实上游 LLM 调用、返回的输入/输出 Token、模型缓存命中 Token、真实联网请求和本地搜索缓存命中写入独立的 `data/qq-usage.sqlite`，默认保留约 35 天。记录以不可变的 QQ `group_id` 归属；日报再通过 OneBot 动态解析当前群名，因此改群名不会让限额失效。一次 Exa 复合查询如果实际请求两次，会准确记为两次；命中本地缓存不会冒充上游调用。
 
 所有群默认启用动态配额。程序按固定群号统计近 7 日的日均群消息数和日均活跃发言人数，取两项中较高的活跃档，把群级硬上限依次折算为 60%、75%、85%、95% 或 100%。额度随正常活跃度上升，但最高不会超过普通/大型群上限或单群覆盖值，因而不会随消息量无限放大；五分钟刷新一次档位，避免瞬时刷屏立刻抬高额度。日报会显示每个群当前档位、日均消息/人数、折算系数和实际动态额度。
 
-大型群自动判定只看 QQ 返回的当前 `member_count` 是否严格超过 120；`max_member_count` 只是群容量，不能当作当前人数。实际人数缺失时保持普通群，避免把小群误套大型群策略。也可以用 `QQ_USAGE_LARGE_GROUPS` 按群号直接指定并强制覆盖。大型群使用更低的硬上限，只向模型发送最近 20 条、最多 8000 字上下文；所有群的普通静默消息最多每 180 秒进行一次“是否主动接话”的模型判断；出现问句或多人热聊时，采样间隔缩短为默认 15 秒（大型群高峰 30 秒），是否未解决由语义判定确认。连续话题窗口内的追问、纠正和补步骤会直接续答，默认最多连续补三轮；热聊中的具体求助或解决方案会优先判断，仍保持短答。明确 `@机器人` 和引用机器人不受静默冷却影响；所有群默认不自动生成会话摘要或成员画像，避免旁观消息在后台持续触发 LLM，确需摘要时才把 `QQ_USAGE_GROUP_BACKGROUND_SUMMARIES_ENABLED` 显式设为 `true`。普通回答、识图和评价统一加载龙玉涛知识，保留角色语感，但不再因“毒舌不够”触发二次复核或本地追加损人话。引用作者只表示内容来源，除非用户明确要求攻击该人，否则只评价内容；主动插话同样只谈事情本身。空内容、客服腔、亲属攻击、正经答案完整性和受保护身份仍按原有质量检查处理。动态配额与大型群策略会叠加：先确定该群的硬上限，再乘当前活跃档系数。
+大型群自动判定只看 QQ 返回的当前 `member_count` 是否严格超过 120；`max_member_count` 只是群容量，不能当作当前人数。实际人数缺失时保持普通群，避免把小群误套大型群策略。也可以用 `QQ_USAGE_LARGE_GROUPS` 按群号直接指定并强制覆盖。明确问答的普通群上下文最多保留最近 40 条/12000 字，大型群最多 12 条/5000 字；旁观判定和主动插话在普通群最多带 8 条/3500 字，大型群单独收紧为 6 条/2500 字，高峰再收紧为 4 条/1400 字。这样短答模式不会为每次读空气重复发送整段旧聊天。所有群的普通静默消息最多每 180 秒进行一次“是否主动接话”的模型判断；出现问句或多人热聊时，采样间隔缩短为默认 15 秒（大型群高峰 30 秒），是否未解决由语义判定确认。连续话题窗口内的追问、纠正和补步骤会直接续答，默认最多连续补三轮；热聊中的具体求助或解决方案会优先判断，仍保持短答。明确 `@机器人` 和引用机器人不受静默冷却影响；所有群的群级滚动摘要和成员画像默认关闭（包括明确回复后的群摘要），只有显式设为 `true` 才启用；私人会话仍保留原有摘要。普通回答、识图和评价统一加载龙玉涛知识，除敏感场景外至少保留一处针对事情本身的口语钩子，不攻击引用作者或提问者。引用作者只表示内容来源，除非用户明确要求攻击该人，否则只评价内容；主动插话同样只谈事情本身。空内容、客服腔、亲属攻击、正经答案完整性和受保护身份仍按原有质量检查处理。动态配额与大型群策略会叠加：先确定该群的硬上限，再乘当前活跃档系数。
 如需让某个群保持普通群额度，可在 `QQ_USAGE_LARGE_GROUP_EXCLUDES` 中按群号排除；排除优先于自动判定和大型群强制列表。
 
 ```dotenv
@@ -172,8 +172,8 @@ QQ_USAGE_LARGE_GROUP_EXCLUDES=
 # 自动判定大型群时，真实 QQ 当前群员数必须严格大于该值；群容量不参与判定。
 QQ_USAGE_LARGE_GROUP_MEMBER_LIMIT_THRESHOLD=120
 QQ_USAGE_CACHED_TOKEN_WEIGHT_PERCENT=10
-QQ_USAGE_PASSIVE_TOKEN_BUDGET_PERCENT=70
-QQ_USAGE_PEAK_PASSIVE_TOKEN_BUDGET_PERCENT=40
+QQ_USAGE_PASSIVE_TOKEN_BUDGET_PERCENT=50
+QQ_USAGE_PEAK_PASSIVE_TOKEN_BUDGET_PERCENT=25
 QQ_USAGE_LARGE_GROUP_SECONDARY_REVIEW_PERCENT=20
 QQ_USAGE_ADAPTIVE_LIMITS_ENABLED=true
 QQ_USAGE_ACTIVITY_LOOKBACK_DAYS=7
@@ -183,10 +183,20 @@ QQ_USAGE_ACTIVITY_LIMIT_PERCENTAGES=60,75,85,95,100
 QQ_USAGE_LARGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS=180
 QQ_USAGE_PEAK_LARGE_GROUP_PASSIVE_DECISION_MULTIPLIER=3
 # 旧 QQ_USAGE_PEAK_LARGE_GROUP_ENGAGEMENT_DECISION_COOLDOWN_SECONDS 已不再控制连续追问
-QQ_USAGE_LARGE_GROUP_HISTORY_MESSAGES=20
-QQ_USAGE_LARGE_GROUP_HISTORY_CHARACTERS=8000
-QQ_USAGE_PEAK_LARGE_GROUP_HISTORY_MESSAGES=10
-QQ_USAGE_PEAK_LARGE_GROUP_HISTORY_CHARACTERS=4000
+QQ_USAGE_GROUP_HISTORY_MESSAGES=40
+QQ_USAGE_GROUP_HISTORY_CHARACTERS=12000
+QQ_USAGE_LARGE_GROUP_HISTORY_MESSAGES=12
+QQ_USAGE_LARGE_GROUP_HISTORY_CHARACTERS=5000
+QQ_USAGE_OBSERVATION_HISTORY_MESSAGES=8
+QQ_USAGE_OBSERVATION_HISTORY_CHARACTERS=3500
+QQ_USAGE_PEAK_OBSERVATION_HISTORY_MESSAGES=5
+QQ_USAGE_PEAK_OBSERVATION_HISTORY_CHARACTERS=2200
+QQ_USAGE_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES=6
+QQ_USAGE_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS=2500
+QQ_USAGE_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES=4
+QQ_USAGE_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS=1400
+QQ_USAGE_PEAK_LARGE_GROUP_HISTORY_MESSAGES=6
+QQ_USAGE_PEAK_LARGE_GROUP_HISTORY_CHARACTERS=2500
 QQ_USAGE_LARGE_GROUP_BACKGROUND_SUMMARIES_ENABLED=false
 QQ_USAGE_GROUP_PASSIVE_DECISION_COOLDOWN_SECONDS=180
 QQ_USAGE_DISCUSSION_DECISION_COOLDOWN_SECONDS=15
@@ -205,7 +215,7 @@ QQ_USAGE_GROUP_LLM_DAILY_TOKEN_LIMITS=298818522=800000
 QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS=298818522=100
 ```
 
-每日 Token 限额使用“折算配额 Token”：未缓存输入和输出按 100% 计算，供应商明确返回的缓存命中输入默认按 10% 计算；日报仍同时展示完整原始 Token 和缓存率。后台摘要、读空气判定、主动插话最多使用动态日配额的 70%，剩余 30% 留给明确请求。达到联网搜索日上限时只跳过新的上游检索，模型仍可在没有新搜索结果的情况下回答；达到后台预留线时后台调用静默停止；只有触及总 LLM 上限时明确请求才会收到限额提示。
+每日 Token 限额使用“折算配额 Token”：未缓存输入和输出按 100% 计算，供应商明确返回的缓存命中输入默认按 10% 计算；日报仍同时展示完整原始 Token 和缓存率。后台摘要、读空气判定、主动插话最多使用动态日配额的 50%，高峰时段大型群再降到 25%，剩余额度留给明确请求。达到联网搜索日上限时只跳过新的上游检索，模型仍可在没有新搜索结果的情况下回答；达到后台预留线时后台调用静默停止；只有触及总 LLM 上限时明确请求才会收到限额提示。
 
 搜索结果按公开查询内容跨群安全复用。时效查询默认缓存 15 分钟，通用查询 6 小时，网络梗 12 小时，龙图资料 24 小时：
 

@@ -7,6 +7,7 @@ import {
   buildNormalReplyStablePrompt,
   buildNormalReplyRetryPrompt,
   buildNormalReplyFallback,
+  ensureRoleVoice,
   buildProtectedIdentityFallback,
   buildProtectedSelfIdentityPrompt,
   buildPureMentionReplyPrompt,
@@ -603,6 +604,7 @@ export async function generateConversationReply(options) {
       activeReply,
       activeReplyPriority,
       passiveImageComment,
+      requireRoleVoice: false,
     });
   }
 
@@ -688,6 +690,18 @@ export async function generateConversationReply(options) {
     protectedRoleSanitized = true;
   }
   answer = removeInternalReplyMetadata(answer) || buildNormalReplyFallback();
+  answer = ensureRoleVoice(answer, {
+    // Keep the normal short-chat voice when the model omitted it, but do not
+    // prepend a canned phrase to image reports, active one-line interjections,
+    // or image reports. Deliberate thinking-mode answers still need the same
+    // light role cue; otherwise the model can drift into a sterile bulletin
+    // even though the stable prompt already asked for conversational wording.
+    required: !recordSummary
+      && !requiredIdentityRole
+      && !activeReply
+      && !passiveImageComment
+      && !hasImageContext,
+  });
   review = reviewNormalReply(answer, {
     thinkingEnabled,
     compactResponse,

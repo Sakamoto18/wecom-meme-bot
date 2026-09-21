@@ -21,6 +21,7 @@ const SECONDARY_REVIEW_SOURCES = new Map([
 ]);
 const LOCALLY_REPAIRABLE_REVIEW_ISSUES = new Set([
   'missing-venomous-bite',
+  'missing-role-voice',
 ]);
 const PRICE_UNIT_TOKENS = 1_000_000;
 const DEEPSEEK_PRICING_SOURCE = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/';

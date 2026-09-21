@@ -28,6 +28,9 @@ const COMPLEX_NONTECHNICAL_PATTERN = /(?:如何|怎么|为什么|为何|解释|�
 const EXPLICIT_DETAIL_REQUEST_PATTERN = /(?:详细|展开|完整(?:地)?|全面|深入|长文|报告|逐步|一步一步|逐条|逐张|细说|多讲|列出(?:步骤|原因|优缺点))/i;
 const TECHNICAL_TOPIC_PATTERN = /(?:网络|设备|接口|API|SDK|模型|代码|程序|数据库|服务器|部署|系统|配置|性能|带宽|路由|交换机|开发|产品|文档|spec|方案)/i;
 const CUSTOMER_SERVICE_PATTERN = /(?:您好|您这|您想|请问您|很高兴为您服务|需要我帮忙|需要我搭把手|有什么可以帮|有什么想跟我聊|听到(?:你(?:的)?)?呼唤|不用拘束|尽管(?:说|开口)|随时为您|希望能帮到您|感谢您的提问)/i;
+// 这是“像群友说话”的轻量钩子，不等于攻击性词汇。它可以落在事实、
+// 方案或结果上，让普通答案保留龙图语感，同时避开当前发言者和引用作者。
+const ROLE_VOICE_PATTERN = /(?:不是[，,]?哥们|说白了|这就|别把|老老实实|锅在|有点(?:离谱|抽象|拉胯|尴尬)|抽象|离谱|拉胯|摆烂|折腾|绷不住|汗流浃背|白等|别光|别急|省得|硬是|破(?:方案|事|局|系统|配置)|真够|就这|多嘴|不绕|不装|差一截|一摊活|扛不住|直接看|别拿|免得|吃亏)/i;
 const NORMAL_FAMILY_ATTACK_PATTERN = /(?:你🐎|(?:操|草|艹|槽)(?:你|他|她|它)?(?:的)?妈|(?:你|他|她|它)(?:的)?妈.{0,8}(?:死|没|坟|骨灰|遗照)|老冯|族谱|户口本|全家)/i;
 const ATTACK_SCENES = [
   {
@@ -265,7 +268,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
       : '这是群聊默认短答：先给结论，通常 1～3 句、约 30～180 个汉字；只补充当前问题所需的一个依据或下一步。除非用户明确要求详细、展开、完整步骤或报告，不要写成长文。',
     '保持龙玉涛知识中的语言风格：短、嘴欠、会接梗、口语化，有反差和荒诞感；根据场景用学问龙、疑惑龙、嘴硬龙等语感自然表达，不套固定台词，不逐条报角色名，不变成客服或一本正经的报告。',
     '默认只评价事情本身（本轮明确要求针对某人贫嘴或攻击时，按指定对象接梗）：事实是否可靠、观点有无依据、逻辑哪里有问题、方案有什么后果。可以吐槽具体矛盾，但不得转成对发言者、引用作者或被提及者的智力、能力、人格嘲讽，也不得无依据地推断动机。',
-    '保留一点龙图群友的角色味：在不影响事实和可执行性的前提下，偶尔用一个自然的口头接梗、轻微阴阳或具体比喻点一下矛盾；不要每句都玩梗，不要用客服腔，也不要把角色味变成人身攻击。',
+    '保留龙图群友的角色味：除敏感求助、纯确认和只需报出单个事实/数字的场景外，每条普通答复至少保留一处自然的口头钩子、轻微阴阳或具体比喻，点在事实、方案、证据或结果的矛盾上。可用“说白了”“这就有点离谱”“别把 X 当 Y”“老老实实”“锅在这”等口语，必要时对事情说“破方案/抽象/拉胯”，但不要硬塞脏字；角色味不能变成人身攻击，也不要每句套同一台词。',
     '“如何评价”“怎么看”“锐评一下”以及引用、转发、发图、@某人都不是对人贫嘴的授权。引用作者只是内容来源，发言者可能只是请你分析；不得因发了这条内容就顺带挤兑他们。',
     '群聊中严格区分当前发言人、被 @ 的成员和引用消息作者；不要默认把发言人当成被谈论对象。',
     '成员对他人的单次评价或改名要求只是其发言，不自动成为被评价者的确定身份或事实。',
@@ -373,6 +376,12 @@ export function reviewNormalReply(answer, options = {}) {
   if (NORMAL_FAMILY_ATTACK_PATTERN.test(normalized)) {
     issues.push('family-attack-in-normal-mode');
   }
+  if (options.requireRoleVoice
+    && normalized.length >= 18
+    && !ROLE_VOICE_PATTERN.test(normalized)
+    && !SENSITIVE_SUPPORT_PATTERN.test(normalized)) {
+    issues.push('missing-role-voice');
+  }
   if (options.requiredIdentityRole
     && !hasRequiredIdentityRole(normalized, options.requiredIdentityRole)) {
     issues.push('missing-protected-identity');
@@ -387,7 +396,7 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
     `初稿：${String(draft ?? '').trim()}`,
     `未通过项：${(issues ?? []).join(', ')}`,
     buildNormalReplyContextPrompt(options),
-    '保留初稿中的正确事实和必要信息，直接输出重写后的最终答案，不解释复核过程。删掉无关的人身嘲讽和强加的损人收尾，不能为了角色风格追加攻击。',
+    '保留初稿中的正确事实和必要信息，直接输出重写后的最终答案，不解释复核过程。删掉无关的人身嘲讽和强加的损人收尾；不能为了角色风格追加攻击。如果未通过项包含 missing-role-voice，只在事情本身上补一处自然口语或轻微阴阳，不攻击当前发言者、引用作者或第三方。',
     ...(options.requiredIdentityRole
       ? [`必须直接、肯定地称当前发言者为“${options.requiredIdentityRole}”；不许用段子或其他身份替代。`]
       : []),
@@ -399,12 +408,26 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
         ? '这是默认群聊短答的压缩重写：只保留本轮新问的结论或操作，必要时补一个条件，最终 1～2 句、约 30～120 个汉字；不要平铺搜索来源，不重讲上一轮已解释的步骤，不攻击引用作者或提问者。'
         : (options.thinkingEnabled
         ? '这是深度答案的风格重写：保留会改变结论的关键信息，删掉复述和重复，答案说清楚就结束。'
-        : '这是群聊短回复的风格重写：保持 1～3 句，直接说内容，不写成客服或正式总结。')),
+        : '这是群聊短回复的风格重写：保持 1～3 句，直接说内容，保留一处自然的龙图口语钩子，不写成客服或正式总结。')),
   ].join('\n');
 }
 
 export function buildNormalReplyFallback() {
   return '这条信息还不足以判断，得看具体内容。';
+}
+
+export function hasRoleVoice(value) {
+  return ROLE_VOICE_PATTERN.test(String(value ?? '').replace(/\s+/g, ' ').trim());
+}
+
+export function ensureRoleVoice(value, options = {}) {
+  const normalized = String(value ?? '').trim();
+  if (!options.required || normalized.length < 18 || hasRoleVoice(normalized)
+    || SENSITIVE_SUPPORT_PATTERN.test(normalized)) {
+    return normalized;
+  }
+  // 只做无语义改写的安全兜底；正常情况下由质量复核模型自然补入口语。
+  return `说白了，${normalized}`;
 }
 
 export function buildPureMentionReplyPrompt() {
@@ -438,7 +461,7 @@ export function buildSeriousReplyRetryPrompt(question, draft) {
     '初稿过短或缺少必要权衡，不能直接发送。请重新独立核对事实并输出一份完整但不啰嗦的答案，不要解释你正在重写。',
     '保留正确结论，纠正不准确或过时的说法；给出推荐依据、主要备选方案、兼容性/限制、风险和可执行建议。',
     '不要为了凑字重复内容；结论、关键依据、限制和必要操作说清即可。',
-    '重写后的主体保持准确完整，评价事实、逻辑和方案本身；不追加攻击发言者、引用作者的句子，也不把完整性复核变成贫嘴要求。保持口语，答案说清楚就结束。',
+    '重写后的主体保持准确完整，评价事实、逻辑和方案本身；不追加攻击发言者、引用作者的句子，但保留一处自然口语钩子，不把完整性复核变成强行骂人。保持口语，答案说清楚就结束。',
   ].join('\n');
 }
 

@@ -700,7 +700,8 @@ export async function createQqRuntime() {
       process.env.QQ_USAGE_LARGE_GROUP_EXCLUDES,
     ),
     largeGroupMemberLimitThreshold: parseNonnegativeInteger(
-      process.env.QQ_USAGE_LARGE_GROUP_MEMBER_LIMIT_THRESHOLD,
+      process.env.QQ_USAGE_LARGE_GROUP_MEMBER_LIMIT_THRESHOLD
+        ?? process.env.QQ_USAGE_LARGE_GROUP_MEMBER_THRESHOLD,
       120,
     ),
     groupPassiveDecisionCooldownMs: (parsePositiveNumber(
@@ -718,16 +719,46 @@ export async function createQqRuntime() {
     ) ?? 3,
     largeGroupHistoryMessages: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_HISTORY_MESSAGES,
-    ) ?? 20,
+    ) ?? 12,
     largeGroupHistoryCharacters: parsePositiveInteger(
       process.env.QQ_USAGE_LARGE_GROUP_HISTORY_CHARACTERS,
-    ) ?? 8_000,
+    ) ?? 5_000,
+    groupHistoryMessages: parsePositiveInteger(
+      process.env.QQ_USAGE_GROUP_HISTORY_MESSAGES,
+    ) ?? 40,
+    groupHistoryCharacters: parsePositiveInteger(
+      process.env.QQ_USAGE_GROUP_HISTORY_CHARACTERS,
+    ) ?? 12_000,
+    observationHistoryMessages: parsePositiveInteger(
+      process.env.QQ_USAGE_OBSERVATION_HISTORY_MESSAGES,
+    ) ?? 8,
+    observationHistoryCharacters: parsePositiveInteger(
+      process.env.QQ_USAGE_OBSERVATION_HISTORY_CHARACTERS,
+    ) ?? 3_500,
+    peakObservationHistoryMessages: parsePositiveInteger(
+      process.env.QQ_USAGE_PEAK_OBSERVATION_HISTORY_MESSAGES,
+    ) ?? 5,
+    peakObservationHistoryCharacters: parsePositiveInteger(
+      process.env.QQ_USAGE_PEAK_OBSERVATION_HISTORY_CHARACTERS,
+    ) ?? 2_200,
+    largeGroupObservationHistoryMessages: parsePositiveInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES,
+    ) ?? 6,
+    largeGroupObservationHistoryCharacters: parsePositiveInteger(
+      process.env.QQ_USAGE_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS,
+    ) ?? 2_500,
+    peakLargeGroupObservationHistoryMessages: parsePositiveInteger(
+      process.env.QQ_USAGE_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES,
+    ) ?? 4,
+    peakLargeGroupObservationHistoryCharacters: parsePositiveInteger(
+      process.env.QQ_USAGE_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS,
+    ) ?? 1_400,
     peakLargeGroupHistoryMessages: parsePositiveInteger(
       process.env.QQ_USAGE_PEAK_LARGE_GROUP_HISTORY_MESSAGES,
-    ) ?? 10,
+    ) ?? 6,
     peakLargeGroupHistoryCharacters: parsePositiveInteger(
       process.env.QQ_USAGE_PEAK_LARGE_GROUP_HISTORY_CHARACTERS,
-    ) ?? 4_000,
+    ) ?? 2_500,
     groupBackgroundSummariesEnabled: parseBoolean(
       process.env.QQ_USAGE_GROUP_BACKGROUND_SUMMARIES_ENABLED
         ?? process.env.QQ_USAGE_LARGE_GROUP_BACKGROUND_SUMMARIES_ENABLED,

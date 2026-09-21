@@ -37,7 +37,7 @@ function createService(options = {}) {
     isConfigured: true,
     async complete(history, modelInput) {
       calls.push({ history, modelInput });
-      return '这是 QQ 回答，蠢货，别搁这装看不懂。';
+      return '这是 QQ 回答，别把问题绕复杂了。';
     },
   };
   const memeStore = options.memeStore ?? {
@@ -79,6 +79,10 @@ function createService(options = {}) {
     groupBackgroundSummariesEnabled: options.groupBackgroundSummariesEnabled,
     largeGroupHistoryMessages: options.largeGroupHistoryMessages,
     largeGroupHistoryCharacters: options.largeGroupHistoryCharacters,
+    largeGroupObservationHistoryMessages: options.largeGroupObservationHistoryMessages,
+    largeGroupObservationHistoryCharacters: options.largeGroupObservationHistoryCharacters,
+    peakLargeGroupObservationHistoryMessages: options.peakLargeGroupObservationHistoryMessages,
+    peakLargeGroupObservationHistoryCharacters: options.peakLargeGroupObservationHistoryCharacters,
     largeGroupBackgroundSummariesEnabled: options.largeGroupBackgroundSummariesEnabled,
     now: options.now,
     logger: { log() {}, warn() {}, info() {} },
@@ -320,6 +324,62 @@ test('大型群只向模型发送最近的有限上下文', () => {
   assert.match(fitted.at(-1).content, /^29:/);
 });
 
+test('大型群旁观判定使用独立的更短窗口，高峰时段继续压缩', () => {
+  let now = Date.parse('2026-09-21T00:00:00Z');
+  const { service } = createService({
+    largeGroupIds: new Set(['large-group-id']),
+    largeGroupObservationHistoryMessages: 6,
+    largeGroupObservationHistoryCharacters: 2_500,
+    peakLargeGroupObservationHistoryMessages: 4,
+    peakLargeGroupObservationHistoryCharacters: 1_400,
+    now: () => now,
+  });
+  const history = Array.from({ length: 20 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    content: `${index}:`.padEnd(600, '字'),
+  }));
+
+  const observed = service.historyForGroup('large-group-id', history, {
+    passiveDecision: true,
+  });
+  assert.ok(observed.length <= 6);
+  assert.ok(observed.reduce((sum, message) => sum + message.content.length, 0) <= 2_500);
+  assert.match(observed.at(-1).content, /^19:/);
+
+  now = Date.parse('2026-09-21T03:00:00Z');
+  const peakObserved = service.historyForGroup('large-group-id', history, {
+    passiveDecision: true,
+  });
+  assert.ok(peakObserved.length <= 4);
+  assert.ok(peakObserved.reduce((sum, message) => sum + message.content.length, 0) <= 1_400);
+  assert.match(peakObserved.at(-1).content, /^19:/);
+});
+
+test('普通群旁观判定和主动插话使用短上下文，明确问答保留较大窗口', () => {
+  const { service } = createService({
+    observationHistoryMessages: 8,
+    observationHistoryCharacters: 3_500,
+    groupHistoryMessages: 40,
+    groupHistoryCharacters: 12_000,
+  });
+  const history = Array.from({ length: 60 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    content: `${index}:`.padEnd(500, '字'),
+  }));
+
+  const observed = service.historyForGroup('normal-group-id', history, {
+    passiveDecision: true,
+  });
+  assert.ok(observed.length <= 8);
+  assert.ok(observed.reduce((sum, message) => sum + message.content.length, 0) <= 3_500);
+  assert.match(observed.at(-1).content, /^59:/);
+
+  const direct = service.historyForGroup('normal-group-id', history);
+  assert.ok(direct.length <= 40);
+  assert.ok(direct.reduce((sum, message) => sum + message.content.length, 0) <= 12_000);
+  assert.match(direct.at(-1).content, /^59:/);
+});
+
 test('Bridge 显示出来的纯 At 昵称仍走短回复并拦截客服话术', async () => {
   const input = {
     message_id: 'rendered-at-1',
@@ -389,11 +449,11 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆，未匹�
   const second = await service.handleMessage({ ...input, message_id: 'm3', text: '还记得吗' });
 
   assert.deepEqual(first.messages.map((message) => message.type), ['text']);
-  assert.equal(first.messages[0].text, '这是 QQ 回答，蠢货，别搁这装看不懂。');
+  assert.equal(first.messages[0].text, '这是 QQ 回答，别把问题绕复杂了。');
   assert.match(calls[0].modelInput, /发言人：QQ 小明/);
   assert.equal(calls[1].history.length, 2);
   assert.match(calls[1].history[0].content, /当前消息：你好/);
-  assert.equal(second.messages[0].text, '这是 QQ 回答，蠢货，别搁这装看不懂。');
+  assert.equal(second.messages[0].text, '这是 QQ 回答，别把问题绕复杂了。');
 });
 
 test('QQ 纯艾特标记会传入快速人格模式并拦截客服式回复', async () => {
