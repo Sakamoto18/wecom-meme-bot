@@ -452,7 +452,6 @@ export async function generateConversationReply(options) {
     buildNormalReplyStablePrompt({}),
   ].filter(Boolean).join('\n\n');
   const stableSystemPrompt = [
-    knowledgeContext,
     buildNormalReplyStablePrompt(normalPromptOptions),
   ].filter(Boolean).join('\n\n');
   const additionalSystemPrompt = [
