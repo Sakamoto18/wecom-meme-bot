@@ -136,7 +136,8 @@ test('攻击消息不联网，仍走统一角色回复生成', async () => {
   assert.equal(result.searchAttempted, false);
   assert.equal(searchCalls, 0);
   assert.equal(calls.length, 1);
-  assert.match(calls[0].options.stableSystemPrompt, /回答任务仍然优先/);
+  assert.match(calls[0].options.stableSystemPrompt, /龙玉涛统一角色基座/);
+  assert.match(calls[0].options.stableSystemPrompt, /先把问题答完/);
   assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /公开龙图语料参考/);
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
 });
@@ -179,7 +180,7 @@ test('问题窗口内遭到攻击时仍先回答问题，再允许简短回击',
   });
   assert.equal(result.mode, 'model');
   assert.equal(calls.length, 1);
-  assert.match(calls[0].stableSystemPrompt, /先继续回答当前问题/);
+  assert.match(calls[0].stableSystemPrompt, /若当前发言者明确挑衅或攻击机器人/);
 });
 
 test('模型复述群聊历史的内部回复标签时只保留答案正文', async () => {
@@ -563,7 +564,7 @@ test('主动 may 插话强制快速短回复，过长草稿会压缩重写', asy
     { type: 'disabled' },
   ]);
   assert.deepEqual(calls.map((call) => call.options.maxTokens), [280, 280]);
-  assert.match(calls[0].options.stableSystemPrompt, /本轮模式：普通对话/);
+  assert.match(calls[0].options.stableSystemPrompt, /龙玉涛统一角色基座/);
   assert.match(calls[0].options.stableSystemPrompt, /历史中属于其他成员/);
   assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /本轮模式：普通对话/);
   assert.match(calls[0].options.stableSystemPrompt, /最终只发 1 句/);
