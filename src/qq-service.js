@@ -72,6 +72,23 @@ const IMAGE_ONLY_MESSAGE_TEXT = '（用户发送了图片，请结合画面线�
 const DEFAULT_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_PEER_BOT_MAX_CONSECUTIVE_REPLIES = 2;
 const DEFAULT_PEER_BOT_LOOP_WINDOW_MS = 5 * 60 * 1000;
+// 普通群的默认对话保留空间仍足够支撑连续追问，但不再把整段 30k 字历史
+// 带进每一次短答。旁观/读空气判定只需要最近几条消息，避免把静默观测的
+// 成本花在与当前消息无关的旧上下文上。
+const DEFAULT_GROUP_HISTORY_MESSAGES = 40;
+const DEFAULT_GROUP_HISTORY_CHARACTERS = 12_000;
+const DEFAULT_OBSERVATION_HISTORY_MESSAGES = 8;
+const DEFAULT_OBSERVATION_HISTORY_CHARACTERS = 3_500;
+const DEFAULT_PEAK_OBSERVATION_HISTORY_MESSAGES = 5;
+const DEFAULT_PEAK_OBSERVATION_HISTORY_CHARACTERS = 2_200;
+const DEFAULT_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES = 6;
+const DEFAULT_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS = 2_500;
+const DEFAULT_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES = 4;
+const DEFAULT_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS = 1_400;
+const DEFAULT_LARGE_GROUP_HISTORY_MESSAGES = 12;
+const DEFAULT_LARGE_GROUP_HISTORY_CHARACTERS = 5_000;
+const DEFAULT_PEAK_LARGE_GROUP_HISTORY_MESSAGES = 6;
+const DEFAULT_PEAK_LARGE_GROUP_HISTORY_CHARACTERS = 2_500;
 const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
 const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
 const MEMBER_HISTORY_INTENT_PATTERN = /(?:之前|以前|历史|上次|上回|曾经|说过|提过|聊过|记得|原话|哪次|什么时候)/;
@@ -1328,21 +1345,61 @@ export class QqBotService {
     );
     this.largeGroupHistoryMessages = Math.max(
       2,
-      Number(options.largeGroupHistoryMessages ?? 20),
+      Number(options.largeGroupHistoryMessages ?? DEFAULT_LARGE_GROUP_HISTORY_MESSAGES),
     );
     this.largeGroupHistoryCharacters = Math.max(
       1_000,
-      Number(options.largeGroupHistoryCharacters ?? 8_000),
+      Number(options.largeGroupHistoryCharacters ?? DEFAULT_LARGE_GROUP_HISTORY_CHARACTERS),
+    );
+    this.groupHistoryMessages = Math.max(
+      2,
+      Number(options.groupHistoryMessages ?? DEFAULT_GROUP_HISTORY_MESSAGES),
+    );
+    this.groupHistoryCharacters = Math.max(
+      1_000,
+      Number(options.groupHistoryCharacters ?? DEFAULT_GROUP_HISTORY_CHARACTERS),
+    );
+    this.observationHistoryMessages = Math.max(
+      2,
+      Number(options.observationHistoryMessages ?? DEFAULT_OBSERVATION_HISTORY_MESSAGES),
+    );
+    this.observationHistoryCharacters = Math.max(
+      1_000,
+      Number(options.observationHistoryCharacters ?? DEFAULT_OBSERVATION_HISTORY_CHARACTERS),
+    );
+    this.peakObservationHistoryMessages = Math.max(
+      2,
+      Number(options.peakObservationHistoryMessages ?? DEFAULT_PEAK_OBSERVATION_HISTORY_MESSAGES),
+    );
+    this.peakObservationHistoryCharacters = Math.max(
+      1_000,
+      Number(options.peakObservationHistoryCharacters ?? DEFAULT_PEAK_OBSERVATION_HISTORY_CHARACTERS),
+    );
+    this.largeGroupObservationHistoryMessages = Math.max(
+      2,
+      Number(options.largeGroupObservationHistoryMessages ?? DEFAULT_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES),
+    );
+    this.largeGroupObservationHistoryCharacters = Math.max(
+      1_000,
+      Number(options.largeGroupObservationHistoryCharacters ?? DEFAULT_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS),
+    );
+    this.peakLargeGroupObservationHistoryMessages = Math.max(
+      2,
+      Number(options.peakLargeGroupObservationHistoryMessages ?? DEFAULT_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES),
+    );
+    this.peakLargeGroupObservationHistoryCharacters = Math.max(
+      1_000,
+      Number(options.peakLargeGroupObservationHistoryCharacters ?? DEFAULT_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS),
     );
     // 判定调用的输出只有几个 token，成本几乎全在随调用附带的群聊上下文，
-    // 因此高峰时段只压缩判定用的上下文，回复生成仍使用完整预算。
+    // 因此旁观判定在所有群都使用短上下文；大型群和高峰时段再进一步压缩。
     this.peakLargeGroupHistoryMessages = Math.max(
       2,
-      Number(options.peakLargeGroupHistoryMessages ?? 10),
+      Number(options.peakLargeGroupHistoryMessages ?? DEFAULT_PEAK_LARGE_GROUP_HISTORY_MESSAGES),
     );
     this.peakLargeGroupHistoryCharacters = Math.max(
       1_000,
-      Number(options.peakLargeGroupHistoryCharacters ?? 4_000),
+      Number(options.peakLargeGroupHistoryCharacters ?? DEFAULT_PEAK_LARGE_GROUP_HISTORY_CHARACTERS),
     );
     // Background summaries/member-memory summaries are opt-in for all groups;
     // passive observation must not silently create extra LLM calls.
@@ -1414,16 +1471,38 @@ export class QqBotService {
   }
 
   historyForGroup(groupId, history, { passiveDecision = false } = {}) {
-    if (!this.isLargeGroup(groupId)) return history;
+    const largeGroup = this.isLargeGroup(groupId);
     const peakDecision = passiveDecision && isDeepSeekPeakTime(this.now());
+    if (passiveDecision) {
+      return fitUsageHistory(
+        history,
+        largeGroup
+          ? (peakDecision
+            ? Math.min(this.peakLargeGroupObservationHistoryMessages, this.largeGroupObservationHistoryMessages)
+            : this.largeGroupObservationHistoryMessages)
+          : (peakDecision
+            ? this.peakObservationHistoryMessages
+            : this.observationHistoryMessages),
+        largeGroup
+          ? (peakDecision
+            ? Math.min(this.peakLargeGroupObservationHistoryCharacters, this.largeGroupObservationHistoryCharacters)
+            : this.largeGroupObservationHistoryCharacters)
+          : (peakDecision
+            ? this.peakObservationHistoryCharacters
+            : this.observationHistoryCharacters),
+      );
+    }
+    if (!largeGroup) {
+      return fitUsageHistory(
+        history,
+        this.groupHistoryMessages,
+        this.groupHistoryCharacters,
+      );
+    }
     return fitUsageHistory(
       history,
-      peakDecision
-        ? Math.min(this.peakLargeGroupHistoryMessages, this.largeGroupHistoryMessages)
-        : this.largeGroupHistoryMessages,
-      peakDecision
-        ? Math.min(this.peakLargeGroupHistoryCharacters, this.largeGroupHistoryCharacters)
-        : this.largeGroupHistoryCharacters,
+      this.largeGroupHistoryMessages,
+      this.largeGroupHistoryCharacters,
     );
   }
 
@@ -1474,10 +1553,11 @@ export class QqBotService {
     // existing memory-summary behavior.  A passive observation always has a
     // group id and is handled by the opt-in branch below.
     if (!groupId) return !passive;
-    // The cost-saving policy targets silent observation.  Explicit/private
-    // conversations keep the existing opt-in summary behavior so a user who
-    // is actively talking to the bot does not lose long-term memory updates.
-    return passive ? this.groupBackgroundSummariesEnabled : true;
+    // Group summaries are opt-in for both passive observation and explicit
+    // replies. The short-answer mode already carries a bounded recent window;
+    // silently summarizing every group turn would add a second LLM call and
+    // consume the same daily budget we reserve for actual replies.
+    return this.groupBackgroundSummariesEnabled;
   }
 
   isPeerBotMessage(payload) {
@@ -1965,6 +2045,9 @@ export class QqBotService {
         this.historyForGroup(
           message.chattype === 'group' ? message.chatid : '',
           this.conversationStore.get(conversationId),
+          // 主动插话沿用旁观判定的短上下文；明确 @/引用仍由 activeReply
+          // 进入同一引擎，但只带最近语境，避免短答反复重传整段旧群聊。
+          { passiveDecision: options.activeReply === true },
         ),
         forbiddenHistoryRoleTerms,
       );

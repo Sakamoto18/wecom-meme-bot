@@ -229,6 +229,19 @@ test('普通回复保留龙玉涛语感但不强制攻击任何参与者', () =>
   assert.match(prompt, /默认只评价事情本身/);
   assert.match(prompt, /只有本轮明确要求攻击或调侃某人/);
   assert.doesNotMatch(prompt, /至少写一句.*损人话|温和吐槽不算完成/);
+  assert.match(prompt, /至少保留一处自然的口头钩子/);
+});
+
+test('普通回复质量复核要求角色钩子但不把角色钩子等同于骂人', () => {
+  assert.ok(reviewNormalReply('这个方案目前可以落地，但要先备份数据。', {
+    requireRoleVoice: true,
+  }).issues.includes('missing-role-voice'));
+  assert.equal(reviewNormalReply('说白了，这个方案能落地，但先备份数据。', {
+    requireRoleVoice: true,
+  }).valid, true);
+  assert.equal(reviewNormalReply('先照顾好自己，别急着做决定。', {
+    requireRoleVoice: true,
+  }).valid, true);
 });
 
 test('正常事实回答和内容吐槽直接通过，不因缺少骂人词而重写', () => {

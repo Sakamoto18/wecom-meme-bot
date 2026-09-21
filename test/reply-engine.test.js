@@ -14,7 +14,7 @@ test('技术问题允许内部推理，但正确短答不自动扩写', async ()
   assert.equal(result.detailedAnswerRequested, false);
   assert.equal(result.seriousAnswerExpanded, false);
   assert.equal(calls.length, 1);
-  assert.equal(result.answer, answer);
+  assert.equal(result.answer, `说白了，${answer}`);
   assert.equal(result.review.valid, true);
 });
 
@@ -30,7 +30,7 @@ test('默认长草稿压缩成短答，保留检索证据和连续对话上下�
     }},
     webSearch: {async search() {return {context: '厂商资料：每台设备占用一口，上联路由器占一口。', resultCount: 1};}},
   });
-  assert.equal(result.answer, answer);
+  assert.equal(result.answer, '说白了，五口就够了，四台设备占四口，最后一口接路由器。');
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].h, history);
   assert.deepEqual(calls[1].h, history);
@@ -178,7 +178,7 @@ test('模型复述群聊历史的内部回复标签时只保留答案正文', as
 
   assert.equal(
     result.answer,
-    '上班摸鱼打游戏还说得理直气壮，你这废物摸鱼都比别人低一个档次。',
+    '说白了，上班摸鱼打游戏还说得理直气壮，你这废物摸鱼都比别人低一个档次。',
   );
   assert.doesNotMatch(result.answer, /机器人群聊回复记录|本轮回复对象|机器人回复：/);
 });
@@ -622,7 +622,7 @@ test('明确要求详细的答案过短时才开启完整性复核', async () =>
     calls[0].options.additionalSystemPrompt,
   );
   assert.match(calls[1].options.revisionSystemPrompt, /正经问答质量复核/);
-  assert.equal(result.answer, longAnswer);
+  assert.equal(result.answer, `说白了，${longAnswer}`);
   assert.equal(result.attempts, 2);
   assert.equal(result.seriousAnswerExpanded, true);
   assert.equal(result.review.valid, true);
