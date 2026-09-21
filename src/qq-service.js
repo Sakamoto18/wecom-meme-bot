@@ -89,6 +89,8 @@ const DEFAULT_LARGE_GROUP_HISTORY_MESSAGES = 12;
 const DEFAULT_LARGE_GROUP_HISTORY_CHARACTERS = 5_000;
 const DEFAULT_PEAK_LARGE_GROUP_HISTORY_MESSAGES = 6;
 const DEFAULT_PEAK_LARGE_GROUP_HISTORY_CHARACTERS = 2_500;
+// 激进成本档仍保留最近语境，允许旁观窗口低于原先的 1000 字下限。
+const MIN_USAGE_HISTORY_CHARACTERS = 600;
 const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
 const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
 const MEMBER_HISTORY_INTENT_PATTERN = /(?:之前|以前|历史|上次|上回|曾经|说过|提过|聊过|记得|原话|哪次|什么时候)/;
@@ -1348,7 +1350,7 @@ export class QqBotService {
       Number(options.largeGroupHistoryMessages ?? DEFAULT_LARGE_GROUP_HISTORY_MESSAGES),
     );
     this.largeGroupHistoryCharacters = Math.max(
-      1_000,
+      MIN_USAGE_HISTORY_CHARACTERS,
       Number(options.largeGroupHistoryCharacters ?? DEFAULT_LARGE_GROUP_HISTORY_CHARACTERS),
     );
     this.groupHistoryMessages = Math.max(
@@ -1356,7 +1358,7 @@ export class QqBotService {
       Number(options.groupHistoryMessages ?? DEFAULT_GROUP_HISTORY_MESSAGES),
     );
     this.groupHistoryCharacters = Math.max(
-      1_000,
+      MIN_USAGE_HISTORY_CHARACTERS,
       Number(options.groupHistoryCharacters ?? DEFAULT_GROUP_HISTORY_CHARACTERS),
     );
     this.observationHistoryMessages = Math.max(
@@ -1364,7 +1366,7 @@ export class QqBotService {
       Number(options.observationHistoryMessages ?? DEFAULT_OBSERVATION_HISTORY_MESSAGES),
     );
     this.observationHistoryCharacters = Math.max(
-      1_000,
+      MIN_USAGE_HISTORY_CHARACTERS,
       Number(options.observationHistoryCharacters ?? DEFAULT_OBSERVATION_HISTORY_CHARACTERS),
     );
     this.peakObservationHistoryMessages = Math.max(
@@ -1372,7 +1374,7 @@ export class QqBotService {
       Number(options.peakObservationHistoryMessages ?? DEFAULT_PEAK_OBSERVATION_HISTORY_MESSAGES),
     );
     this.peakObservationHistoryCharacters = Math.max(
-      1_000,
+      MIN_USAGE_HISTORY_CHARACTERS,
       Number(options.peakObservationHistoryCharacters ?? DEFAULT_PEAK_OBSERVATION_HISTORY_CHARACTERS),
     );
     this.largeGroupObservationHistoryMessages = Math.max(
@@ -1380,7 +1382,7 @@ export class QqBotService {
       Number(options.largeGroupObservationHistoryMessages ?? DEFAULT_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES),
     );
     this.largeGroupObservationHistoryCharacters = Math.max(
-      1_000,
+      MIN_USAGE_HISTORY_CHARACTERS,
       Number(options.largeGroupObservationHistoryCharacters ?? DEFAULT_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS),
     );
     this.peakLargeGroupObservationHistoryMessages = Math.max(
@@ -1388,7 +1390,7 @@ export class QqBotService {
       Number(options.peakLargeGroupObservationHistoryMessages ?? DEFAULT_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_MESSAGES),
     );
     this.peakLargeGroupObservationHistoryCharacters = Math.max(
-      1_000,
+      MIN_USAGE_HISTORY_CHARACTERS,
       Number(options.peakLargeGroupObservationHistoryCharacters ?? DEFAULT_PEAK_LARGE_GROUP_OBSERVATION_HISTORY_CHARACTERS),
     );
     // 判定调用的输出只有几个 token，成本几乎全在随调用附带的群聊上下文，
@@ -1398,7 +1400,7 @@ export class QqBotService {
       Number(options.peakLargeGroupHistoryMessages ?? DEFAULT_PEAK_LARGE_GROUP_HISTORY_MESSAGES),
     );
     this.peakLargeGroupHistoryCharacters = Math.max(
-      1_000,
+      MIN_USAGE_HISTORY_CHARACTERS,
       Number(options.peakLargeGroupHistoryCharacters ?? DEFAULT_PEAK_LARGE_GROUP_HISTORY_CHARACTERS),
     );
     // Background summaries/member-memory summaries are opt-in for all groups;
