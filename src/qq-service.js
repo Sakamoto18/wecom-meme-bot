@@ -2222,6 +2222,7 @@ export class QqBotService {
           ? [...new Set(options.attachmentSha256s.filter(Boolean))]
           : (options.attachmentSha256 ? [options.attachmentSha256] : []);
         const forceMeme = generated.mode === 'generated-attack'
+          || generated.roleReplyHadAttack === true
           || generated.mode === 'pure-mention';
         const sceneAliasMatches = attachmentSha256s.length > 0
           ? []

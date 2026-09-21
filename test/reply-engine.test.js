@@ -106,7 +106,7 @@ test('明确要求骂引用作者时仍使用原有对线风格且不改成骂�
   assert.match(calls[0].additionalSystemPrompt, /不得把攻击落到指令发送者身上/);
 });
 
-test('攻击消息不联网、不注入固定语料，直接调用模型生成', async () => {
+test('攻击消息不联网，仍走统一角色回复生成', async () => {
   const calls = [];
   let searchCalls = 0;
   const result = await generateConversationReply({
@@ -128,7 +128,7 @@ test('攻击消息不联网、不注入固定语料，直接调用模型生成',
     },
   });
 
-  assert.equal(result.mode, 'generated-attack');
+  assert.equal(result.mode, 'model');
   assert.equal(result.usedModel, true);
   assert.equal(result.attempts, 1);
   assert.equal(result.review.valid, true);
@@ -136,12 +136,12 @@ test('攻击消息不联网、不注入固定语料，直接调用模型生成',
   assert.equal(result.searchAttempted, false);
   assert.equal(searchCalls, 0);
   assert.equal(calls.length, 1);
-  assert.match(calls[0].options.additionalSystemPrompt, /不需要讲逻辑/);
+  assert.match(calls[0].options.stableSystemPrompt, /回答任务仍然优先/);
   assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /公开龙图语料参考/);
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
 });
 
-test('对线语境中的追问仍使用直接攻击模式', async () => {
+test('对线语境中的追问仍保留回击状态但统一回答', async () => {
   const history = [
     { role: 'user', content: '你妈死了' },
     { role: 'assistant', content: '你🐎的旧帖还在坟头翻页呢。' },
@@ -157,7 +157,7 @@ test('对线语境中的追问仍使用直接攻击模式', async () => {
     webSearchEnabled: false,
   });
 
-  assert.equal(result.mode, 'generated-attack');
+  assert.equal(result.mode, 'model');
   assert.equal(result.review.valid, true);
 });
 
@@ -220,8 +220,8 @@ test('孤立 ma 或与历史高度重复会触发一次模型重写', async () =
     webSearchEnabled: false,
   });
 
-  assert.equal(modelCalls, 2);
-  assert.equal(result.attempts, 2);
+  assert.equal(modelCalls, 1);
+  assert.equal(result.attempts, 1);
   assert.equal(result.review.valid, true);
   assert.doesNotMatch(result.answer, /(?:^|[^a-z])ma(?:$|[^a-z])/i);
 });

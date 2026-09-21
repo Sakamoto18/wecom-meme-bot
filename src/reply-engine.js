@@ -26,6 +26,7 @@ import {
   shouldRequestDetailedAnswer,
   shouldUseThinking,
   shouldUseAttackStyle,
+  isExplicitThirdPartyAttackRequest,
 } from './response-style.js';
 import { IMAGE_MEANING_PROMPT, FORWARD_SUMMARY_PROMPT } from './image-reply-context.js';
 
@@ -291,7 +292,8 @@ export async function generateConversationReply(options) {
   // A standalone attack remains a dedicated short attack turn. Once the
   // message also belongs to an active question/engagement window, it uses the
   // unified answer-plus-rebuttal path below.
-  const pureThirdPartyAttack = attackStyle && !activeReply;
+  const pureThirdPartyAttack = attackStyle && !activeReply
+    && isExplicitThirdPartyAttackRequest(content, interactionContext);
   if (pureThirdPartyAttack) {
     const firstScene = selectAttackScene(history);
     const firstDraft = await chatClient.complete(history, userContent, {
@@ -371,7 +373,7 @@ export async function generateConversationReply(options) {
     };
   }
 
-  const useLongtuKnowledge = shouldSearchLongtuKnowledge(content);
+  const useLongtuKnowledge = !attackStyle && shouldSearchLongtuKnowledge(content);
   // Meme wording is an intent hint for the persona/attack guard, not a
   // restriction on information retrieval.  A question such as “这是什么梗”
   // can still be a current event or an otherwise unknown topic; routing it to
@@ -379,8 +381,8 @@ export async function generateConversationReply(options) {
   // multiple subjects.  Keep the broad, unfiltered general search as the
   // default and reserve dedicated modes for longtu knowledge and explicit
   // time-sensitive requests.
-  const useMemeKnowledge = !useLongtuKnowledge && shouldSearchMemeKnowledge(content);
-  const useCurrentInformation = !useLongtuKnowledge
+  const useMemeKnowledge = !attackStyle && !useLongtuKnowledge && shouldSearchMemeKnowledge(content);
+  const useCurrentInformation = !attackStyle && !useLongtuKnowledge
     && shouldSearchCurrentInformation(content);
   const imageSearch = Array.isArray(imageSearchQueries);
   const queries = imageSearch ? imageSearchQueries.slice(0, 3) : [content];
@@ -388,7 +390,8 @@ export async function generateConversationReply(options) {
     ? 'longtu'
     : (useCurrentInformation ? 'current' : 'general');
   const searchAttempted = Boolean(
-    webSearchEnabled
+    !attackStyle
+    && webSearchEnabled
     && webSearch
     && searchMode
     && queries.length > 0,
@@ -544,6 +547,7 @@ export async function generateConversationReply(options) {
     activeReply,
     activeReplyPriority,
     passiveImageComment,
+    attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
   });
   if (!review.valid && attempts < 2) {
     const needsSeriousExpansion = review.issues.includes('too-thin-for-serious');
@@ -586,13 +590,14 @@ export async function generateConversationReply(options) {
           timeoutMs: thinkingEnabled ? 90_000 : 45_000,
           thinking: { type: 'disabled' },
         });
-        const rewrittenReview = reviewNormalReply(rewrittenAnswer, {
+      const rewrittenReview = reviewNormalReply(rewrittenAnswer, {
           thinkingEnabled,
           compactResponse,
           requiredIdentityRole,
           activeReply,
           activeReplyPriority,
-          passiveImageComment,
+        passiveImageComment,
+        attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
         });
         attempts += 1;
         normalPersonaRewritten = !needsSeriousExpansion;
@@ -616,6 +621,7 @@ export async function generateConversationReply(options) {
       activeReply,
       activeReplyPriority,
       passiveImageComment,
+      attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
       requireRoleVoice: false,
     });
   }
@@ -701,7 +707,9 @@ export async function generateConversationReply(options) {
     ) || '这个头衔属于固定的另一位群成员，不是你。';
     protectedRoleSanitized = true;
   }
-  answer = removeInternalReplyMetadata(answer) || buildNormalReplyFallback();
+  answer = removeInternalReplyMetadata(
+    attackStyle ? removeLiteralLatinMa(answer) : answer,
+  ) || buildNormalReplyFallback();
   answer = ensureRoleVoice(answer, {
     // Keep the normal short-chat voice when the model omitted it, but do not
     // prepend a canned phrase to image reports, active one-line interjections,
@@ -711,6 +719,7 @@ export async function generateConversationReply(options) {
     required: !recordSummary
       && !requiredIdentityRole
       && !activeReply
+      && !attackStyle
       && !passiveImageComment
       && !hasImageContext,
   });
@@ -721,6 +730,7 @@ export async function generateConversationReply(options) {
     activeReply,
     activeReplyPriority,
     passiveImageComment,
+    attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
   });
 
   return {
@@ -744,6 +754,7 @@ export async function generateConversationReply(options) {
     normalPersonaRewritten,
     normalPersonaReviewSkipped,
     normalPersonaFallback: false,
+    roleReplyHadAttack: Boolean(attackStyle),
     protectedIdentityFallback,
     protectedRoleRewritten,
     protectedRoleSanitized,
