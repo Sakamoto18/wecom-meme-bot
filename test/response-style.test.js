@@ -396,6 +396,12 @@ test('问题窗口内的明确攻击仍进入对线，普通攻击词不误触�
   assert.equal(shouldUseAttackStyle('这个傻逼，B站 P2 怎么抓', [], { activeReply: true }), true);
   assert.equal(shouldUseAttackStyle('请攻击张三', [], { activeReply: true }), true);
   assert.equal(shouldUseAttackStyle('nm', [], { activeReply: true }), false);
+  assert.equal(shouldUseAttackStyle('回答不对，傻逼', [], {
+    activeReply: true,
+    hasQuotedContent: true,
+    quotedBot: true,
+    quotedAuthorLabel: '龙玉涛',
+  }), true);
 });
 
 test('攻击画面会排除近期已经用过的截图意象', () => {
