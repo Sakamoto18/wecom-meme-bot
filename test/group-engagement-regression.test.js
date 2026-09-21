@@ -17,6 +17,7 @@ function fixture({ peak = false, failReply = false } = {}) {
   } };
   const decider = new ActiveReplyDecider({ chatClient, enabled: true, now: () => now,
     candidateProbability: 0, questionProbability: 0, engagementReplyProbability: 0,
+    engagementMaxReplies: 3,
     logger: { warn() {} }, random: () => 1 });
   const store = new ConversationStore();
   const service = new QqBotService({ chatClient, activeReplyDecider: decider,
@@ -108,12 +109,14 @@ test('回复生成失败不消耗续聊轮次和窗口时间', async () => {
   assert.equal(f.decider.getGroupEngagement('g').expiresAt, before.expiresAt);
 });
 
-test('引用机器人直接攻击恢复 attack-reply，普通引用和背景里的骂人不触发', async () => {
+test('引用机器人遭攻击时走统一回答并保留回击状态，普通引用和背景里的骂人不触发纯攻击', async () => {
   const f = fixture();
   const quoted = { observe_only: false, quoted_user_id: 'bot', quoted_text: '行，这次确实看歪了。',
     mentions: [{ user_id: 'bot', name: '龙玉涛' }] };
   await f.send('@龙玉涛 你这个傻逼ai', quoted);
-  assert.ok(f.calls.some(c => c.options.usageSource === 'attack-reply'));
+  const firstReply = f.calls.find(c => c.options.usageSource === 'conversation-reply');
+  assert.ok(firstReply);
+  assert.match(firstReply.options.stableSystemPrompt, /有明确攻击或挑衅信号/);
   for (const [text, overrides] of [
     ['？是我说的他是小处男吗', {}],
     ['如何评价', { quoted_text: '你这个傻逼ai' }],

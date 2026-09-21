@@ -326,7 +326,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
   }
   if (options.attackDuringAnswer) {
     lines.push(
-      '本轮有攻击或挑衅信号，但回答任务仍然优先。先继续回答当前问题和可执行结论，再用一句简短、就事的回击接住对方；不要把整条回复改成纯骂人，也不要因为回击而漏掉问题。用户回到讨论时，立即切回理性讨论格式。',
+      '本轮有明确攻击或挑衅信号，但回答任务仍然优先。先继续回答当前问题和可执行结论，再必须补一句有力度的自然回击，指出对方的攻击、态度或表达有多离谱；回击可以冲，但不要只骂不答、不要攻击无关第三方、不要编造现实亲属事实。用户回到讨论时，立即切回理性讨论格式。',
     );
   }
   if (options.replySequence && !compactActiveReply && !options.passiveImageComment) {
@@ -400,7 +400,7 @@ export function reviewNormalReply(answer, options = {}) {
     || (normalized.match(/[。！？!?；;]/g) ?? []).length > 5)) {
     issues.push('too-long-for-chat');
   }
-  if (NORMAL_FAMILY_ATTACK_PATTERN.test(normalized)) {
+  if (NORMAL_FAMILY_ATTACK_PATTERN.test(normalized) && !options.attackDuringAnswer) {
     issues.push('family-attack-in-normal-mode');
   }
   if (options.requireRoleVoice
