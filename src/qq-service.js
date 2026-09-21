@@ -77,6 +77,8 @@ const DEFAULT_PEER_BOT_LOOP_WINDOW_MS = 5 * 60 * 1000;
 // 成本花在与当前消息无关的旧上下文上。
 const DEFAULT_GROUP_HISTORY_MESSAGES = 40;
 const DEFAULT_GROUP_HISTORY_CHARACTERS = 12_000;
+const DEFAULT_PEAK_GROUP_HISTORY_MESSAGES = 8;
+const DEFAULT_PEAK_GROUP_HISTORY_CHARACTERS = 3_000;
 const DEFAULT_OBSERVATION_HISTORY_MESSAGES = 8;
 const DEFAULT_OBSERVATION_HISTORY_CHARACTERS = 3_500;
 const DEFAULT_PEAK_OBSERVATION_HISTORY_MESSAGES = 5;
@@ -1340,7 +1342,11 @@ export class QqBotService {
       0, Number(options.peakDiscussionDecisionCooldownMs ?? 30_000),
     );
     // 高峰时段（工作日 09:00-12:00、14:00-18:00 北京时间）DeepSeek 单价翻倍，
-    // 大型群的静默读空气在这几个小时里额外降频，明确 @/引用不走这条路径。
+    // 普通群和大型群的静默读空气都额外降频，明确 @/引用不走这条路径。
+    this.peakGroupPassiveDecisionMultiplier = Math.max(
+      1,
+      Number(options.peakGroupPassiveDecisionMultiplier ?? 2),
+    );
     this.peakLargeGroupPassiveDecisionMultiplier = Math.max(
       1,
       Number(options.peakLargeGroupPassiveDecisionMultiplier ?? 3),
@@ -1360,6 +1366,14 @@ export class QqBotService {
     this.groupHistoryCharacters = Math.max(
       MIN_USAGE_HISTORY_CHARACTERS,
       Number(options.groupHistoryCharacters ?? DEFAULT_GROUP_HISTORY_CHARACTERS),
+    );
+    this.peakGroupHistoryMessages = Math.max(
+      2,
+      Number(options.peakGroupHistoryMessages ?? DEFAULT_PEAK_GROUP_HISTORY_MESSAGES),
+    );
+    this.peakGroupHistoryCharacters = Math.max(
+      MIN_USAGE_HISTORY_CHARACTERS,
+      Number(options.peakGroupHistoryCharacters ?? DEFAULT_PEAK_GROUP_HISTORY_CHARACTERS),
     );
     this.observationHistoryMessages = Math.max(
       2,
@@ -1474,7 +1488,8 @@ export class QqBotService {
 
   historyForGroup(groupId, history, { passiveDecision = false } = {}) {
     const largeGroup = this.isLargeGroup(groupId);
-    const peakDecision = passiveDecision && isDeepSeekPeakTime(this.now());
+    const peakTime = isDeepSeekPeakTime(this.now());
+    const peakDecision = passiveDecision && peakTime;
     if (passiveDecision) {
       return fitUsageHistory(
         history,
@@ -1497,8 +1512,8 @@ export class QqBotService {
     if (!largeGroup) {
       return fitUsageHistory(
         history,
-        this.groupHistoryMessages,
-        this.groupHistoryCharacters,
+        peakTime ? this.peakGroupHistoryMessages : this.groupHistoryMessages,
+        peakTime ? this.peakGroupHistoryCharacters : this.groupHistoryCharacters,
       );
     }
     return fitUsageHistory(
@@ -1509,8 +1524,8 @@ export class QqBotService {
   }
 
   passiveDecisionCooldownMs(groupId, { engaged = false, discussion = false } = {}) {
-    const peakLargeGroup = this.isLargeGroup(groupId)
-      && isDeepSeekPeakTime(this.now());
+    const peakTime = isDeepSeekPeakTime(this.now());
+    const peakLargeGroup = this.isLargeGroup(groupId) && peakTime;
     if (engaged) {
       // A human continuation must reach the semantic classifier even at peak
       // pricing. Optional interjections still have their own rhythm gates.
@@ -1518,11 +1533,13 @@ export class QqBotService {
     }
     if (discussion) return Math.min(
       this.groupPassiveDecisionCooldownMs,
-      peakLargeGroup ? this.peakDiscussionDecisionCooldownMs : this.discussionDecisionCooldownMs,
+      peakTime ? this.peakDiscussionDecisionCooldownMs : this.discussionDecisionCooldownMs,
     );
     return peakLargeGroup
       ? this.groupPassiveDecisionCooldownMs
         * this.peakLargeGroupPassiveDecisionMultiplier
+      : peakTime
+        ? this.groupPassiveDecisionCooldownMs * this.peakGroupPassiveDecisionMultiplier
       : this.groupPassiveDecisionCooldownMs;
   }
 
@@ -1797,7 +1814,7 @@ export class QqBotService {
       return { reason: 'passive-image-disabled' };
     }
     const now = this.now();
-    const peak = this.isLargeGroup(payload.groupId) && isDeepSeekPeakTime(now);
+    const peak = isDeepSeekPeakTime(now);
     const cooldown = this.passiveImageCooldownMs * (peak ? 2 : 1);
     const previous = this.passiveImageScans.get(payload.groupId);
     if (previous && now - previous.at < (previous.candidate === false ? Math.min(5000, cooldown) : cooldown)) return { reason: 'passive-image-cooldown' };

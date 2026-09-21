@@ -456,6 +456,42 @@ test('后台用量到预留线后静默收紧，明确请求仍可使用保留�
   }
 });
 
+test('普通群在高峰时段也使用更低的后台 Token 预留线', async () => {
+  const fixture = createTracker({
+    now: () => Date.UTC(2026, 7, 25, 2), // 北京时间 10:00，工作日峰时
+    maxGroupLlmTokensPerDay: 100,
+    passiveTokenBudgetPercent: 70,
+    peakPassiveTokenBudgetPercent: 25,
+  });
+  const client = fixture.tracker.wrapChatClient({
+    model: 'test-model',
+    isConfigured: true,
+    async complete(_history, _content, options) {
+      options.onUsage({
+        usage: { prompt_tokens: 20, completion_tokens: 10 },
+      });
+      return 'ok';
+    },
+  });
+
+  try {
+    await fixture.tracker.runWithContext({
+      groupId: 'ordinary-peak-group', source: 'direct-message', largeGroup: false,
+    }, () => client.complete([], 'direct'));
+    await assert.rejects(
+      fixture.tracker.runWithContext({
+        groupId: 'ordinary-peak-group', source: 'observed-message', largeGroup: false,
+      }, () => client.complete([], 'passive', {
+        usageSource: 'active-reply-decision',
+      })),
+      (error) => error instanceof QqUsageLimitError
+        && error.metric === 'llm-passive-tokens',
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
 test('Exa 复合检索按真实上游请求计数，缓存命中不重复算 API 调用', async () => {
   const fixture = createTracker();
   const queries = [];

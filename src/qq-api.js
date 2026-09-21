@@ -714,6 +714,9 @@ export async function createQqRuntime() {
     peakDiscussionDecisionCooldownMs: (parseNonnegativeInteger(
       process.env.QQ_USAGE_PEAK_DISCUSSION_DECISION_COOLDOWN_SECONDS, 30,
     )) * 1000,
+    peakGroupPassiveDecisionMultiplier: parsePositiveNumber(
+      process.env.QQ_USAGE_PEAK_GROUP_PASSIVE_DECISION_MULTIPLIER,
+    ) ?? 2,
     peakLargeGroupPassiveDecisionMultiplier: parsePositiveNumber(
       process.env.QQ_USAGE_PEAK_LARGE_GROUP_PASSIVE_DECISION_MULTIPLIER,
     ) ?? 3,
@@ -729,6 +732,12 @@ export async function createQqRuntime() {
     groupHistoryCharacters: parsePositiveInteger(
       process.env.QQ_USAGE_GROUP_HISTORY_CHARACTERS,
     ) ?? 12_000,
+    peakGroupHistoryMessages: parsePositiveInteger(
+      process.env.QQ_USAGE_PEAK_GROUP_HISTORY_MESSAGES,
+    ) ?? 8,
+    peakGroupHistoryCharacters: parsePositiveInteger(
+      process.env.QQ_USAGE_PEAK_GROUP_HISTORY_CHARACTERS,
+    ) ?? 3_000,
     observationHistoryMessages: parsePositiveInteger(
       process.env.QQ_USAGE_OBSERVATION_HISTORY_MESSAGES,
     ) ?? 8,
