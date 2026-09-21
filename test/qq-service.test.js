@@ -355,6 +355,35 @@ test('大型群旁观判定使用独立的更短窗口，高峰时段继续压�
   assert.match(peakObserved.at(-1).content, /^19:/);
 });
 
+test('激进成本档允许旁观窗口低于一千字', () => {
+  let now = Date.parse('2026-09-21T00:00:00Z');
+  const { service } = createService({
+    largeGroupIds: new Set(['large-group-id']),
+    largeGroupObservationHistoryMessages: 3,
+    largeGroupObservationHistoryCharacters: 1_200,
+    peakLargeGroupObservationHistoryMessages: 3,
+    peakLargeGroupObservationHistoryCharacters: 900,
+    now: () => now,
+  });
+  const history = Array.from({ length: 10 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    content: `${index}:`.padEnd(500, '字'),
+  }));
+
+  const observed = service.historyForGroup('large-group-id', history, {
+    passiveDecision: true,
+  });
+  assert.ok(observed.length <= 3);
+  assert.ok(observed.reduce((sum, message) => sum + message.content.length, 0) <= 1_200);
+
+  now = Date.parse('2026-09-21T03:00:00Z');
+  const peakObserved = service.historyForGroup('large-group-id', history, {
+    passiveDecision: true,
+  });
+  assert.ok(peakObserved.length <= 3);
+  assert.ok(peakObserved.reduce((sum, message) => sum + message.content.length, 0) <= 900);
+});
+
 test('普通群旁观判定和主动插话使用短上下文，明确问答保留较大窗口', () => {
   const { service } = createService({
     observationHistoryMessages: 8,
