@@ -161,6 +161,27 @@ test('对线语境中的追问仍使用直接攻击模式', async () => {
   assert.equal(result.review.valid, true);
 });
 
+test('问题窗口内遭到攻击时仍先回答问题，再允许简短回击', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '你这个傻逼，B站 P2 怎么抓？',
+    modelInput: '当前问题：你这个傻逼，B站 P2 怎么抓？',
+    activeReply: true,
+    activeReplyPriority: 'must',
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push(options);
+        return '先在链接后加 p=2；你这开场骂人的劲儿，和参数一样都得收一收。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.equal(result.mode, 'model');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].stableSystemPrompt, /先继续回答当前问题/);
+});
+
 test('模型复述群聊历史的内部回复标签时只保留答案正文', async () => {
   const result = await generateConversationReply({
     content: '上班时间打个蛋的游戏',

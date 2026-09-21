@@ -282,7 +282,13 @@ export async function generateConversationReply(options) {
     };
   }
 
-  if (!recordSummary && shouldUseAttackStyle(content, history, { ...interactionContext, activeReply, hasImageContext, hasQuotedContent })) {
+  const attackStyle = !recordSummary && shouldUseAttackStyle(content, history, {
+    ...interactionContext,
+    activeReply,
+    hasImageContext,
+    hasQuotedContent,
+  });
+  if (attackStyle && !activeReply) {
     const firstScene = selectAttackScene(history);
     const firstDraft = await chatClient.complete(history, userContent, {
       additionalSystemPrompt: [
@@ -443,6 +449,7 @@ export async function generateConversationReply(options) {
     activeReplyPriority,
     replySequence,
     passiveImageComment,
+    attackDuringAnswer: attackStyle && activeReply,
   };
   // Put the invariant persona and knowledge before the live mode/history suffix.
   // DeepSeek can reuse this prefix across ordinary replies, active replies and
