@@ -55,10 +55,17 @@ export class OpenAICompatibleChatClient {
               && (options.systemPrompt ?? this.systemPrompt)
               ? [{ role: 'system', content: options.systemPrompt ?? this.systemPrompt }]
               : []),
-            ...(options.stableSystemPrompt
+            ...(options.stableSystemPrompt && !options.stableSystemPromptAfterHistory
               ? [{ role: 'system', content: options.stableSystemPrompt }]
               : []),
             ...history,
+            // Mode-specific rules are intentionally after the conversation
+            // history when requested. The invariant prefix and the earlier
+            // turns can then be reused across normal/active/review calls,
+            // while this late system message still governs the current turn.
+            ...(options.stableSystemPrompt && options.stableSystemPromptAfterHistory
+              ? [{ role: 'system', content: options.stableSystemPrompt }]
+              : []),
             ...(options.additionalSystemPrompt
               ? [{ role: 'system', content: options.additionalSystemPrompt }]
               : []),

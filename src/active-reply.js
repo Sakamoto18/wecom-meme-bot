@@ -587,14 +587,15 @@ export class ActiveReplyDecider {
     }
     try {
       const answer = await this.chatClient.complete([], decisionInput, {
-        systemPrompt: isPeerBot ? OPTIONAL_VALUE_SYSTEM_PROMPT : HUMAN_OPTIONAL_VALUE_SYSTEM_PROMPT,
+        // Keep the shared neutral prefix first, then the task-specific rules,
+        // so both classifiers and later calls can reuse the provider prefix.
+        systemPrompt: ACTIVE_REPLY_CACHE_PREFIX,
         sharedContext,
         maxTokens: 4,
         usageSource: 'active-value-gate',
-        cachePrefixSystemPrompt: ACTIVE_REPLY_CACHE_PREFIX,
-        // Put the shared neutral rules first so decision and value-gate
-        // requests can reuse the same provider prefix cache.
-        deferSystemPromptAfterSharedContext: true,
+        cachePrefixSystemPrompt: isPeerBot
+          ? OPTIONAL_VALUE_SYSTEM_PROMPT
+          : HUMAN_OPTIONAL_VALUE_SYSTEM_PROMPT,
         timeoutMs: this.timeoutMs,
         temperature: 0,
         thinking: { type: 'disabled' },
@@ -709,12 +710,16 @@ export class ActiveReplyDecider {
     let decision;
     try {
       const answer = await this.chatClient.complete([], decisionInput, {
-        systemPrompt: payload.isPeerBot ? DECISION_SYSTEM_PROMPT : HUMAN_DECISION_SYSTEM_PROMPT,
+        // The invariant neutral rules are the first message. The decision
+        // variant follows it, before the dynamic transcript, and therefore
+        // remains cacheable across messages without mixing group content.
+        systemPrompt: ACTIVE_REPLY_CACHE_PREFIX,
         sharedContext: conversationInput,
         maxTokens: 8,
         usageSource: 'active-reply-decision',
-        cachePrefixSystemPrompt: ACTIVE_REPLY_CACHE_PREFIX,
-        deferSystemPromptAfterSharedContext: true,
+        cachePrefixSystemPrompt: payload.isPeerBot
+          ? DECISION_SYSTEM_PROMPT
+          : HUMAN_DECISION_SYSTEM_PROMPT,
         timeoutMs: this.timeoutMs,
         temperature: 0,
         thinking: { type: 'disabled' },

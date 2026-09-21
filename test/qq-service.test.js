@@ -1551,7 +1551,7 @@ test('回答群友的短消息经上下文语义复核后不会误触发回复�
     isConfigured: true,
     async complete(history, input, options) {
       calls.push({ history, input, options });
-      return /发言价值复核器/.test(options.systemPrompt) ? 'skip' : 'may';
+      return /发言价值复核器/.test(options.cachePrefixSystemPrompt) ? 'skip' : 'may';
     },
   };
   const activeReplyDecider = new ActiveReplyDecider({
@@ -1575,7 +1575,7 @@ test('回答群友的短消息经上下文语义复核后不会误触发回复�
   assert.deepEqual(result, { mode: 'observed', messages: [] });
   assert.equal(calls.length, 2);
   assert.match(calls[0].options.systemPrompt, /读空气/);
-  assert.match(calls[1].options.systemPrompt, /发言价值复核器/);
+  assert.match(calls[1].options.cachePrefixSystemPrompt, /发言价值复核器/);
 });
 
 test('普通群消息经读空气判定命中后复用现有人格回复引擎', async () => {
@@ -1617,7 +1617,7 @@ test('真人艾特后开启群级话题窗口，其他真人相关发言选择�
   const chatClient = {
     isConfigured: true,
     async complete(history, modelInput, options) {
-      if (/发言价值复核器/.test(options?.systemPrompt)) return 'speak';
+      if (/发言价值复核器/.test(options?.cachePrefixSystemPrompt)) return 'speak';
       if (options?.maxTokens === 8) return 'may';
       replyCalls.push({ history, modelInput, options });
       return '具体做法我给你说明白，省得你又把简单事折腾成事故现场。';

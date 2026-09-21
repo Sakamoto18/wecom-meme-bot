@@ -94,6 +94,40 @@ test('OpenAI 兼容客户端允许单次请求覆盖角色提示词', async () =
   assert.doesNotMatch(capturedBody.messages[0].content, /默认角色/);
 });
 
+test('OpenAI 兼容客户端可把模式提示放到历史之后以复用历史前缀', async () => {
+  let capturedBody;
+  const client = new OpenAICompatibleChatClient({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.example.com',
+    model: 'test-model',
+    systemPrompt: '固定角色',
+    fetchImpl: async (_url, options) => {
+      capturedBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200 });
+    },
+  });
+
+  await client.complete([
+    { role: 'user', content: '旧问题' },
+    { role: 'assistant', content: '旧回答' },
+  ], '新问题', {
+    cachePrefixSystemPrompt: '共享知识',
+    stableSystemPrompt: '本轮模式',
+    stableSystemPromptAfterHistory: true,
+    additionalSystemPrompt: '本轮资料',
+  });
+
+  assert.deepEqual(capturedBody.messages, [
+    { role: 'system', content: '固定角色' },
+    { role: 'system', content: '共享知识' },
+    { role: 'user', content: '旧问题' },
+    { role: 'assistant', content: '旧回答' },
+    { role: 'system', content: '本轮模式' },
+    { role: 'system', content: '本轮资料' },
+    { role: 'user', content: '新问题' },
+  ]);
+});
+
 test('OpenAI 兼容客户端允许单次请求覆盖超时时间', async () => {
   const client = new OpenAICompatibleChatClient({
     apiKey: 'test-key',

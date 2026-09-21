@@ -476,6 +476,9 @@ export async function generateConversationReply(options) {
   const stableSystemPrompt = [
     buildNormalReplyStablePrompt(normalPromptOptions),
   ].filter(Boolean).join('\n\n');
+  // Keep the mode-specific prompt after history so the invariant prefix and
+  // the earlier turns remain reusable across normal, active and review calls.
+  const cacheLayoutOptions = { stableSystemPromptAfterHistory: true };
   const additionalSystemPrompt = [
     imageSafetyPrompt,
     imageSearch && queries.length === 0
@@ -503,6 +506,7 @@ export async function generateConversationReply(options) {
     answer = await chatClient.complete(history, userContent, {
       stableSystemPrompt,
       cachePrefixSystemPrompt,
+      ...cacheLayoutOptions,
       additionalSystemPrompt,
       maxTokens: thinkingEnabled ? 20_000 : responseMaxTokens,
       usageSource: activeReply ? 'active-reply' : 'conversation-reply',
@@ -516,6 +520,7 @@ export async function generateConversationReply(options) {
     answer = await chatClient.complete(history, revisionUserContent, {
       stableSystemPrompt,
       cachePrefixSystemPrompt,
+      ...cacheLayoutOptions,
       additionalSystemPrompt,
       maxTokens: responseMaxTokens,
       usageSource: activeReply ? 'active-reply-thinking-fallback' : 'conversation-thinking-fallback',
@@ -529,6 +534,7 @@ export async function generateConversationReply(options) {
       const expandedAnswer = await chatClient.complete(history, revisionUserContent, {
         stableSystemPrompt,
         cachePrefixSystemPrompt,
+        ...cacheLayoutOptions,
         additionalSystemPrompt,
         revisionSystemPrompt: buildSeriousReplyRetryPrompt(content, answer),
         maxTokens: 20_000,
@@ -577,7 +583,8 @@ export async function generateConversationReply(options) {
       try {
         const rewrittenAnswer = await chatClient.complete(history, revisionUserContent, {
           stableSystemPrompt,
-        cachePrefixSystemPrompt,
+          cachePrefixSystemPrompt,
+          ...cacheLayoutOptions,
           additionalSystemPrompt,
           revisionSystemPrompt: needsSeriousExpansion
             ? buildSeriousReplyRetryPrompt(content, answer)
@@ -638,6 +645,7 @@ export async function generateConversationReply(options) {
       const correctedAnswer = await chatClient.complete(history, revisionUserContent, {
         stableSystemPrompt,
         cachePrefixSystemPrompt,
+        ...cacheLayoutOptions,
         additionalSystemPrompt,
         revisionSystemPrompt: buildProtectedRoleCorrectionPrompt(
           answer,
@@ -676,6 +684,7 @@ export async function generateConversationReply(options) {
       const semanticallyReviewedAnswer = await chatClient.complete(history, revisionUserContent, {
         stableSystemPrompt,
         cachePrefixSystemPrompt,
+        ...cacheLayoutOptions,
         additionalSystemPrompt,
         revisionSystemPrompt: buildProtectedRoleSemanticReviewPrompt(
           answer,
@@ -756,6 +765,7 @@ export async function generateConversationReply(options) {
         {
           stableSystemPrompt,
           cachePrefixSystemPrompt,
+          ...cacheLayoutOptions,
           additionalSystemPrompt: [
             imageSafetyPrompt,
             protectedIdentityContext,
