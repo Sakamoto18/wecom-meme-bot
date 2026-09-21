@@ -172,7 +172,7 @@ test('问题窗口内遭到攻击时仍先回答问题，再允许简短回击',
       isConfigured: true,
       async complete(history, input, options) {
         calls.push(options);
-        return '先在链接后加 p=2；你这开场骂人的劲儿，和参数一样都得收一收。';
+        return '先在链接后加 p=2；你这个傻逼开场，和这参数一样都得收一收。';
       },
     },
     webSearchEnabled: false,

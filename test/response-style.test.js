@@ -252,6 +252,19 @@ test('普通回复质量复核要求角色钩子但不把角色钩子等同于�
   }).valid, true);
 });
 
+test('问题窗口遭攻击时必须保留直接回击，不能只写软性评价', () => {
+  assert.ok(reviewNormalReply('先把链接后的 p=2 补上，这样才能抓到第二段。', {
+    attackDuringAnswer: true,
+  }).issues.includes('missing-direct-rebuttal'));
+  assert.equal(reviewNormalReply('先把链接后的 p=2 补上；你这个傻逼开场，和错参数一样都得收一收。', {
+    attackDuringAnswer: true,
+  }).valid, true);
+  assert.match(buildNormalReplyStablePrompt({ attackDuringAnswer: true }), /真正接住这句骂/);
+  assert.match(buildNormalReplyRetryPrompt('你这个傻逼，P2 怎么抓？', '先补 p=2。', ['missing-direct-rebuttal'], {
+    attackDuringAnswer: true,
+  }), /必须补一句直接、明确的回击/);
+});
+
 test('正常事实回答和内容吐槽直接通过，不因缺少骂人词而重写', () => {
   for (const answer of [
     '可以，成员资料会持久化保存。',

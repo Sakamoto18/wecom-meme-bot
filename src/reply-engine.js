@@ -583,6 +583,7 @@ export async function generateConversationReply(options) {
               activeReply,
               activeReplyPriority,
               passiveImageComment,
+              attackDuringAnswer: attackStyle && !pureThirdPartyAttack,
             }),
           maxTokens: responseMaxTokens,
           ...(passiveImageComment ? { temperature: 0.2 } : {}),
