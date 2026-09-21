@@ -17,6 +17,11 @@ const SENSITIVE_SUPPORT_PATTERN = /(?:我(?:的)?(?:妈|爸|父亲|母亲|家人
 const ADVERSARIAL_FOLLOWUP_PATTERN = /(?:回答我|哪(?:里)?来的|你(?:妈|🐎|呢)|咋(?:了|地|么)|干什么|凭什么|不服|然后呢|就这|继续|有种|笑死)/i;
 // 只保留明确的指令入口，普通‘评价’或叙述某人在骂人不直接启动攻击。
 const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /^(?:@[^\s]+\s+)*(?:(?:请|帮我|给我|麻烦你|你)\s*)*(?:把[^，。！？\n]{1,30})?(?:骂|攻击|怼|喷|拷打|羞辱|嘲讽|对线)/i;
+
+export function isExplicitThirdPartyAttackRequest(content, interaction = {}) {
+  return THIRD_PARTY_ATTACK_REQUEST_PATTERN.test(styleRequestText(content))
+    && (interaction.targetLabels?.length > 0 || interaction.hasThirdPartyTarget === true);
+}
 const LONGTU_TOPIC_PATTERN = /(?:龙图|龙玉涛|老冯)/i;
 const KNOWLEDGE_INTENT_PATTERN = /(?:是什么|是谁|什么意思|哪里来|来源|出处|由来|什么梗|语录|搜索|联网|资料|历史|评价|看待|怎么看|如何看)/i;
 const MEME_KNOWLEDGE_PATTERN = /(?:(?:什么|啥|这个|这|该)(?:网络)?梗|(?:查|搜|搜索|查询|科普|解释|讲讲|说说).{0,28}梗|(?:网络|网上|热|流行|抽象|贴吧|B站|抖音).{0,8}梗|梗.{0,10}(?:意思|含义|来源|出处|由来|怎么火)|(?:网络用语|网络流行语|流行语|黑话).{0,10}(?:意思|含义|来源|出处|由来))/i;
@@ -321,7 +326,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
   }
   if (options.attackDuringAnswer) {
     lines.push(
-      '本轮是在连续问题窗口中遭到明确攻击。先继续回答当前问题和可执行结论，再用一句简短、就事的回击接住对方；不要把整条回复改成纯骂人，也不要因为回击而漏掉问题。后续用户回到讨论时，立即切回理性讨论格式。',
+      '本轮有攻击或挑衅信号，但回答任务仍然优先。先继续回答当前问题和可执行结论，再用一句简短、就事的回击接住对方；不要把整条回复改成纯骂人，也不要因为回击而漏掉问题。用户回到讨论时，立即切回理性讨论格式。',
     );
   }
   if (options.replySequence && !compactActiveReply && !options.passiveImageComment) {
