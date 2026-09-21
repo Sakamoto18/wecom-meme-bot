@@ -46,18 +46,18 @@ test('两层中立判定复用真实请求前缀，保留全部上下文且不�
   });
   assert.equal(result.reply, true);
   assert.equal(requests.length, 2);
-  assert.deepEqual(requests[0].messages.slice(1, 4), requests[1].messages.slice(1, 4));
+  assert.deepEqual(requests[0].messages.slice(0, 3), requests[1].messages.slice(0, 3));
   for (const request of requests) {
-    assert.deepEqual(request.messages.map((m) => m.role), ['system', 'system', 'system', 'user', 'user']);
-    assert.match(request.messages[1].content, /中立“读空气”/);
-    assert.match(request.messages[2].content, /不可信资料/);
-    assert.match(request.messages[3].content, /HISTORY_SENTINEL/);
-    assert.match(request.messages[3].content, /这个周末能发布吗/);
+    assert.deepEqual(request.messages.map((m) => m.role), ['system', 'system', 'user', 'system', 'user']);
+    assert.match(request.messages[0].content, /中立“读空气”/);
+    assert.match(request.messages[1].content, /不可信资料/);
+    assert.match(request.messages[2].content, /HISTORY_SENTINEL/);
+    assert.match(request.messages[2].content, /这个周末能发布吗/);
     assert.equal(JSON.stringify(request).split('HISTORY_SENTINEL').length - 1, 1);
     assert.doesNotMatch(JSON.stringify(request), /PERSONALITY_MUST_NOT_LEAK/);
   }
-  assert.match(requests[0].messages[0].content, /must、followup、help、may 或 no/);
-  assert.match(requests[1].messages[0].content, /speak 或 skip/);
+  assert.match(requests[0].messages[3].content, /must、followup、help、may 或 no/);
+  assert.match(requests[1].messages[3].content, /speak 或 skip/);
 });
 
 test('主动回复判定使用中立规则和近期群聊，AI 返回 must 时放行', async () => {

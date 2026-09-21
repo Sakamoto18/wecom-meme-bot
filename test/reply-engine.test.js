@@ -82,7 +82,7 @@ test('引用评价、识图和转发总结保留龙图知识，不自动攻击�
     assert.equal(result.answer, draft);
     assert.equal(calls.length, 1);
     assert.equal(result.normalPersonaFallback, false);
-    assert.match(calls[0].stableSystemPrompt, /本地龙图知识/);
+    assert.match(calls[0].cachePrefixSystemPrompt, /本地龙图知识/);
     assert.match(calls[0].stableSystemPrompt, /短、嘴欠、会接梗/);
     assert.match(calls[0].additionalSystemPrompt, /引用作者 甲 只是内容来源/);
     assert.match(calls[0].additionalSystemPrompt, /只有本轮明确要求攻击或调侃某人/);
@@ -683,7 +683,7 @@ test('询问龙图出处时使用本地知识和专用联网摘要', async () =>
   assert.equal(result.mode, 'longtu-knowledge');
   assert.equal(result.searchAttempted, true);
   assert.equal(searchCalls, 1);
-  assert.match(calls[0].options.stableSystemPrompt, /本地龙图知识/);
+  assert.match(calls[0].options.cachePrefixSystemPrompt, /本地龙图知识/);
   assert.match(calls[0].options.additionalSystemPrompt, /本轮联网摘要/);
 });
 

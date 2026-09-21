@@ -589,6 +589,9 @@ export class ActiveReplyDecider {
         maxTokens: 4,
         usageSource: 'active-value-gate',
         cachePrefixSystemPrompt: ACTIVE_REPLY_CACHE_PREFIX,
+        // Put the shared neutral rules first so decision and value-gate
+        // requests can reuse the same provider prefix cache.
+        deferSystemPromptAfterSharedContext: true,
         timeoutMs: this.timeoutMs,
         temperature: 0,
         thinking: { type: 'disabled' },
@@ -708,6 +711,7 @@ export class ActiveReplyDecider {
         maxTokens: 8,
         usageSource: 'active-reply-decision',
         cachePrefixSystemPrompt: ACTIVE_REPLY_CACHE_PREFIX,
+        deferSystemPromptAfterSharedContext: true,
         timeoutMs: this.timeoutMs,
         temperature: 0,
         thinking: { type: 'disabled' },
