@@ -318,6 +318,62 @@ test('普通闲聊保留通用联网，正常答案不因缺少骂人词而重�
   assert.equal(result.review.valid, true);
 });
 
+test('口癖示范保留原句但不把攻击性口癖落到当前用户', async () => {
+  const personaContext = [
+    '【已确认的人格补充】',
+    '偏好口癖：敢这么跟我说话，你的🐎是批发的？',
+    '【人格补充结束】',
+  ].join('\n');
+  const result = await generateConversationReply({
+    content: '你口癖呢',
+    modelInput: '当前问题：你口癖呢',
+    personaContext,
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '敢这么跟我说话，你的🐎是批发的？顺便再骂你一句。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.equal(result.answer, '口癖示范：“敢这么跟我说话，你的🐎是批发的？”');
+  assert.equal(result.roleReplyHadAttack, false);
+});
+
+test('质疑口癖没有生效时也只引用示范，不把口癖反打到用户', async () => {
+  const personaContext = '偏好口癖：敢这么跟我说话，你的🐎是批发的？';
+  const result = await generateConversationReply({
+    content: '刚刚的私聊中没有出现我说的口癖',
+    modelInput: '刚刚的私聊中没有出现我说的口癖',
+    personaContext,
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '敢这么跟我说话，你的🐎是批发的？';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.equal(result.answer, '口癖示范：“敢这么跟我说话，你的🐎是批发的？”');
+  assert.equal(result.roleReplyHadAttack, false);
+});
+
+test('普通问题中的未授权亲属攻击会被删除', async () => {
+  const result = await generateConversationReply({
+    content: '今天适合跑步吗',
+    modelInput: '今天适合跑步吗',
+    personaContext: '偏好口癖：敢这么跟我说话，你的🐎是批发的？',
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '天气合适就去跑，你🐎在龙图里当背景板呢。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.doesNotMatch(result.answer, /你🐎|你的🐎/u);
+});
+
 test('未命中专用规则的评价问题会先通用联网再按人格回答', async () => {
   const searchCalls = [];
   const modelCalls = [];
