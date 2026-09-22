@@ -1861,7 +1861,7 @@ test('群话题窗口内连续艾特按群短节流且不会重置发起者和�
   assert.equal(callsAfterBurst, callsAfterFirst);
   assert.equal(callsAfterAdmitted > callsAfterBurst, true);
   assert.equal(stateBeforeEnd?.ownerUserId, 'human-1');
-  assert.equal(stateBeforeEnd?.replyCount, 0);
+  assert.equal(stateBeforeEnd?.replyCount, 2);
   assert.equal(stateBeforeEnd?.participantUserIds.has('human-2'), true);
   assert.equal(stateBeforeEnd?.expiresAt, 115_000);
   assert.deepEqual(ended, { mode: 'observed', messages: [] });

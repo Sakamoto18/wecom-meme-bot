@@ -3,7 +3,7 @@ const DEFAULT_ENGAGEMENT_WINDOW_MS = 100_000;
 const DEFAULT_ENGAGEMENT_REPLY_COOLDOWN_MS = 18_000;
 const DEFAULT_ENGAGEMENT_MENTION_COOLDOWN_MS = 5_000;
 const DEFAULT_ENGAGEMENT_REPLY_PROBABILITY = 0.6;
-const DEFAULT_ENGAGEMENT_MAX_REPLIES = 4;
+const DEFAULT_ENGAGEMENT_MAX_REPLIES = 3;
 const DEFAULT_DISENGAGE_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_ENGAGEMENTS = 1_000;
 // Keep the long, invariant part of both neutral classifiers before the live
@@ -67,6 +67,8 @@ const OPTIONAL_VALUE_SYSTEM_PROMPT = buildOptionalValueSystemPrompt(true);
 const HUMAN_OPTIONAL_VALUE_SYSTEM_PROMPT = buildOptionalValueSystemPrompt(false);
 
 const EXPLICIT_QUESTION_PATTERN = /[?？]|(?:请问|求助|谁知道|有人知道|怎么|咋办|咋整|为什么|为何|如何|啥意思|什么意思|是什么|是不是|能不能|可不可以|有没有|懂不懂|知道吗|行不行|对不对)/i;
+const LOW_INFORMATION_ENGAGEMENT_PATTERN = /^(?:嗯+|哦+|噢+|啊+|好+|行+|对+|是的|确实|没错|懂了|知道了|收到|哈哈+|笑死|破防了|破绷了|绷不住了|我好像(?:还)?见过|我也见过|有印象|有点意思|牛|6+|绝了|离谱|不是吧|真的假的)[。！!？?~～\s]*$/iu;
+const ENGAGEMENT_FOLLOWUP_PATTERN = /(?:那(?:然后|接下来|下一步)(?:呢)?|那[^。！？!?]{0,30}(?:呢|怎么|哪|改|办|解决|处理)|然后呢|下一步|具体(?:怎么做|怎么弄|怎么改|说)|再(?:补(?:充|一句)|具体(?:点|说)|说说)|不对|理解反了|刚才说错|我的意思是|不懂|没明白|还是(?:不对|不行|失败|没用)|依然(?:不对|不行|失败|没用)|仍然(?:不对|不行|失败|没用)|继续(?:说|讲|展开)?|你怎么看)|(?:吗|呢|吧)[!?？。！~～\s]*$/iu;
 
 function normalizeSet(values) {
   if (values instanceof Set) return new Set([...values].map(String));
@@ -95,6 +97,21 @@ function parseOptionalValue(value) {
     .trim();
   return withoutThinking.match(/(?:^|\n)\s*(speak|skip)\s*[.!。！]?\s*$/i)?.[1]
     ?.toLowerCase() ?? '';
+}
+
+function normalizeEngagementText(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isLowInformationEngagement(payload) {
+  return LOW_INFORMATION_ENGAGEMENT_PATTERN.test(normalizeEngagementText(payload?.text));
+}
+
+function isLikelyEngagementFollowup(payload) {
+  return ENGAGEMENT_FOLLOWUP_PATTERN.test(normalizeEngagementText(payload?.text));
 }
 
 export function isExplicitEngagementEnd(value) {
@@ -313,12 +330,13 @@ export class ActiveReplyDecider {
     return state;
   }
 
-  openEngagement(payload) {
+  openEngagement(payload, options = {}) {
     if (payload?.messageType !== 'group') return false;
     const key = this.engagementKey(payload);
     if (!key) return false;
     const ownerUserId = String(payload?.userId ?? '').trim();
     if (!ownerUserId || payload?.isPeerBot) return false;
+    const replied = options.replied === true;
     const now = this.now();
     this.groupPauses.delete(String(payload.groupId));
     const current = this.getGroupEngagement(key, now);
@@ -332,6 +350,7 @@ export class ActiveReplyDecider {
         ...current,
         lastActivityAt: now,
         lastReplyAt: now,
+        replyCount: current.replyCount + (replied ? 1 : 0),
         followupCount: 0,
         lastMentionReplyAt: this.isDirectMention(payload)
           ? now
@@ -357,7 +376,7 @@ export class ActiveReplyDecider {
       ownerUserId,
       participantUserIds: new Set([ownerUserId]),
       mutedUserIds: new Set(),
-      replyCount: 0,
+      replyCount: replied ? 1 : 0,
       followupCount: 0,
     });
     return true;
@@ -578,7 +597,7 @@ export class ActiveReplyDecider {
         replied: true, followup: decision.reason === 'engagement-followup-must',
       });
     }
-    return this.openEngagement(payload);
+    return this.openEngagement(payload, { replied: true });
   }
 
   async evaluateOptionalValue(decisionInput, sharedContext, { isPeerBot = false } = {}) {
@@ -668,6 +687,18 @@ export class ActiveReplyDecider {
     }
 
     const signals = this.mustSignals(payload);
+    // A continuous topic window is context, not permission to answer every
+    // short reaction. Reject obvious acknowledgements and vague statements
+    // before the classifier call so they do not consume tokens or reopen the
+    // conversation through a false follow-up decision.
+    if (engagement
+      && !payload.isPeerBot
+      && !signals.quotedBot
+      && !signals.namedBot
+      && !signals.explicitQuestion
+      && isLowInformationEngagement(payload)) {
+      return { reply: false, reason: 'engagement-low-signal' };
+    }
     const humanDiscussion = !payload.isPeerBot && this.isBusy(groupId, now, { humanOnly: true });
     const signalSummary = [
       signals.quotedBot ? '当前消息引用了机器人之前的发言。' : '',
@@ -764,6 +795,9 @@ export class ActiveReplyDecider {
         );
       }
       if (decision === 'followup') {
+        if (!isLikelyEngagementFollowup(payload)) {
+          return { reply: false, reason: 'engagement-followup-low-signal' };
+        }
         if (engagement.replyCount + (engagement.followupCount ?? 0) >= this.engagementMaxReplies) {
           return { reply: false, reason: 'engagement-followup-limit' };
         }

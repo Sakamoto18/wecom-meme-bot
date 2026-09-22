@@ -34,21 +34,21 @@ function fixture({ peak = false, failReply = false } = {}) {
     send(text, overrides = {}) { return service.handleMessage({ ...base, message_id: String(++id), text, ...overrides }); } };
 }
 
-test('热聊主动接入后 observe_only 连续追问三轮，不受峰时采样、概率或十八秒冷却拦截', async () => {
+test('热聊主动接入后 observe_only 首答最多补两轮，不受峰时采样、概率或十八秒冷却拦截', async () => {
   for (const peak of [false, true]) {
     const f = fixture({ peak });
     const first = await f.send('服务连不上，应该先排哪里？');
     assert.equal(first.active_reply_reason, 'ai-help');
     assert.ok(f.decider.getGroupEngagement('g'));
     f.classify('followup');
-    for (const question of ['我试过了还是不行', '？是我说地址错了吗', '那端口在哪改']) {
+    for (const question of ['我试过了还是不行', '？是我说地址错了吗']) {
       f.tick();
       const result = await f.send(question);
       assert.equal(result.active_reply_reason, 'engagement-followup-must');
       assert.ok(result.messages.some(m => m.type === 'text'));
     }
     assert.equal(f.calls.filter(c => c.options.usageSource === 'active-value-gate').length, 0);
-    assert.equal(f.decider.getGroupEngagement('g').followupCount, 3);
+    assert.equal(f.decider.getGroupEngagement('g').followupCount, 2);
     const capped = await f.send('还要再补一步');
     assert.equal(capped.messages.length, 0);
     f.tick(6000);

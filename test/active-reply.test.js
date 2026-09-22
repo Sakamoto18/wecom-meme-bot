@@ -373,7 +373,6 @@ test('连续话题里的追问和纠正不再走概率阀门，最多补两轮',
     engagementWindowMs: 100_000,
     engagementReplyCooldownMs: 60_000,
     engagementReplyProbability: 0,
-    engagementMaxReplies: 3,
     now: () => currentTime,
     random: () => 1,
   });
@@ -394,6 +393,49 @@ test('连续话题里的追问和纠正不再走概率阀门，最多补两轮',
     history: [{ role: 'assistant', content: '机器人上一轮回答' }],
   });
   assert.deepEqual(stopped, { reply: false, reason: 'engagement-followup-limit' });
+});
+
+test('连续话题里的低信息短句在模型判定前静默', async () => {
+  let calls = 0;
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        calls += 1;
+        return 'followup';
+      },
+    },
+    enabled: true,
+    now: () => 10_000,
+  });
+  decider.openEngagement(groupPayload({ userId: 'u1', text: '先聊聊这个问题' }));
+
+  const result = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u2', text: '我好像还见过' }),
+    history: [{ role: 'assistant', content: '机器人刚回答过' }],
+  });
+
+  assert.deepEqual(result, { reply: false, reason: 'engagement-low-signal' });
+  assert.equal(calls, 0);
+});
+
+test('模型误判 followup 但当前消息没有追问线索时静默', async () => {
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return 'followup'; },
+    },
+    enabled: true,
+    now: () => 10_000,
+  });
+  decider.openEngagement(groupPayload({ userId: 'u1', text: '先聊聊这个问题' }));
+
+  const result = await decider.shouldReply({
+    payload: groupPayload({ userId: 'u2', text: '这个方案我之前看过了' }),
+    history: [{ role: 'assistant', content: '机器人刚回答过' }],
+  });
+
+  assert.deepEqual(result, { reply: false, reason: 'engagement-followup-low-signal' });
 });
 
 test('具体求助 help 绕过普通概率', async () => {
