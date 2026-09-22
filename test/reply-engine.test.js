@@ -203,6 +203,7 @@ test('问题窗口内遭到攻击时仍先回答问题，再允许简短回击',
   assert.equal(result.mode, 'model');
   assert.equal(calls.length, 1);
   assert.match(calls[0].stableSystemPrompt, /若当前发言者明确挑衅或攻击机器人/);
+  assert.match(calls[0].stableSystemPrompt, /已确认人格中的攻击性口癖不改变本轮攻击判定/);
 });
 
 test('统一角色初稿把回击写成说教时，追加一次真正的临场对线句', async () => {
