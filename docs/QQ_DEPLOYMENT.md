@@ -82,9 +82,24 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs -f qq-bot astrbo
 - 默认不发送“处理中”占位消息，因此明确龙图指令仍然只回图片；需要时可在插件配置中开启。
 - 插件处理消息后会停止 AstrBot 默认 LLM 流程，避免同一条消息回复两次。
 - Bridge 在入口标记事件由本插件接管，阻止 AstrBot 默认 LLM；在正常发送流程结束后停止后续事件链，禁用群、关闭旁观、空消息及后端异常等提前返回路径也有拦截。不要在正常产出回复前一律停止事件链，否则框架可能跳过本插件的发送阶段。允许群中的普通消息会先交给 Node 服务“读空气”，判定不回复时静默进入角色/语境记忆，判定回复时仍由现有人格、搜索和记忆链路生成。
-- 群内只有 `/add`、`/tag`、`/del`、超管硬终止命令 `/stop` 和日报 `/usage-report` 会进入本项目；其中 `/usage-report YYYY-MM-DD` 仅限超管回捞指定日期并私聊自己，其他以 `/` 开头的 AstrBot/插件指令都会被 Bridge 停止。
+- 群内只有 `/add`、`/tag`、`/del`、人格训练 `/persona`、超管硬终止命令 `/stop` 和日报 `/usage-report` 会进入本项目；其中 `/usage-report YYYY-MM-DD` 仅限超管回捞指定日期并私聊自己，其他以 `/` 开头的 AstrBot/插件指令都会被 Bridge 停止。
 - 被动群聊回复会引用原消息。原消息明确 `@` 第三人时，回复优先 `@` 这些目标（最多 3 人）；如果只 `@机器人`，回复会 `@` 发令者。机器人自身、发送者自艾特和 `@全体成员` 不会被当成第三方目标，私聊不附加引用或艾特。Node 判定产生的主动插话不引用触发消息，表现为机器人自己发送的一条群消息。若消息同时 `@机器人` 并明确要求攻击某位群友（例如“请攻击张三”“骂一下张三”），后端会优先把攻击目标解析为被点名群友，即使该成员还没有完成昵称确认；不会再默认攻击指令发送者。
 - 纯 `@机器人` 没有附加文字时会进入独立 QQ 服务的快速人格模式，强制关闭 thinking，并对客服式草稿使用角色招呼兜底；Bridge 会先停止 AstrBot 默认 LLM。
+
+### 角色人格训练
+
+人格训练与普通群聊记忆使用独立 SQLite。`.env.qq` 可配置：
+
+```dotenv
+QQ_PERSONA_MEMORY_ENABLED=true
+QQ_PERSONA_DATABASE_FILE=data/qq-persona.sqlite
+QQ_PERSONA_GLOBAL_USERS=你的训练管理员QQ号
+QQ_PERSONA_DEFAULT_SCOPE=user
+QQ_PERSONA_TRAINING_SESSION_MINUTES=30
+QQ_PERSONA_MAX_CONTEXT_CHARACTERS=1200
+```
+
+普通用户或管理员发送“记住我的口癖：……”后，Bot 只生成待确认草稿；发送“确认保存”或 `/persona save` 才会写入。普通用户默认保存自己的专属口癖，管理员使用 `/persona global 规则` 才能提交全局人格。`/persona preview` 查看待确认内容，`/persona list` 查看当前范围，`/persona off` 停用当前范围，`/persona undo` 恢复上一历史版本。普通群聊、引用、图片 OCR 和搜索摘要不会自动写入人格。
 
 ### 群聊主动回复（ChatPlus 风格）
 

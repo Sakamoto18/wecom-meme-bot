@@ -211,6 +211,7 @@ export async function generateConversationReply(options) {
     webSearchEnabled = true,
     knowledgeContext = '',
     memorySummary = '',
+    personaContext = '',
     interactionContext = {},
     protectedIdentityContext = '',
     forbiddenProtectedRoleTerms = [],
@@ -252,6 +253,7 @@ export async function generateConversationReply(options) {
         imageSafetyPrompt,
         protectedIdentityContext,
         memoryContext,
+        personaContext,
         buildPureMentionReplyPrompt(),
       ].filter(Boolean).join('\n\n'),
       maxTokens: 120,
@@ -308,6 +310,7 @@ export async function generateConversationReply(options) {
         knowledgeContext,
         protectedIdentityContext,
         memoryContext,
+        personaContext,
         buildAttackPrompt(content, {
           history,
           attackScene: firstScene,
@@ -334,6 +337,7 @@ export async function generateConversationReply(options) {
         knowledgeContext,
           protectedIdentityContext,
           memoryContext,
+          personaContext,
           buildAttackRetryPrompt(
             content,
             firstDraft,
@@ -472,6 +476,7 @@ export async function generateConversationReply(options) {
   const cachePrefixSystemPrompt = [
     knowledgeContext,
     buildNormalReplyStablePrompt({}),
+    personaContext,
   ].filter(Boolean).join('\n\n');
   const stableSystemPrompt = [
     buildNormalReplyStablePrompt(normalPromptOptions),
@@ -770,6 +775,7 @@ export async function generateConversationReply(options) {
             imageSafetyPrompt,
             protectedIdentityContext,
             memoryContext,
+            personaContext,
             buildAttackPrompt(content, {
               history,
               attackScene: rebuttalScene,

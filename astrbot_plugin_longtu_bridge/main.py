@@ -47,7 +47,7 @@ RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
 )
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
-    "/add", "/tag", "/del", "/stop", "/usage-report",
+    "/add", "/tag", "/del", "/stop", "/usage-report", "/persona",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
@@ -1064,8 +1064,8 @@ class LongtuQqBridge(Star):
         return self._enabled(configured, True)
 
     def _should_reply(self, event: AstrMessageEvent) -> bool:
-        # 斜杠命令是 Bridge 的硬白名单，不受旧配置开关影响：图库管理命令
-        # 与超管 /stop 可以继续进入本项目，其余命令必须在这里停止。
+        # 斜杠命令是 Bridge 的硬白名单，不受旧配置开关影响：图库管理命令、
+        # 人格训练命令与超管 /stop 可以继续进入本项目，其余命令必须在这里停止。
         if self._is_slash_command(event):
             return self._is_allowed_bridge_slash_command(event)
         if event.is_private_chat():

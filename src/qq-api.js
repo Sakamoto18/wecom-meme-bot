@@ -12,6 +12,8 @@ import { MemeStore } from './meme-store.js';
 import { LongtuLibrary } from './longtu-library.js';
 import { parseAdminUsers, parseProtectedRoles } from './longtu-management.js';
 import { QqMemoryStore } from './qq-memory-store.js';
+import { QqPersonaStore } from './qq-persona-store.js';
+import { QqPersonaManager } from './qq-persona-manager.js';
 import { QqBotService } from './qq-service.js';
 import { QqUsageTracker } from './qq-usage-tracker.js';
 import { LongtuWebSearch } from './web-search.js';
@@ -391,6 +393,19 @@ export async function createQqRuntime() {
     },
   });
 
+  const personaStore = new QqPersonaStore({
+    databaseFilePath: path.resolve(
+      projectRoot,
+      process.env.QQ_PERSONA_DATABASE_FILE?.trim() || 'data/qq-persona.sqlite',
+    ),
+    maxRules: parsePositiveInteger(process.env.QQ_PERSONA_MAX_RULES) ?? 20,
+    maxPhrases: parsePositiveInteger(process.env.QQ_PERSONA_MAX_PHRASES) ?? 12,
+    maxAvoidPatterns: parsePositiveInteger(process.env.QQ_PERSONA_MAX_AVOID_PATTERNS) ?? 12,
+    maxExamples: parsePositiveInteger(process.env.QQ_PERSONA_MAX_EXAMPLES) ?? 8,
+    maxContextCharacters: parsePositiveInteger(process.env.QQ_PERSONA_MAX_CONTEXT_CHARACTERS) ?? 1_200,
+  });
+  await personaStore.load();
+
   const usageTracker = new QqUsageTracker({
     databaseFilePath: path.resolve(
       projectRoot,
@@ -665,6 +680,14 @@ export async function createQqRuntime() {
     memberAliases,
     longtuLibrary,
     adminUsers,
+    personaManager: new QqPersonaManager({
+      store: personaStore,
+      enabled: parseBoolean(process.env.QQ_PERSONA_MEMORY_ENABLED, true),
+      adminUsers,
+      globalUsers: parseIdentifierSet(process.env.QQ_PERSONA_GLOBAL_USERS),
+      defaultScope: process.env.QQ_PERSONA_DEFAULT_SCOPE,
+      pendingTtlMs: (parsePositiveNumber(process.env.QQ_PERSONA_TRAINING_SESSION_MINUTES) ?? 30) * 60 * 1000,
+    }),
     protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
     // 本地 OCR 默认开启：镜像内已带 tesseract，缺失时会自动退回纯视觉识别。
     imageOcrEnabled: process.env.QQ_IMAGE_OCR_ENABLED?.trim() !== 'false',
@@ -779,6 +802,7 @@ export async function createQqRuntime() {
     service,
     chatClient,
     conversationStore,
+    personaStore,
     memeStore,
     longtuLibrary,
     memberAliases,
@@ -840,6 +864,8 @@ export async function startQqApi() {
         bundled_image_count: currentStats.longtuImageCount - currentStats.dynamicActive,
         dynamic_image_count: currentStats.dynamicActive,
         ...runtime.conversationStore.getStats(),
+        persona_memory_enabled: runtime.service.personaManager?.enabled === true,
+        ...runtime.personaStore.getStats(),
       };
     },
   });
@@ -876,6 +902,7 @@ export async function startQqApi() {
     await new Promise((resolve) => server.close(resolve));
     await runtime.conversationStore.flush();
     runtime.conversationStore.close();
+    runtime.personaStore.close();
     runtime.longtuLibrary.close();
     runtime.usageTracker.close();
     runtime.mediaUsageTracker.close();

@@ -1284,6 +1284,7 @@ export class QqBotService {
     this.knowledgeContext = options.knowledgeContext ?? '';
     this.memberAliases = options.memberAliases ?? {};
     this.longtuLibrary = options.longtuLibrary ?? null;
+    this.personaManager = options.personaManager ?? null;
     this.adminUsers = options.adminUsers ?? new Set();
     this.protectedRoles = options.protectedRoles ?? new Map();
     this.activeReplyDecider = options.activeReplyDecider ?? null;
@@ -2058,6 +2059,7 @@ export class QqBotService {
       this.identityContextSafetyPrompt,
       buildProtectedIdentityContext(turnProtectedRoles),
     ].filter(Boolean).join('\n\n');
+    const personaContext = this.personaManager?.contextFor?.(message) ?? '';
 
     return this.conversationStore.runExclusive(conversationId, async () => {
       const history = sanitizeConversationHistory(
@@ -2114,6 +2116,7 @@ export class QqBotService {
           .map((url) => ({ type: 'video_url', video_url: { url } })),
         history,
         memorySummary,
+        personaContext,
         interactionContext,
         protectedIdentityContext: turnIdentityContext,
         forbiddenProtectedRoleTerms: forbiddenRoleTerms,
@@ -3266,6 +3269,13 @@ export class QqBotService {
     }
 
     const message = buildQqCompatibleMessage(payload);
+    const personaResult = this.personaManager?.handle?.(payload);
+    if (personaResult?.handled) {
+      return {
+        mode: personaResult.mode,
+        messages: personaResult.messages ?? [],
+      };
+    }
     this.recordParticipants(payload);
     this.inferPlainTextTargets(payload, message);
     this.recordMemberObservation(payload, message);
