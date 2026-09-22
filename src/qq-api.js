@@ -698,6 +698,7 @@ export async function createQqRuntime() {
       20_000,
     ),
     passiveImageEnabled: process.env.QQ_PASSIVE_IMAGE_ENABLED?.trim() !== 'false',
+    passiveImageVisualEnabled: process.env.QQ_PASSIVE_IMAGE_VISUAL_ENABLED?.trim() !== 'false',
     passiveImageCooldownMs: parseNonnegativeInteger(process.env.QQ_PASSIVE_IMAGE_COOLDOWN_SECONDS, 60) * 1000,
     activeReplyDecider,
     repeatDetector,

@@ -619,7 +619,7 @@ export class QqUsageTracker {
   isPassiveLlmCall(context, source) {
     const normalizedSource = String(source || context.source || '');
     return context.source === 'observed-message'
-      || /(?:decision|gate|summary)/.test(normalizedSource);
+      || /(?:decision|gate|summary|active-image-triage)/.test(normalizedSource);
   }
 
   shouldRunSecondaryReview({ source, issues = [], model } = {}) {

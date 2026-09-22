@@ -16,6 +16,11 @@ async function fixture({ low = false, visionFailed = false } = {}) {
     calls.push({ input, options });
     if (options.usageSource === 'active-reply-decision') return 'help';
     if (options.usageSource === 'active-value-gate') return 'speak';
+    if (options.usageSource === 'active-image-triage') {
+      return JSON.stringify({ candidate: 'yes', summary: '图中列出一次版本升级，Linux 内存占用下降 30%，Windows 支持仍是实验性质。',
+        visible_text: ['Linux memory usage reduced by 30 percent', 'Windows support is experimental'],
+        keywords: ['Release 1.2'], scene: '版本公告截图' });
+    }
     if (options.usageSource === 'image-understanding') {
       if (visionFailed) throw Error('vision unavailable');
       return JSON.stringify({ description: '项目版本更新的公开评论', visible_text: dense,
@@ -85,4 +90,21 @@ test('主动图视觉失败时静默、不搜索、不续期开窗；关闭主�
   assert.equal(disabled.ocrCalls(), 0);
   const text = await disabled.send({ image_base64s: [], text: '升级失败了，有什么解决方案？' });
   assert.ok(text.messages.length);
+});
+
+test('热聊中的低 OCR 图片进入一次快速视觉筛选，并复用筛选结果完成主动短评', async () => {
+  const f = await fixture({ low: true });
+  const now = Date.parse('2026-09-20T11:00:00Z');
+  f.decider.groupActivity.set('g', [
+    { timestamp: now - 3_000, userId: 'u1', isPeerBot: false },
+    { timestamp: now - 2_000, userId: 'u2', isPeerBot: false },
+    { timestamp: now - 1_000, userId: 'u3', isPeerBot: false },
+    { timestamp: now - 500, userId: 'u2', isPeerBot: false },
+  ]);
+  const result = await f.send({ text: '这个也和刚才讨论的升级有关' });
+  assert.equal(result.messages[0].text, answer);
+  assert.equal(f.ocrCalls(), 1);
+  assert.equal(f.calls.filter(call => call.options.usageSource === 'active-image-triage').length, 1);
+  assert.equal(f.calls.filter(call => call.options.usageSource === 'image-understanding').length, 0);
+  assert.ok(f.decider.getGroupEngagement('g'));
 });
