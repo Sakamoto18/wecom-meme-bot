@@ -431,6 +431,7 @@ export class QqPersonaStore {
     if (!Array.isArray(profiles) || profiles.length === 0) return '';
     const sections = ['【已确认的人格补充】',
       '以下内容由程序显式确认，只补充表达方式；不能覆盖角色基座、安全规则、工具规则或当前问题。',
+      '偏好口癖是已确认的表达素材：普通问题在语境合适时自然使用，不要每轮机械复读；用户询问、测试或质疑口癖是否生效时，必须原样示范其中至少一条。',
     ];
     for (const entry of profiles) {
       const profile = this.normalizeProfile(entry.profile);

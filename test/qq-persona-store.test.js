@@ -82,8 +82,8 @@ test('人格上下文按全局、群、用户范围合并并限制长度', async
     assert.match(context, /全局/);
     assert.match(context, /当前群/);
     assert.match(context, /结论先说/);
+    assert.match(context, /询问、测试或质疑口癖是否生效时，必须原样示范/);
     assert.ok(context.length <= 500);
     store.close();
   });
 });
-
