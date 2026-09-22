@@ -3048,7 +3048,7 @@ export class QqBotService {
           if (this.isPeerBotMessage(payload)) {
             this.recordPeerBotReply(payload);
           } else if (this.isDirectHumanEngagementTrigger(payload)) {
-            this.activeReplyDecider?.openEngagement?.(payload);
+            this.activeReplyDecider?.openEngagement?.(payload, { replied: true });
           } else if (result.active_reply && result.mode !== 'repeat-reply') {
             this.activeReplyDecider?.confirmReply?.(payload, {
               reply: true, reason: result.active_reply_reason,
