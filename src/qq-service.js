@@ -1019,6 +1019,7 @@ function mimeTypeForExtension(extension) {
 function imageMessage(meme) {
   return {
     type: 'image',
+    sub_type: 1,
     filename: meme.filename,
     mime_type: mimeTypeForExtension(meme.extension),
     base64: meme.buffer.toString('base64'),

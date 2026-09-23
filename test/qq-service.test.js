@@ -505,6 +505,7 @@ test('明确龙图指令直接返回 Base64 图片且不调用模型', async () 
 
   assert.equal(result.mode, 'longtu');
   assert.equal(result.messages[0].type, 'image');
+  assert.equal(result.messages[0].sub_type, 1);
   assert.equal(
     Buffer.from(result.messages[0].base64, 'base64').toString(),
     'fake-image',

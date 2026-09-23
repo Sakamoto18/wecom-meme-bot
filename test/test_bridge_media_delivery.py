@@ -20,8 +20,17 @@ class Image(Component):
 class Video(Component): pass
 class Plain(Component): pass
 
+class BaseMessageComponent:
+    def __init__(self, **kwargs): self.__dict__.update(kwargs)
+sticker_source = ast.parse((Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu_bridge/qq_sticker.py').read_text())
+sticker_class = next(n for n in sticker_source.body if isinstance(n, ast.ClassDef))
+sticker_namespace = {'BaseMessageComponent': BaseMessageComponent,
+                     'ComponentType': SimpleNamespace(Image='Image')}
+exec(compile(ast.fix_missing_locations(ast.Module(body=[sticker_class], type_ignores=[])), '<qq-sticker>', 'exec'), sticker_namespace)
+QqSticker = sticker_namespace['QqSticker']
+
 namespace = {'AstrMessageEvent': object, 'logger': logging.getLogger('test'), 'asyncio': asyncio,
-             'Comp': SimpleNamespace(Image=Image, Video=Video, Plain=Plain)}
+             'Comp': SimpleNamespace(Image=Image, Video=Video, Plain=Plain), 'QqSticker': QqSticker}
 exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(name='Bridge', bases=[], keywords=[], body=methods, decorator_list=[])], type_ignores=[])), '<bridge-methods>', 'exec'), namespace)
 Bridge = namespace['Bridge']
 async def fake_card(self, message):
@@ -141,5 +150,19 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chains[0][0].args, ('第一条结论',))
         self.assertEqual(chains[1][0].args, ('第二条条件',))
         self.assertIsInstance(chains[2][0], Image)
+
+    def test_only_marked_memes_use_sticker_type_and_keep_original_bytes(self):
+        response = {'messages': [
+            {'type': 'text', 'text': '结论'},
+            {'type': 'image', 'base64': 'dragon', 'sub_type': 1},
+            {'type': 'image', 'base64': 'share-card'},
+        ]}
+        chains = Bridge._reply_chains_from_backend(response)
+        self.assertEqual(len(chains), 3)
+        self.assertEqual(chains[1][0].toDict(), {
+            'type': 'image', 'data': {'file': 'base64://dragon', 'sub_type': 1, 'summary': '[龙图]'},
+        })
+        self.assertIsInstance(chains[2][0], Image)
+        self.assertEqual(chains[2][0].args, ('share-card',))
 
 if __name__ == '__main__': unittest.main()

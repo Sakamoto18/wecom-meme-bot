@@ -10,6 +10,7 @@ import time
 from zoneinfo import ZoneInfo
 from .video_card import render_video_card
 from .video_delivery_cache import VideoDeliveryCache, VideoForwardRejected
+from .qq_sticker import QqSticker
 
 import aiohttp
 from aiohttp import web
@@ -2296,7 +2297,10 @@ class LongtuQqBridge(Star):
                 # independently; keep this explanation in the normal chain.
                 chains.append([Comp.Plain(str(message["text"]))])
             elif message_type == "image" and message.get("base64"):
-                chains.append([Comp.Image.fromBase64(str(message["base64"]))])
+                if message.get("sub_type") == 1:
+                    chains.append([QqSticker(file=f"base64://{message['base64']}")])
+                else:
+                    chains.append([Comp.Image.fromBase64(str(message["base64"]))])
             elif message_type == "video" and message.get("url"):
                 # OneBot accepts an HTTPS URL for video; keep it out of the
                 # JSON bridge body as base64 because videos exceed API limits.
