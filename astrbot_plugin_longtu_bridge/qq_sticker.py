@@ -1,11 +1,12 @@
-"""Preserve QQ's sticker subtype through AstrBot's OneBot serializer."""
+"""QQ sticker transport data, delivered directly by the bridge via OneBot."""
 
 from astrbot.api.message_components import BaseMessageComponent, ComponentType
 
 
 class QqSticker(BaseMessageComponent):
-    # AstrBot's Image branch rebuilds the segment with only `file`, discarding
-    # sub_type. A dedicated component uses its ordinary toDict path instead.
+    # AstrBot's Image serializer drops sub_type, while RespondStage rejects
+    # custom-only chains as empty. Never yield this component to that stage;
+    # _deliver_reply_chains sends its dictionary through OneBot directly.
     type: ComponentType = ComponentType.Image
     file: str
 
