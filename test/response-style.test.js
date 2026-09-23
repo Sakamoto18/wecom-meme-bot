@@ -231,13 +231,13 @@ test('普通回复保留龙玉涛语感但不强制攻击任何参与者', () =>
   assert.match(prompt, /默认只评价事情本身/);
   assert.match(prompt, /只有本轮明确要求攻击或调侃某人/);
   assert.doesNotMatch(prompt, /至少写一句.*损人话|温和吐槽不算完成/);
-  assert.match(prompt, /至少保留一处自然的口头钩子/);
+  assert.match(prompt, /信息和锋芒融在同一句/);
 });
 
 test('普通正经回答也明确要求带事情本身的贫嘴口吻', () => {
   const prompt = buildNormalReplyStablePrompt({});
   assert.match(prompt, /角色口吻是硬要求/);
-  assert.match(prompt, /普通答复必须在给出结论后至少保留一处自然的口头钩子/);
+  assert.match(prompt, /普通答复用鲜明的阴阳、冷嘲和傲气直接表达判断/);
   assert.match(prompt, /不要只发客服式结论/);
 });
 
@@ -313,7 +313,7 @@ test('普通回复重写保留事实和来源，不追加对作者的攻击', ()
   });
   assert.match(prompt, /保留初稿中的正确事实/);
   assert.match(prompt, /引用作者.*只是内容来源/);
-  assert.match(prompt, /不能为了角色风格追加攻击/);
+  assert.match(prompt, /删掉无关的人身攻击和万能损人收尾/);
   assert.doesNotMatch(prompt, /必须加入一句.*攻击/);
 });
 

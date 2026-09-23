@@ -774,7 +774,7 @@ test('主动 must 的技术推理不要求扩写普通问题', async () => {
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].options.thinking, { type: 'enabled' });
   assert.equal(calls[0].options.maxTokens, 20_000);
-  assert.match(calls[0].options.stableSystemPrompt, /第一句直接给当前要用的答案或操作/);
+  assert.match(calls[0].options.stableSystemPrompt, /追问就补本轮要用的答案或操作和必要条件/);
   assert.equal(result.answer, answer);
   assert.equal(result.review.valid, true);
 });
