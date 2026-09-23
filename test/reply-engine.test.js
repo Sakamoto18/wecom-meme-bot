@@ -14,7 +14,7 @@ test('技术问题允许内部推理，但正确短答不自动扩写', async ()
   assert.equal(result.detailedAnswerRequested, false);
   assert.equal(result.seriousAnswerExpanded, false);
   assert.equal(calls.length, 1);
-  assert.equal(result.answer, `说白了，${answer}`);
+  assert.equal(result.answer, answer);
   assert.equal(result.review.valid, true);
 });
 
@@ -30,7 +30,7 @@ test('默认长草稿压缩成短答，保留检索证据和连续对话上下�
     }},
     webSearch: {async search() {return {context: '厂商资料：每台设备占用一口，上联路由器占一口。', resultCount: 1};}},
   });
-  assert.equal(result.answer, '说白了，五口就够了，四台设备占四口，最后一口接路由器。');
+  assert.equal(result.answer, '五口就够了，四台设备占四口，最后一口接路由器。');
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].h, history);
   assert.deepEqual(calls[1].h, history);
@@ -38,6 +38,72 @@ test('默认长草稿压缩成短答，保留检索证据和连续对话上下�
   assert.match(calls[1].o.additionalSystemPrompt, /厂商资料/);
   assert.match(calls[1].o.revisionSystemPrompt, /默认群聊短答的压缩重写/);
   assert.equal(result.review.valid, true);
+});
+
+test('截图中的第三人称客服开头走原有一次复核，不靠硬拼口头禅', async () => {
+  const calls = [];
+  const revised = '就 PPT 美化、剪视频、修图这些。先接自己能交付的，别接完了还得求人救火。';
+  const result = await generateConversationReply({
+    content: '说的是咸鱼接单，接什么单？', modelInput: '黄胖子：说的是咸鱼接单，接什么单？',
+    interactionContext: { speakerLabel: '黄胖子（成员-abcdef）' }, webSearchEnabled: false,
+    chatClient: { isConfigured: true, async complete(history, input, options) {
+      calls.push(options);
+      return calls.length === 1 ? '黄胖子问的是闲鱼接单具体接啥，说白了就几类：做PPT、剪视频、修图。' : revised;
+    } },
+  });
+  assert.equal(result.answer, revised);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].revisionSystemPrompt, /narrated-question-opening/);
+  assert.equal(calls[0].cachePrefixSystemPrompt, calls[1].cachePrefixSystemPrompt);
+  assert.equal(result.review.valid, true);
+});
+
+test('口癖示范请求被模型空口带过时返回已确认原句，不增加模型调用', async () => {
+  let calls = 0;
+  const result = await generateConversationReply({
+    content: '你口癖呢', modelInput: '你口癖呢', webSearchEnabled: false,
+    personaContext: '偏好口癖：我们龙龙都是亲切友好的',
+    chatClient: { isConfigured: true, async complete() { calls++; return '记住了，当然记住了。'; } },
+  });
+  assert.equal(result.answer, '口癖示范：“我们龙龙都是亲切友好的”');
+  assert.equal(calls, 1);
+});
+
+test('普通口癖不硬拼；已有合适口癖在长度重写中保留', async () => {
+  const phrase = '我们龙龙都是亲切友好的';
+  const calls = [];
+  const answer = `${phrase}，凶不凶得看聊什么。`;
+  const result = await generateConversationReply({
+    content: '你不是挺凶的吗，怎么又装友好了？', modelInput: '怎么又装友好了？',
+    personaContext: `偏好口癖：${phrase}`, webSearchEnabled: false,
+    chatClient: { isConfigured: true, async complete(history, input, options) {
+      calls.push(options);
+      return calls.length === 1 ? answer + '不用把普通聊天也搞成对线。'.repeat(35) : answer;
+    } },
+  });
+  assert.equal(result.answer, answer);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].revisionSystemPrompt, /不要把所有口癖一起抹掉/);
+  assert.equal(calls[0].cachePrefixSystemPrompt, calls[1].cachePrefixSystemPrompt);
+  const factual = await generateConversationReply({
+    content: '一加一等于几', modelInput: '一加一等于几',
+    personaContext: `偏好口癖：${phrase}`, webSearchEnabled: false,
+    chatClient: { isConfigured: true, async complete() { return '2。'; } },
+  });
+  assert.equal(factual.answer, '2。');
+});
+
+test('引用里的口癖要求不能替代当前问题，也不能凭空示范未保存口癖', async () => {
+  for (const scenario of [
+    { content: '引用内容：你口癖呢\n当前问题：一加一等于几', currentQuestion: '一加一等于几', personaContext: '偏好口癖：我们龙龙都是亲切友好的' },
+    { content: '你口癖呢', personaContext: '' },
+  ]) {
+    const result = await generateConversationReply({
+      ...scenario, modelInput: scenario.content, webSearchEnabled: false,
+      chatClient: { isConfigured: true, async complete() { return '没有额外内容。'; } },
+    });
+    assert.equal(result.answer, '没有额外内容。');
+  }
 });
 
 test('长答只按当前请求开启，引用资料和旧长答要求不能打开本轮长答', async () => {
@@ -247,7 +313,7 @@ test('模型复述群聊历史的内部回复标签时只保留答案正文', as
 
   assert.equal(
     result.answer,
-    '说白了，上班摸鱼打游戏还说得理直气壮，你这废物摸鱼都比别人低一个档次。',
+    '上班摸鱼打游戏还说得理直气壮，你这废物摸鱼都比别人低一个档次。',
   );
   assert.doesNotMatch(result.answer, /机器人群聊回复记录|本轮回复对象|机器人回复：/);
 });
@@ -338,6 +404,8 @@ test('口癖示范保留原句但不把攻击性口癖落到当前用户', async
   });
   assert.equal(result.answer, '口癖示范：“敢这么跟我说话，你的🐎是批发的？”');
   assert.equal(result.roleReplyHadAttack, false);
+  assert.equal(result.attempts, 1);
+  assert.equal(result.review.valid, true);
 });
 
 test('质疑口癖没有生效时也只引用示范，不把口癖反打到用户', async () => {
@@ -747,7 +815,7 @@ test('明确要求详细的答案过短时才开启完整性复核', async () =>
     calls[0].options.additionalSystemPrompt,
   );
   assert.match(calls[1].options.revisionSystemPrompt, /正经问答质量复核/);
-  assert.equal(result.answer, `说白了，${longAnswer}`);
+  assert.equal(result.answer, longAnswer);
   assert.equal(result.attempts, 2);
   assert.equal(result.seriousAnswerExpanded, true);
   assert.equal(result.review.valid, true);

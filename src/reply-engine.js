@@ -7,7 +7,6 @@ import {
   buildNormalReplyStablePrompt,
   buildNormalReplyRetryPrompt,
   buildNormalReplyFallback,
-  ensureRoleVoice,
   buildProtectedIdentityFallback,
   buildProtectedSelfIdentityPrompt,
   buildPureMentionReplyPrompt,
@@ -89,14 +88,17 @@ function stripUnauthorizedFamilyAttack(value) {
 }
 
 function protectPersonaAttackDirection(answer, content, personaContext, attackStyle) {
-  if (attackStyle || !hasUnauthorizedFamilyAttack(answer)) return answer;
+  if (attackStyle) return answer;
   // A neutral question about the saved phrase is a demonstration request, not
   // permission to aim a stored insult at the current speaker. Quote the
   // original phrase so its person/target direction stays visible and intact.
   if (PERSONA_DEMONSTRATION_PATTERN.test(String(content ?? ''))) {
-    const phrase = personaPhrasesFromContext(personaContext)[0];
-    if (phrase) return `口癖示范：“${phrase}”`;
+    const phrases = personaPhrasesFromContext(personaContext);
+    const usedPhrase = phrases.find((phrase) => String(answer).includes(phrase));
+    const phrase = usedPhrase || phrases[0];
+    if (phrase && (!usedPhrase || hasUnauthorizedFamilyAttack(answer))) return `口癖示范：“${phrase}”`;
   }
+  if (!hasUnauthorizedFamilyAttack(answer)) return answer;
   return stripUnauthorizedFamilyAttack(answer) || buildNormalReplyFallback();
 }
 
@@ -504,6 +506,12 @@ export async function generateConversationReply(options) {
     passiveImageComment,
     attackDuringAnswer: attackStyle && !pureAttack,
   };
+  const personaDemonstration = !attackStyle
+    && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
+  const dialogueReviewContext = {
+    interactionContext, currentQuestion, recordSummary,
+    quotedPersonaPhrases: personaDemonstration ? personaPhrasesFromContext(personaContext) : [],
+  };
   // Put the invariant persona and knowledge before the live mode/history suffix.
   // DeepSeek can reuse this prefix across ordinary replies, active replies and
   // review attempts even when the current question or search result changes.
@@ -591,7 +599,13 @@ export async function generateConversationReply(options) {
     }
   }
 
+  // A saved-phrase demonstration can be formatted locally; do not spend a
+  // second model call trying to remove the very quote the user requested.
+  if (personaDemonstration) {
+    answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle);
+  }
   let review = reviewNormalReply(answer, {
+    ...dialogueReviewContext,
     thinkingEnabled,
     compactResponse,
     requiredIdentityRole,
@@ -643,14 +657,15 @@ export async function generateConversationReply(options) {
           timeoutMs: thinkingEnabled ? 90_000 : 45_000,
           thinking: { type: 'disabled' },
         });
-      const rewrittenReview = reviewNormalReply(rewrittenAnswer, {
+        const rewrittenReview = reviewNormalReply(rewrittenAnswer, {
+          ...dialogueReviewContext,
           thinkingEnabled,
           compactResponse,
           requiredIdentityRole,
           activeReply,
           activeReplyPriority,
-        passiveImageComment,
-        attackDuringAnswer: attackStyle && !pureAttack,
+          passiveImageComment,
+          attackDuringAnswer: attackStyle && !pureAttack,
         });
         attempts += 1;
         normalPersonaRewritten = !needsSeriousExpansion;
@@ -765,24 +780,9 @@ export async function generateConversationReply(options) {
   answer = removeInternalReplyMetadata(
     attackStyle ? removeLiteralLatinMa(answer) : answer,
   ) || buildNormalReplyFallback();
-  answer = protectPersonaAttackDirection(answer, content, personaContext, attackStyle);
-  const personaDemonstration = !attackStyle
-    && PERSONA_DEMONSTRATION_PATTERN.test(String(content ?? ''));
-  answer = ensureRoleVoice(answer, {
-    // Keep the normal short-chat voice when the model omitted it, but do not
-    // prepend a canned phrase to image reports, active one-line interjections,
-    // or image reports. Deliberate thinking-mode answers still need the same
-    // light role cue; otherwise the model can drift into a sterile bulletin
-    // even though the stable prompt already asked for conversational wording.
-    required: !recordSummary
-      && !requiredIdentityRole
-      && !activeReply
-      && !attackStyle
-      && !personaDemonstration
-      && !passiveImageComment
-      && !hasImageContext,
-  });
+  answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle);
   review = reviewNormalReply(answer, {
+    ...dialogueReviewContext,
     thinkingEnabled,
     compactResponse,
     requiredIdentityRole,

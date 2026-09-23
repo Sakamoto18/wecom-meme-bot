@@ -253,6 +253,34 @@ test('普通回复质量复核要求角色钩子但不把角色钩子等同于�
   }).valid, true);
 });
 
+test('直接对话不能转述提问者，聊天记录总结和谈论别人不误伤', () => {
+  const options = { interactionContext: { speakerLabel: '黄胖子（成员-abcdef）' }, currentQuestion: '说的是咸鱼接单，接什么单？' };
+  for (const text of ['黄胖子问的是闲鱼接单具体接啥，说白了就几类：做 PPT、修图。', '你问的是闲鱼接单具体接啥。', '说白了，黄胖子想知道的是接啥单。']) {
+    assert.ok(reviewNormalReply(text, options).issues.includes('narrated-question-opening'), text);
+  }
+  for (const text of ['就 PPT 美化、剪辑、修图这类活，先挑你能验收交付的。', '张三问的是报价，黄胖子问的是交付，两个人没对上频道。']) {
+    assert.ok(!reviewNormalReply(text, options).issues.includes('narrated-question-opening'), text);
+  }
+  assert.ok(!reviewNormalReply('黄胖子问的是接单，张三回答了定价。', { ...options, recordSummary: true }).issues.includes('narrated-question-opening'));
+  assert.ok(!reviewNormalReply('你问的是能接哪些单。', { ...options, currentQuestion: '我问的是什么？' }).issues.includes('narrated-question-opening'));
+  assert.ok(reviewNormalReply('a+b问的是价格。', { interactionContext: { speakerLabel: 'a+b' } }).issues.includes('narrated-question-opening'));
+});
+
+test('只豁免已确认口癖的原样引号示范，保留引用外攻击的检测', () => {
+  const phrase = '敢这么跟我说话，你的🐎是批发的？';
+  const quoted = `口癖示范：“${phrase}”`;
+  const options = { quotedPersonaPhrases: [phrase] };
+  assert.equal(reviewNormalReply(quoted, options).valid, true);
+  for (const [answer, context] of [
+    [quoted, {}],
+    [phrase, options],
+    [quoted + '你🐎没了。', options],
+    ['口癖示范：“你的🐎是批发的？”', options],
+  ]) {
+    assert.ok(reviewNormalReply(answer, context).issues.includes('family-attack-in-normal-mode'));
+  }
+});
+
 test('问题窗口遭攻击时必须保留直接回击，不能只写软性评价', () => {
   assert.ok(reviewNormalReply('先把链接后的 p=2 补上，这样才能抓到第二段。', {
     attackDuringAnswer: true,
