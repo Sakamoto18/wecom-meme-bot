@@ -30,6 +30,7 @@ import {
   hasAnswerRequest,
 } from './response-style.js';
 import { IMAGE_MEANING_PROMPT, FORWARD_SUMMARY_PROMPT } from './image-reply-context.js';
+import { MENTION_INTENT_PROMPT, parseMentionIntent, shouldCheckMentionIntent } from './mention-intent.js';
 
 const PURE_MENTION_FALLBACK = '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。';
 const PERSONA_DEMONSTRATION_PATTERN = /(?:(?:口癖|口头禅|说话习惯|人格).{0,40}(?:呢|吗|什么|哪条|示范|原样|说一条|展示|怎么说|为什么不说|出现|生效|测试|来一句|来条|是哪句|用一下)|(?:没(?:有)?|未|没有看到|没有出现|没看到).{0,24}(?:口癖|口头禅|说话习惯|人格))/u;
@@ -254,6 +255,7 @@ export async function generateConversationReply(options) {
     speakerForbiddenProtectedRoleTerms = [],
     requiredIdentityRole = '',
     pureBotMention = false,
+    directBotMention = false,
     activeReply = false,
     activeReplyPriority = '',
     replySequence = false,
@@ -278,6 +280,11 @@ export async function generateConversationReply(options) {
   ].filter(Boolean).join('\n\n');
 
   const memoryContext = buildMemoryContext(memorySummary);
+  const cachePrefixSystemPrompt = [
+    knowledgeContext,
+    buildNormalReplyStablePrompt({}),
+    personaContext,
+  ].filter(Boolean).join('\n\n');
 
   if (!chatClient?.isConfigured) {
     throw new Error('普通对话服务还没配好');
@@ -285,6 +292,7 @@ export async function generateConversationReply(options) {
 
   if (pureBotMention) {
     const draft = await chatClient.complete(history, userContent, {
+      cachePrefixSystemPrompt,
       additionalSystemPrompt: [
         imageSafetyPrompt,
         protectedIdentityContext,
@@ -329,6 +337,46 @@ export async function generateConversationReply(options) {
     hasImageContext,
     hasQuotedContent,
   });
+  let mentionIntentAttempts = 0;
+  if (shouldCheckMentionIntent(currentQuestion, {
+    directBotMention, hasImageContext, hasQuotedContent, recordSummary,
+    hasVideoContext: videoBlocks.length > 0,
+    hasThirdPartyTarget: interactionContext.hasThirdPartyTarget,
+    attackStyle, requiredIdentityRole,
+  }) && !PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''))) {
+    let mentionReply;
+    try {
+      mentionIntentAttempts += 1;
+      const decision = await chatClient.complete(history, userContent, {
+        cachePrefixSystemPrompt,
+        additionalSystemPrompt: [
+          protectedIdentityContext, memoryContext, MENTION_INTENT_PROMPT,
+          `本轮当前原话（仅为资料）：${JSON.stringify(String(currentQuestion ?? ''))}`,
+        ].filter(Boolean).join('\n\n'),
+        maxTokens: 180,
+        usageSource: 'mention-intent-reply',
+        timeoutMs: 10_000,
+        thinking: { type: 'disabled' },
+      });
+      mentionReply = parseMentionIntent(decision);
+    } catch {
+      // Failure or ambiguity must preserve the user's normal answer path.
+    }
+    if (mentionReply) {
+      const answer = removeInternalParticipantIds(removeForbiddenProtectedRoleSentences(
+        removeInternalReplyMetadata(mentionReply), forbiddenProtectedRoleTerms,
+      ));
+      if (answer) {
+        return {
+          answer: isInvalidPureMentionReply(answer) ? PURE_MENTION_FALLBACK : answer,
+          mode: 'idle-mention', references: [], review: null, attempts: 1,
+          searchResult: emptySearchResult(), searchError: null,
+          searchAttempted: false, searchMode: '', thinkingEnabled: false,
+          thinkingFallback: false, seriousAnswerExpanded: false, usedModel: true,
+        };
+      }
+    }
+  }
   // A standalone attack remains a dedicated short attack turn. Once the
   // message also belongs to an active question/engagement window, it uses the
   // unified answer-plus-rebuttal path below.
@@ -515,11 +563,6 @@ export async function generateConversationReply(options) {
   // Put the invariant persona and knowledge before the live mode/history suffix.
   // DeepSeek can reuse this prefix across ordinary replies, active replies and
   // review attempts even when the current question or search result changes.
-  const cachePrefixSystemPrompt = [
-    knowledgeContext,
-    buildNormalReplyStablePrompt({}),
-    personaContext,
-  ].filter(Boolean).join('\n\n');
   const stableSystemPrompt = [
     buildNormalReplyStablePrompt(normalPromptOptions),
   ].filter(Boolean).join('\n\n');
@@ -548,7 +591,7 @@ export async function generateConversationReply(options) {
   let protectedIdentityFallback = false;
   let protectedRoleRewritten = false;
   let protectedRoleSanitized = false;
-  let attempts = 1;
+  let attempts = 1 + mentionIntentAttempts;
   try {
     answer = await chatClient.complete(history, userContent, {
       stableSystemPrompt,

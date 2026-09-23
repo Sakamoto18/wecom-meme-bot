@@ -35,8 +35,8 @@ function createService(options = {}) {
   const calls = [];
   const chatClient = options.chatClient ?? {
     isConfigured: true,
-    async complete(history, modelInput) {
-      calls.push({ history, modelInput });
+    async complete(history, modelInput, options) {
+      calls.push({ history, modelInput, options });
       return '这是 QQ 回答，别把问题绕复杂了。';
     },
   };
@@ -2206,7 +2206,8 @@ test('明确艾特也不能让 peer Bot 绕过循环阈值，真人艾特不受�
     );
     assert.equal(humanReply.messages.length > 0, true);
   }
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 8);
+  assert.equal(calls.filter(call => call.options?.usageSource === 'mention-intent-reply').length, 3);
 });
 
 test('peer Bot 首轮回复后先过语境阀门，空泛续话不等到硬阈值就静默', async () => {
@@ -3086,4 +3087,36 @@ test('图文简介元数据完整传递，封面始终选第一张原图', async
   assert.equal(message.description,'图文正文');
   assert.equal(message.provider,'xiaohongshu');
   assert.deepEqual(message.tags,['话题']);
+});
+
+test('真人无意义艾特发一条回怼再附表情龙图，peer Bot 保留原路由', async () => {
+  const calls = [];
+  let engagementOpens = 0;
+  const { service } = createService({
+    peerBotUsers: new Set(['peer']),
+    activeReplyDecider: { openEngagement() { engagementOpens++; } },
+    webSearchEnabled: true,
+    webSearch: { async search() { return { context: '', resultCount: 0 }; } },
+    chatClient: { isConfigured: true, async complete(h, i, options) {
+      calls.push(options);
+      if (options.usageSource === 'mention-intent-reply') {
+        return '{"kind":"banter","reply":"闲得你，艾特键让你当门铃按了。"}';
+      }
+      return '先说清这一步。';
+    } },
+  });
+  const message = {
+    message_id: 'idle-human', message_type: 'group', group_id: 'idle-test',
+    user_id: 'human', sender_name: '真人', text: '看看奶子',
+    bot_user_id: 'bot', mentions: [{ user_id: 'bot', name: '龙玉涛' }],
+  };
+  const result = await service.handleMessage(message);
+  assert.equal(result.mode, 'idle-mention');
+  assert.deepEqual(result.messages.map(m => m.type), ['text', 'image']);
+  assert.equal(result.messages[0].text, '闲得你，艾特键让你当门铃按了。');
+  assert.equal(result.messages[1].sub_type, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(engagementOpens, 0);
+  await service.handleMessage({ ...message, message_id: 'idle-peer', user_id: 'peer' });
+  assert.equal(calls.filter(o => o.usageSource === 'mention-intent-reply').length, 1);
 });

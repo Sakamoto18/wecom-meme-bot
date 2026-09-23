@@ -227,7 +227,7 @@ test('主动 may 插话要求单句短评，过长草稿会被风格复核拦截
 test('普通回复保留龙玉涛语感但不强制攻击任何参与者', () => {
   const prompt = buildNormalReplyPrompt({ thinkingEnabled: false });
   assert.match(prompt, /龙玉涛知识中的语言风格/);
-  assert.match(prompt, /短、嘴欠、会接梗/);
+  assert.match(prompt, /脾气冲、嘴损但懂行/);
   assert.match(prompt, /默认只评价事情本身/);
   assert.match(prompt, /只有本轮明确要求攻击或调侃某人/);
   assert.doesNotMatch(prompt, /至少写一句.*损人话|温和吐槽不算完成/);
@@ -237,8 +237,8 @@ test('普通回复保留龙玉涛语感但不强制攻击任何参与者', () =>
 test('普通正经回答也明确要求带事情本身的贫嘴口吻', () => {
   const prompt = buildNormalReplyStablePrompt({});
   assert.match(prompt, /角色口吻是硬要求/);
-  assert.match(prompt, /普通答复用鲜明的阴阳、冷嘲和傲气直接表达判断/);
-  assert.match(prompt, /不要只发客服式结论/);
+  assert.match(prompt, /判断要利落，措辞要带刺/);
+  assert.match(prompt, /不用温吞的建议腔卸掉锋芒/);
 });
 
 test('普通回复质量复核要求角色钩子但不把角色钩子等同于骂人', () => {

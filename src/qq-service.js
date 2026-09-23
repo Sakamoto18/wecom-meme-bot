@@ -2230,6 +2230,7 @@ export class QqBotService {
         webSearchEnabled: this.webSearchEnabled,
         knowledgeContext: this.knowledgeContext,
         pureBotMention: options.pureBotMention === true,
+        directBotMention: options.directBotMention === true,
         activeReply: options.activeReply === true,
         activeReplyPriority: options.activeReplyPriority,
         replySequence: options.pureBotMention !== true,
@@ -2348,6 +2349,7 @@ export class QqBotService {
           : (options.attachmentSha256 ? [options.attachmentSha256] : []);
         const forceMeme = generated.mode === 'generated-attack'
           || generated.roleReplyHadAttack === true
+          || generated.mode === 'idle-mention'
           || generated.mode === 'pure-mention';
         const sceneAliasMatches = attachmentSha256s.length > 0
           ? []
@@ -2729,6 +2731,7 @@ export class QqBotService {
         imageNotice: preparedImages.notice,
         activeReply: true,
         activeReplyPriority,
+        directBotMention: this.isDirectHumanMentionTrigger(payload),
       },
     );
     if (passiveImage?.text && !result.messages?.length) return this.observeMessage(payload, message);
@@ -3162,6 +3165,8 @@ export class QqBotService {
           this.activeReplyDecider?.recordBotReply?.(payload.groupId);
           if (this.isPeerBotMessage(payload)) {
             this.recordPeerBotReply(payload);
+          } else if (result.mode === 'idle-mention' || result.mode === 'pure-mention') {
+            // One-shot banter must not open or refresh a costly question window.
           } else if (this.isDirectHumanEngagementTrigger(payload)) {
             this.activeReplyDecider?.openEngagement?.(payload, { replied: true });
           } else if (result.active_reply && result.mode !== 'repeat-reply') {
@@ -3508,6 +3513,7 @@ export class QqBotService {
         forwardedContext: [payload.forwardedText, payload.quotedForwardedText].filter(Boolean).join('\n'),
         longtuAliases,
         pureBotMention: payload.pureBotMention,
+        directBotMention: this.isDirectHumanMentionTrigger(payload),
       },
     );
   }

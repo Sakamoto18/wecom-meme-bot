@@ -149,7 +149,7 @@ test('引用评价、识图和转发总结保留龙图知识，不自动攻击�
     assert.equal(calls.length, 1);
     assert.equal(result.normalPersonaFallback, false);
     assert.match(calls[0].cachePrefixSystemPrompt, /本地龙图知识/);
-    assert.match(calls[0].stableSystemPrompt, /短、嘴欠、会接梗/);
+    assert.match(calls[0].stableSystemPrompt, /脾气冲、嘴损但懂行/);
     assert.match(calls[0].additionalSystemPrompt, /引用作者 甲 只是内容来源/);
     assert.match(calls[0].additionalSystemPrompt, /只有本轮明确要求攻击或调侃某人/);
   }
@@ -652,6 +652,70 @@ test('纯艾特强制快速人格模式，客服式草稿回退为角色招呼',
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
   assert.equal(calls[0].options.maxTokens, 120);
   assert.match(calls[0].options.additionalSystemPrompt, /纯艾特回应/);
+});
+
+test('截图中的无实质请求艾特先判意图，同次生成回怼且不调用搜索', async () => {
+  const calls = [];
+  const history = [{role:'user',content:'其他群友：要是只看看奶子，那我没话说。'}];
+  const result = await generateConversationReply({
+    content:'看看奶子',currentQuestion:'看看奶子',modelInput:'当前发言人：甲\n当前消息：看看奶子',
+    directBotMention:true,history,knowledgeContext:'龙玉涛角色知识',
+    webSearch:{async search(){assert.fail('无意义艾特不应拿搜索结果替用户补题');}},
+    chatClient:{isConfigured:true,async complete(h,input,options){calls.push({h,input,options});return '{"kind":"banter","reply":"你这脑子除了这点破事，还装得下啥？"}';}},
+  });
+  assert.equal(result.mode,'idle-mention');
+  assert.equal(result.answer,'你这脑子除了这点破事，还装得下啥？');
+  assert.equal(result.searchAttempted,false);
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0].h,history);
+  assert.match(calls[0].options.cachePrefixSystemPrompt,/龙玉涛角色知识/);
+});
+
+test('有上下文的简短追问、检查失败或格式错误都保留正常回答与搜索', async () => {
+  for (const decision of ['{"kind":"continue"}','不是 JSON',new Error('timeout')]) {
+    let searches=0;
+    const calls=[];
+    const result=await generateConversationReply({
+      content:'那五口的呢',modelInput:'那五口的呢',directBotMention:true,
+      history:[{role:'assistant',content:'四台设备外加路由上联，总共需要五个口。'}],
+      webSearch:{async search(){searches++;return {context:'产品资料：五个千兆网口',resultCount:1};}},
+      chatClient:{isConfigured:true,async complete(h,input,options){calls.push(options);if(calls.length===1){if(decision instanceof Error)throw decision;return decision;}return '五口正好够，四台设备加一个上联。';}},
+    });
+    assert.equal(result.mode,'web-knowledge');
+    assert.equal(result.answer,'五口正好够，四台设备加一个上联。');
+    assert.equal(searches,1);
+    assert.equal(calls.length,2);
+    assert.equal(result.attempts,2);
+    assert.equal(calls[0].cachePrefixSystemPrompt,calls[1].cachePrefixSystemPrompt);
+  }
+});
+
+test('已确认空喊但草稿夹带 token 元话术时短句兜底，不重新启动搜索', async () => {
+  let calls = 0;
+  const result = await generateConversationReply({
+    content:'在？',modelInput:'在？',directBotMention:true,
+    webSearch:{async search(){assert.fail('不能为无意义艾特重启搜索');}},
+    chatClient:{isConfigured:true,async complete(){calls++;return '{"kind":"banter","reply":"先把欠的 token 结了。"}';}},
+  });
+  assert.equal(result.mode,'idle-mention');
+  assert.doesNotMatch(result.answer,/token|结了|搜索/iu);
+  assert.equal(calls,1);
+});
+
+test('普通消息、实际问题和附带材料不被短艾特语义检查抢走', async () => {
+  for(const scenario of [
+    {content:'看看奶子',directBotMention:false},
+    {content:'为什么失败',directBotMention:true},
+    {content:'看看',directBotMention:true,hasImageContext:true},
+    {content:'看看',directBotMention:true,hasQuotedContent:true},
+    {content:'我不想活了',directBotMention:true},
+  ]){
+    const calls=[];
+    await generateConversationReply({...scenario,modelInput:scenario.content,webSearchEnabled:false,
+      chatClient:{isConfigured:true,async complete(h,i,o){calls.push(o);return '我在，先说眼前这一件。';}},
+    });
+    assert.ok(calls.every(o=>o.usageSource!=='mention-intent-reply'),scenario.content);
+  }
 });
 
 test('更早的 QQ 记忆摘要会作为不可信背景注入回复提示词', async () => {
