@@ -3296,6 +3296,12 @@ export class QqBotService {
           messages: [{
             type: 'video',
             url: resolved.url,
+            // QQ upload reuse is scoped to the actual media, never the group.
+            // Bilibili CID distinguishes parts even when different short links
+            // resolve to the same video; quality variants remain separate.
+            mediaCacheKey: createHash('sha256').update(candidate.provider === 'bilibili' && resolved.cid
+              ? `bilibili:${resolved.cid}:${resolved.quality || 0}`
+              : `${candidate.provider}:${resolved.url}`).digest('hex'),
             title: resolved.title,
             coverUrl: resolved.coverUrl || '',
             author: resolved.author || '',

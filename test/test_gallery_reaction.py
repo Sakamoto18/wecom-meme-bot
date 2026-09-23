@@ -88,7 +88,7 @@ def build(response, forward_fails=False, image_fails=False, video_error=None, vi
     bridge._group_info = group_info
     bridge._observe_only = lambda *a, **k: False
 
-    async def forwarded_content(event, components):
+    async def forwarded_content(event, components, **kwargs):
         return '', []
     bridge._forwarded_content = forwarded_content
 
@@ -165,6 +165,39 @@ class GalleryReactionTests(unittest.IsolatedAsyncioTestCase):
         bridge, event, reactions, actions = build(VIDEO)
         await drive(bridge, event)
         self.assertEqual(reactions, [True], '视频路径的回应不能被改动影响')
+
+    async def test_simultaneous_groups_keep_card_first_and_share_one_video_upload(self):
+        bridge, first, reactions, _ = build(VIDEO)
+        second = SimpleNamespace(**vars(first))
+        second.get_group_id = lambda: '913546080'
+        second.message_obj = SimpleNamespace(message_id='556', self_id='2170902293')
+        entered, finish = asyncio.Event(), asyncio.Event()
+        sent = []
+        async def card(message):
+            return 'card-png'
+        async def call_action(action, **kwargs):
+            kind = kwargs.get('message', [{}])[0].get('type', 'native-forward')
+            sent.append((str(kwargs['group_id']), kind))
+            if kind == 'video':
+                entered.set()
+                await finish.wait()
+                return {'message_id': 1001}
+            if action == 'forward_group_single_msg':
+                self.assertEqual(kwargs['message_id'], 1001)
+                return None  # The actual deployed NapCat action's success data.
+            return {'message_id': 1000}
+        first.bot = second.bot = SimpleNamespace(call_action=call_action)
+        bridge._video_card = card
+        one = asyncio.create_task(drive(bridge, first))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        two = asyncio.create_task(drive(bridge, second))
+        await asyncio.sleep(0)
+        finish.set()
+        await asyncio.gather(one, two)
+        self.assertEqual([kind for group, kind in sent if group == '499615970'], ['image', 'video'])
+        self.assertEqual([kind for group, kind in sent if group == '913546080'], ['image', 'native-forward'])
+        self.assertEqual(reactions, [True, True])
+        await bridge.video_delivery_cache.close()
 
     async def test_video_send_exception_must_not_be_swallowed_as_success(self):
         bridge, event, reactions, actions = build(VIDEO, video_error=RuntimeError('terminated'))

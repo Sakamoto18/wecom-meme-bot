@@ -5,18 +5,23 @@ import contextlib
 import logging
 from pathlib import Path
 import re
+import sys
 import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu_bridge'))
+from video_delivery_cache import VideoDeliveryCache, VideoForwardRejected
+
 source = ast.parse((Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu_bridge/main.py').read_text())
 bridge = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'LongtuQqBridge')
 methods = [n for n in bridge.body if getattr(n, 'name', '') in (
-    '_call_video_send', '_send_video_from_backend',
+    '_call_video_send', '_call_video_forward', '_send_video_from_backend',
 )]
 namespace = dict(asyncio=asyncio, contextlib=contextlib, re=re, time=time,
                  AstrMessageEvent=object, VIDEO_SEND_TIMEOUT_SECONDS=480,
+                 VideoDeliveryCache=VideoDeliveryCache, VideoForwardRejected=VideoForwardRejected,
                  logger=logging.getLogger('video-test'))
 exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(
     name='Bridge', bases=[], keywords=[], body=methods, decorator_list=[],
@@ -127,6 +132,45 @@ class VideoDeliveryTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(namespace, VIDEO_SEND_TIMEOUT_SECONDS=0.01):
             with self.assertRaises(asyncio.TimeoutError):
                 await Bridge()._call_video_send(bot, 'send_group_msg', {'group_id': 1}, 'https://cdn/v.mp4')
+
+    async def test_native_forward_accepts_napcat_null_ack_without_forging_message_id(self):
+        actions = []
+        async def call_action(action, **params):
+            actions.append((action, params))
+            return None
+        result = await Bridge()._call_video_forward(SimpleNamespace(call_action=call_action), {'group_id': 2}, 101)
+        self.assertEqual(actions, [('forward_group_single_msg', {'message_id': 101, 'group_id': '2'})])
+        self.assertEqual(result, {'delivery': 'native-forward', 'reused_message_id': 101})
+
+    async def test_only_explicit_forward_rejection_allows_upload_fallback(self):
+        class ActionFailed(Exception):
+            retcode = 1404
+        async def rejected(*args, **kwargs):
+            raise ActionFailed('unsupported')
+        with self.assertRaises(VideoForwardRejected):
+            await Bridge()._call_video_forward(SimpleNamespace(call_action=rejected), {'group_id': 2}, 101)
+        async def timeout(*args, **kwargs):
+            raise asyncio.TimeoutError()
+        with self.assertRaises(asyncio.TimeoutError):
+            await Bridge()._call_video_forward(SimpleNamespace(call_action=timeout), {'group_id': 2}, 101)
+
+    async def test_group_shared_video_uses_one_upload_and_native_forward_reactions(self):
+        instance, first, _, reactions = self.setup_sender()
+        actions = []
+        async def call_action(action, **params):
+            actions.append((action, params))
+            return {'message_id': 101} if action == 'send_group_msg' else None
+        first.bot = SimpleNamespace(call_action=call_action)
+        first.get_self_id = lambda: 'bot'
+        second = SimpleNamespace(**vars(first))
+        second.get_group_id = lambda: '913546080'
+        message = {'url': 'https://cdn/v.mp4', 'provider': 'xiaohongshu', 'mediaCacheKey': 'same-video'}
+        self.assertTrue(await instance._send_video_from_backend(first, message))
+        self.assertTrue(await instance._send_video_from_backend(second, message))
+        self.assertEqual([a for a, _ in actions], ['send_group_msg', 'forward_group_single_msg'])
+        self.assertEqual(reactions, [True, True])
+        self.assertEqual(actions[1][1]['group_id'], '913546080')
+        await instance.video_delivery_cache.close()
 
 
 if __name__ == '__main__':

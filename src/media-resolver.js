@@ -544,10 +544,14 @@ export class MediaResolver {
     if (cached && cached.expiresAt > Date.now()) {
       // Media validity is independent of optional card metadata. Reuse the
       // parsed video/gallery across groups even when an author/cover is absent.
+      this.logger.info?.(`媒体解析缓存命中：provider=${candidate?.provider || 'unknown'}`);
       return cached.value;
     }
     if (cached) this.cache.delete(key);
-    if (this.inflight.has(key)) return this.inflight.get(key);
+    if (this.inflight.has(key)) {
+      this.logger.info?.(`媒体解析共用任务：provider=${candidate?.provider || 'unknown'}`);
+      return this.inflight.get(key);
+    }
 
     const task = (async () => {
       await this.acquireSlot();

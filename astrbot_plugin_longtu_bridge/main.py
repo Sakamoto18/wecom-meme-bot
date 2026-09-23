@@ -9,6 +9,7 @@ import re
 import time
 from zoneinfo import ZoneInfo
 from .video_card import render_video_card
+from .video_delivery_cache import VideoDeliveryCache, VideoForwardRejected
 
 import aiohttp
 from aiohttp import web
@@ -120,6 +121,7 @@ class LongtuQqBridge(Star):
         self.recent_image_cache: dict[str, tuple[float, list[str]]] = {}
         # 同一条视频的封面字节，键是去掉签名的地址，重复转发直接命中。
         self.cover_cache: dict[str, tuple[float, bytes]] = {}
+        self.video_delivery_cache = VideoDeliveryCache(logger=logger)
         self.report_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
         self.internal_send_runner: web.AppRunner | None = None
@@ -307,6 +309,29 @@ class LongtuQqBridge(Star):
             raise RuntimeError('QQ 视频接口未返回消息回执')
         return receipt
 
+    async def _call_video_forward(self, bot, destination: dict, message_id):
+        """NapCat returns null only after native forwardMsg reports result=0."""
+        try:
+            result = await asyncio.wait_for(bot.call_action(
+                'forward_group_single_msg', message_id=message_id,
+                group_id=str(destination['group_id']),
+            ), timeout=30)
+        except Exception as error:
+            # aiocqhttp raises ActionFailed for an explicit non-zero retcode.
+            # A transport timeout is uncertain and must never trigger a resend.
+            if getattr(error, 'retcode', None) not in (None, 0):
+                raise VideoForwardRejected(str(error)) from error
+            raise
+        if isinstance(result, dict) and (
+            result.get('status') == 'failed' or result.get('retcode', 0) not in (0, None)
+        ):
+            raise VideoForwardRejected('QQ 原生转发接口明确返回失败')
+        receipt = result.get('data', result) if isinstance(result, dict) else result
+        # The deployed API returns None; some versions return a message receipt.
+        if receipt is not None and not (isinstance(receipt, dict) and receipt.get('message_id')):
+            raise RuntimeError('QQ 原生转发接口返回了未知结果')
+        return {**(receipt or {}), 'delivery': 'native-forward', 'reused_message_id': message_id}
+
     async def _send_video_from_backend(self, event: AstrMessageEvent, message: dict) -> bool:
         """Send directly: RespondStage swallows errors raised after a yield."""
         private = event.is_private_chat()
@@ -320,7 +345,21 @@ class LongtuQqBridge(Star):
             video_url = str(message.get('url') or '')
             if not video_url:
                 raise RuntimeError('视频地址缺失')
-            receipt = await self._call_video_send(event.bot, action, destination, video_url)
+            account = str(getattr(getattr(event, 'message_obj', None), 'self_id', '') or '')
+            if callable(getattr(event, 'get_self_id', None)):
+                account = str(event.get_self_id() or account)
+            if not private and account and message.get('provider') in {
+                'bilibili', 'xiaohongshu', 'douyin', 'kuaishou',
+            }:
+                if not getattr(self, 'video_delivery_cache', None):
+                    self.video_delivery_cache = VideoDeliveryCache(logger=logger)
+                receipt = await asyncio.wait_for(self.video_delivery_cache.deliver(
+                    account, str(message.get('mediaCacheKey') or video_url),
+                    lambda: self._call_video_send(event.bot, action, destination, video_url),
+                    lambda source: self._call_video_forward(event.bot, destination, source),
+                ), timeout=VIDEO_SEND_TIMEOUT_SECONDS)
+            else:
+                receipt = await self._call_video_send(event.bot, action, destination, video_url)
         except Exception as error:
             timed_out = isinstance(error, asyncio.TimeoutError) or bool(
                 re.search(r'timeout|timed out|超时', str(error), re.IGNORECASE))
@@ -347,7 +386,9 @@ class LongtuQqBridge(Star):
             return False
         logger.info(
             f'视频发送成功：target={destination} source_message_id={source_id} '
-            f'message_id={receipt["message_id"]} duration_ms={int((time.monotonic() - started) * 1000)}',
+            f'message_id={receipt.get("message_id", "")} '
+            f'delivery={receipt.get("delivery", "upload")} reused_from={receipt.get("reused_message_id", "")} '
+            f'duration_ms={int((time.monotonic() - started) * 1000)}',
         )
         with contextlib.suppress(Exception):
             await self._react_media_result(event, True)
@@ -2838,6 +2879,8 @@ class LongtuQqBridge(Star):
             event.stop_event()
 
     async def terminate(self):
+        if getattr(self, 'video_delivery_cache', None):
+            await self.video_delivery_cache.close()
         self.report_stop.set()
         if self.report_task:
             self.report_task.cancel()
