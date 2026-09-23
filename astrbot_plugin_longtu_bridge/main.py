@@ -2326,6 +2326,42 @@ class LongtuQqBridge(Star):
         return [component for chain in cls._reply_chains_from_backend(response)
                 for component in chain]
 
+    async def _deliver_reply_chains(self, event, reply_chains, prefix):
+        """Keep text in AstrBot; deliver standalone QQ stickers via OneBot.
+
+        RespondStage validates exact component classes, so a custom sticker
+        alone is considered empty even though the OneBot serializer supports it.
+        Send it directly with an acknowledgement instead of yielding that chain.
+        """
+        for index, original_chain in enumerate(reply_chains):
+            chain = prefix + original_chain if index == 0 and prefix else original_chain
+            if any(isinstance(component, QqSticker) for component in chain):
+                private = event.is_private_chat()
+                action = "send_private_msg" if private else "send_group_msg"
+                destination = ({"user_id": int(event.get_sender_id())} if private
+                               else {"group_id": int(event.get_group_id())})
+                try:
+                    result = await event.bot.call_action(
+                        action, **destination,
+                        message=[component.toDict() for component in chain],
+                    )
+                    if not isinstance(result, dict) or result.get("status") == "failed" or result.get("retcode", 0) not in (0, None):
+                        raise RuntimeError("OneBot 未确认龙图发送成功")
+                    data = result.get("data") if isinstance(result.get("data"), dict) else result
+                    message_id = data.get("message_id")
+                    if message_id is None:
+                        raise RuntimeError("OneBot 龙图发送缺少 message_id 回执")
+                    logger.info(f"龙图表情发送成功：target={destination} message_id={message_id}")
+                except Exception as error:
+                    # A timeout may already have delivered the sticker. Do not
+                    # blindly resend and duplicate it; surface the failed send.
+                    logger.warning(f"龙图表情发送失败：target={destination} error={error}")
+                    raise
+            else:
+                yield event.chain_result(chain)
+            if index + 1 < len(reply_chains):
+                await asyncio.sleep(0.12)
+
     async def _send_forward_from_backend(self, event: AstrMessageEvent, response: dict) -> bool:
         message = next((item for item in response.get("messages", []) if item.get("type") == "forward"), None)
         if not message:
@@ -2871,14 +2907,8 @@ class LongtuQqBridge(Star):
                 # 媒体结果直接发成可播放视频，不再挂引用；普通对话继续保留
                 # 原有引用和 @ 送达前缀。
                 prefix = [] if bool(response.get("active_reply")) else self._reply_prefix(event, components)
-                for index, chain in enumerate(reply_chains):
-                    if index == 0 and prefix:
-                        chain = prefix + chain
-                    yield event.chain_result(chain)
-                    if index + 1 < len(reply_chains):
-                        # Let NapCat flush one message before the next part so
-                        # the group sees a natural short follow-up sequence.
-                        await asyncio.sleep(0.12)
+                async for result in self._deliver_reply_chains(event, reply_chains, prefix):
+                    yield result
         finally:
             event.stop_event()
 

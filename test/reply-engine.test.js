@@ -2,6 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateConversationReply } from '../src/reply-engine.js';
 
+test('普通评价不输出检索媒体尾注，明确追问出处时保留', async () => {
+  const draft='请三天（3天年假）连休13天（新京报）。';
+  for(const [currentQuestion,expected] of [['如何评价请三休十三','请三天（3天年假）连休13天。'],['来源呢',draft]]) {
+    const result=await generateConversationReply({
+      content:currentQuestion,currentQuestion,modelInput:currentQuestion,
+      history:[{role:'user',content:'上次给我看来源'}],
+      webSearch:{async search(){return {context:'新京报公布的放假安排。',resultCount:1};}},
+      chatClient:{isConfigured:true,async complete(){return draft;}},
+    });
+    assert.equal(result.answer,expected);
+  }
+});
+
 test('技术问题允许内部推理，但正确短答不自动扩写', async () => {
   const calls = [];
   const answer = '用五口千兆交换机就行，四台设备接进去，再留一口接路由器；先确认网线和设备端口也都是千兆。';
@@ -478,7 +491,7 @@ test('未命中专用规则的评价问题会先通用联网再按人格回答',
   assert.equal(searchCalls.length, 1);
   assert.equal(searchCalls[0].options.mode, 'general');
   assert.match(modelCalls[0].options.additionalSystemPrompt, /通用联网检索摘要/);
-  assert.match(result.answer, /example\.com/);
+  assert.doesNotMatch(result.answer, /example\.com/);
 });
 
 test('复合热门话题不因“是什么梗”被限制为 meme 搜索', async () => {
@@ -510,7 +523,7 @@ test('复合热门话题不因“是什么梗”被限制为 meme 搜索', async
   assert.equal(result.searchMode, 'general');
   assert.equal(searchCalls.length, 1);
   assert.equal(searchCalls[0].options.mode, 'general');
-  assert.match(result.answer, /sina\.com\.cn/);
+  assert.doesNotMatch(result.answer, /sina\.com\.cn/);
 });
 
 test('事实回答原样发出，不重试且不追加固定攻击收尾', async () => {

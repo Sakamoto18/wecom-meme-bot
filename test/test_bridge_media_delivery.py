@@ -9,7 +9,7 @@ import unittest
 source = ast.parse((Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu_bridge/main.py').read_text())
 bridge = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'LongtuQqBridge')
 methods = [n for n in bridge.body if getattr(n, 'name', '') in (
-    '_reply_chain_from_backend', '_reply_chains_from_backend', '_send_forward_from_backend', '_send_media_limit_card',
+    '_reply_chain_from_backend', '_reply_chains_from_backend', '_deliver_reply_chains', '_send_forward_from_backend', '_send_media_limit_card',
 )]
 
 class Component:
@@ -164,5 +164,35 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertIsInstance(chains[2][0], Image)
         self.assertEqual(chains[2][0].args, ('share-card',))
+
+    async def test_standalone_sticker_bypasses_empty_chain_filter_after_text(self):
+        for private in (False, True):
+            event, calls = self.event(private=private)
+            event.chain_result = lambda chain: chain
+            chains = Bridge._reply_chains_from_backend({'messages': [
+                {'type': 'text', 'text': '回怼'},
+                {'type': 'image', 'base64': 'dragon', 'sub_type': 1},
+            ]})
+            delivered = []
+            async for chain in Bridge()._deliver_reply_chains(event, chains, []):
+                self.assertEqual(calls, [], '先发送文字，再发送龙图')
+                self.assertTrue(all(not isinstance(c, QqSticker) for c in chain))
+                delivered.append(chain)
+            self.assertEqual(len(delivered), 1)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], 'send_private_msg' if private else 'send_group_msg')
+            self.assertEqual(calls[0][1]['message'][0]['data']['sub_type'], 1)
+
+    async def test_sticker_failure_is_visible_and_not_retried_as_duplicate(self):
+        for result in ({'status': 'failed', 'retcode': 1200}, {}):
+            event, calls = self.event()
+            async def fail(action, **kwargs):
+                calls.append(action)
+                return result
+            event.bot.call_action = fail
+            with self.assertRaises(RuntimeError):
+                async for _ in Bridge()._deliver_reply_chains(event, [[QqSticker(file='base64://dragon')]], []):
+                    self.fail('不能把独立表情交给空消息过滤器')
+            self.assertEqual(len(calls), 1)
 
 if __name__ == '__main__': unittest.main()

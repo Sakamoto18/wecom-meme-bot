@@ -14,7 +14,7 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
 
   const handler = source.slice(handlerStart, handlerEnd);
   const disableDefaultLlmIndex = handler.indexOf('event.call_llm = True');
-  const yieldReplyIndex = handler.indexOf('yield event.chain_result(chain)');
+  const yieldReplyIndex = handler.indexOf('yield result');
   const stopIndex = handler.indexOf('event.stop_event()');
   const slashBranchIndex = handler.indexOf('if self._is_slash_command(event):');
   const routingIndex = handler.indexOf('should_reply = self._should_reply(event)');
@@ -24,7 +24,8 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.ok(disableDefaultLlmIndex < routingIndex);
   assert.notEqual(yieldReplyIndex, -1);
   assert.match(handler, /_reply_chains_from_backend/);
-  assert.match(handler, /await asyncio\.sleep\(0\.12\)/);
+  assert.match(handler, /_deliver_reply_chains\(event, reply_chains, prefix\)/);
+  assert.match(source, /await asyncio\.sleep\(0\.12\)/);
   assert.notEqual(stopIndex, -1);
   assert.ok(stopIndex > yieldReplyIndex);
   assert.equal(handler.match(/event\.stop_event\(\)/g)?.length, 1);
