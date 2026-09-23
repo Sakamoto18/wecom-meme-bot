@@ -102,7 +102,8 @@ export function extractMediaUrls({ text = '', richSegments = [], cards = [] } = 
 export function classifyMediaUrl(value) {
   let host = '';
   try { host = new URL(value).hostname.toLowerCase(); } catch { return 'unknown'; }
-  if (host === 'xhslink.com' || host.endsWith('.xhslink.com') || host.includes('xiaohongshu.com')) return 'xiaohongshu';
+  if (['xhslink.com', 'xhslink.cn', 'xiaohongshu.com']
+    .some((domain) => host === domain || host.endsWith(`.${domain}`))) return 'xiaohongshu';
   if (host.includes('douyin.com') || host.includes('iesdouyin.com')) return 'douyin';
   if (host.includes('kuaishou.com') || host.includes('gifshow.com')) return 'kuaishou';
   if (host.includes('bilibili.com') || host === 'b23.tv') return 'bilibili';

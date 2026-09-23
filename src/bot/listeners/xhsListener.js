@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mediaCandidates } from '../../media-link-extractor.js';
 
-const LINK_PATTERN = /https?:\/\/(?:www\.)?(?:xhslink\.com|xiaohongshu\.com\/(?:discovery\/)?item\/)[^\s<>"']+/iu;
 const DEFAULT_SCRIPT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../parser/xhs_resolver.py',
@@ -23,12 +23,12 @@ async function sendResult(message, text, send) {
 
 export async function handleXhsLink(message, options = {}) {
   const raw = String(message?.raw_message ?? message?.message ?? '');
-  const match = raw.match(LINK_PATTERN);
-  if (!match) return { handled: false };
+  const candidate = mediaCandidates({ text: raw }).find(item => item.provider === 'xiaohongshu');
+  if (!candidate) return { handled: false };
   const timeoutMs = Number(options.timeoutMs ?? 6_000);
   const child = (options.spawnImpl ?? spawn)(
     options.pythonCommand ?? 'python3',
-    [options.scriptPath ?? DEFAULT_SCRIPT, '--url', match[0], '--timeout', String(Math.max(0.1, timeoutMs / 1000))],
+    [options.scriptPath ?? DEFAULT_SCRIPT, '--url', candidate.url, '--timeout', String(Math.max(0.1, timeoutMs / 1000))],
     { env: { ...process.env, ...(options.env ?? {}) }, stdio: ['ignore', 'pipe', 'pipe'] },
   );
   let stdout = '';

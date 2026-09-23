@@ -13,7 +13,7 @@ wanted = ('_media_group_enabled', '_react_media_share',
           '_group_allowed_providers', '_providers_in_text')
 methods = [n for n in bridge.body if getattr(n, 'name', '') in wanted]
 patterns = [n for n in source.body if isinstance(n, ast.Assign)
-            and getattr(n.targets[0], 'id', '') == 'MEDIA_PROVIDER_PATTERNS']
+            and getattr(n.targets[0], 'id', '') in ('MEDIA_PROVIDER_PATTERNS', 'MEDIA_ACK_PATTERN')]
 ns = {'os': os, 're': re, 'AstrMessageEvent': object, 'logger': logging.getLogger('test')}
 exec(compile(ast.fix_missing_locations(ast.Module(body=[*patterns, ast.ClassDef(name='Bridge', bases=[], keywords=[], body=methods, decorator_list=[])], type_ignores=[])), '<bridge>', 'exec'), ns)
 
@@ -33,6 +33,7 @@ class ExclusionTests(unittest.IsolatedAsyncioTestCase):
 DOUYIN = 'https://v.douyin.com/abc123/'
 BILIBILI = 'https://b23.tv/abc'
 XHS = 'https://xhslink.com/a/abc'
+XHS_CN = 'https://xhslink.cn/o/6IV5SHvQTnX'
 
 
 class ProviderWhitelistTests(unittest.TestCase):
@@ -60,6 +61,7 @@ class ProviderWhitelistTests(unittest.TestCase):
                 # 其余平台仍然关闭。
                 self.assertFalse(instance._media_group_enabled(event, BILIBILI), group)
                 self.assertFalse(instance._media_group_enabled(event, XHS), group)
+                self.assertFalse(instance._media_group_enabled(event, XHS_CN), group)
                 self.assertFalse(
                     instance._media_group_enabled(event, 'https://example.com/x'), group,
                 )
@@ -90,6 +92,10 @@ class ProviderWhitelistTests(unittest.TestCase):
         self.assertEqual(instance._providers_in_text(DOUYIN), {'douyin'})
         self.assertEqual(instance._providers_in_text(BILIBILI), {'bilibili'})
         self.assertEqual(instance._providers_in_text(XHS), {'xiaohongshu'})
+        self.assertEqual(instance._providers_in_text(XHS_CN), {'xiaohongshu'})
+        self.assertIsNotNone(ns['MEDIA_ACK_PATTERN'].search(XHS_CN))
+        for fake in ('https://notxhslink.cn/o/demo', 'https://xhslink.cn.example.org/demo'):
+            self.assertEqual(instance._providers_in_text(fake), set())
         self.assertEqual(instance._providers_in_text('https://www.kuaishou.com/f/x'), {'kuaishou'})
         self.assertEqual(instance._providers_in_text('没有链接'), set())
         self.assertEqual(

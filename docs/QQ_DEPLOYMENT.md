@@ -467,7 +467,7 @@ docker compose --env-file .env.qq -f docker-compose.qq.yml logs --tail=200 qq-bo
 NapCat 容器需要模拟 amd64，首次启动较慢是正常现象。若 Docker Desktop 未启用 Rosetta，可在 Docker Desktop 设置中开启相关选项后重试。
 ## QQ 分享解析：B 站、小红书、抖音
 
-Bridge 会主动处理支持平台的分享卡片和 HTTPS 分享文本，不要求额外 `@` 机器人。它保留 OneBot 原始 `json/xml` 卡片中的跳转地址，也支持从引用卡片中回捞地址。Node 根据平台使用 provider、公开页面解析或 `yt-dlp`，不是把任意外链都当成视频。
+Bridge 会主动处理支持平台的分享卡片和 HTTP/HTTPS 分享文本，不要求额外 `@` 机器人。小红书支持 `xhslink.com`、`xhslink.cn` 短链和 `xiaohongshu.com` 笔记链接，直接粘贴链接即可触发。它保留 OneBot 原始 `json/xml` 卡片中的跳转地址，也支持从引用卡片中回捞地址。Node 根据平台使用 provider、公开页面解析或 `yt-dlp`，不是把任意外链都当成视频。
 
 正常视频输出为“独立简介卡片 + 视频”；卡片包含源平台作者的圆形头像、昵称、原生 logo、标题、封面、正文/标签，B 站还显示发布时间。图文则为“独立简介卡片 + 只含图片的合并聊天记录”，多图卡片最多展示九张预览，超出用 `+N` 表示。卡片失败继续视频，不单独补发标题。
 

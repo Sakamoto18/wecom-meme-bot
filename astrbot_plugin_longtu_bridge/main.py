@@ -72,7 +72,7 @@ NATIVE_QQ_VIDEO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MEDIA_ACK_PATTERN = re.compile(
-    r"https?://[^\s<>\u3000]*(?:bilibili\.com|b23\.tv|xhslink\.com|xiaohongshu\.com|"
+    r"https?://[^\s<>\u3000]*(?:bilibili\.com|b23\.tv|xhslink\.(?:com|cn)(?![a-z0-9.-])|xiaohongshu\.com|"
     r"douyin\.com|iesdouyin\.com|kuaishou\.com|gifshow\.com|v\.qq\.com)[^\s<>\u3000]*",
     re.IGNORECASE,
 )
@@ -80,7 +80,7 @@ MEDIA_ACK_PATTERN = re.compile(
 # classifyMediaUrl \u4fdd\u6301\u4e00\u81f4\uff0c\u4e24\u8fb9\u5224\u65ad\u540c\u4e00\u6761\u94fe\u63a5\u5fc5\u987b\u5f97\u5230\u540c\u4e00\u4e2a\u5e73\u53f0\u3002
 MEDIA_PROVIDER_PATTERNS = {
     "bilibili": re.compile(r"https?://[^\s<>\u3000]*(?:bilibili\.com|b23\.tv)", re.IGNORECASE),
-    "xiaohongshu": re.compile(r"https?://[^\s<>\u3000]*(?:xhslink\.com|xiaohongshu\.com)", re.IGNORECASE),
+    "xiaohongshu": re.compile(r"https?://(?:[a-z0-9-]+\.)*(?:xhslink\.(?:com|cn)|xiaohongshu\.com)(?![a-z0-9.-])", re.IGNORECASE),
     "douyin": re.compile(r"https?://[^\s<>\u3000]*(?:douyin\.com|iesdouyin\.com)", re.IGNORECASE),
     "kuaishou": re.compile(r"https?://[^\s<>\u3000]*(?:kuaishou\.com|gifshow\.com)", re.IGNORECASE),
 }

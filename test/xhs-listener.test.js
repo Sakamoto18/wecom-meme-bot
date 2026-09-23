@@ -44,6 +44,19 @@ test('XHS listener 透传解析脚本失败信息', async () => {
   assert.deepEqual(sent, ['未配置已授权的详情接口']);
 });
 
+test('XHS listener 和 QQ 主入口共用域名识别，支持 .cn 并完整传递原链接', async () => {
+  const url = 'https://xhslink.cn/o/6IV5SHvQTnX';
+  const result = await handleXhsLink({ group_id: 'test', raw_message: `分享 ${url}，看看` }, {
+    spawnImpl(_command, args) {
+      assert.equal(args[2], url);
+      return childWithJson({ status: 'success', data: { video_url: 'https://cdn.example/video.mp4' } });
+    },
+    send: async () => {},
+  });
+  assert.equal(result.status, 'success');
+  assert.equal((await handleXhsLink({ raw_message: 'https://xhslink.cn.evil.example/demo' })).handled, false);
+});
+
 test('XHS listener 超时后终止子进程并返回重试提示', async () => {
   const sent = [];
   let killed = false;

@@ -1,6 +1,7 @@
 import os
 import requests
 import re
+from urllib.parse import urlsplit
 from page_content import note_url_from_response, parse_public_note, normalize_note
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -18,7 +19,8 @@ def get_api():
 def resolve(req:Req):
  try:
   target=req.url
-  if 'xhslink.com' in target:
+  host=(urlsplit(target).hostname or '').lower()
+  if any(host == domain or host.endswith('.'+domain) for domain in ('xhslink.com','xhslink.cn')):
    response=requests.get(target,allow_redirects=True,timeout=10)
    target=note_url_from_response(response)
    content=parse_public_note(response.text,response.url)
