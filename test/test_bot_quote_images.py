@@ -15,7 +15,9 @@ bridge = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name =
 names = {
     '_quoted_visual_chain', '_quoted_author', '_quoted_text', '_reply_component',
     '_image_base64s', '_components_from_raw_message', '_quoted_message_chain',
-    '_reply_chains_from_backend',
+    '_reply_chains_from_backend', '_recent_image_cache_key',
+    '_remember_outbound_image', '_outbound_images_for_quote',
+    '_outbound_images_for_reference',
     'on_qq_message',
 }
 methods = [n for n in bridge.body if getattr(n, 'name', '') in names]
@@ -35,6 +37,10 @@ namespace = {'Comp': SimpleNamespace(Plain=Plain, Image=Image, Reply=Reply, Forw
              'asyncio': asyncio, 'contextlib': contextlib, 're': re, 'time': time,
              'logger': logging.getLogger('test'), 'MAX_IMAGE_COMPONENTS': 12,
              'MAX_QUOTED_REPLY_DEPTH': 3,
+             'OUTBOUND_IMAGE_CACHE_MAX_BASE64_CHARACTERS': 100000,
+             'OUTBOUND_IMAGE_CACHE_TTL_SECONDS': 1800,
+             'OUTBOUND_IMAGE_CACHE_MAX_ENTRIES': 128,
+             'RECENT_IMAGE_REFERENCE_PATTERN': re.compile(r'(?:上面|刚才|前面|上一张|前一张|这张(?:图|图片)|这个(?:图|图片)|图里|图片里)'),
              'MEDIA_SHARE_PATTERN': re.compile(r'https?://'),
              'MEDIA_ACK_PATTERN': re.compile(r'https?://'),
              'NATIVE_QQ_VIDEO_PATTERN': re.compile(r'qq\.com'),
@@ -43,6 +49,20 @@ exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(name='Bridg
 Bridge = namespace['Bridge']
 
 class QuoteImageTests(unittest.IsolatedAsyncioTestCase):
+    def test_outbound_card_cache_recovers_by_quote_id_and_latest_reference(self):
+        instance = Bridge()
+        instance.outbound_image_cache = {}
+        instance.outbound_latest_image_cache = {}
+        event = SimpleNamespace(
+            is_private_chat=lambda: False,
+            get_group_id=lambda: '1109147947',
+            get_sender_id=lambda: 'user',
+        )
+        encoded = 'Y2FyZC1pbWFnZQ=='
+        instance._remember_outbound_image(event, {'data': {'message_id': 'card-1'}}, encoded)
+        self.assertEqual(instance._outbound_images_for_quote(SimpleNamespace(id='card-1')), [encoded])
+        self.assertEqual(instance._outbound_images_for_reference(event, '解释刚才这张图'), [encoded])
+
     def test_raw_onebot_sub_type_is_preserved_for_quote_filtering(self):
         components = Bridge._components_from_raw_message([{
             'type': 'image',
