@@ -184,6 +184,13 @@ function normalizeImageList(value, fallback) {
   return images;
 }
 
+function normalizeImageSubTypes(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, MAX_SOURCE_IMAGE_COUNT).map((item) => (
+    String(item ?? '').trim() === '1' ? '1' : '0'
+  ));
+}
+
 function limitTotalImageBase64(
   images,
   quotedImages,
@@ -535,9 +542,9 @@ export async function prepareImageBlocks(payload, logger = console) {
     : [];
   const entries = [
     ...imageBase64s.map((base64, index) => [`当前消息图片 ${index + 1}`, base64]),
-    ...(ownQuote ? [] : quotedImageBase64s).map((base64, index) => [`引用消息图片 ${index + 1}`, base64]),
+    ...quotedImageBase64s.map((base64, index) => [`引用消息图片 ${index + 1}`, base64]),
     ...forwardImageBase64s.map((base64, index) => [`合并转发图片 ${index + 1}`, base64]),
-    ...(ownQuote ? [] : quotedForwardImageBase64s).map(
+    ...quotedForwardImageBase64s.map(
       (base64, index) => [`引用合并转发图片 ${index + 1}`, base64],
     ),
   ];
@@ -881,6 +888,7 @@ export function normalizeQqPayload(payload) {
     payload.quoted_image_base64s,
     payload.quoted_image_base64,
   );
+  const quotedImageSubTypes = normalizeImageSubTypes(payload.quoted_image_sub_types);
   const forwardImageBase64s = normalizeImageList(payload.forward_image_base64s);
   const quotedForwardImageBase64s = normalizeImageList(
     payload.quoted_forward_image_base64s,
@@ -918,6 +926,9 @@ export function normalizeQqPayload(payload) {
     groupMemberLimit: normalizeOptionalNonnegativeInteger(payload.group_member_limit),
     imageBase64s: limitedImages.images,
     quotedImageBase64s: limitedImages.quotedImages,
+    quotedImageSubTypes: quotedImageSubTypes.length >= limitedImages.quotedImages.length
+      ? quotedImageSubTypes.slice(0, limitedImages.quotedImages.length)
+      : [],
     forwardImageBase64s: limitedImages.forwardImages,
     quotedForwardImageBase64s: limitedImages.quotedForwardImages,
     imageInputNotice: (
@@ -946,12 +957,29 @@ export function normalizeQqPayload(payload) {
   };
   if (normalized.botUserId && normalized.quotedAuthor?.userId === normalized.botUserId
     && !parseLongtuManagementCommand(normalized.text)) {
-    // Also protect older Bridge callers: keep the quoted text/author, but
-    // never reinterpret our own decorative reply image as a new user upload.
-    normalized.quotedImageBase64s = [];
-    normalized.quotedImageBase64 = '';
+    // Older Bridge callers did not carry image subtype metadata, so retain the
+    // old safe behavior for those payloads. The current Bridge marks every
+    // accepted quoted image as 0 and filters only QQ sticker images (1) before
+    // this point; ordinary bot-generated share cards remain available to vision.
+    const hasCompleteImageMetadata = normalized.quotedImageSubTypes.length === normalized.quotedImageBase64s.length;
+    if (hasCompleteImageMetadata) {
+      const accepted = [];
+      const acceptedSubTypes = [];
+      normalized.quotedImageBase64s.forEach((image, index) => {
+        if (normalized.quotedImageSubTypes[index] === '1') return;
+        accepted.push(image);
+        acceptedSubTypes.push('0');
+      });
+      normalized.quotedImageBase64s = accepted;
+      normalized.quotedImageSubTypes = acceptedSubTypes;
+    } else {
+      normalized.quotedImageBase64s = [];
+      normalized.quotedImageSubTypes = [];
+    }
     normalized.quotedForwardImageBase64s = [];
+    normalized.quotedImageBase64 = normalized.quotedImageBase64s[0] ?? '';
     normalized.hasImage = normalized.imageBase64s.length > 0
+      || normalized.quotedImageBase64s.length > 0
       || normalized.forwardImageBase64s.length > 0;
   }
   if (!normalized.pureBotMention && isRenderedPureBotMention(normalized)) {

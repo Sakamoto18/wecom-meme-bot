@@ -1294,7 +1294,24 @@ class LongtuQqBridge(Star):
                     data.get("url") or data.get("file") or data.get("file_id") or "",
                 ).strip()
                 if reference:
-                    components.append(Comp.Image(file=reference))
+                    image = Comp.Image(file=reference)
+                    # AstrBot 的 Image 组件通常不会暴露 OneBot 的 sub_type。
+                    # 暂存到组件上，后续只过滤我们发出的 QQ 龙图表情
+                    #（sub_type=1），普通分享卡/总结图仍可被视觉模型读取。
+                    for attribute, value in (
+                        ("_longtu_image_sub_type", data.get("sub_type")),
+                        ("_longtu_image_summary", data.get("summary")),
+                    ):
+                        if value is None or value == "":
+                            continue
+                        try:
+                            setattr(image, attribute, value)
+                        except Exception:
+                            # 某些 AstrBot 版本的组件模型禁止动态字段；
+                            # _quoted_message_chain 还会把原始 sub_type
+                            # 写到 Reply 上作为兜底。
+                            pass
+                    components.append(image)
             elif segment_type == "text":
                 text = str(data.get("text") or "")
                 if text:
@@ -1335,11 +1352,24 @@ class LongtuQqBridge(Star):
             for component in current_chain
         )
         existing_user_id, existing_name = self._quoted_author(reply_component)
+        bot_user_id = str(event.get_self_id() or "").strip()
+        # 机器人自己的引用可能已经带有图片和作者，适配器却丢掉了
+        # OneBot image.sub_type。此时仍回捞一次 get_msg，才能区分龙图
+        # 表情（sub_type=1）与需要解释的普通分享卡。
+        needs_bot_image_metadata = bool(
+            bot_user_id
+            and existing_user_id == bot_user_id
+            and any(isinstance(component, Comp.Image) for component in current_chain)
+        )
         reply_id = str(getattr(reply_component, "id", "") or "").strip()
         bot = getattr(event, "bot", None)
         if (
             not reply_id
-            or (has_rich_content and (existing_user_id or existing_name))
+            or (
+                has_rich_content
+                and (existing_user_id or existing_name)
+                and not needs_bot_image_metadata
+            )
             or not bot
             or not callable(getattr(bot, "call_action", None))
         ):
@@ -1409,6 +1439,19 @@ class LongtuQqBridge(Star):
                 f"转发 {sum(isinstance(item, Comp.Forward) for item in expanded_chain)} 条、"
                 f"引用深度不超过 {MAX_QUOTED_REPLY_DEPTH} 层",
             )
+            # 动态字段在部分 AstrBot 版本上可能被组件模型拒绝。保留一份
+            # 与图片顺序对应的原始 sub_type，供 _quoted_visual_chain 过滤
+            # QQ 龙图表情而不误删普通机器人图片。
+            quoted_image_sub_types = []
+            for segment in raw_segments if isinstance(raw_segments, list) else []:
+                if not isinstance(segment, dict) or str(segment.get("type") or "").lower() != "image":
+                    continue
+                data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
+                quoted_image_sub_types.append(str(data.get("sub_type") or "0"))
+            try:
+                setattr(reply_component, "_longtu_quoted_image_sub_types", quoted_image_sub_types)
+            except Exception:
+                pass
             # get_msg 是该层引用的权威消息体；不用适配器已有的精简 chain 与
             # 回捞结果拼接，否则同一句正文或同一张图可能被重复送入模型。
             return expanded_chain
@@ -2029,7 +2072,7 @@ class LongtuQqBridge(Star):
 
     @classmethod
     def _quoted_visual_chain(cls, event, reply_component, chain: list, text: str) -> list:
-        """Bot reply attachments are decorations, not a new user image request."""
+        """过滤机器人发出的龙图表情，保留普通机器人图片供视觉理解。"""
         quoted_user_id, _ = cls._quoted_author(reply_component)
         bot_user_id = str(event.get_self_id() or "").strip()
         if not bot_user_id or quoted_user_id != bot_user_id:
@@ -2038,7 +2081,33 @@ class LongtuQqBridge(Star):
         # The Node management branch handles them without calling vision.
         if re.match(r"^(?:/(?:add|tag|del)(?:\s|$)|(?:检查|查看|查询|确认)|(?:这张|这个).*(?:图库|标记|标签|关键词))", str(text or "").strip()):
             return list(chain or [])
-        return [component for component in (chain or []) if not isinstance(component, Comp.Image)]
+        image_sub_types = list(
+            getattr(reply_component, "_longtu_quoted_image_sub_types", []) or [],
+        )
+        image_index = 0
+        filtered = []
+        for component in chain or []:
+            if not isinstance(component, Comp.Image):
+                filtered.append(component)
+                continue
+            sub_type = (
+                getattr(component, "_longtu_image_sub_type", None)
+                or getattr(component, "sub_type", None)
+            )
+            if sub_type in (None, "") and image_index < len(image_sub_types):
+                sub_type = image_sub_types[image_index]
+            summary = str(
+                getattr(component, "_longtu_image_summary", "")
+                or getattr(component, "summary", "")
+                or "",
+            ).strip()
+            image_index += 1
+            # 只有明确的 OneBot sub_type=1 或本项目龙图摘要才是装饰表情。
+            # 普通图片（包括机器人生成的分享卡）必须继续进入视觉链路。
+            if str(sub_type).strip() == "1" or summary == "[龙图]":
+                continue
+            filtered.append(component)
+        return filtered
 
     @staticmethod
     async def _image_base64(image_component) -> str:
@@ -2463,6 +2532,7 @@ class LongtuQqBridge(Star):
             "pure_bot_mention": True,
             "image_base64": "",
             "quoted_image_base64": "",
+            "quoted_image_sub_types": [],
             "forward_image_base64s": [],
             "quoted_forward_image_base64s": [],
             "rich_segments": self._rich_segments(event),
@@ -2788,7 +2858,11 @@ class LongtuQqBridge(Star):
                 "quoted_image_base64s": quoted_image_base64s,
                 "forward_image_base64s": forward_image_base64s,
                 "quoted_forward_image_base64s": quoted_forward_image_base64s,
-            "rich_segments": rich_segments,
+                # _quoted_visual_chain 已过滤明确的 sub_type=1 龙图表情；
+                # 发送显式的普通图片标记，让 Node 不再按旧版兼容逻辑把
+                # 机器人引用消息里的所有图片一并清空。
+                "quoted_image_sub_types": ["0"] * len(quoted_image_base64s),
+                "rich_segments": rich_segments,
                 "video_urls": [
                     str(item.get("data", {}).get("url"))
                     for item in rich_segments
