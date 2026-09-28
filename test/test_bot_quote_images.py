@@ -12,7 +12,12 @@ from unittest.mock import AsyncMock, Mock
 
 source = ast.parse((Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu_bridge/main.py').read_text())
 bridge = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'LongtuQqBridge')
-names = {'_quoted_visual_chain', '_quoted_author', '_quoted_text', '_reply_component', '_image_base64s', 'on_qq_message'}
+names = {
+    '_quoted_visual_chain', '_quoted_author', '_quoted_text', '_reply_component',
+    '_image_base64s', '_components_from_raw_message', '_quoted_message_chain',
+    '_reply_chains_from_backend',
+    'on_qq_message',
+}
 methods = [n for n in bridge.body if getattr(n, 'name', '') in names]
 for method in methods:
     if method.name == 'on_qq_message': method.decorator_list = []
@@ -29,6 +34,7 @@ class Forward: pass
 namespace = {'Comp': SimpleNamespace(Plain=Plain, Image=Image, Reply=Reply, Forward=Forward),
              'asyncio': asyncio, 'contextlib': contextlib, 're': re, 'time': time,
              'logger': logging.getLogger('test'), 'MAX_IMAGE_COMPONENTS': 12,
+             'MAX_QUOTED_REPLY_DEPTH': 3,
              'MEDIA_SHARE_PATTERN': re.compile(r'https?://'),
              'MEDIA_ACK_PATTERN': re.compile(r'https?://'),
              'NATIVE_QQ_VIDEO_PATTERN': re.compile(r'qq\.com'),
@@ -37,8 +43,38 @@ exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(name='Bridg
 Bridge = namespace['Bridge']
 
 class QuoteImageTests(unittest.IsolatedAsyncioTestCase):
-    async def run_message(self, author='bot', current_image=False, text='你刚刚这句什么意思', fetched_author=None):
+    def test_raw_onebot_sub_type_is_preserved_for_quote_filtering(self):
+        components = Bridge._components_from_raw_message([{
+            'type': 'image',
+            'data': {'file': 'base64://dragon', 'sub_type': 1, 'summary': '[龙图]'},
+        }])
+        self.assertEqual(getattr(components[0], '_longtu_image_sub_type', None), 1)
+        self.assertEqual(getattr(components[0], '_longtu_image_summary', None), '[龙图]')
+
+    async def test_bot_quote_hydrates_onebot_sub_type_before_visual_filter(self):
+        quoted = Reply('bot', [Image('preview')])
+        event = SimpleNamespace(
+            get_self_id=lambda: 'bot',
+            message_obj=SimpleNamespace(self_id='bot'),
+            bot=SimpleNamespace(call_action=AsyncMock(return_value={
+                'data': {
+                    'sender': {'user_id': 'bot', 'nickname': '龙玉涛'},
+                    'message': [{
+                        'type': 'image',
+                        'data': {'file': 'base64://card', 'sub_type': 0},
+                    }],
+                },
+            })),
+        )
+        instance = Bridge()
+        chain = await instance._quoted_message_chain(event, quoted, quoted.chain)
+        self.assertEqual(getattr(quoted, '_longtu_quoted_image_sub_types', None), ['0'])
+        visual = Bridge._quoted_visual_chain(event, quoted, chain, '解释一下这张图')
+        self.assertEqual(len(visual), 1)
+
+    async def run_message(self, author='bot', current_image=False, text='你刚刚这句什么意思', fetched_author=None, quoted_sub_type='1'):
         quoted = Reply(author, [Plain('原来的文字回答'), Image('quoted-meme')])
+        quoted._longtu_quoted_image_sub_types = [str(quoted_sub_type)]
         components = [Plain(text), quoted] + ([Image('new-user-image')] if current_image else [])
         event = SimpleNamespace(get_self_id=lambda:'bot', get_sender_id=lambda:'user',
             get_sender_name=lambda:'用户', get_group_id=lambda:'1109147947',
@@ -92,6 +128,12 @@ class QuoteImageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(downloads, ['new-user-image'])
         self.assertEqual(payload['image_base64s'], ['new-user-image'])
         self.assertEqual(payload['quoted_image_base64s'], [])
+
+    async def test_bot_quote_keeps_regular_generated_image_for_vision(self):
+        payload, downloads, _ = await self.run_message(quoted_sub_type='0')
+        self.assertEqual(payload['quoted_image_base64s'], ['quoted-meme'])
+        self.assertTrue(payload['has_image'])
+        self.assertEqual(downloads, ['quoted-meme'])
 
     async def test_other_user_quote_keeps_image(self):
         payload, downloads, _ = await self.run_message(author='human')

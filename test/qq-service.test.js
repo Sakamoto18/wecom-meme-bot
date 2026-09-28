@@ -1110,6 +1110,30 @@ test('引用 Bot 自己的表情包只保留文字；用户新图和引用真人
   assert.equal(management.quotedImageBase64, png, '引用 Bot 的图库管理仍可读取图片字节');
 });
 
+test('引用 Bot 发送的普通分享卡会保留图片；明确的龙图 sub_type=1 仍过滤', async () => {
+  const png = (await createPng()).toString('base64');
+  const regular = normalizeQqPayload({
+    message_type: 'private', user_id: 'user', bot_user_id: 'bot',
+    quoted_user_id: 'bot', quoted_text: '这是机器人刚刚发的分享卡',
+    quoted_image_base64s: [png], quoted_image_sub_types: ['0'],
+    has_image: true, text: '解释一下你刚刚发的图',
+  });
+  assert.deepEqual(regular.quotedImageBase64s, [png]);
+  assert.equal(regular.hasImage, true);
+  const prepared = await prepareImageBlocks(regular);
+  assert.equal(prepared.imageCount, 1);
+  assert.match(prepared.blocks[0].text, /引用消息图片 1/);
+
+  const sticker = normalizeQqPayload({
+    message_type: 'private', user_id: 'user', bot_user_id: 'bot',
+    quoted_user_id: 'bot', quoted_text: '这是机器人刚刚发的龙图',
+    quoted_image_base64s: [png], quoted_image_sub_types: ['1'],
+    has_image: true, text: '你刚刚发的表情是什么意思',
+  });
+  assert.deepEqual(sticker.quotedImageBase64s, []);
+  assert.equal(sticker.hasImage, false);
+});
+
 test('合并转发图片会和普通图片一起进入视觉链路', async () => {
   const png = (await createPng()).toString('base64');
   const payload = normalizeQqPayload({
