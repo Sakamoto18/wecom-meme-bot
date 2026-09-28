@@ -44,6 +44,12 @@ GET_IMAGE_CIRCUIT_RESET_SECONDS = 300
 RECENT_IMAGE_CACHE_TTL_SECONDS = 10 * 60
 RECENT_IMAGE_CACHE_MAX_ENTRIES = 256
 RECENT_IMAGE_CACHE_MAX_BASE64_CHARACTERS = 24 * 1024 * 1024 * 4 // 3
+# 普通分享卡/视频总结图是 Bridge 自己通过 OneBot 发送的，QQ 偶尔在
+# 紧接着的引用回捞里只返回占位符。单独保留短时、按消息 ID 索引的副本，
+# 不与用户图片旁观缓存混用，也不保存 sub_type=1 龙图表情。
+OUTBOUND_IMAGE_CACHE_TTL_SECONDS = 30 * 60
+OUTBOUND_IMAGE_CACHE_MAX_ENTRIES = 128
+OUTBOUND_IMAGE_CACHE_MAX_BASE64_CHARACTERS = 32 * 1024 * 1024 * 4 // 3
 RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
     r"(?:上面|刚才|前面|上一张|前一张|这张(?:图|图片)|这个(?:图|图片)|图里|图片里)",
 )
@@ -120,6 +126,8 @@ class LongtuQqBridge(Star):
         # 静默观察不调用模型，但保留短时间内最近一批图片，支持用户先发图、
         # 再单独 @ 机器人询问“上面这张图”的常见 QQ 使用方式。
         self.recent_image_cache: dict[str, tuple[float, list[str]]] = {}
+        self.outbound_image_cache: dict[str, tuple[float, list[str]]] = {}
+        self.outbound_latest_image_cache: dict[str, tuple[float, list[str]]] = {}
         # 同一条视频的封面字节，键是去掉签名的地址，重复转发直接命中。
         self.cover_cache: dict[str, tuple[float, bytes]] = {}
         self.video_delivery_cache = VideoDeliveryCache(logger=logger)
@@ -1510,6 +1518,66 @@ class LongtuQqBridge(Star):
             return []
         return list(images)
 
+    def _remember_outbound_image(
+        self,
+        event: AstrMessageEvent,
+        result: dict,
+        base64_image: str,
+    ) -> None:
+        """Keep a regular bot-generated card briefly available for quote recovery."""
+        normalized = str(base64_image or '').strip()
+        if not normalized or not re.fullmatch(r'[A-Za-z0-9+/]+={0,2}', normalized):
+            return
+        if len(normalized) > OUTBOUND_IMAGE_CACHE_MAX_BASE64_CHARACTERS:
+            logger.warning('机器人生成图片过大，不写入引用回捞缓存')
+            return
+        receipt = result.get('data') if isinstance(result, dict) and isinstance(result.get('data'), dict) else result
+        message_id = str(receipt.get('message_id') or '').strip() if isinstance(receipt, dict) else ''
+        if not message_id:
+            return
+        now = time.monotonic()
+        self.outbound_image_cache[message_id] = (now, [normalized])
+        scope = self._recent_image_cache_key(event)
+        self.outbound_latest_image_cache[scope] = (now, [normalized])
+        for cache in (self.outbound_image_cache, self.outbound_latest_image_cache):
+            expired = [
+                key for key, (created_at, _images) in cache.items()
+                if now - created_at > OUTBOUND_IMAGE_CACHE_TTL_SECONDS
+            ]
+            for key in expired:
+                cache.pop(key, None)
+        while len(self.outbound_image_cache) > OUTBOUND_IMAGE_CACHE_MAX_ENTRIES:
+            oldest = min(self.outbound_image_cache, key=lambda key: self.outbound_image_cache[key][0])
+            self.outbound_image_cache.pop(oldest, None)
+
+    def _outbound_images_for_quote(self, reply_component) -> list[str]:
+        message_id = str(getattr(reply_component, 'id', '') or '').strip()
+        cached = getattr(self, 'outbound_image_cache', {}).get(message_id)
+        if not cached:
+            return []
+        created_at, images = cached
+        if time.monotonic() - created_at > OUTBOUND_IMAGE_CACHE_TTL_SECONDS:
+            getattr(self, 'outbound_image_cache', {}).pop(message_id, None)
+            return []
+        return list(images)
+
+    def _outbound_images_for_reference(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+    ) -> list[str]:
+        if not RECENT_IMAGE_REFERENCE_PATTERN.search(str(text or '')):
+            return []
+        scope = self._recent_image_cache_key(event)
+        cached = getattr(self, 'outbound_latest_image_cache', {}).get(scope)
+        if not cached:
+            return []
+        created_at, images = cached
+        if time.monotonic() - created_at > OUTBOUND_IMAGE_CACHE_TTL_SECONDS:
+            getattr(self, 'outbound_latest_image_cache', {}).pop(scope, None)
+            return []
+        return list(images)
+
     @staticmethod
     def _compact_forward_value(value, limit: int) -> str:
         return " ".join(str(value or "").split()).strip()[:limit]
@@ -2341,6 +2409,9 @@ class LongtuQqBridge(Star):
             if isinstance(result, dict) and (result.get("status") == "failed"
                                               or result.get("retcode", 0) not in (0, None)):
                 return False
+            remember_outbound = getattr(self, '_remember_outbound_image', None)
+            if callable(remember_outbound):
+                remember_outbound(event, result, str(card))
             logger.info(f"媒体限制卡片：独立封面已发送 target={destination} result={result!r}")
             return True
         except Exception as error:
@@ -2455,6 +2526,9 @@ class LongtuQqBridge(Star):
                     message=[{"type": "image", "data": {"file": f"base64://{card}"}}])
                 if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
                     raise RuntimeError("QQ 简介卡片接口返回失败")
+                remember_outbound = getattr(self, '_remember_outbound_image', None)
+                if callable(remember_outbound):
+                    remember_outbound(event, result, str(card))
                 logger.info(f"图文简介卡片：独立图片消息已发送 target={destination} result={result!r}")
         except Exception as error:
             logger.warning(f"图文简介卡片发送失败：{error}")
@@ -2656,6 +2730,12 @@ class LongtuQqBridge(Star):
                     quoted_chain,
                 )
             quoted_visual_chain = self._quoted_visual_chain(event, reply_component, quoted_chain, text)
+            outbound_quote_lookup = getattr(self, '_outbound_images_for_quote', None)
+            cached_outbound_quote_images = (
+                outbound_quote_lookup(reply_component)
+                if should_reply and reply_component and callable(outbound_quote_lookup)
+                else []
+            )
             has_image = any(
                 isinstance(component, Comp.Image)
                 for component in components
@@ -2793,6 +2873,7 @@ class LongtuQqBridge(Star):
                 quoted_forward_image_base64s = []
             image_base64s = []
             quoted_image_base64s = []
+            quoted_image_sub_types = []
             # 被动旁观消息不调用 Node/模型，但把最近一批图片短暂缓存在
             # AstrBot 插件内，支持“先发图、下一条再 @ 机器人评价”的消息习惯。
             # 缓存有严格的群数、图片数、总字节和 TTL 上限，不会进入旁观用量统计。
@@ -2802,6 +2883,16 @@ class LongtuQqBridge(Star):
                     quoted_image_base64s = await self._image_base64s(quoted_visual_chain)
                 except Exception as error:
                     logger.warning(f"QQ 图片读取失败：{type(error).__name__}")
+
+            # NapCat 回捞不到机器人自己刚发的普通图片时，使用发送回执对应
+            # 的短时副本。龙图表情从不写入此缓存，因此仍保持静默。
+            if should_reply and cached_outbound_quote_images and not quoted_image_base64s:
+                quoted_image_base64s = cached_outbound_quote_images
+                quoted_image_sub_types = ["0"] * len(quoted_image_base64s)
+                has_image = True
+                logger.info(
+                    f"已从机器人发送回执缓存恢复 {len(quoted_image_base64s)} 张引用图片",
+                )
 
             cached_images = [
                 *image_base64s,
@@ -2828,6 +2919,19 @@ class LongtuQqBridge(Star):
                     logger.info(
                         f"已将最近缓存的 {len(recent_images)} 张图片带入本轮 QQ 视觉请求",
                     )
+                else:
+                    outbound_reference_lookup = getattr(self, '_outbound_images_for_reference', None)
+                    outbound_images = (
+                        outbound_reference_lookup(event, text)
+                        if callable(outbound_reference_lookup)
+                        else []
+                    )
+                    if outbound_images:
+                        image_base64s = outbound_images
+                        has_image = True
+                        logger.info(
+                            f"已将最近发送的 {len(outbound_images)} 张分享卡带入本轮 QQ 视觉请求",
+                        )
 
             bot_user_id = str(event.get_self_id() or "").strip()
             group_info = (
@@ -2861,7 +2965,7 @@ class LongtuQqBridge(Star):
                 # _quoted_visual_chain 已过滤明确的 sub_type=1 龙图表情；
                 # 发送显式的普通图片标记，让 Node 不再按旧版兼容逻辑把
                 # 机器人引用消息里的所有图片一并清空。
-                "quoted_image_sub_types": ["0"] * len(quoted_image_base64s),
+                "quoted_image_sub_types": quoted_image_sub_types or ["0"] * len(quoted_image_base64s),
                 "rich_segments": rich_segments,
                 "video_urls": [
                     str(item.get("data", {}).get("url"))
@@ -2961,6 +3065,9 @@ class LongtuQqBridge(Star):
                             )
                             if isinstance(result, dict) and (result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)):
                                 raise RuntimeError(f"QQ 图片接口返回失败：{result!r}")
+                            remember_outbound = getattr(self, '_remember_outbound_image', None)
+                            if callable(remember_outbound):
+                                remember_outbound(event, result, str(card))
                             logger.info(f"视频分享卡片：OneBot 图片回执={result!r}")
                             logger.info("视频分享卡片：独立图片消息已发送")
                             return True
