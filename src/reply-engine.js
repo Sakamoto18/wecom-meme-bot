@@ -267,6 +267,8 @@ export async function generateConversationReply(options) {
     passiveImageComment = false,
     imageSearchQueries,
     imageSearchPlan,
+    imageInformationPolicy = null,
+    imageInformationPrompt = '',
     recordSummary = false,
     videoBlocks = [],
   } = options;
@@ -277,6 +279,7 @@ export async function generateConversationReply(options) {
   const revisionUserContent = modelInput;
   const imageSafetyPrompt = [
     hasImageContext ? `${IMAGE_INPUT_SAFETY_PROMPT}\n\n${passiveImageComment ? PASSIVE_IMAGE_COMMENT_PROMPT : IMAGE_MEANING_PROMPT}` : '',
+    imageInformationPrompt,
     recordSummary ? FORWARD_SUMMARY_PROMPT : '',
   ].filter(Boolean).join('\n\n');
 
@@ -535,7 +538,10 @@ export async function generateConversationReply(options) {
   const detailedAnswerRequested = recordSummary
     || (!passiveImageComment && !compactActiveReply && shouldRequestDetailedAnswer(currentQuestion));
   const compactResponse = !detailedAnswerRequested;
-  const responseMaxTokens = compactActiveReply ? 280 : (compactResponse ? 650 : 8_000);
+  const lowInformationImage = hasImageContext && imageInformationPolicy?.level === 'low_information';
+  const responseMaxTokens = lowInformationImage
+    ? 260
+    : (compactActiveReply ? 280 : (compactResponse ? 650 : 8_000));
   const webSearchStatus = buildWebSearchStatus({
     requested: imageSearch ? queries.length > 0
       : (useCurrentInformation || useMemeKnowledge || searchMode === 'general'),

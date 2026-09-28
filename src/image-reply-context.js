@@ -1,4 +1,7 @@
 import { buildSourceScope } from './search-scope.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // 图片检索是补充证据，不是识图的默认副作用。纯表情、反应图和只有情绪
 // 短句的图片没有稳定的公开线索，交给搜索只会把无意义内容变成 API 账单。
@@ -12,6 +15,32 @@ const GENERIC_IMAGE_TERMS = new Set([
 ]);
 
 const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|辟谣|谣言|真实吗|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景)/u;
+const IMAGE_INFORMATION_PATTERN = /(?:长文|文章|公告|新闻|论坛|帖子|评论区|聊天记录|对话|多格|漫画|表格|数据|图表|教程|报错|故障|说明书|规则|通知|投票|调查|对比|时间线)/u;
+const UI_NOISE_PATTERN = /(?:点赞|评论|转发|收藏|播放|浏览|粉丝|关注|分享|登录|注册|首页|搜索|推荐|热门|账号|用户名|用户名称|up主|作者|发布于|在线|分钟前|小时前|昨天|第\s*\d+楼)/iu;
+
+const CURRENT_FILE = fileURLToPath(import.meta.url);
+const PROJECT_ROOT = path.resolve(path.dirname(CURRENT_FILE), '..');
+const DEFAULT_HOT_TOPICS = [
+  'deepseek', 'openai', '人工智能', 'ai', '大模型', '机器人',
+  '峰谷电价', '抖音', '小红书', '哔哩哔哩', 'b站',
+];
+
+function loadHotTopics() {
+  const configured = String(process.env.QQ_IMAGE_HOT_TOPICS ?? '').trim();
+  if (configured) return configured.split(/[,，\n]/u).map(item => item.trim()).filter(Boolean);
+  try {
+    const file = path.join(PROJECT_ROOT, 'config', 'image-hot-topics.json');
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    return Array.isArray(parsed)
+      ? parsed
+        .filter(item => typeof item === 'string' || !item?.expiresAt || Date.parse(item.expiresAt) >= Date.now())
+        .map(item => typeof item === 'string' ? item : item?.keyword)
+        .filter(Boolean)
+      : DEFAULT_HOT_TOPICS;
+  } catch {
+    return DEFAULT_HOT_TOPICS;
+  }
+}
 
 function compactText(value) {
   return String(value ?? '')
@@ -23,6 +52,112 @@ function compactText(value) {
 
 function meaningfulCharacters(value) {
   return (compactText(value).match(/[\p{L}\p{N}\p{Script=Han}]/gu) ?? []).length;
+}
+
+function normalizedTextList(values = []) {
+  return (Array.isArray(values) ? values : [])
+    .map(compactText)
+    .filter(Boolean);
+}
+
+function noiseFreeVisibleText(item = {}) {
+  return normalizedTextList(item.visibleText)
+    .map(text => text.replace(/https?:\/\/\S+/giu, ' ').replace(/\s+/gu, ' ').trim())
+    .filter(text => {
+      const count = meaningfulCharacters(text);
+      if (count < 3) return false;
+      // A line made solely of interface counters or account chrome is not
+      // information density. Keep mixed lines such as a real post title.
+      return !(UI_NOISE_PATTERN.test(text) && count < 18);
+    });
+}
+
+function distinctCharacters(value) {
+  return new Set((compactText(value).match(/[\p{L}\p{N}\p{Script=Han}]/gu) ?? [])).size;
+}
+
+function hotTopicMatches(item = {}) {
+  const haystack = [
+    item.description,
+    ...normalizedTextList(item.visibleText),
+    ...normalizedTextList(item.keywords),
+    item.scene,
+  ].join(' ').toLowerCase();
+  return loadHotTopics().filter(topic => haystack.includes(String(topic).toLowerCase()));
+}
+
+/**
+ * Classify an image after vision/OCR. This is deliberately stricter than the
+ * model's search_queries field: watermarks and account chrome cannot make a
+ * picture eligible for paid web search.
+ */
+export function classifyImageInformation(item = {}) {
+  const visibleText = noiseFreeVisibleText(item);
+  const text = visibleText.join('\n');
+  const meaningful = meaningfulCharacters(text);
+  const unique = distinctCharacters(text);
+  const queryClues = normalizedTextList(item.searchQueries);
+  const specificClue = queryClues.length > 0
+    && queryClues.some(clue => meaningfulCharacters(clue) >= 8 && latinTerms(clue).length + (clue.match(/[\p{Script=Han}]/gu) ?? []).length >= 2)
+    && meaningful >= 12
+    && !visibleText.every(line => UI_NOISE_PATTERN.test(line));
+  const hasStructure = IMAGE_INFORMATION_PATTERN.test([
+    item.description, item.scene, item.keywords?.join(' '),
+  ].join(' '));
+  const hasHotTopic = hotTopicMatches(item);
+  const dense = meaningful >= 100 && unique >= 25;
+  const structured = visibleText.length >= 4 && meaningful >= 45 && unique >= 18 && hasStructure;
+  const highDensity = dense || structured;
+  return {
+    level: highDensity
+      ? 'high_density'
+      : (hasHotTopic && meaningful >= 24 ? 'hot_topic' : (specificClue ? 'informative_clue' : 'low_information')),
+    highDensity,
+    hotTopic: hasHotTopic && meaningful >= 24,
+    hotTopics: hasHotTopic,
+    specificClue,
+    meaningfulCharacters: meaningful,
+    visibleTextBlocks: visibleText.length,
+    searchEligible: highDensity || (hasHotTopic && meaningful >= 24) || specificClue,
+    reason: highDensity
+      ? '正文密度或结构足够'
+      : (hasHotTopic && meaningful >= 24
+        ? '命中近期热词且有上下文'
+        : (specificClue ? '包含可核实的具体公开线索' : '低信息或仅含界面噪声')),
+  };
+}
+
+export function classifyImageAnalysis(analysis) {
+  const items = analysis?.items?.length ? analysis.items : (analysis ? [analysis] : []);
+  const classifications = items.map(classifyImageInformation);
+  const highDensity = classifications.some(item => item.highDensity);
+  const hotTopic = classifications.some(item => item.hotTopic);
+  const specificClue = classifications.some(item => item.specificClue);
+  const allLowInformation = classifications.length > 0 && classifications.every(item => item.level === 'low_information');
+  return {
+    level: highDensity ? 'high_density' : (hotTopic ? 'hot_topic' : (specificClue ? 'informative_clue' : 'low_information')),
+    highDensity,
+    hotTopic,
+    allLowInformation,
+    items: classifications,
+    searchEligible: highDensity || hotTopic || specificClue,
+  };
+}
+
+export function buildImageInformationPolicy(policy = {}, { explicitSearch = false } = {}) {
+  if (policy.level === 'low_information') {
+    if (explicitSearch) {
+      return '这张图被程序判定为低信息图片。用户明确问出处或梗义时只回答可核实的来源/含义，不做主观评价，不攻击发图者，不扩展成长篇图片解说。';
+    }
+    return '这张图被程序判定为低信息图片（表情包、反应图、界面噪声或无正文截图）。不要联网搜索，也不要写长篇图片评价；用户若要求评价，只用角色语气接一句短梗后结束。';
+  }
+  if (policy.level === 'hot_topic') {
+    return '这张图命中近期热词且包含一定上下文。只核实与当前问题直接相关的热词背景，不要因为热词本身平铺搜索报告。';
+  }
+  if (policy.level === 'informative_clue') {
+    return '这张图包含可核实的具体公开线索。只围绕这条线索补充背景，不要把界面字段或搜索过程写成报告。';
+  }
+  return '这张图达到高密度信息标准。优先提炼正文、数字、时间、条件和观点；只有当前问题确实需要外部背景时才联网。';
 }
 
 function latinTerms(value) {
@@ -107,6 +242,10 @@ export function buildImageSearchPlan(analysis, content = '') {
   const queries = [];
   const seen = new Set();
   for (const item of items) {
+    const itemPolicy = classifyImageInformation(item);
+    // Low-information images are searchable only for an explicit source/meme
+    // lookup. Ordinary “评价一下” requests must not create API spend.
+    if (!itemPolicy.searchEligible && !explicitIntent) continue;
     // An explicit empty array means vision found no suitable public search
     // clue (for example a private chat screenshot); don't send its OCR online.
     const proposed = Array.isArray(item.searchQueries)
