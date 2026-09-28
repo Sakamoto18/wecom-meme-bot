@@ -49,7 +49,8 @@ RECENT_IMAGE_CACHE_MAX_BASE64_CHARACTERS = 24 * 1024 * 1024 * 4 // 3
 # 不与用户图片旁观缓存混用，也不保存 sub_type=1 龙图表情。
 OUTBOUND_IMAGE_CACHE_TTL_SECONDS = 30 * 60
 OUTBOUND_IMAGE_CACHE_MAX_ENTRIES = 128
-OUTBOUND_IMAGE_CACHE_MAX_BASE64_CHARACTERS = 32 * 1024 * 1024 * 4 // 3
+OUTBOUND_IMAGE_MAX_BASE64_CHARACTERS = 16 * 1024 * 1024 * 4 // 3
+OUTBOUND_IMAGE_CACHE_MAX_TOTAL_BASE64_CHARACTERS = 32 * 1024 * 1024 * 4 // 3
 RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
     r"(?:上面|刚才|前面|上一张|前一张|这张(?:图|图片)|这个(?:图|图片)|图里|图片里)",
 )
@@ -1528,7 +1529,7 @@ class LongtuQqBridge(Star):
         normalized = str(base64_image or '').strip()
         if not normalized or not re.fullmatch(r'[A-Za-z0-9+/]+={0,2}', normalized):
             return
-        if len(normalized) > OUTBOUND_IMAGE_CACHE_MAX_BASE64_CHARACTERS:
+        if len(normalized) > OUTBOUND_IMAGE_MAX_BASE64_CHARACTERS:
             logger.warning('机器人生成图片过大，不写入引用回捞缓存')
             return
         receipt = result.get('data') if isinstance(result, dict) and isinstance(result.get('data'), dict) else result
@@ -1546,7 +1547,17 @@ class LongtuQqBridge(Star):
             ]
             for key in expired:
                 cache.pop(key, None)
-        while len(self.outbound_image_cache) > OUTBOUND_IMAGE_CACHE_MAX_ENTRIES:
+        def total_characters(cache):
+            return sum(
+                sum(len(image) for image in images)
+                for _created_at, images in cache.values()
+            )
+
+        while (
+            len(self.outbound_image_cache) > OUTBOUND_IMAGE_CACHE_MAX_ENTRIES
+            or total_characters(self.outbound_image_cache)
+            > OUTBOUND_IMAGE_CACHE_MAX_TOTAL_BASE64_CHARACTERS
+        ):
             oldest = min(self.outbound_image_cache, key=lambda key: self.outbound_image_cache[key][0])
             self.outbound_image_cache.pop(oldest, None)
 
