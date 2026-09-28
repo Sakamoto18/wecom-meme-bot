@@ -52,7 +52,7 @@ OUTBOUND_IMAGE_CACHE_MAX_ENTRIES = 128
 OUTBOUND_IMAGE_MAX_BASE64_CHARACTERS = 16 * 1024 * 1024 * 4 // 3
 OUTBOUND_IMAGE_CACHE_MAX_TOTAL_BASE64_CHARACTERS = 32 * 1024 * 1024 * 4 // 3
 RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
-    r"(?:上面|刚才|前面|上一张|前一张|这张(?:图|图片)|这个(?:图|图片)|图里|图片里)",
+    r"(?:上面|刚才|刚刚|前面|上一张|前一张|这张(?:图|图片)|这个(?:图|图片)|图里|图片里)",
 )
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
