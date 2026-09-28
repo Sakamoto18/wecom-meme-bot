@@ -473,6 +473,10 @@ export async function createQqRuntime() {
       process.env.QQ_USAGE_LARGE_GROUP_MAX_SEARCH_CALLS_PER_DAY,
       100,
     ),
+    maxImageSearchCallsPerWindow: parseNonnegativeInteger(
+      process.env.QQ_USAGE_IMAGE_SEARCH_CALLS_PER_MINUTE,
+      4,
+    ),
     groupSearchLimits: parseIdentifierNumberMap(
       process.env.QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS,
     ),

@@ -1,5 +1,78 @@
 import { buildSourceScope } from './search-scope.js';
 
+// 图片检索是补充证据，不是识图的默认副作用。纯表情、反应图和只有情绪
+// 短句的图片没有稳定的公开线索，交给搜索只会把无意义内容变成 API 账单。
+const IMAGE_SEARCH_DEFAULT_MAX_QUERIES = 1;
+const IMAGE_SEARCH_EXPLICIT_MAX_QUERIES = 2;
+const GENERIC_IMAGE_TERMS = new Set([
+  '图', '图片', '截图', '表情', '表情包', '梗图', '反应图', '反应',
+  '自拍', '风景', '猫', '猫猫', '猫咪', '狗', '狗狗', '哈哈', '哈哈哈',
+  '笑死', '笑死了', '绷不住', '好好笑', '无语', '离谱', '破防', '草',
+  '啊', '呃', '额', '问号', '什么梗', '看看这图', '这是什么',
+]);
+
+const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|辟谣|谣言|真实吗|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景)/u;
+
+function compactText(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/[\u0000-\u001f\u007f]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function meaningfulCharacters(value) {
+  return (compactText(value).match(/[\p{L}\p{N}\p{Script=Han}]/gu) ?? []).length;
+}
+
+function latinTerms(value) {
+  return compactText(value).match(/[A-Za-z][A-Za-z0-9._-]*/gu) ?? [];
+}
+
+function isGenericImageClue(value) {
+  const text = compactText(value)
+    .replace(/[“”"'‘’`~!！?？。.,，、:：;；()[\]{}<>《》【】_\-]+/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .toLowerCase();
+  if (!text) return true;
+  if (GENERIC_IMAGE_TERMS.has(text)) return true;
+  // Repeated laughter/emotion characters are not a public search clue.
+  if (/^(?:哈|呵|笑|草|啊|呃|额|？|!|！|？){2,}$/u.test(text)) return true;
+  return false;
+}
+
+function hasUsefulImageClue(subject, item = {}) {
+  const clue = compactText(subject);
+  if (!clue || isGenericImageClue(clue)) return false;
+  const hanCount = (clue.match(/[\p{Script=Han}]/gu) ?? []).length;
+  const latinCount = latinTerms(clue).length;
+  const digitCount = (clue.match(/\d/gu) ?? []).length;
+  const visibleText = (Array.isArray(item.visibleText) ? item.visibleText : [])
+    .map(compactText).filter(Boolean);
+  const visibleLength = visibleText.reduce((sum, text) => sum + meaningfulCharacters(text), 0);
+  const keywordText = (Array.isArray(item.keywords) ? item.keywords : [])
+    .map(compactText).filter((text) => !isGenericImageClue(text)).join(' ');
+  const sourceCandidates = Array.isArray(item.sourceCandidates)
+    ? item.sourceCandidates.filter((candidate) => candidate?.confidence !== 'low')
+    : [];
+
+  // Exact phrases, named works/people, version numbers and multi-token English
+  // titles survive the gate. A lone platform name or “猫咪表情” does not.
+  if (hanCount >= 6 || latinCount >= 2 || digitCount >= 2) return true;
+  if (visibleLength >= 12 && meaningfulCharacters(keywordText) >= 3) return true;
+  if (sourceCandidates.length > 0 && (hanCount >= 4 || latinCount >= 1) && visibleLength >= 6) return true;
+  return false;
+}
+
+export function hasExplicitImageSearchIntent(content = '') {
+  return EXPLICIT_IMAGE_SEARCH_PATTERN.test(compactText(content));
+}
+
+export function isImageSearchEligible(item, subject) {
+  return hasUsefulImageClue(subject, item);
+}
+
 // Vision output remains evidence for the normal persona, not a user-facing report.
 export const FORWARD_SUMMARY_PROMPT = [
   '【本轮任务：总结用户提供的聊天记录】',
@@ -24,6 +97,10 @@ export const IMAGE_MEANING_PROMPT = [
 export function buildImageSearchPlan(analysis, content = '') {
   if (/(?:不要|不用|不必|无需|禁止|别).{0,6}(?:联网|上网|搜索|检索)/u.test(content)) return [];
   const items = analysis?.items?.length ? analysis.items : (analysis ? [analysis] : []);
+  const explicitIntent = hasExplicitImageSearchIntent(content);
+  const maxQueries = explicitIntent
+    ? IMAGE_SEARCH_EXPLICIT_MAX_QUERIES
+    : IMAGE_SEARCH_DEFAULT_MAX_QUERIES;
   const intent = /真假|核实|辟谣|谣言|真实吗/u.test(content)
     ? '事实核查'
     : (/出处|来源|什么梗/u.test(content) ? '来源 含义' : '含义 背景');
@@ -39,6 +116,11 @@ export function buildImageSearchPlan(analysis, content = '') {
       const subject = String(value ?? '').replace(/[\u0000-\u001f\u007f]/gu, ' ')
         .replace(/\s+/gu, ' ').trim().slice(0, 140);
       if (!subject || /https?:\/\/|data:image|成员-[a-f0-9]{6,12}|\b\d{7,}\b/iu.test(subject)) continue;
+      // Without an explicit lookup request, a textless picture is usually a
+      // reaction/meme image. Do not spend an upstream call just because vision
+      // guessed a template name; explicit “出处/什么梗” can still opt in.
+      if (!explicitIntent && meaningfulCharacters(item.visibleText?.join(' ')) === 0) continue;
+      if (!isImageSearchEligible(item, subject)) continue;
       const fingerprint = subject.normalize('NFKC').toLowerCase();
       const scope = buildSourceScope(item.sourceCandidates);
       const key = `${scope.includeDomains.join(',')}:${fingerprint}`;
@@ -48,7 +130,7 @@ export function buildImageSearchPlan(analysis, content = '') {
       const query = scope.candidates.length && !/[\p{Script=Han}]/u.test(subject)
         ? subject : `${subject} ${intent}`;
       queries.push({ query, ...scope });
-      if (queries.length >= 3) return queries;
+      if (queries.length >= maxQueries) return queries;
     }
   }
   return queries;

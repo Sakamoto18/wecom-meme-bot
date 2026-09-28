@@ -52,7 +52,7 @@ OUTBOUND_IMAGE_CACHE_MAX_ENTRIES = 128
 OUTBOUND_IMAGE_MAX_BASE64_CHARACTERS = 16 * 1024 * 1024 * 4 // 3
 OUTBOUND_IMAGE_CACHE_MAX_TOTAL_BASE64_CHARACTERS = 32 * 1024 * 1024 * 4 // 3
 RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
-    r"(?:上面|刚才|刚刚|前面|上一张|前一张|这张(?:图|图片)|这个(?:图|图片)|图里|图片里)",
+    r"(?:上面|刚才|刚刚|前面|上一张|前一张|这张(?:图|图片|封面|卡片|分享卡)|这个(?:图|图片|封面|卡片|分享卡)|图里|图片里|封面里|卡片里)",
 )
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
@@ -2747,6 +2747,10 @@ class LongtuQqBridge(Star):
                 if should_reply and reply_component and callable(outbound_quote_lookup)
                 else []
             )
+            # 回捞成功时也保留这个标记：短时回执缓存不仅用于补回图片字节，
+            # 还用于告诉 Node 这不是用户图片，而是 Bot 自己发出的分享卡。
+            bot_generated_image_reference = bool(cached_outbound_quote_images)
+            bot_generated_image_reference_from_recent = False
             has_image = any(
                 isinstance(component, Comp.Image)
                 for component in components
@@ -2940,6 +2944,8 @@ class LongtuQqBridge(Star):
                     if outbound_images:
                         image_base64s = outbound_images
                         has_image = True
+                        bot_generated_image_reference = True
+                        bot_generated_image_reference_from_recent = True
                         logger.info(
                             f"已将最近发送的 {len(outbound_images)} 张分享卡带入本轮 QQ 视觉请求",
                         )
@@ -2949,6 +2955,16 @@ class LongtuQqBridge(Star):
                 await self._group_info(event.get_group_id())
                 if not event.is_private_chat()
                 else {}
+            )
+            bot_generated_image_only = bot_generated_image_reference and (
+                bot_generated_image_reference_from_recent
+                or not any((
+                    image_base64s,
+                    quoted_forward_image_base64s,
+                    forward_image_base64s,
+                    observed_forward_images,
+                    observed_quoted_forward_images,
+                ))
             )
 
             payload = {
@@ -2977,6 +2993,8 @@ class LongtuQqBridge(Star):
                 # 发送显式的普通图片标记，让 Node 不再按旧版兼容逻辑把
                 # 机器人引用消息里的所有图片一并清空。
                 "quoted_image_sub_types": quoted_image_sub_types or ["0"] * len(quoted_image_base64s),
+                "quoted_bot_generated_image": bot_generated_image_reference,
+                "bot_generated_image_only": bot_generated_image_only,
                 "rich_segments": rich_segments,
                 "video_urls": [
                     str(item.get("data", {}).get("url"))

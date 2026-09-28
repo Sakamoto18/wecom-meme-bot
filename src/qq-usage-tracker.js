@@ -15,6 +15,8 @@ const DEFAULT_ACTIVITY_LIMIT_PERCENTAGES = [60, 75, 85, 95, 100];
 const ACTIVITY_TIER_NAMES = ['quiet', 'light', 'normal', 'active', 'hot'];
 const DEFAULT_LARGE_GROUP_SECONDARY_REVIEW_PERCENT = 20;
 const DEFAULT_PEAK_PASSIVE_TOKEN_BUDGET_PERCENT = 40;
+const DEFAULT_IMAGE_SEARCH_RATE_WINDOW_MS = 60 * 1000;
+const DEFAULT_IMAGE_SEARCH_CALLS_PER_WINDOW = 4;
 const SECONDARY_REVIEW_SOURCES = new Map([
   ['conversation-reply-review', 'conversation-reply'],
   ['active-reply-review', 'active-reply'],
@@ -51,7 +53,9 @@ export class QqUsageLimitError extends Error {
         ? `今日后台/主动插话 Token 已达到预留线 ${limit}`
         : (metric === 'search-calls'
           ? `今日联网搜索已达到上限 ${limit}`
-          : `本小时大模型调用已达到上限 ${limit}`));
+          : (metric === 'search-rate'
+            ? `最近一分钟图片联网搜索已达到限流 ${limit}`
+            : `本小时大模型调用已达到上限 ${limit}`)));
     super(`群 ${groupId} ${description}`);
     this.name = 'QqUsageLimitError';
     this.groupId = groupId;
@@ -273,6 +277,16 @@ export class UsageTrackedWebSearch {
     result = await this.searchClient.search(content, {
       ...options,
       onBeforeUpstreamRequest: (info = {}) => {
+        if (options.usageSource === 'web-search-image'
+          && !this.tracker.reserveImageSearchCall()) {
+          const context = this.tracker.currentContext();
+          this.tracker.recordBlockedSearchRate({ source: options.usageSource });
+          throw new QqUsageLimitError(
+            context.groupId,
+            this.tracker.maxImageSearchCallsPerWindow,
+            'search-rate',
+          );
+        }
         reservations.push(this.tracker.startSearchCall({
           source: options.usageSource,
         }));
@@ -376,6 +390,15 @@ export class QqUsageTracker {
       options.maxLargeGroupSearchCallsPerDay,
       this.maxGroupSearchCallsPerDay,
     );
+    this.maxImageSearchCallsPerWindow = positiveInteger(
+      options.maxImageSearchCallsPerWindow,
+      DEFAULT_IMAGE_SEARCH_CALLS_PER_WINDOW,
+    );
+    this.imageSearchRateWindowMs = positiveInteger(
+      options.imageSearchRateWindowMs,
+      DEFAULT_IMAGE_SEARCH_RATE_WINDOW_MS,
+    ) || DEFAULT_IMAGE_SEARCH_RATE_WINDOW_MS;
+    this.imageSearchRate = new Map();
     this.groupSearchLimits = options.groupSearchLimits instanceof Map
       ? new Map(options.groupSearchLimits)
       : new Map();
@@ -465,6 +488,50 @@ export class QqUsageTracker {
 
   wrapWebSearch(search) {
     return new UsageTrackedWebSearch(search, this);
+  }
+
+  reserveImageSearchCall() {
+    const context = this.currentContext();
+    // The burst limiter is intended for noisy group image traffic. Private
+    // requests and an explicit zero limit retain the existing daily policy.
+    if (context.messageType !== 'group' || !context.groupId
+      || this.maxImageSearchCallsPerWindow <= 0) return true;
+    const now = this.now();
+    const previous = this.imageSearchRate.get(context.groupId);
+    const entry = previous && now - previous.startedAt < this.imageSearchRateWindowMs
+      ? previous
+      : { startedAt: now, count: 0 };
+    if (entry.count >= this.maxImageSearchCallsPerWindow) {
+      this.imageSearchRate.set(context.groupId, entry);
+      return false;
+    }
+    entry.count += 1;
+    this.imageSearchRate.set(context.groupId, entry);
+    if (this.imageSearchRate.size > 2_000) {
+      for (const [groupId, candidate] of this.imageSearchRate) {
+        if (now - candidate.startedAt >= this.imageSearchRateWindowMs) {
+          this.imageSearchRate.delete(groupId);
+        }
+      }
+    }
+    return true;
+  }
+
+  recordBlockedSearchRate({ source } = {}) {
+    const context = this.currentContext();
+    this.ensureOpen().prepare(`
+      INSERT INTO qq_usage_events(
+        created_at, group_id, user_id, message_type, kind, source,
+        allowed, succeeded, large_group, limit_reason
+      ) VALUES (?, ?, ?, ?, 'search', ?, 0, 0, ?, 'image-search-rate')
+    `).run(
+      this.now(),
+      context.groupId,
+      context.userId,
+      context.messageType,
+      String(source || context.source || 'search'),
+      context.largeGroup ? 1 : 0,
+    );
   }
 
   prune(now = this.now()) {

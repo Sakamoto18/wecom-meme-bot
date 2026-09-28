@@ -562,3 +562,47 @@ test('联网搜索达到单群日上限后只跳过上游请求', async () => {
     fixture.close();
   }
 });
+
+test('图片联网搜索额外按群做分钟级限流，普通文字搜索不受影响', async () => {
+  let now = Date.UTC(2026, 7, 25, 4);
+  const fixture = createTracker({
+    now: () => now,
+    maxImageSearchCallsPerWindow: 1,
+  });
+  let upstreamCalls = 0;
+  const search = fixture.tracker.wrapWebSearch(new LongtuWebSearch({
+    provider: 'exa',
+    exaApiKey: 'test-key',
+    fallbackEndpoint: null,
+    fetchImpl: async () => {
+      upstreamCalls += 1;
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    },
+  }));
+
+  try {
+    await fixture.tracker.runWithContext({ groupId: 'image-rate-group' }, () => (
+      search.search('第一张具体图片线索', { mode: 'general', usageSource: 'web-search-image' })
+    ));
+    await assert.rejects(
+      fixture.tracker.runWithContext({ groupId: 'image-rate-group' }, () => (
+        search.search('第二张具体图片线索', { mode: 'general', usageSource: 'web-search-image' })
+      )),
+      (error) => error instanceof QqUsageLimitError
+        && error.metric === 'search-rate'
+        && error.limit === 1,
+    );
+    await fixture.tracker.runWithContext({ groupId: 'image-rate-group' }, () => (
+      search.search('普通文字问题', { mode: 'general', usageSource: 'web-search-general' })
+    ));
+    now += 60_001;
+    await fixture.tracker.runWithContext({ groupId: 'image-rate-group' }, () => (
+      search.search('第三张具体图片线索', { mode: 'general', usageSource: 'web-search-image' })
+    ));
+    const report = fixture.tracker.getReport();
+    assert.equal(upstreamCalls, 3);
+    assert.equal(report.groups[0].blockedSearchCalls, 1);
+  } finally {
+    fixture.close();
+  }
+});

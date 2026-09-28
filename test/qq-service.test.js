@@ -1054,7 +1054,7 @@ test('图片默认按识别出的具体线索联网，无需用户额外要求�
   webSearch.search = async (query) => { queries.push(query); return originalSearch(); };
   const chatClient = { isConfigured: true, async complete(_history, _input, options) {
     return options.usageSource === 'image-understanding'
-      ? JSON.stringify({ description: '标准越统一反而越多的漫画', keywords: ['xkcd'], search_queries: ['xkcd Standards 927'] })
+      ? JSON.stringify({ description: '标准越统一反而越多的漫画', visible_text: ['14 competing standards'], keywords: ['xkcd'], search_queries: ['xkcd Standards 927'] })
       : '这是在讽刺重复造标准，你这蠢货又准备发明第十五套了。';
   } };
   const first = createService({ webSearch, webSearchEnabled: true, chatClient });
