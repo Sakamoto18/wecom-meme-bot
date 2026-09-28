@@ -14,7 +14,7 @@ test('裁剪评论按界面特征生成候选，逐图绑定范围，不把私�
     { sourceCandidates: reddit, searchQueries: ['Linux kernel changes'] },
     { sourceCandidates: normalizeSourceCandidates([{ platform: 'github', confidence: 'high', evidence: 'issue 标签与编号布局' }]), searchQueries: ['Linux kernel changes'] },
     { sourceCandidates: reddit, keywords: ['secret'], searchQueries: [] },
-  ] });
+  ] }, '请核实这两条来源');
   assert.equal(plan.length, 2);
   assert.deepEqual(plan[0].includeDomains, ['reddit.com']);
   assert.deepEqual(plan[1].includeDomains, ['github.com']);

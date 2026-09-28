@@ -2,16 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildImageSearchQueries } from '../src/image-reply-context.js';
 import { generateConversationReply } from '../src/reply-engine.js';
+import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
 
 const answer = '这图是在讽刺各自发明新标准反而制造更多标准，再统一一次就凑齐第十五套了。';
 
-test('图片检索限定具体线索，去重并限制最多三条，不把整段 OCR 发给搜索', () => {
+test('图片检索限定具体线索，去重并限制查询预算，不把整段 OCR 发给搜索', () => {
   const queries = buildImageSearchQueries({ items: [
     { visibleText: ['整段私人对话，不应上传'], searchQueries: ['xkcd Standards', 'xkcd Standards'] },
     { searchQueries: ['This is fine KC Green', 'Distracted boyfriend'] },
     { searchQueries: ['fourth topic'] },
   ] }, '这几个是什么梗');
-  assert.deepEqual(queries, ['xkcd Standards 来源 含义', 'This is fine KC Green 来源 含义', 'Distracted boyfriend 来源 含义']);
+  assert.deepEqual(queries, ['xkcd Standards 来源 含义', 'This is fine KC Green 来源 含义']);
 });
 
 test('视觉明确没有公开线索、识别失败或用户不允许联网时，不发空泛查询', () => {
@@ -19,6 +20,18 @@ test('视觉明确没有公开线索、识别失败或用户不允许联网时�
   assert.deepEqual(buildImageSearchQueries(null, '这是什么'), []);
   assert.deepEqual(buildImageSearchQueries({ keywords: ['xkcd'] }, '不要联网，只读图'), []);
   assert.deepEqual(buildImageSearchQueries({ searchQueries: ['https://example.com/steal', 'QQ 123456789'] }), []);
+});
+
+test('无文字或纯情绪梗图默认不搜索，明确核实时也只接受具体线索', () => {
+  assert.deepEqual(buildImageSearchQueries({ items: [
+    { searchQueries: ['哈哈哈哈'], visibleText: [], keywords: ['表情包'] },
+    { searchQueries: ['猫咪 反应图'], visibleText: [], keywords: ['猫咪', '反应图'] },
+  ] }, '看看这图'), []);
+  assert.deepEqual(buildImageSearchQueries({ searchQueries: ['表情包'] }, '这是什么梗'), []);
+  assert.deepEqual(buildImageSearchQueries({ searchQueries: ['Distracted boyfriend'] }, '评价一下这图'), []);
+  assert.deepEqual(buildImageSearchQueries({ searchQueries: ['This is fine KC Green'] }, '这是什么梗'), [
+    'This is fine KC Green 来源 含义',
+  ]);
 });
 
 test('图片线索走真实搜索接口，结果进入自然解释提示，人格生成路径保留', async () => {
@@ -90,4 +103,21 @@ test('带图的选择题直接回答，识别资料不变成必输出的描述',
   assert.match(calls[0].additionalSystemPrompt, /图片只是证据/);
   assert.match(calls[0].additionalSystemPrompt, /本轮用户当前问题.*你怎么选/);
   assert.doesNotMatch(calls[0].additionalSystemPrompt, /默认解释这张图在表达/);
+});
+
+test('引用 Bot 自己生成的视频封面时直接说明不评价，不进入视觉和联网搜索', async () => {
+  const payload = normalizeQqPayload({
+    message_type: 'group', group_id: 'g', user_id: 'u', bot_user_id: 'bot',
+    text: '评价一下这张图', quoted_user_id: 'bot',
+    quoted_image_base64s: ['aGVsbG8='], quoted_image_sub_types: ['0'],
+    quoted_bot_generated_image: true, bot_generated_image_only: true,
+    has_image: true,
+  });
+  assert.equal(payload.hasImage, false);
+  const service = new QqBotService({});
+  const result = await service.handleNormalizedMessage(payload);
+  assert.deepEqual(result.messages, [{
+    type: 'text',
+    text: '这是我抓取视频生成的封面卡片，只用于传递视频信息，不评价这张图。',
+  }]);
 });
