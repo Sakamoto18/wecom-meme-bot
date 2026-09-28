@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildImageSearchQueries } from '../src/image-reply-context.js';
+import {
+  buildImageSearchQueries,
+  classifyImageAnalysis,
+  classifyImageInformation,
+} from '../src/image-reply-context.js';
 import { generateConversationReply } from '../src/reply-engine.js';
 import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
 
@@ -32,6 +36,51 @@ test('无文字或纯情绪梗图默认不搜索，明确核实时也只接受�
   assert.deepEqual(buildImageSearchQueries({ searchQueries: ['This is fine KC Green'] }, '这是什么梗'), [
     'This is fine KC Green 来源 含义',
   ]);
+});
+
+test('水印、账号名和互动计数不会伪装成高密度信息图', () => {
+  const item = {
+    description: 'B站视频截图，画面右上角有账号名和点赞数',
+    visibleText: ['哔哩哔哩', '某某UP主', '点赞 12.4万', '评论 392'],
+    keywords: ['AI动物视频'],
+    scene: '平台分享截图',
+  };
+  const policy = classifyImageInformation(item);
+  assert.equal(policy.level, 'low_information');
+  assert.equal(policy.searchEligible, false);
+  assert.deepEqual(buildImageSearchQueries({ items: [{
+    ...item,
+    searchQueries: ['AI动物视频 B站 原视频'],
+  }] }, '评价一下这张图'), []);
+});
+
+test('长文、论坛和多格漫画达到严格信息密度后才允许搜索', () => {
+  const policy = classifyImageAnalysis({ items: [{
+    description: '论坛评论区的长文讨论，包含多个观点和结论',
+    visibleText: [
+      '第一层：这个方案在高峰期间会导致大量请求排队。',
+      '第二层：缓存命中率下降的原因需要看输入前缀是否稳定。',
+      '第三层：建议先拆分动态上下文，再观察实际命中率。',
+      '第四层：如果仍然异常，再检查供应商缓存策略。',
+    ],
+    keywords: ['缓存', '高峰', '请求'],
+    scene: '论坛评论区',
+    searchQueries: ['缓存命中率 高峰 请求'],
+  }] });
+  assert.equal(policy.level, 'high_density');
+  assert.equal(policy.searchEligible, true);
+});
+
+test('热词必须同时有上下文，单独出现在水印中不会触发搜索', () => {
+  assert.equal(classifyImageInformation({
+    visibleText: ['小红书', '点赞 23'],
+    description: '小红书分享封面',
+  }).level, 'low_information');
+  assert.equal(classifyImageInformation({
+    visibleText: ['最近人工智能模型的价格又调整了，开发者需要重新核算成本。'],
+    description: '一段关于人工智能的价格公告',
+    scene: '公告截图',
+  }).level, 'hot_topic');
 });
 
 test('图片线索走真实搜索接口，结果进入自然解释提示，人格生成路径保留', async () => {
