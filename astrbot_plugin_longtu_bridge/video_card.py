@@ -317,9 +317,16 @@ def render_video_card(message, cover_bytes=b"", avatar_bytes=b"", preview_bytes=
         draw_rich_text(card, (padding, title_y + i * title_step), line, font, "#44208f")
     if cover:
         card.paste(cover, (padding if portrait else (width - cover.width) // 2, cover_y))
-    color = "#666666" if message.get("provider") == "bilibili" else "#333333"
+    is_bilibili = message.get("provider") == "bilibili"
+    color = "#666666" if is_bilibili else "#333333"
+    summary_started = False
     for i, line in enumerate(footer_lines):
-        draw_rich_text(card, (padding, footer_y + i * 32), line, small, color)
+        if is_bilibili and line.startswith("AI总结："):
+            summary_started = True
+        # Keep the source description black while the separately sourced AI
+        # conclusion retains its gray tone, making the two sections distinct.
+        line_color = color if summary_started or not is_bilibili else "#000000"
+        draw_rich_text(card, (padding, footer_y + i * 32), line, small, line_color)
     output = io.BytesIO()
     card.save(output, format="PNG", optimize=True)
     return output.getvalue()

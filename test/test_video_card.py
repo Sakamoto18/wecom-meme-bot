@@ -125,6 +125,28 @@ class CardTests(unittest.TestCase):
             "AI总结：只有总结",
         )
 
+    def test_bilibili_description_is_black_and_ai_summary_stays_gray(self):
+        card = self.render({
+            "provider": "bilibili",
+            "description": "视频简介",
+            "aiSummary": "AI 提炼的视频内容",
+            "aiSummaryStatus": "available",
+        })
+        # The footer starts below the portrait cover in self.render(). Sample
+        # dark painted pixels from each text row rather than relying on exact
+        # antialiased edge colors.
+        footer_top = card.height - 24 - 3 * 32
+        description_pixels = [
+            pixel for pixel in card.crop((24, footer_top, 736, footer_top + 32)).getdata()
+            if max(pixel) < 100
+        ]
+        summary_pixels = [
+            pixel for pixel in card.crop((24, footer_top + 64, 736, footer_top + 96)).getdata()
+            if 80 <= max(pixel) <= 190 and max(pixel) - min(pixel) < 12
+        ]
+        self.assertTrue(description_pixels)
+        self.assertTrue(summary_pixels)
+
     def test_no_fabricated_tags_or_platform_label(self):
         self.assertEqual(card_footer({"provider": "xiaohongshu", "description": "没有话题的正文"}), "没有话题的正文")
         self.assertEqual(card_footer({"provider": "xiaohongshu", "description": "正文 #模型[话题]# #高达[话题]#"}), "正文 #模型# #高达#")
