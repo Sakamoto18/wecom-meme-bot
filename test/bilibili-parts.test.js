@@ -7,6 +7,7 @@ import {
   extractBilibiliPage, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
 } from '../src/bilibili-provider.js';
 import { buildBilibiliWbiParams, parseBilibiliAiSummary } from '../src/bilibili-ai-summary.js';
+import { createBilibiliSessionProvider } from '../src/bilibili-session-provider.js';
 import { MediaResolver, normalizeDownloadSource } from '../src/media-resolver.js';
 import { mediaCandidates } from '../src/media-link-extractor.js';
 import { QqBotService } from '../src/qq-service.js';
@@ -132,6 +133,47 @@ test('B站 AI 总结使用 WBI 登录态并透传到解析结果', async () => {
   assert.equal(signed.wts, '123');
   assert.match(signed.w_rid, /^[a-f0-9]{32}$/u);
   assert.equal(calls.filter(({ url }) => url.pathname === '/x/web-interface/view/conclusion/get').length, 1);
+});
+
+test('B站 AI 总结优先使用 provider 返回的持久化登录态', async () => {
+  const calls = [];
+  const fetchImpl = async (input, options = {}) => {
+    const url = new URL(input);
+    calls.push({ url, options });
+    if (url.pathname === '/x/web-interface/view') return Response.json({ code: 0, data: {
+      ...metadata, owner: { ...metadata.owner, mid: 4282930 },
+    } });
+    if (url.pathname === '/x/player/playurl') return Response.json({ code: 0, data: {
+      quality: 64, durl: [{ url: 'https://cdn.example/session.mp4', size: 1234 }],
+    } });
+    if (url.pathname === '/x/web-interface/nav') return Response.json({ code: 0, data: { wbi_img: {
+      img_url: 'https://i0.hdslb.com/bfs/wbi/img.png',
+      sub_url: 'https://i0.hdslb.com/bfs/wbi/sub.png',
+    } } });
+    if (url.pathname === '/x/web-interface/view/conclusion/get') {
+      assert.equal(options.headers.Cookie, 'SESSDATA=provider-session');
+      return Response.json({ code: 0, data: { summary: '来自持久化登录态的总结内容。' } });
+    }
+    throw new Error(`Unexpected request: ${url.href}`);
+  };
+  const result = await resolveBilibiliMedia(VIDEO, {
+    fetchImpl,
+    bilibiliCookie: 'SESSDATA=stale-static-cookie',
+    bilibiliCookieProvider: async () => 'SESSDATA=provider-session',
+  });
+  assert.equal(result.aiSummary, '来自持久化登录态的总结内容。');
+  assert.equal(calls.filter(({ url }) => url.pathname === '/x/web-interface/view/conclusion/get').length, 1);
+});
+
+test('B站 session provider 规范化抖音 provider 地址并隐藏未登录态', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async (input) => {
+    assert.equal(input, 'http://provider.test/bilibili-cookie');
+    return Response.json({ logged_in: true, cookie: 'SESSDATA=server-session' });
+  };
+  const provider = createBilibiliSessionProvider({ providerUrl: 'http://provider.test/resolve' });
+  assert.equal(await provider(), 'SESSDATA=server-session');
 });
 
 test('没有分 P 参数默认 P1，时长用 P1 而不是整个稿件总长', async () => {

@@ -22,6 +22,7 @@ import { proxyRemoteMedia } from './media-stream-proxy.js';
 import { MediaUsageTracker } from './media-usage-tracker.js';
 import { createXhsProvider } from './xhs-provider.js';
 import { createDouyinProvider } from './douyin-provider.js';
+import { createBilibiliSessionProvider } from './bilibili-session-provider.js';
 
 // DeepSeek Vision's inline request limit is 48 MiB. Keep the bridge/API
 // aligned with that limit so multi-image payloads are not rejected locally.
@@ -652,6 +653,10 @@ export async function createQqRuntime() {
     timeoutMs: (parsePositiveNumber(process.env.XHS_PROVIDER_TIMEOUT_SECONDS) ?? 6) * 1000,
   });
   const douyinProvider = createDouyinProvider({ providerUrl: process.env.DOUYIN_PROVIDER_URL });
+  const bilibiliSessionProvider = createBilibiliSessionProvider({
+    providerUrl: process.env.BILIBILI_PROVIDER_URL || process.env.DOUYIN_PROVIDER_URL,
+    timeoutMs: (parsePositiveNumber(process.env.QQ_BILIBILI_SESSION_TIMEOUT_MS) ?? 800),
+  });
   const mediaProvider = async ({ url, platform }) => {
     if (platform === 'xiaohongshu') return xhsProvider?.({ url, platform });
     if (platform === 'douyin') return douyinProvider?.({ url, platform });
@@ -663,6 +668,7 @@ export async function createQqRuntime() {
     cookiesFile: process.env.QQ_MEDIA_YTDLP_COOKIES_FILE?.trim() || '',
     cookie: process.env.QQ_MEDIA_YTDLP_COOKIE?.trim() || '',
     bilibiliCookie: process.env.QQ_BILIBILI_COOKIE?.trim() || '',
+    bilibiliCookieProvider: bilibiliSessionProvider,
     aiSummaryTimeoutMs: (parsePositiveNumber(
       process.env.QQ_BILIBILI_AI_SUMMARY_TIMEOUT_SECONDS,
     ) ?? 1.5) * 1000,

@@ -3,11 +3,14 @@ services:
     build: ./services/douyin-provider
     container_name: longtu-douyin-provider
     restart: unless-stopped
+    environment:
+      BILIBILI_AUTH_STATE: /data/bilibili-auth/state.json
     ports:
       - "127.0.0.1:9001:9001"
       - "127.0.0.1:6080:6080"
     volumes:
       - ./data/douyin-profile:/data/profile
+      - ./data/bilibili-auth:/data/bilibili-auth
     stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9001/healthz', timeout=3)"]
@@ -32,6 +35,7 @@ services:
       QQ_API_HOST: 0.0.0.0
       QQ_API_PORT: 8787
       DOUYIN_PROVIDER_URL: http://douyin-provider:9001/resolve
+      BILIBILI_PROVIDER_URL: http://douyin-provider:9001
     volumes:
       - ./memes:/app/memes:ro
       - ./config:/app/config:ro

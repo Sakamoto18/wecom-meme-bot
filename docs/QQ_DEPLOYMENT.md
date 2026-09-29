@@ -493,7 +493,18 @@ Bridge 会主动处理支持平台的分享卡片和 HTTP/HTTPS 分享文本，�
 B 站多 P 分享按链接中的 `p=2`（普通视频页）或 `page=2`（播放器页）抓取对应分 P，短链也保留跳转后的分 P。未指定时默认 P1。多 P 卡片标题带 P 数和分 P 名称，时长与大小取所选视频；缓存区分各 P，同一个 P 仍可跨群复用。分 P 无效或无法确认时明确提示，不用 P1 顶替。
 
 B 站视频卡片会在简介下方尝试读取平台原生 AI 总结。该能力调用 B 站
-`/x/web-interface/view/conclusion/get`，需要配置已登录的 `QQ_BILIBILI_COOKIE`，并使用公开 WBI 参数签名；未配置登录态、视频不支持总结、接口返回未登录或请求超时，卡片显示“AI总结：该视频不支持 AI 总结”，不会阻断视频解析和发送。AI 总结请求有独立短超时，不会把 B 站视频变成先等总结再发视频的同步依赖。
+`/x/web-interface/view/conclusion/get`，并使用公开 WBI 参数签名。线上默认优先从复用抖音
+provider 的 Chromium 会话读取 B 站小号登录态，只保存 Playwright `storage_state`，不新增浏览器镜像；
+没有 provider 登录态时才回退到 `QQ_BILIBILI_COOKIE`。未配置登录态、视频不支持总结、接口返回未登录或请求超时，
+卡片显示“AI总结：该视频不支持 AI 总结”，不会阻断视频解析和发送。AI 总结请求有独立短超时，不会把 B 站视频
+变成先等总结再发视频的同步依赖。
+
+B 站 provider 登录：启动后通过服务器的 VNC 页面打开 `/bilibili-login.png` 对应的 B 站页面，使用专用小号扫码。
+登录成功后访问 `/bilibili-save-session` 保存会话；qq-bot 后续通过内网 `/bilibili-cookie` 读取当前 Cookie，
+不会把 Cookie 写进日志。会话文件位于宿主机 `data/bilibili-auth/state.json`，只包含登录态，浏览器缓存限制为 64 MiB。
+如果需要通过 SSH 查看登录页，可执行 `ssh -L 6080:127.0.0.1:6080 ubuntu@服务器`，然后打开
+`http://127.0.0.1:6080/vnc.html`。关闭本地浏览器不会影响服务器登录态；不要在 B 站网页点击“退出登录”，
+否则上游可能撤销该会话。会话失效后重新扫码并保存即可。
 
 解析开始时，NapCat 的 `set_msg_emoji_like` 给原分享挂一个原生表情回应。视频首次发送拿到有效 OneBot `message_id` 回执后才回应成功表情（`QQ_MEDIA_SUCCESS_EMOJI_ID`，默认 `478`）；复用视频时以 NapCat 原生转发的成功回执为准。失败用 `QQ_MEDIA_FAILURE_EMOJI_ID`（默认 `479`）。视频发送失败还会尝试发送引用提示；普通解析失败的部分分支只有失败表情。结果表情与解析开关同范围，适用于群聊和私聊，按有效配置排除的分享保持静默。
 
@@ -529,6 +540,7 @@ QQ_MEDIA_USAGE_DATABASE_FILE=data/qq-media-usage.sqlite
 # 可选：B 站 AI 视频总结登录态。只用于 B 站总结接口，不写入日志。
 QQ_BILIBILI_COOKIE=
 QQ_BILIBILI_AI_SUMMARY_TIMEOUT_SECONDS=1.5
+QQ_BILIBILI_SESSION_TIMEOUT_MS=800
 ```
 
 单视频上限为 500 MiB（提示写作 500MB）。解析到可靠的文件大小或通过探测取得大小后，先判断再完整下载；未知大小的下载路径按累计字节等方式兜底，不能由播放时长推算大小，也不能认为交给 NapCat 的直链都经过 Node 全程计数。图文不走视频大小拦截，视频自身播放时长不作为拒绝条件。

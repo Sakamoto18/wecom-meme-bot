@@ -136,10 +136,20 @@ export async function fetchBilibiliAiSummary({
   cid,
   upMid,
   cookie = '',
+  cookieProvider = null,
   fetchImpl = fetch,
   timeoutMs = 1_500,
 } = {}) {
-  const normalizedCookie = String(cookie || '').trim();
+  let normalizedCookie = String(cookie || '').trim();
+  if (typeof cookieProvider === 'function') {
+    try {
+      const providerCookie = await cookieProvider();
+      if (providerCookie) normalizedCookie = String(providerCookie).trim();
+    } catch {
+      // A provider login outage must keep the existing static-cookie fallback
+      // and must never block the video itself.
+    }
+  }
   if (!normalizedCookie) return result('unsupported', '', '未配置 B 站登录态');
   if (!cid || (!aid && !bvid) || !upMid) return result('unsupported', '', '缺少 B 站总结参数');
   const controller = new AbortController();

@@ -2,8 +2,10 @@ import asyncio
 import html
 import logging
 import os
+import tempfile
 import time
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI
@@ -17,11 +19,16 @@ context = None
 playwright = None
 profile_guard = None
 login_page = None
+bilibili_browser = None
+bilibili_context = None
+bilibili_login_page = None
 lock = asyncio.Lock()
 context_lock = asyncio.Lock()
+bilibili_context_lock = asyncio.Lock()
 QUEUE_TIMEOUT = 22
 RESOLVE_TIMEOUT = 20
 NAVIGATION_TIMEOUT_MS = 10000
+BILIBILI_NAV_URL = 'https://api.bilibili.com/x/web-interface/nav'
 
 
 def is_real_video_url(url):
@@ -59,6 +66,113 @@ def context_closed(*_):
     login_page = None
 
 
+def bilibili_state_path():
+    return Path(os.getenv('BILIBILI_AUTH_STATE', '/data/bilibili-auth/state.json')).resolve()
+
+
+async def get_bilibili_context():
+    """Open a temporary Chromium context backed by a small storage-state file.
+
+    The Douyin provider already owns the Chromium binary. Bilibili does not get
+    another image or a full user-data directory: only cookies/local storage are
+    persisted in ``BILIBILI_AUTH_STATE``.
+    """
+    global bilibili_browser, bilibili_context, playwright
+    async with bilibili_context_lock:
+        if bilibili_context is not None:
+            return bilibili_context
+        if playwright is None:
+            playwright = await async_playwright().start()
+        if bilibili_browser is None:
+            bilibili_browser = await playwright.chromium.launch(
+                headless=False,
+                executable_path='/usr/bin/chromium',
+                timeout=10000,
+                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                      '--disk-cache-size=67108864'],
+            )
+        state = bilibili_state_path()
+        kwargs = {'viewport': {'width': 1440, 'height': 1000}}
+        if state.is_file() and state.stat().st_size > 0:
+            kwargs['storage_state'] = str(state)
+        try:
+            bilibili_context = await bilibili_browser.new_context(**kwargs)
+        except Exception as error:
+            # A truncated state file must not stop the whole Douyin provider.
+            logger.warning('Bilibili storage state invalid; starting a clean context: %s', error)
+            kwargs.pop('storage_state', None)
+            bilibili_context = await bilibili_browser.new_context(**kwargs)
+        bilibili_context.set_default_timeout(5000)
+        bilibili_context.on('close', bilibili_context_closed)
+        return bilibili_context
+
+
+def bilibili_context_closed(*_):
+    global bilibili_context, bilibili_login_page
+    bilibili_context = None
+    bilibili_login_page = None
+
+
+async def bilibili_login_state():
+    ctx = await get_bilibili_context()
+    try:
+        response = await ctx.request.get(
+            BILIBILI_NAV_URL,
+            headers={
+                'referer': 'https://www.bilibili.com/',
+                'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+            },
+            timeout=5000,
+        )
+        if not response.ok:
+            return {'logged_in': False, 'code': response.status, 'message': 'nav_http_error'}
+        payload = await response.json()
+        data = payload.get('data') if isinstance(payload, dict) else {}
+        return {
+            'logged_in': payload.get('code') == 0 and bool(data.get('isLogin')),
+            'code': payload.get('code'),
+            'message': payload.get('message', ''),
+        }
+    except Exception as error:
+        return {'logged_in': False, 'code': None, 'message': type(error).__name__}
+
+
+async def save_bilibili_state():
+    state = bilibili_state_path()
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.parent.chmod(0o700)
+    ctx = await get_bilibili_context()
+    fd, temporary = tempfile.mkstemp(prefix='.state-', suffix='.json', dir=state.parent)
+    os.close(fd)
+    try:
+        await ctx.storage_state(path=temporary)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, state)
+        os.chmod(state, 0o600)
+    finally:
+        with suppress(FileNotFoundError):
+            os.unlink(temporary)
+    return state
+
+
+async def bilibili_cookie_header():
+    if not bilibili_state_path().is_file():
+        return {'logged_in': False, 'code': None, 'message': 'state_file_missing', 'cookie': ''}
+    status = await bilibili_login_state()
+    if not status['logged_in']:
+        return status | {'cookie': ''}
+    ctx = await get_bilibili_context()
+    cookies = await ctx.cookies(['https://www.bilibili.com', 'https://api.bilibili.com'])
+    header = '; '.join(
+        f"{item['name']}={item['value']}"
+        for item in cookies
+        if item.get('name') and item.get('value')
+    )
+    if header:
+        await save_bilibili_state()
+    return status | {'cookie': header}
+
+
 @asynccontextmanager
 async def lifespan(app):
     global profile_guard
@@ -69,6 +183,12 @@ async def lifespan(app):
         logger.info('Douyin browser ready; persistent login profile preserved')
         yield
     finally:
+        if bilibili_context is not None:
+            with suppress(Exception):
+                await asyncio.wait_for(bilibili_context.close(), 5)
+        if bilibili_browser is not None:
+            with suppress(Exception):
+                await asyncio.wait_for(bilibili_browser.close(), 5)
         if context is not None:
             with suppress(Exception):
                 await asyncio.wait_for(context.close(), 5)
@@ -107,6 +227,41 @@ async def login_status():
         return {'logged_in': False, 'browser_ready': context is not None}
     text = (await login_page.locator('body').inner_text())[:5000]
     return {'logged_in': bool('登录' not in text or '我的' in text or '退出登录' in text)}
+
+
+@app.get('/bilibili-login.png')
+async def bilibili_login_png():
+    global bilibili_login_page
+    ctx = await get_bilibili_context()
+    if bilibili_login_page is None or bilibili_login_page.is_closed():
+        bilibili_login_page = await ctx.new_page()
+        await bilibili_login_page.goto('https://www.bilibili.com/', wait_until='domcontentloaded', timeout=20000)
+    return Response(await bilibili_login_page.screenshot(type='png', full_page=False), media_type='image/png')
+
+
+@app.get('/bilibili-login-status')
+async def bilibili_login_status():
+    status = await bilibili_login_state()
+    status['state_file'] = bilibili_state_path().is_file()
+    return status
+
+
+@app.post('/bilibili-save-session')
+async def bilibili_save_session():
+    status = await bilibili_login_state()
+    if not status['logged_in']:
+        return JSONResponse(status | {'saved': False}, status_code=409)
+    state = await save_bilibili_state()
+    return {'logged_in': True, 'saved': True, 'state_file': str(state)}
+
+
+@app.get('/bilibili-cookie')
+async def bilibili_cookie():
+    # Internal Docker-network endpoint. Never log or expose the cookie in any
+    # status response; qq-bot consumes it only for the upstream API call.
+    status = await bilibili_cookie_header()
+    return JSONResponse(status if status.get('cookie') else {k: v for k, v in status.items() if k != 'cookie'},
+                        status_code=200 if status.get('logged_in') and status.get('cookie') else 401)
 
 
 EXTRACT_SCRIPT = r'''() => {

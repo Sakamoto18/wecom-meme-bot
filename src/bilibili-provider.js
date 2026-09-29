@@ -138,7 +138,7 @@ async function getJson(url, fetchImpl, timeoutMs) {
 
 export async function resolveBilibiliMedia(value, {
   fetchImpl = fetch, timeoutMs = 15_000, shortLinkIdResolver,
-  bilibiliCookie = '', aiSummaryTimeoutMs = 1_500,
+  bilibiliCookie = '', bilibiliCookieProvider = null, aiSummaryTimeoutMs = 1_500,
 } = {}) {
   let id = extractBilibiliVideoId(value);
   let requestedPage = extractBilibiliPage(value);
@@ -206,6 +206,7 @@ export async function resolveBilibiliMedia(value, {
       cid,
       upMid: cardMetadata.upMid,
       cookie: bilibiliCookie,
+      cookieProvider: bilibiliCookieProvider,
       fetchImpl,
       timeoutMs: Math.min(Number(aiSummaryTimeoutMs) || 1_500, timeoutMs),
     });
