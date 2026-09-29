@@ -111,12 +111,18 @@ class CardTests(unittest.TestCase):
         self.assertEqual(
             card_footer({"provider": "bilibili", "description": description,
                          "aiSummary": "AI 提炼的视频内容", "aiSummaryStatus": "available"}),
-            "视频简介\nAI总结：AI 提炼的视频内容",
+            "视频简介\n\nAI总结：AI 提炼的视频内容",
         )
         self.assertEqual(
             card_footer({"provider": "bilibili", "description": description,
                          "aiSummaryStatus": "unsupported"}),
-            "视频简介\nAI总结：该视频不支持 AI 总结",
+            "视频简介\n\nAI总结：该视频不支持 AI 总结",
+        )
+
+    def test_bilibili_ai_summary_has_no_leading_blank_line_without_description(self):
+        self.assertEqual(
+            card_footer({"provider": "bilibili", "aiSummary": "只有总结", "aiSummaryStatus": "available"}),
+            "AI总结：只有总结",
         )
 
     def test_no_fabricated_tags_or_platform_label(self):
