@@ -331,6 +331,8 @@ export class MediaResolver {
     this.command = options.command || 'yt-dlp';
     this.cookiesFile = String(options.cookiesFile || '').trim();
     this.cookie = String(options.cookie || '').trim();
+    this.bilibiliCookie = String(options.bilibiliCookie || '').trim();
+    this.aiSummaryTimeoutMs = Math.max(300, Number(options.aiSummaryTimeoutMs ?? 1_500) || 1_500);
     this.timeoutMs = options.timeoutMs ?? 120_000;
     // A configured provider/download timeout must never hold a media slot for
     // longer than the user-facing eight-minute extraction deadline.
@@ -477,6 +479,9 @@ export class MediaResolver {
       images: value.images || [],
       publishedAt: positive(value.publishedAt),
       description: value.description || '',
+      aiSummary: value.aiSummary || '',
+      aiSummarySupported: value.aiSummarySupported === true,
+      aiSummaryStatus: value.aiSummaryStatus || '',
       duration: positive(value.duration),
       ...(value.page ? { page: value.page, cid: value.cid } : {}),
       extractor: value.extractor || 'remote-stream-proxy',
@@ -658,6 +663,8 @@ export class MediaResolver {
           try {
             const bilibili = await resolveBilibiliMedia(sourceKey, {
               timeoutMs: Math.min(remainingTimeout(), 15_000),
+              bilibiliCookie: this.bilibiliCookie,
+              aiSummaryTimeoutMs: Math.min(this.aiSummaryTimeoutMs, remainingTimeout()),
               shortLinkIdResolver: (url) => probeBilibiliShortLink(url, {
                 command: this.command, timeoutMs: Math.min(remainingTimeout(), 15_000),
               }),

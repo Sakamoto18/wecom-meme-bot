@@ -196,6 +196,13 @@ def wrap_text(text, font, width):
 def card_footer(message):
     description = str(message.get("description") or "").strip()
     if message.get("provider") == "bilibili":
+        ai_summary = str(message.get("aiSummary") or "").strip()
+        if ai_summary:
+            return "\n".join(part for part in (description, "AI总结：" + ai_summary) if part)
+        # B 站 AI 总结依赖视频自身的能力和登录态。卡片明确标记不可用，
+        # 避免用户误以为机器人漏抓了简介；这不会影响视频发送。
+        if message.get("aiSummaryStatus"):
+            return "\n".join(part for part in (description, "AI总结：该视频不支持 AI 总结") if part)
         return description
     tags = message.get("tags")
     if not isinstance(tags, list):

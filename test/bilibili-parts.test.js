@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   extractBilibiliPage, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
 } from '../src/bilibili-provider.js';
+import { buildBilibiliWbiParams, parseBilibiliAiSummary } from '../src/bilibili-ai-summary.js';
 import { MediaResolver, normalizeDownloadSource } from '../src/media-resolver.js';
 import { mediaCandidates } from '../src/media-link-extractor.js';
 import { QqBotService } from '../src/qq-service.js';
@@ -92,6 +93,45 @@ test('P2 选择自己的 cid、大小、标题和时长，保留原作者/简介
   assert.equal(result.coverUrl, metadata.pic);
   assert.equal(result.page, 2);
   assert.equal(result.cid, '436920316');
+});
+
+test('B站 AI 总结使用 WBI 登录态并透传到解析结果', async () => {
+  const calls = [];
+  const data = { ...metadata, owner: { ...metadata.owner, mid: 4282930 } };
+  const fakeWbi = {
+    img_url: 'https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png',
+    sub_url: 'https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png',
+  };
+  const fetchImpl = async (input, options = {}) => {
+    const url = new URL(input);
+    calls.push({ url, options });
+    if (url.pathname === '/x/web-interface/view') return Response.json({ code: 0, data });
+    if (url.pathname === '/x/player/playurl') {
+      return Response.json({ code: 0, data: {
+        quality: 64, durl: [{ url: 'https://cdn.example/ai.mp4', size: 1234 }],
+      } });
+    }
+    if (url.pathname === '/x/web-interface/nav') return Response.json({ code: 0, data: { wbi_img: fakeWbi } });
+    if (url.pathname === '/x/web-interface/view/conclusion/get') {
+      assert.ok(url.searchParams.get('w_rid'));
+      assert.equal(options.headers.Cookie, 'SESSDATA=test');
+      return Response.json({ code: 0, data: {
+        model_result: JSON.stringify({ summary: '视频主要展示了舞蹈动作和拍摄过程。' }),
+      } });
+    }
+    throw new Error(`Unexpected request: ${url.href}`);
+  };
+  const result = await resolveBilibiliMedia(VIDEO, {
+    fetchImpl, bilibiliCookie: 'SESSDATA=test', aiSummaryTimeoutMs: 500,
+  });
+  assert.equal(result.aiSummary, '视频主要展示了舞蹈动作和拍摄过程。');
+  assert.equal(result.aiSummarySupported, true);
+  assert.equal(result.aiSummaryStatus, 'available');
+  assert.equal(parseBilibiliAiSummary({ data: { model_result: JSON.stringify({ summary: '测试总结内容足够长。' }) } }), '测试总结内容足够长。');
+  const signed = buildBilibiliWbiParams({ aid: 1, bvid: 'BV1test', cid: 2, up_mid: 3 }, fakeWbi.img_url, fakeWbi.sub_url, 123);
+  assert.equal(signed.wts, '123');
+  assert.match(signed.w_rid, /^[a-f0-9]{32}$/u);
+  assert.equal(calls.filter(({ url }) => url.pathname === '/x/web-interface/view/conclusion/get').length, 1);
 });
 
 test('没有分 P 参数默认 P1，时长用 P1 而不是整个稿件总长', async () => {

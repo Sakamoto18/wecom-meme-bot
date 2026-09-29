@@ -52,6 +52,13 @@ const MAX_IMAGE_BASE64_CHARACTERS = 44 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BASE64_CHARACTERS = 42 * 1024 * 1024;
 // 原始图片与切片分开计算，合并转发最多接收 24 张原图。
 const MAX_SOURCE_IMAGE_COUNT = 24;
+// Ordinary quote replies almost always contain one reaction/meme image. Keep
+// the default multimodal request small; detailed image/record requests can
+// opt into a bounded larger set below.
+const MAX_QUOTED_IMAGE_COMPONENTS = 1;
+const MAX_EXPLICIT_QUOTED_IMAGE_COMPONENTS = 3;
+const QUOTED_IMAGE_DETAIL_PATTERN = /(?:识别|读图|看图|图里|图片里|解释(?:一下)?(?:这|该)?(?:张|组)?图|总结(?:一下)?(?:这|该)?(?:组|些)?图|逐张|出处|原图|原帖|核实|真假|什么梗|梗义)/u;
+const QUOTED_FORWARD_DETAIL_PATTERN = /(?:总结|梳理|概括|汇总|逐张|完整读取|聊天记录)/u;
 // 切片后真正送进视觉模型的图块总数。analyzeImages 逐块单独请求，所以这个
 // 数字等于一条消息最多触发多少次视觉调用，直接决定成本。
 const MAX_MODEL_IMAGE_COUNT = 32;
@@ -73,6 +80,8 @@ export const MODEL_EFFECTIVE_PIXELS = 1_300 * 1_300;
 // 读；再大就必须切，否则正文字号会掉到十几像素。
 export const PRECISION_TILE_MIN_SCALE = 0.7;
 const IMAGE_ANALYSIS_MAX_CHARACTERS = 4_000;
+const IMAGE_ANALYSIS_CACHE_TTL_MS = 30 * 60 * 1000;
+const IMAGE_ANALYSIS_CACHE_MAX_ENTRIES = 256;
 const IMAGE_ONLY_MESSAGE_TEXT = '（用户发送了图片，请结合画面线索和可核实的背景，解释它表达的意思。）';
 const DEFAULT_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_PEER_BOT_MAX_CONSECUTIVE_REPLIES = 2;
@@ -898,11 +907,27 @@ export function normalizeQqPayload(payload) {
   const quotedForwardImageBase64s = normalizeImageList(
     payload.quoted_forward_image_base64s,
   );
+  const imageRequestText = [
+    payload.text,
+    payload.quoted_text,
+    payload.forwarded_text,
+    payload.quoted_forwarded_text,
+  ].filter(Boolean).join('\n');
+  const quotedImageLimit = QUOTED_IMAGE_DETAIL_PATTERN.test(imageRequestText)
+    ? MAX_EXPLICIT_QUOTED_IMAGE_COMPONENTS
+    : MAX_QUOTED_IMAGE_COMPONENTS;
+  const quotedForwardImageLimit = QUOTED_FORWARD_DETAIL_PATTERN.test(imageRequestText)
+    ? MAX_SOURCE_IMAGE_COUNT
+    : MAX_QUOTED_IMAGE_COMPONENTS;
+  const quotedImagesTrimmed = quotedImageBase64s.length > quotedImageLimit;
+  const quotedForwardImagesTrimmed = quotedForwardImageBase64s.length > quotedForwardImageLimit;
+  const boundedQuotedImageBase64s = quotedImageBase64s.slice(0, quotedImageLimit);
+  const boundedQuotedForwardImageBase64s = quotedForwardImageBase64s.slice(0, quotedForwardImageLimit);
   const limitedImages = limitTotalImageBase64(
     imageBase64s,
-    quotedImageBase64s,
+    boundedQuotedImageBase64s,
     forwardImageBase64s,
-    quotedForwardImageBase64s,
+    boundedQuotedForwardImageBase64s,
   );
   const normalized = {
     messageId: normalizeIdentifier(payload.message_id, 'message_id', false),
@@ -938,11 +963,16 @@ export function normalizeQqPayload(payload) {
       : [],
     forwardImageBase64s: limitedImages.forwardImages,
     quotedForwardImageBase64s: limitedImages.quotedForwardImages,
-    imageInputNotice: (
+    imageInputNotice: [
+      (
       (Array.isArray(payload.forward_image_base64s) ? payload.forward_image_base64s.length : 0)
       + (Array.isArray(payload.quoted_forward_image_base64s) ? payload.quoted_forward_image_base64s.length : 0)
       > limitedImages.forwardImages.length + limitedImages.quotedForwardImages.length
-    ) ? '合并转发中部分图片因数量、总大小或数据格式限制未进入本轮识别，不能将本轮结果视为全部图片的完整总结。' : '',
+      ) ? '合并转发中部分图片因数量、总大小或数据格式限制未进入本轮识别，不能将本轮结果视为全部图片的完整总结。' : '',
+      (quotedImagesTrimmed || quotedForwardImagesTrimmed)
+        ? '引用图片已按本轮任务收紧：默认最多读取 1 张；明确逐张/总结时仍有上限，未读取部分不能视为完整图片内容。'
+        : '',
+    ].filter(Boolean).join('；'),
     videoUrls: Array.isArray(payload.video_urls)
       ? payload.video_urls.map((url) => normalizeString(url, 4096))
         .filter((url) => /^https?:\/\//u.test(url)).slice(0, 2)
@@ -1423,6 +1453,9 @@ export class QqBotService {
     this.passiveImageCooldownMs = Math.max(0, Number(options.passiveImageCooldownMs ?? 60_000));
     this.passiveImageScans = new Map();
     this.imageOcrCache = new WeakMap();
+    // 同一张被反复引用的图片不重复触发 OCR/视觉模型；缓存只保留内部
+    // 识别结果，不把图片字节写入磁盘或对外暴露。
+    this.imageAnalysisCache = new Map();
     this.groupMemberCounts = new Map();
     this.largeGroupDecisionLogged = new Set();
     // Passive “read the air” checks are intentionally throttled for every
@@ -2005,6 +2038,39 @@ export class QqBotService {
     };
   }
 
+  imageAnalysisCacheKey(block, recordContext = '') {
+    // 转发总结按图片在记录中的位置解释；同一张图片可能在不同节点代表
+    // 不同上下文，因此不跨 forward summary 复用视觉结果。
+    if (recordContext) return '';
+    const imageUrl = String(block?.image_url?.url || '').trim();
+    const match = imageUrl.match(/^data:[^;,]+;base64,([\s\S]+)$/iu);
+    if (!match) return '';
+    return `single:${createHash('sha256').update(match[1]).digest('hex')}`;
+  }
+
+  cachedImageAnalysis(block, recordContext = '') {
+    const key = this.imageAnalysisCacheKey(block, recordContext);
+    if (!key) return null;
+    const cached = this.imageAnalysisCache.get(key);
+    if (!cached) return null;
+    if (cached.createdAt + IMAGE_ANALYSIS_CACHE_TTL_MS <= Date.now()) {
+      this.imageAnalysisCache.delete(key);
+      return null;
+    }
+    return { ...cached.item };
+  }
+
+  rememberImageAnalysis(block, recordContext, item) {
+    const key = this.imageAnalysisCacheKey(block, recordContext);
+    if (!key || !item || item.failed) return;
+    this.imageAnalysisCache.set(key, { createdAt: Date.now(), item: { ...item } });
+    while (this.imageAnalysisCache.size > IMAGE_ANALYSIS_CACHE_MAX_ENTRIES) {
+      const oldest = this.imageAnalysisCache.keys().next().value;
+      if (!oldest) break;
+      this.imageAnalysisCache.delete(oldest);
+    }
+  }
+
   async analyzeImages(imageBlocks, question = '', recordContext = '') {
     if (!Array.isArray(imageBlocks) || imageBlocks.length === 0) return null;
     if (!this.chatClient?.isConfigured) return null;
@@ -2026,6 +2092,12 @@ export class QqBotService {
     const analyses = [];
     const analyzeEntry = async (entry, entryIndex) => {
       const index = entryIndex + 1;
+      const cached = this.cachedImageAnalysis(entry.block, recordContext);
+      if (cached) {
+        analyses.push({ ...cached, index, sourceLabel: entry.label, fromCache: true });
+        this.logger.debug?.(`QQ 第 ${index} 张图片理解缓存命中`);
+        return;
+      }
       const ocrLines = await this.ocrImageBlock(entry.block);
       const recordIndex = entry.label.match(/合并转发图片 (\d+)/u)?.[1];
       const contextPosition = recordIndex ? recordContext.indexOf(`[图片#${recordIndex}]`) : -1;
@@ -2087,7 +2159,7 @@ export class QqBotService {
           : parsed;
         if (!item) throw new Error('图片识别返回空内容');
         if (item) {
-          analyses.push({
+          const analysisItem = {
             index,
             sourceLabel: entry.label,
             description: String(item.description ?? '').trim(),
@@ -2096,7 +2168,9 @@ export class QqBotService {
             scene: String(item.scene ?? '').trim(),
             searchQueries: item.searchQueries,
             sourceCandidates: item.sourceCandidates,
-          });
+          };
+          analyses.push(analysisItem);
+          this.rememberImageAnalysis(entry.block, recordContext, analysisItem);
         }
       } catch (error) {
         // 单张失败不应让同一条转发中的其他图片全部丢失。
@@ -3390,6 +3464,9 @@ export class QqBotService {
             avatarUrl: resolved.avatarUrl || '',
             publishedAt: resolved.publishedAt || 0,
             description: resolved.description || '',
+            aiSummary: resolved.aiSummary || '',
+            aiSummarySupported: resolved.aiSummarySupported === true,
+            aiSummaryStatus: resolved.aiSummaryStatus || '',
             tags: resolved.tags || [],
             duration: resolved.duration,
             provider: candidate.provider,

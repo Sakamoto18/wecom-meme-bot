@@ -1,5 +1,6 @@
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { isBilibiliRemovedCode, looksRemoved, removedError } from './media-removed.js';
+import { fetchBilibiliAiSummary } from './bilibili-ai-summary.js';
 
 const HEADERS = {
   'user-agent': 'Mozilla/5.0 (compatible; LongtuQQBot/1.0)',
@@ -137,6 +138,7 @@ async function getJson(url, fetchImpl, timeoutMs) {
 
 export async function resolveBilibiliMedia(value, {
   fetchImpl = fetch, timeoutMs = 15_000, shortLinkIdResolver,
+  bilibiliCookie = '', aiSummaryTimeoutMs = 1_500,
 } = {}) {
   let id = extractBilibiliVideoId(value);
   let requestedPage = extractBilibiliPage(value);
@@ -184,6 +186,9 @@ export async function resolveBilibiliMedia(value, {
       coverUrl: normalizeMediaUrl(selected?.first_frame || metadata.pic || metadata.cover || ''),
       author: String(metadata.owner?.name || ''),
       avatarUrl: normalizeMediaUrl(metadata.owner?.face || ''),
+      aid: Number(metadata.aid || id.aid || 0) || 0,
+      bvid: String(metadata.bvid || id.bvid || ''),
+      upMid: Number(metadata.owner?.mid || 0) || 0,
       publishedAt: Number(metadata.pubdate || 0),
       duration: Number(selected?.duration ?? (page === 1 && !pages.length ? metadata.duration : 0)) || 0,
       page, cid: String(cid), sourceUrl,
@@ -193,9 +198,21 @@ export async function resolveBilibiliMedia(value, {
     query.set('qn', '64');
     query.set('fnval', '1');
     query.set('fourk', '1');
-    const play = await getJson(
-      `https://api.bilibili.com/x/player/playurl?${query}`, fetchImpl, timeoutMs,
-    );
+    // AI 总结属于可选卡片元数据。与播放接口并行请求，且有独立短超时，
+    // 避免因为 B 站登录态/风控让视频发送变慢或失败。
+    const aiSummaryPromise = fetchBilibiliAiSummary({
+      aid: cardMetadata.aid,
+      bvid: cardMetadata.bvid,
+      cid,
+      upMid: cardMetadata.upMid,
+      cookie: bilibiliCookie,
+      fetchImpl,
+      timeoutMs: Math.min(Number(aiSummaryTimeoutMs) || 1_500, timeoutMs),
+    });
+    const [play, aiSummary] = await Promise.all([
+      getJson(`https://api.bilibili.com/x/player/playurl?${query}`, fetchImpl, timeoutMs),
+      aiSummaryPromise,
+    ]);
     const stream = [...(play.durl || [])]
       .filter((item) => normalizeMediaUrl(item?.url))
       .sort((left, right) => Number(right.size || 0) - Number(left.size || 0))[0];
@@ -211,6 +228,9 @@ export async function resolveBilibiliMedia(value, {
     mediaUrls.sort((left, right) => priority(left) - priority(right));
     return {
       ...cardMetadata,
+      aiSummary: aiSummary.text || '',
+      aiSummarySupported: aiSummary.status === 'available',
+      aiSummaryStatus: aiSummary.status,
       mediaUrl: mediaUrls[0],
       backupMediaUrls: mediaUrls.slice(1),
       size: Number(stream.size || 0),

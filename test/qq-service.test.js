@@ -1134,6 +1134,39 @@ test('引用 Bot 发送的普通分享卡会保留图片；明确的龙图 sub_t
   assert.equal(sticker.hasImage, false);
 });
 
+test('普通引用图片默认只读取一张，明确逐张识别时放宽到三张', async () => {
+  const png = (await createPng()).toString('base64');
+  const ordinary = normalizeQqPayload({
+    message_type: 'private', user_id: 'quote-limit-user',
+    text: '评价一下', quoted_image_base64s: [png, png, png, png],
+  });
+  assert.equal(ordinary.quotedImageBase64s.length, 1);
+  assert.match(ordinary.imageInputNotice, /最多读取 1 张/u);
+
+  const explicit = normalizeQqPayload({
+    message_type: 'private', user_id: 'quote-detail-user',
+    text: '逐张识别这组图', quoted_image_base64s: [png, png, png, png],
+  });
+  assert.equal(explicit.quotedImageBase64s.length, 3);
+  assert.match(explicit.imageInputNotice, /未读取部分/u);
+});
+
+test('同一张引用图片在同一服务实例内复用视觉摘要，不重复调用模型', async () => {
+  const png = (await createPng()).toString('base64');
+  let imageCalls = 0;
+  const { service } = createService({ chatClient: {
+    isConfigured: true,
+    async complete(_history, input, options) {
+      if (options.usageSource === 'image-understanding') imageCalls += 1;
+      return '{"description":"一张包含明确正文的截图","visible_text":["正文内容"],"keywords":["正文"],"scene":"截图","search_queries":[],"source_candidates":[]}';
+    },
+  } });
+  const blocks = (await prepareImageBlocks({ imageBase64s: [png] })).blocks;
+  await service.analyzeImages(blocks, '解释这张图');
+  await service.analyzeImages(blocks, '解释这张图');
+  assert.equal(imageCalls, 1);
+});
+
 test('合并转发图片会和普通图片一起进入视觉链路', async () => {
   const png = (await createPng()).toString('base64');
   const payload = normalizeQqPayload({
