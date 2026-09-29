@@ -106,6 +106,19 @@ class CardTests(unittest.TestCase):
         self.assertEqual(card_footer({"provider": "bilibili", "description": description}), description)
         self.assertEqual(card_footer({"provider": "bilibili", "description": ""}), "")
 
+    def test_bilibili_ai_summary_is_below_description_and_unavailable_is_explicit(self):
+        description = "视频简介"
+        self.assertEqual(
+            card_footer({"provider": "bilibili", "description": description,
+                         "aiSummary": "AI 提炼的视频内容", "aiSummaryStatus": "available"}),
+            "视频简介\nAI总结：AI 提炼的视频内容",
+        )
+        self.assertEqual(
+            card_footer({"provider": "bilibili", "description": description,
+                         "aiSummaryStatus": "unsupported"}),
+            "视频简介\nAI总结：该视频不支持 AI 总结",
+        )
+
     def test_no_fabricated_tags_or_platform_label(self):
         self.assertEqual(card_footer({"provider": "xiaohongshu", "description": "没有话题的正文"}), "没有话题的正文")
         self.assertEqual(card_footer({"provider": "xiaohongshu", "description": "正文 #模型[话题]# #高达[话题]#"}), "正文 #模型# #高达#")

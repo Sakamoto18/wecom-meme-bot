@@ -662,6 +662,10 @@ export async function createQqRuntime() {
     command: process.env.QQ_MEDIA_YTDLP_COMMAND?.trim() || 'yt-dlp',
     cookiesFile: process.env.QQ_MEDIA_YTDLP_COOKIES_FILE?.trim() || '',
     cookie: process.env.QQ_MEDIA_YTDLP_COOKIE?.trim() || '',
+    bilibiliCookie: process.env.QQ_BILIBILI_COOKIE?.trim() || '',
+    aiSummaryTimeoutMs: (parsePositiveNumber(
+      process.env.QQ_BILIBILI_AI_SUMMARY_TIMEOUT_SECONDS,
+    ) ?? 1.5) * 1000,
     timeoutMs: (parsePositiveNumber(
       process.env.QQ_MEDIA_DOWNLOAD_TIMEOUT_SECONDS
         ?? process.env.QQ_MEDIA_RESOLVE_TIMEOUT_SECONDS,
