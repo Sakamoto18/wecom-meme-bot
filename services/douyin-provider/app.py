@@ -453,10 +453,23 @@ async def read_page(page, url, video_requests, state, video_sizes=None):
         if int(gallery_hint.get('total') or 0) > 0:
             images, total = await collect_gallery(page, state, gallery_hint)
             if images:
+                animated_videos = []
+                for item in data.get('videos') or []:
+                    if not isinstance(item, dict):
+                        continue
+                    video_url = html.unescape(str(item.get('video') or item.get('url') or ''))
+                    if not is_real_video_url(video_url):
+                        continue
+                    animated_videos.append({
+                        'video_url': video_url,
+                        'cover': str(item.get('cover') or ''),
+                        'size': video_sizes.get(video_url, 0),
+                    })
                 logger.info('Douyin note gallery takes precedence over animated video resources images=%d counter_total=%d',
                             len(images), total)
                 return {'status': 'success', 'data': {
                     'media_type': 'images', 'video_url': '', 'images': images,
+                    'animated_videos': animated_videos[:len(images)],
                     'cover': images[0], **common,
                 }}
     video_items = []

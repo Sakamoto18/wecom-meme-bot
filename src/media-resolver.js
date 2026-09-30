@@ -20,6 +20,18 @@ import {
   normalizeBilibiliSource, isBilibiliPartError,
 } from './bilibili-provider.js';
 
+// Douyin note pages can expose short MP4 motion assets alongside the static
+// gallery images. QQ treats a URL sent as an image as an animated image only
+// when it is a GIF, so keep the note as a gallery and transcode those optional
+// assets to small GIFs. These limits are deliberately much lower than the
+// 500 MiB playable-video limit: a motion preview is a convenience, not a
+// second full video download.
+const MAX_ANIMATED_SOURCE_BYTES = 64 * 1024 * 1024;
+const MAX_ANIMATED_GIF_BYTES = 20 * 1024 * 1024;
+const MAX_ANIMATED_SECONDS = 4;
+const MAX_ANIMATED_FPS = 8;
+const MAX_ANIMATED_WIDTH = 480;
+
 function positive(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : 0;
@@ -56,7 +68,7 @@ export function normalizeDownloadSource(value) {
   return normalizeBilibiliSource(normalized);
 }
 
-function runCommand(command, args, { timeoutMs = 120_000, cwd } = {}) {
+function runCommand(command, args, { timeoutMs = 120_000, cwd, label = '命令' } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
@@ -77,7 +89,7 @@ function runCommand(command, args, { timeoutMs = 120_000, cwd } = {}) {
     child.on('close', (code) => {
       clearTimeout(timer);
       if (code !== 0) {
-        const error = new Error(`yt-dlp 下载失败（${String(stderr).trim().slice(-500)}）`);
+        const error = new Error(`${label}执行失败（${String(stderr).trim().slice(-500)}）`);
         error.stdout = stdout;
         error.stderr = stderr;
         reject(error);
@@ -88,13 +100,15 @@ function runCommand(command, args, { timeoutMs = 120_000, cwd } = {}) {
   });
 }
 
-function limitedFileTransform() {
+function limitedFileTransform(maxBytes = MAX_MEDIA_BYTES) {
   let bytes = 0;
   return new Transform({
     transform(chunk, encoding, callback) {
       bytes += chunk.length;
-      if (bytes > MAX_MEDIA_BYTES) {
-        callback(mediaTooLargeError(bytes));
+      if (bytes > maxBytes) {
+        callback(maxBytes === MAX_MEDIA_BYTES
+          ? mediaTooLargeError(bytes)
+          : new Error(`动效源超过 ${Math.round(maxBytes / 1024 / 1024)} MiB`));
         return;
       }
       callback(null, chunk, encoding);
@@ -290,7 +304,12 @@ async function extractHtmlVideo(url, timeoutMs, outputDirectory) {
   }
 }
 
-async function downloadDirectMedia(value, timeoutMs, outputDirectory) {
+async function downloadDirectMedia(
+  value,
+  timeoutMs,
+  outputDirectory,
+  maxBytes = MAX_MEDIA_BYTES,
+) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(mediaExtractionTimeoutError()), timeoutMs);
   const signal = value.signal
@@ -304,13 +323,19 @@ async function downloadDirectMedia(value, timeoutMs, outputDirectory) {
     });
     if (!response.ok || !response.body) throw new Error(`视频流返回 HTTP ${response.status}`);
     const declaredSize = Number(response.headers.get('content-length') || 0);
-    if (declaredSize > MAX_MEDIA_BYTES) throw mediaTooLargeError(declaredSize);
+    if (declaredSize > maxBytes) {
+      if (maxBytes === MAX_MEDIA_BYTES) throw mediaTooLargeError(declaredSize);
+      throw new Error(`动效源超过 ${Math.round(maxBytes / 1024 / 1024)} MiB`);
+    }
     await mkdir(outputDirectory, { recursive: true });
     filePath = path.join(outputDirectory, `${Date.now()}-${randomBytes(8).toString('hex')}.mp4`);
-    await pipeline(response.body, limitedFileTransform(), createWriteStream(filePath));
+    await pipeline(response.body, limitedFileTransform(maxBytes), createWriteStream(filePath));
     const info = await stat(filePath);
-    if (!info.isFile() || info.size <= 0 || info.size > MAX_MEDIA_BYTES) {
-      if (info?.size > MAX_MEDIA_BYTES) throw mediaTooLargeError(info.size);
+    if (!info?.isFile() || info.size <= 0 || info.size > maxBytes) {
+      if (info?.size > maxBytes) {
+        if (maxBytes === MAX_MEDIA_BYTES) throw mediaTooLargeError(info.size);
+        throw new Error(`动效源超过 ${Math.round(maxBytes / 1024 / 1024)} MiB`);
+      }
       throw new Error('下载的视频文件为空');
     }
     return {
@@ -325,10 +350,64 @@ async function downloadDirectMedia(value, timeoutMs, outputDirectory) {
   }
 }
 
+async function convertAnimatedMediaToGif(value, {
+  timeoutMs,
+  outputDirectory,
+  ffmpegCommand = 'ffmpeg',
+} = {}) {
+  const mediaUrl = normalizeMediaUrl(value?.mediaUrl || value?.url || '');
+  if (!mediaUrl) return null;
+  const declaredSize = positive(value?.size);
+  if (declaredSize > MAX_ANIMATED_SOURCE_BYTES) {
+    throw new Error(`动效源超过 ${Math.round(MAX_ANIMATED_SOURCE_BYTES / 1024 / 1024)} MiB`);
+  }
+  const startedAt = Date.now();
+  const budget = Math.max(1_000, Number(timeoutMs) || 1_000);
+  const remainingTimeout = () => Math.max(1_000, budget - (Date.now() - startedAt));
+  const downloaded = await downloadDirectMedia({
+    mediaUrl,
+    requestHeaders: value?.requestHeaders || {},
+  }, remainingTimeout(), outputDirectory, MAX_ANIMATED_SOURCE_BYTES);
+  const gifPath = path.join(
+    outputDirectory,
+    `${Date.now()}-${randomBytes(8).toString('hex')}.gif`,
+  );
+  try {
+    // Palette generation keeps the small preview readable while the fixed
+    // frame/width limits prevent a long or 4K source from consuming the bot's
+    // media slot and disk quota.
+    const filter = [
+      `[0:v]fps=${MAX_ANIMATED_FPS},scale=${MAX_ANIMATED_WIDTH}:-1:flags=lanczos,split[s0][s1]`,
+      `[s0]palettegen=max_colors=128[p]`,
+      `[s1][p]paletteuse=dither=sierra2_4a[v]`,
+    ].join(';');
+    await runCommand(ffmpegCommand, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-t', String(MAX_ANIMATED_SECONDS), '-i', downloaded.filePath,
+      '-filter_complex', filter, '-map', '[v]', '-an', '-loop', '0',
+      '-f', 'gif', gifPath,
+    ], {
+      timeoutMs: remainingTimeout(), cwd: outputDirectory, label: '动效 GIF 转码',
+    });
+    const info = await stat(gifPath).catch(() => null);
+    if (!info?.isFile() || info.size <= 0) throw new Error('动效 GIF 为空');
+    if (info.size > MAX_ANIMATED_GIF_BYTES) {
+      throw new Error(`动效 GIF 超过 ${Math.round(MAX_ANIMATED_GIF_BYTES / 1024 / 1024)} MiB`);
+    }
+    return { filePath: gifPath, outputBytes: info.size, sourceBytes: downloaded.outputBytes };
+  } catch (error) {
+    await unlink(gifPath).catch(() => {});
+    throw error;
+  } finally {
+    await unlink(downloaded.filePath).catch(() => {});
+  }
+}
+
 export class MediaResolver {
   constructor(options = {}) {
     this.enabled = options.enabled === true;
     this.command = options.command || 'yt-dlp';
+    this.ffmpegCommand = options.ffmpegCommand || 'ffmpeg';
     this.cookiesFile = String(options.cookiesFile || '').trim();
     this.cookie = String(options.cookie || '').trim();
     this.bilibiliCookie = String(options.bilibiliCookie || '').trim();
@@ -425,12 +504,50 @@ export class MediaResolver {
   registerMedia(value) {
     const id = randomBytes(24).toString('base64url');
     const expiresAt = Date.now() + this.cacheTtlMs;
-    this.mediaFiles.set(id, { filePath: value.filePath, expiresAt, size: value.outputBytes || 0 });
+    this.mediaFiles.set(id, {
+      filePath: value.filePath,
+      expiresAt,
+      size: value.outputBytes || 0,
+      mediaType: value.mediaType || value.contentType || 'video/mp4',
+    });
     return {
       ...value,
       mediaId: id,
       url: `${this.publicBaseUrl}/v1/qq/media/${id}`,
     };
+  }
+
+  async prepareAnimatedGalleryImages(provided, images, timeoutMs) {
+    const animatedItems = Array.isArray(provided?.animatedItems)
+      ? provided.animatedItems : [];
+    if (!animatedItems.length || !Array.isArray(images) || !images.length) return images;
+    const count = Math.min(animatedItems.length, images.length);
+    const replacements = await Promise.all(images.slice(0, count).map(async (image, index) => {
+      const item = animatedItems[index];
+      try {
+        const converted = await convertAnimatedMediaToGif(item, {
+          timeoutMs: Math.min(Math.max(1_000, Number(timeoutMs) || 1_000), 30_000),
+          outputDirectory: this.cacheDirectory,
+          ffmpegCommand: this.ffmpegCommand,
+        });
+        if (!converted) return image;
+        const registered = this.registerMedia({
+          filePath: converted.filePath,
+          outputBytes: converted.outputBytes,
+          mediaType: 'image/gif',
+          extractor: 'douyin-animated-gallery',
+          downloadBytes: converted.sourceBytes,
+          direct: true,
+        });
+        return registered.url;
+      } catch (error) {
+        // An animated preview is optional. Keep the original static image so
+        // the gallery can still be sent when a CDN or ffmpeg is unavailable.
+        this.logger.warn?.(`抖音图文动效转换失败，回退静态图：index=${index + 1} error=${error.message}`);
+        return image;
+      }
+    }));
+    return [...replacements, ...images.slice(count)];
   }
 
   registerRemoteMedia(value) {
@@ -672,9 +789,14 @@ export class MediaResolver {
               return { url: provided.mediaUrl, ...directMedia };
             }
             if (provided?.images?.length) {
+              const galleryImages = await this.prepareAnimatedGalleryImages(
+                provided,
+                provided.images,
+                remainingTimeout(),
+              );
               return {
-                images: provided.images, title: provided.title || '',
-                coverUrl: provided.images[0] || '',
+                images: galleryImages, title: provided.title || '',
+                coverUrl: galleryImages[0] || provided.images[0] || '',
                 author: provided.author || '', avatarUrl: provided.avatarUrl || '', tags: provided.tags || [],
                 description: provided.description || '', extractor: 'provider-gallery',
                 downloadBytes: 0, outputBytes: 0, direct: true,

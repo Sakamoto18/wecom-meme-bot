@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createDouyinProvider } from '../src/douyin-provider.js';
@@ -134,4 +134,63 @@ test('抖音多视频分享保留每条视频和封面', async (t) => {
   assert.deepEqual(resolved.images, videos.map((item) => item.cover));
   assert.deepEqual(resolved.mediaItems.map((item) => item.mediaUrl), videos.map((item) => item.video_url));
   assert.deepEqual(resolved.mediaItems.map((item) => item.coverUrl), videos.map((item) => item.cover));
+});
+
+test('抖音图文的动态 MP4 资源作为可选动图元数据保留，不改变图文类型', async (t) => {
+  const animated = [
+    { video_url: 'https://cdn.example/animated-1.mp4', cover: GALLERY_IMAGES[0] },
+    { video_url: 'https://cdn.example/animated-2.mp4', cover: GALLERY_IMAGES[1] },
+  ];
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ status: 'success', data: {
+    media_type: 'images', images: GALLERY_IMAGES, animated_videos: animated,
+  } })));
+  const provider = createDouyinProvider({ providerUrl: 'http://provider.test/resolve' });
+  const resolved = await provider({ platform: 'douyin', url: 'https://v.douyin.com/note/' });
+  assert.equal(resolved.mediaUrl, '');
+  assert.deepEqual(resolved.images, GALLERY_IMAGES);
+  assert.deepEqual(resolved.animatedItems.map((item) => item.mediaUrl), animated.map((item) => item.video_url));
+});
+
+test('抖音图文动效转成 GIF URL，失败时才回退静态图', async () => {
+  const cacheDirectory = await mkdtemp(path.join(os.tmpdir(), 'douyin-animated-gallery-'));
+  const fakeFfmpeg = path.join(cacheDirectory, 'fake-ffmpeg');
+  await writeFile(fakeFfmpeg, '#!/usr/bin/env node\n\nimport { writeFileSync } from "node:fs";\nwriteFileSync(process.argv.at(-1), "GIF89a");\n');
+  await chmod(fakeFfmpeg, 0o755);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (endpoint, options = {}) => {
+    if (String(endpoint) === 'http://provider.test/resolve') {
+      return new Response(JSON.stringify(galleryPayload({
+        images: GALLERY_IMAGES.slice(0, 2),
+        animated_videos: [
+          { video_url: 'https://cdn.example/animated-1.mp4', size: 5 },
+          { video_url: 'https://cdn.example/animated-2.mp4', size: 5 },
+        ],
+      })), { headers: { 'content-type': 'application/json' } });
+    }
+    if (String(endpoint).includes('animated-')) {
+      return new Response(Buffer.from('not-a-real-mp4'), {
+        headers: { 'content-length': '14' },
+      });
+    }
+    throw new Error(`unexpected fetch ${String(endpoint)} ${JSON.stringify(options)}`);
+  };
+  const resolver = new MediaResolver({ enabled: true, cacheDirectory,
+    cacheTtlMs: 60_000, ffmpegCommand: fakeFfmpeg,
+    publicBaseUrl: 'http://qq-bot:8787',
+    providerResolver: createDouyinProvider({ providerUrl: 'http://provider.test/resolve' }),
+    logger: { info() {}, warn() {} },
+  });
+  try {
+    const result = await resolver.resolve({ url: 'https://v.douyin.com/animated-note/', provider: 'douyin' });
+    assert.equal(result.images.length, 2);
+    assert.ok(result.images.every((url) => url.startsWith('http://qq-bot:8787/v1/qq/media/')));
+    const mediaIds = result.images.map((url) => url.split('/').pop());
+    const resources = await Promise.all(mediaIds.map((id) => resolver.getMediaFile(id)));
+    assert.deepEqual(resources.map((item) => item.mediaType), ['image/gif', 'image/gif']);
+    assert.deepEqual(resources.map((item) => item.size), [6, 6]);
+  } finally {
+    resolver.close();
+    globalThis.fetch = originalFetch;
+    await rm(cacheDirectory, { recursive: true, force: true });
+  }
 });

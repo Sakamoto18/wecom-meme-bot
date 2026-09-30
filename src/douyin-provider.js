@@ -53,6 +53,23 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
           tags: Array.isArray(typeof item === 'object' ? item?.tags : null) ? item.tags : [],
         }];
       }).filter(Boolean)).values()];
+    const rawAnimatedItems = data.animated_videos || data.animatedVideos || data.gallery_videos;
+    const animatedItems = [...new Map((Array.isArray(rawAnimatedItems) ? rawAnimatedItems : [])
+      .map((item) => {
+        const mediaUrl = normalizeMediaUrl(typeof item === 'string'
+          ? item : item?.mediaUrl || item?.video_url || item?.videoUrl || item?.url);
+        if (!mediaUrl) return null;
+        return [mediaUrl, {
+          mediaUrl,
+          coverUrl: normalizeMediaUrl(typeof item === 'object'
+            ? item?.coverUrl || item?.cover_url || item?.cover : '') || '',
+          size: Number(typeof item === 'object' ? item?.size || item?.video_size || item?.videoSize : 0) || 0,
+          requestHeaders: {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+            Referer: 'https://www.douyin.com/',
+          },
+        }];
+      }).filter(Boolean)).values()];
     // Playwright returns video_url/cover; MediaResolver requires mediaUrl/coverUrl.
     const mediaUrl = (gallery || metadataOnly || mediaItems.length > 1)
       ? '' : normalizeMediaUrl(data.mediaUrl || data.video_url || data.videoUrl);
@@ -74,6 +91,7 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
     return {
       mediaUrl,
       mediaItems: mediaItems.length > 1 ? mediaItems : [],
+      animatedItems: gallery ? animatedItems : [],
       size: Number(data.size || data.video_size || data.videoSize || 0) || 0,
       images: mediaItems.length > 1
         ? [...new Set(mediaItems.map((item) => item.coverUrl).filter(Boolean))].slice(0, 18)
