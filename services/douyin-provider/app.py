@@ -361,14 +361,14 @@ def removed_marker(text):
     return next((marker for marker in REMOVED_MARKERS if marker in body), '')
 
 
-async def collect_gallery(page, state):
+async def collect_gallery(page, state, initial=None):
     """收集图文页的图集，按轮播计数器翻页补齐懒加载的图片。
 
     只在同一个作品内翻页：抖音的方向键翻到最后一张还会继续滑进推荐流，
     URL 一变就必须停，否则会把别人的作品混进这一条分享里。
     """
     state['stage'] = 'gallery'
-    first = await page.evaluate(GALLERY_SCRIPT)
+    first = initial or await page.evaluate(GALLERY_SCRIPT)
     origin_path = first.get('path') or ''
     if '/note/' not in origin_path:
         return [], 0
@@ -443,6 +443,22 @@ async def read_page(page, url, video_requests, state, video_sizes=None):
         'author': data.get('author', ''), 'avatar_url': data.get('avatar', ''),
         'tags': data.get('tags', []),
     }
+    # Douyin's /note/ pages can contain MP4 resources used to animate an
+    # image-text carousel. They look like two playable videos in the DOM, but
+    # the share is still a gallery (the page exposes an N/M image counter).
+    # Probe that counter before interpreting video elements; this keeps
+    # image-text shares as images while real video pages retain the fast path.
+    if '/note/' in str(data.get('path') or ''):
+        gallery_hint = await page.evaluate(GALLERY_SCRIPT)
+        if int(gallery_hint.get('total') or 0) > 0:
+            images, total = await collect_gallery(page, state, gallery_hint)
+            if images:
+                logger.info('Douyin note gallery takes precedence over animated video resources images=%d counter_total=%d',
+                            len(images), total)
+                return {'status': 'success', 'data': {
+                    'media_type': 'images', 'video_url': '', 'images': images,
+                    'cover': images[0], **common,
+                }}
     video_items = []
     cover_images = [str(item) for item in (data.get('covers') or []) if item]
     for index, item in enumerate(data.get('videos') or []):
