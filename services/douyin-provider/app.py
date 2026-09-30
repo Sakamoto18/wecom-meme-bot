@@ -423,47 +423,12 @@ async def read_page(page, url, video_requests, state, video_sizes=None):
     await page.wait_for_timeout(2500)
     state['stage'] = 'extract'
     data = await page.evaluate(EXTRACT_SCRIPT)
-    # A normal video can also use the /note/ route. If the first DOM snapshot
-    # already contains exactly one playable stream and no actual gallery image,
-    # return it immediately. Do not let a delayed/irrelevant N/M counter send
-    # this video through the image-text branch. Image-text notes keep their
-    # existing multi-asset path below (animated MP4s are still optional GIF
-    # sources there).
-    initial_video_items = []
-    for item in data.get('videos') or []:
-        if isinstance(item, dict):
-            video_url = html.unescape(str(item.get('video') or item.get('url') or ''))
-            cover = str(item.get('cover') or '')
-        else:
-            video_url, cover = html.unescape(str(item or '')), ''
-        if is_real_video_url(video_url) and not any(
-            existing['video_url'] == video_url for existing in initial_video_items
-        ):
-            initial_video_items.append({'video_url': video_url, 'cover': cover})
-    initial_gallery_hint = None
-    if '/note/' in str(data.get('path') or ''):
-        initial_gallery_hint = await page.evaluate(GALLERY_SCRIPT)
-    initial_gallery_items = (initial_gallery_hint or {}).get('items') or []
-    if (len(initial_video_items) == 1 or (
-        not initial_video_items and is_real_video_url(data.get('video'))
-    )) and len(initial_gallery_items) < 2:
-        item = initial_video_items[0] if initial_video_items else {
-            'video_url': html.unescape(str(data.get('video'))), 'cover': ''
-        }
-        return {'status': 'success', 'data': {
-            'media_type': 'video', 'video_url': item['video_url'],
-            'cover': item.get('cover') or data.get('cover', ''),
-            **{
-                'title': data.get('title', ''), 'description': data.get('desc', ''),
-                'author': data.get('author', ''), 'avatar_url': data.get('avatar', ''),
-                'tags': data.get('tags', []),
-            },
-        }}
     # ``/note/`` pages hydrate the real players and cover images after the
     # initial shell. A single read around the four-second mark can therefore
     # see only the uuu_265 placeholder. Poll this page type until the real
-    # player set and cover are present; ordinary video shares keep the fast
-    # path unchanged.
+    # player set and cover are present. Do not classify a /note/ page as a
+    # video until its gallery branch has had a chance to finish; animated MP4s
+    # on image-text notes are optional GIF sources, not the post type.
     if '/note/' in str(data.get('path') or ''):
         for _ in range(6):
             playable = [item for item in (data.get('videos') or [])
@@ -485,7 +450,7 @@ async def read_page(page, url, video_requests, state, video_sizes=None):
     # Probe that counter before interpreting video elements; this keeps
     # image-text shares as images while real video pages retain the fast path.
     if '/note/' in str(data.get('path') or ''):
-        gallery_hint = initial_gallery_hint or await page.evaluate(GALLERY_SCRIPT)
+        gallery_hint = await page.evaluate(GALLERY_SCRIPT)
         if int(gallery_hint.get('total') or 0) > 0:
             images, total = await collect_gallery(page, state, gallery_hint)
             if images:
