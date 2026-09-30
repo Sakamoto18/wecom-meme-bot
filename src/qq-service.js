@@ -3479,6 +3479,63 @@ export class QqBotService {
         return { mode: 'media-disabled', messages: [] };
       }
       const startedAt = Date.now();
+      // A QQ share card can contain several platform URLs (抖音's multi-video
+      // share is represented this way rather than as one provider response).
+      // Resolve all supported URLs before choosing the legacy single-video path;
+      // otherwise the old `[0]` selection silently drops every later video.
+      if (supportedCandidates.length > 1) {
+        const multiResults = [];
+        for (const multiCandidate of supportedCandidates.slice(0, 4)) {
+          const multiStartedAt = Date.now();
+          try {
+            const multiResolved = await this.mediaResolver.resolve(multiCandidate);
+            this.mediaUsageTracker?.record({
+              groupId: payload.messageType === 'group' ? payload.groupId : '',
+              userId: payload.userId,
+              provider: multiCandidate.provider,
+              operation: 'resolve',
+              sourceUrlHash: createHash('sha256').update(multiCandidate.url).digest('hex'),
+              durationMs: Date.now() - multiStartedAt,
+              downloadBytes: multiResolved.downloadBytes,
+              outputBytes: multiResolved.outputBytes,
+            });
+            multiResults.push({ candidate: multiCandidate, resolved: multiResolved });
+          } catch (multiError) {
+            this.logger.warn(`多视频分享中的一条解析失败：provider=${multiCandidate.provider} error=${multiError.message}`);
+          }
+        }
+        const multiVideos = multiResults.flatMap(({ candidate: multiCandidate, resolved: multiResolved }) => {
+          if (!multiResolved?.url) return [];
+          return [{
+            type: 'video',
+            url: multiResolved.url,
+            mediaCacheKey: createHash('sha256').update(multiCandidate.provider === 'bilibili' && multiResolved.cid
+              ? `bilibili:${multiResolved.cid}:${multiResolved.quality || 0}`
+              : `${multiCandidate.provider}:${multiResolved.url}`).digest('hex'),
+            title: multiResolved.title || '',
+            coverUrl: multiResolved.coverUrl || '',
+            images: [],
+            author: multiResolved.author || '',
+            avatarUrl: multiResolved.avatarUrl || '',
+            publishedAt: multiResolved.publishedAt || 0,
+            description: multiResolved.description || '',
+            aiSummary: multiResolved.aiSummary || '',
+            aiSummarySupported: multiResolved.aiSummarySupported === true,
+            aiSummaryStatus: multiResolved.aiSummaryStatus || '',
+            tags: multiResolved.tags || [],
+            duration: multiResolved.duration,
+            provider: multiCandidate.provider,
+          }];
+        });
+        if (multiVideos.length > 1) {
+          const previewImages = [...new Set(
+            multiVideos.map((item) => item.coverUrl).filter(Boolean),
+          )].slice(0, 18);
+          multiVideos[0].images = previewImages;
+          this.logger.info(`多视频分享聚合完成：group=${payload.groupId || ''} videos=${multiVideos.length} previews=${previewImages.length}`);
+          return { mode: 'media', messages: multiVideos };
+        }
+      }
       const candidate = supportedCandidates[0];
       let candidateSummary = 'invalid-url';
       try {
@@ -3503,7 +3560,7 @@ export class QqBotService {
           outputBytes: resolved.outputBytes,
         });
         const partLog = resolved.page ? ` page=${resolved.page} cid=${resolved.cid || ''}` : '';
-        this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0}${partLog} title=${String(resolved.title || '').slice(0, 120)} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} media_duration_s=${resolved.duration || 0} duration_ms=${Date.now() - startedAt}`);
+        this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0}${partLog} title=${String(resolved.title || '').slice(0, 120)} videos=${resolved.mediaItems?.length || 1} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} media_duration_s=${resolved.duration || 0} duration_ms=${Date.now() - startedAt}`);
         if (!resolved.url && resolved.images?.length) {
           // 图集的兜底标题按来源平台走：抖音图文不能顶着“小红书图文”发出去。
           const galleryFallbackTitle = candidate.provider === 'douyin'
@@ -3518,31 +3575,47 @@ export class QqBotService {
             }],
           };
         }
-        return {
-          mode: 'media',
-          messages: [{
-            type: 'video',
-            url: resolved.url,
+        const providerItems = Array.isArray(resolved.mediaItems) && resolved.mediaItems.length > 1
+          ? resolved.mediaItems : [resolved];
+        const previewImages = [...new Set([
+          ...(Array.isArray(resolved.images) ? resolved.images : []),
+          ...providerItems.map((item) => item.coverUrl || item.cover || '').filter(Boolean),
+        ])].slice(0, 18);
+        const messages = providerItems
+          .filter((item) => item?.url)
+          .map((item, index) => {
+            const mediaUrl = String(item.url);
             // QQ upload reuse is scoped to the actual media, never the group.
             // Bilibili CID distinguishes parts even when different short links
             // resolve to the same video; quality variants remain separate.
-            mediaCacheKey: createHash('sha256').update(candidate.provider === 'bilibili' && resolved.cid
-              ? `bilibili:${resolved.cid}:${resolved.quality || 0}`
-              : `${candidate.provider}:${resolved.url}`).digest('hex'),
-            title: resolved.title,
-            coverUrl: resolved.coverUrl || '',
-            author: resolved.author || '',
-            avatarUrl: resolved.avatarUrl || '',
-            publishedAt: resolved.publishedAt || 0,
-            description: resolved.description || '',
-            aiSummary: resolved.aiSummary || '',
-            aiSummarySupported: resolved.aiSummarySupported === true,
-            aiSummaryStatus: resolved.aiSummaryStatus || '',
-            tags: resolved.tags || [],
-            duration: resolved.duration,
-            provider: candidate.provider,
-          }],
-        };
+            const mediaCacheKey = createHash('sha256').update(candidate.provider === 'bilibili' && item.cid
+              ? `bilibili:${item.cid}:${item.quality || 0}`
+              : `${candidate.provider}:${mediaUrl}`).digest('hex');
+            return {
+              type: 'video',
+              url: mediaUrl,
+              mediaCacheKey,
+              title: item.title || resolved.title || '',
+              coverUrl: item.coverUrl || item.cover || resolved.coverUrl || '',
+              // The first message carries all preview covers so the Bridge can
+              // render one standard multi-image share card for a multi-video
+              // post. Later messages remain lean and only carry their stream.
+              images: index === 0 ? previewImages : [],
+              multiVideo: providerItems.length > 1,
+              author: item.author || resolved.author || '',
+              avatarUrl: item.avatarUrl || resolved.avatarUrl || '',
+              publishedAt: item.publishedAt || resolved.publishedAt || 0,
+              description: item.description || resolved.description || '',
+              aiSummary: item.aiSummary || resolved.aiSummary || '',
+              aiSummarySupported: item.aiSummarySupported === true || resolved.aiSummarySupported === true,
+              aiSummaryStatus: item.aiSummaryStatus || resolved.aiSummaryStatus || '',
+              tags: item.tags?.length ? item.tags : (resolved.tags || []),
+              duration: item.duration || resolved.duration,
+              provider: candidate.provider,
+            };
+          });
+        if (messages.length === 0) throw new Error('媒体解析未返回可发送的视频地址');
+        return { mode: 'media', messages };
       } catch (error) {
         const removedAtSource = isRemovedError(error);
         const mediaTooLarge = isMediaTooLargeError(error);

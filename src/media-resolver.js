@@ -577,6 +577,56 @@ export class MediaResolver {
               url: key,
               platform: candidate?.provider || 'unknown',
             }), remainingTimeout());
+            if (Array.isArray(provided?.mediaItems) && provided.mediaItems.length > 1) {
+              const registeredItems = [];
+              for (const item of provided.mediaItems.slice(0, 4)) {
+                const itemUrl = normalizeMediaUrl(item?.mediaUrl || item?.url || item?.videoUrl);
+                if (!itemUrl) continue;
+                const itemMetadata = {
+                  mediaUrl: itemUrl,
+                  title: item.title || provided.title || '',
+                  coverUrl: item.coverUrl || item.cover_url || item.cover
+                    || provided.coverUrl || provided.cover || '',
+                  author: item.author || provided.author || '',
+                  avatarUrl: item.avatarUrl || provided.avatarUrl || '',
+                  description: item.description || provided.description || '',
+                  tags: item.tags?.length ? item.tags : (provided.tags || []),
+                  duration: positive(item.duration || provided.duration),
+                  size: positive(item.size),
+                  provider: candidate?.provider || '',
+                  extractor: 'provider-direct-multi',
+                  downloadBytes: 0,
+                  outputBytes: 0,
+                  direct: true,
+                };
+                await this.rejectIfTooLarge(itemMetadata);
+                if (candidate?.provider === 'douyin') {
+                  itemMetadata.requestHeaders = {
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
+                    Referer: 'https://www.douyin.com/',
+                  };
+                }
+                registeredItems.push(this.registerRemoteMedia(itemMetadata));
+              }
+              if (registeredItems.length > 1) {
+                const coverImages = [...new Set(registeredItems
+                  .map((item) => item.coverUrl).filter(Boolean))].slice(0, 18);
+                return {
+                  mediaItems: registeredItems,
+                  images: coverImages,
+                  title: provided.title || registeredItems[0].title || '',
+                  coverUrl: coverImages[0] || provided.coverUrl || '',
+                  author: provided.author || registeredItems[0].author || '',
+                  avatarUrl: provided.avatarUrl || registeredItems[0].avatarUrl || '',
+                  description: provided.description || registeredItems[0].description || '',
+                  tags: provided.tags || registeredItems[0].tags || [],
+                  extractor: 'provider-direct-multi',
+                  downloadBytes: 0,
+                  outputBytes: 0,
+                  direct: true,
+                };
+              }
+            }
             if (provided?.mediaUrl) {
               let title = provided.title || '';
               let coverUrl = provided.coverUrl || '';

@@ -118,3 +118,20 @@ test('抖音 Provider 的图文与视频互斥，且图集去重限长', async (
   resolved = await provider({ platform: 'douyin', url: 'https://v.douyin.com/n/' });
   assert.equal(resolved.coverUrl, GALLERY_IMAGES[0]);
 });
+
+test('抖音多视频分享保留每条视频和封面', async (t) => {
+  const videos = [
+    { video_url: 'https://cdn.example/video-1.mp4', cover: 'https://cdn.example/cover-1.jpg', duration: 3 },
+    { video_url: 'https://cdn.example/video-2.mp4', cover: 'https://cdn.example/cover-2.jpg', duration: 5 },
+  ];
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ status: 'success', data: {
+    media_type: 'videos', videos, title: '双视频', author: '原作者',
+  } })));
+  const provider = createDouyinProvider({ providerUrl: 'http://provider.test/resolve' });
+  const resolved = await provider({ platform: 'douyin', url: 'https://v.douyin.com/multi/' });
+  assert.equal(resolved.mediaUrl, '');
+  assert.equal(resolved.mediaItems.length, 2);
+  assert.deepEqual(resolved.images, videos.map((item) => item.cover));
+  assert.deepEqual(resolved.mediaItems.map((item) => item.mediaUrl), videos.map((item) => item.video_url));
+  assert.deepEqual(resolved.mediaItems.map((item) => item.coverUrl), videos.map((item) => item.cover));
+});

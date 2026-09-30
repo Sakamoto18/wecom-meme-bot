@@ -266,7 +266,7 @@ async def bilibili_cookie():
 
 EXTRACT_SCRIPT = r'''() => {
     const resources=performance.getEntriesByType('resource').map(x=>x.name);
-    const videos=[...document.querySelectorAll('video')].flatMap(v=>[v.currentSrc,v.src]);
+    const videoElements=[...document.querySelectorAll('video')];
     const meta=(name)=>document.querySelector(`meta[name="${name}"]`)?.content||'';
     const authorImg=[...document.images].find(img=>/aweme-avatar/i.test(img.src) && img.alt && !/icon/i.test(img.alt));
     const avatar=authorImg?.currentSrc || '';
@@ -275,11 +275,23 @@ EXTRACT_SCRIPT = r'''() => {
     const poster=[...document.querySelectorAll('video[poster], video')].map(v=>v.poster || '').find(Boolean) || '';
     const html=document.documentElement?.outerHTML || '';
     const urls=[...html.matchAll(/https?:\/\/[^"'\s<>]+/g)].map(m=>m[0].replaceAll('\/','/'));
-    const candidates=[...videos,...resources,...urls].filter(Boolean);
-    const video=candidates.find(u=>{ const low=String(u).toLowerCase(); return low.indexOf('uuu_265.mp4')<0 && (/\.(mp4|m3u8)(?:[?#]|$)/i.test(u)||/playwm|play\//i.test(u)); }) || '';
+    const isVideo=(u)=>{ const low=String(u||'').toLowerCase(); return low.indexOf('uuu_265.mp4')<0 && (/\.(mp4|m3u8)(?:[?#]|$)/i.test(u)||/playwm|play\//i.test(u)); };
+    const isCover=(u)=>{ const low=String(u||'').toLowerCase(); return Boolean(u) && !/douyindefault|default\.ee9da4401be3dae0|aweme-avatar|favicon|logo/.test(low); };
+    // A Douyin multi-video share renders one player element per work. Keep the
+    // URL/poster pair from those elements together; collecting every network
+    // video request would also pull recommendation previews into the share.
+    const elementItems=videoElements.map(v=>({video:v.currentSrc||v.src||'',cover:isCover(v.poster||'') ? v.poster : ''}))
+      .filter(item=>isVideo(item.video));
+    const candidates=[...videoElements.flatMap(v=>[v.currentSrc,v.src]),...resources,...urls].filter(Boolean);
+    const fallbackVideo=candidates.find(isVideo) || '';
+    const videos=[...new Map(elementItems.map(item=>[item.video,item])).values()];
+    if (!videos.length && fallbackVideo) videos.push({video:fallbackVideo,cover:isCover(poster) ? poster : ''});
+    const video=videos[0]?.video || '';
     const imageCandidates=[...document.images].map(img=>img.currentSrc || img.src || '').filter(Boolean);
     const embeddedCover=imageCandidates.find(u=>{ const low=String(u).toLowerCase(); return !/aweme-avatar|icon|logo/.test(low) && /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(u); }) || '';
-    return {title:document.title,desc:meta('description'),cover:meta('lark:url:video_cover_image_url') || document.querySelector('meta[property="og:image"]')?.content || poster || embeddedCover,video,author,avatar,tags:keywords};
+    const coverCandidates=[meta('lark:url:video_cover_image_url'),document.querySelector('meta[property="og:image"]')?.content,poster,embeddedCover].filter(isCover);
+    const pageCover=coverCandidates[0] || '';
+    return {title:document.title,desc:meta('description'),cover:pageCover,video,videos,author,avatar,tags:keywords};
    }'''
 
 
@@ -399,6 +411,28 @@ async def read_page(page, url, video_requests, state, video_sizes=None):
         'author': data.get('author', ''), 'avatar_url': data.get('avatar', ''),
         'tags': data.get('tags', []),
     }
+    video_items = []
+    for item in data.get('videos') or []:
+        if isinstance(item, dict):
+            video_url = html.unescape(str(item.get('video') or item.get('url') or ''))
+            cover = str(item.get('cover') or '')
+        else:
+            video_url, cover = html.unescape(str(item or '')), ''
+        if not is_real_video_url(video_url):
+            continue
+        if any(existing['video_url'] == video_url for existing in video_items):
+            continue
+        video_items.append({
+            'video_url': video_url,
+            'cover': cover or data.get('cover', ''),
+            'size': video_sizes.get(video_url, 0),
+        })
+    if len(video_items) > 1:
+        logger.info('Douyin multi-video extracted videos=%d', len(video_items))
+        return {'status': 'success', 'data': {
+            'media_type': 'videos', 'video_url': video_items[0]['video_url'],
+            'videos': video_items, 'cover': video_items[0].get('cover', ''), **common,
+        }}
     if data.get('video'):
         return {'status': 'success', 'data': {
             'media_type': 'video', 'video_url': html.unescape(data['video']),

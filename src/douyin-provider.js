@@ -33,15 +33,35 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
     const images = [...new Set((Array.isArray(rawImages) ? rawImages : [])
       .map((item) => normalizeMediaUrl(typeof item === 'string' ? item : item?.url || item?.url_default))
       .filter(Boolean))].slice(0, 18);
+    const rawVideoItems = data.videos || data.video_items || data.videoItems
+      || data.video_urls || data.videoUrls || data.mediaUrls;
+    const mediaItems = [...new Map((Array.isArray(rawVideoItems) ? rawVideoItems : [])
+      .map((item) => {
+        const mediaUrl = normalizeMediaUrl(typeof item === 'string'
+          ? item : item?.mediaUrl || item?.video_url || item?.videoUrl || item?.url);
+        if (!mediaUrl) return null;
+        const coverUrl = normalizeMediaUrl(typeof item === 'object'
+          ? item?.coverUrl || item?.cover_url || item?.cover || item?.poster : '')
+          || normalizeMediaUrl(data.coverUrl || data.cover_url || data.cover) || '';
+        return [mediaUrl, {
+          mediaUrl,
+          coverUrl,
+          size: Number(typeof item === 'object' ? item?.size || item?.video_size || item?.videoSize : 0) || 0,
+          duration: Number(typeof item === 'object' ? item?.duration : 0) || 0,
+          title: String(typeof item === 'object' ? item?.title || '' : ''),
+          description: String(typeof item === 'object' ? item?.description || item?.desc || '' : ''),
+          tags: Array.isArray(typeof item === 'object' ? item?.tags : null) ? item.tags : [],
+        }];
+      }).filter(Boolean)).values()];
     // Playwright returns video_url/cover; MediaResolver requires mediaUrl/coverUrl.
-    const mediaUrl = (gallery || metadataOnly)
+    const mediaUrl = (gallery || metadataOnly || mediaItems.length > 1)
       ? '' : normalizeMediaUrl(data.mediaUrl || data.video_url || data.videoUrl);
     // 声明了 metadata 却什么都没带，等于一无所获，不能当成功放过去。
     const usefulMetadata = metadataOnly && Boolean(
       data.title || data.author || data.description
       || data.cover || data.cover_url || data.coverUrl,
     );
-    if (!mediaUrl && !images.length && !usefulMetadata) {
+    if (!mediaUrl && !mediaItems.length && !images.length && !usefulMetadata) {
       throw new Error('抖音 Provider 未返回可用视频地址');
     }
     if (mediaUrl && new URL(mediaUrl).pathname.endsWith('/uuu_265.mp4')) {
@@ -53,8 +73,11 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
       .trim();
     return {
       mediaUrl,
+      mediaItems: mediaItems.length > 1 ? mediaItems : [],
       size: Number(data.size || data.video_size || data.videoSize || 0) || 0,
-      images: mediaUrl ? [] : images,
+      images: mediaItems.length > 1
+        ? [...new Set(mediaItems.map((item) => item.coverUrl).filter(Boolean))].slice(0, 18)
+        : (mediaUrl ? [] : images),
       metadataOnly,
       coverUrl: normalizeMediaUrl(data.coverUrl || data.cover_url || data.cover) || images[0] || '',
       title: String(data.title || ''),

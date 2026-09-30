@@ -343,8 +343,20 @@ class LongtuQqBridge(Star):
             raise RuntimeError('QQ 原生转发接口返回了未知结果')
         return {**(receipt or {}), 'delivery': 'native-forward', 'reused_message_id': message_id}
 
-    async def _send_video_from_backend(self, event: AstrMessageEvent, message: dict) -> bool:
-        """Send directly: RespondStage swallows errors raised after a yield."""
+    async def _send_video_from_backend(
+        self,
+        event: AstrMessageEvent,
+        message: dict,
+        *,
+        react_result: bool = True,
+        send_failure_notice: bool = True,
+    ) -> bool:
+        """Send one video directly: RespondStage swallows errors after a yield.
+
+        Multi-video shares use this as a fallback after trying one native
+        forward record.  In that path reactions and failure notices are sent
+        once for the whole bundle by the caller.
+        """
         private = event.is_private_chat()
         action = 'send_private_msg' if private else 'send_group_msg'
         destination = ({'user_id': int(event.get_sender_id())} if private
@@ -379,21 +391,23 @@ class LongtuQqBridge(Star):
                 f'duration_ms={int((time.monotonic() - started) * 1000)} '
                 f'error={type(error).__name__}: {error}',
             )
-            with contextlib.suppress(Exception):
-                await self._react_media_result(event, False)
+            if react_result:
+                with contextlib.suppress(Exception):
+                    await self._react_media_result(event, False)
             # A client-side timeout does not cancel an upload already accepted
             # by QQ. Do not retry blindly or falsely claim it was interrupted.
             notice = ('视频发送等待超时，暂未收到 QQ 成功回执，可能仍在发送。建议点击分享前往平台观看。'
                       if timed_out else '视频发送失败，未收到 QQ 成功回执。请稍后重试，或点击分享前往平台观看。')
-            try:
-                segments = [{'type': 'text', 'data': {'text': notice}}]
-                if source_id:
-                    segments.insert(0, {'type': 'reply', 'data': {'id': source_id}})
-                await asyncio.wait_for(event.bot.call_action(
-                    action, **destination, message=segments,
-                ), timeout=15)
-            except Exception as notice_error:
-                logger.warning(f'视频发送失败提示也未送达：{notice_error}')
+            if send_failure_notice:
+                try:
+                    segments = [{'type': 'text', 'data': {'text': notice}}]
+                    if source_id:
+                        segments.insert(0, {'type': 'reply', 'data': {'id': source_id}})
+                    await asyncio.wait_for(event.bot.call_action(
+                        action, **destination, message=segments,
+                    ), timeout=15)
+                except Exception as notice_error:
+                    logger.warning(f'视频发送失败提示也未送达：{notice_error}')
             return False
         logger.info(
             f'视频发送成功：target={destination} source_message_id={source_id} '
@@ -401,9 +415,59 @@ class LongtuQqBridge(Star):
             f'delivery={receipt.get("delivery", "upload")} reused_from={receipt.get("reused_message_id", "")} '
             f'duration_ms={int((time.monotonic() - started) * 1000)}',
         )
-        with contextlib.suppress(Exception):
-            await self._react_media_result(event, True)
+        if react_result:
+            with contextlib.suppress(Exception):
+                await self._react_media_result(event, True)
         return True
+
+    async def _send_video_bundle_from_backend(self, event: AstrMessageEvent, messages: list[dict]) -> bool:
+        """Send several videos as one QQ merged-forward record.
+
+        NapCat accepts video components in forward nodes.  If a particular
+        OneBot build rejects remote video nodes, the caller falls back to the
+        normal per-video upload path, preserving delivery instead of dropping
+        the whole share.
+        """
+        videos = [item for item in messages
+                  if isinstance(item, dict) and str(item.get('url') or '').startswith(('http://', 'https://'))]
+        if len(videos) < 2:
+            return False
+        bot = getattr(event, 'bot', None)
+        call_action = getattr(bot, 'call_action', None)
+        if not callable(call_action):
+            return False
+        private = event.is_private_chat()
+        destination = ({'user_id': int(event.get_sender_id())} if private
+                        else {'group_id': int(event.get_group_id())})
+        action = 'send_private_forward_msg' if private else 'send_group_forward_msg'
+        sender_id = str(event.get_self_id() or '2170902293')
+        sender_name = str(getattr(getattr(event, 'message_obj', None), 'self_id', '') or '龙玉涛')
+        nodes = [{
+            'type': 'node',
+            'data': {
+                'uin': sender_id,
+                'name': sender_name,
+                'content': [{'type': 'video', 'data': {'file': str(item['url'])}}],
+            },
+        } for item in videos]
+        try:
+            result = await asyncio.wait_for(call_action(
+                action, **destination, messages=nodes,
+            ), timeout=VIDEO_SEND_TIMEOUT_SECONDS)
+            if isinstance(result, dict) and (
+                result.get('status') == 'failed' or result.get('retcode', 0) not in (0, None)
+            ):
+                raise RuntimeError('QQ 多视频合并转发接口返回失败')
+            logger.info(
+                f'多视频合并转发已发送：target={destination} videos={len(videos)} result={result!r}',
+            )
+            return True
+        except Exception as error:
+            logger.warning(
+                f'多视频合并转发失败，将逐条发送：target={destination} '
+                f'videos={len(videos)} error={error}',
+            )
+            return False
 
     def _usage_api_url(self) -> str:
         api_url = self._api_url().rstrip("/")
@@ -3066,13 +3130,15 @@ class LongtuQqBridge(Star):
             # like a short group conversation and keeps the optional meme last.
             if reply_chains:
                 if response.get("mode") == "media":
-                    video_message = next((item for item in response.get("messages", [])
-                                          if item.get("type") == "video"), {})
+                    video_messages = [item for item in response.get("messages", [])
+                                      if item.get("type") == "video" and item.get("url")]
+                    video_message = video_messages[0] if video_messages else {}
                     # Card identity belongs to the source video author.
                     video_message = dict(video_message)
                     logger.info(
                         f"视频分享数据：title={str(video_message.get('title') or '')[:80]} "
-                        f"cover={'yes' if video_message.get('coverUrl') else 'no'}",
+                        f"cover={'yes' if video_message.get('coverUrl') else 'no'} "
+                        f"videos={len(video_messages)} previews={len(video_message.get('images') or [])}",
                     )
                     # Keep the card separate: a cover failure must not cancel
                     # video delivery, and neither result proves video success.
@@ -3111,7 +3177,36 @@ class LongtuQqBridge(Star):
                         await asyncio.wait_for(_deliver_card(), timeout=12)
                     except Exception as error:
                         logger.warning(f"视频分享卡片等待失败（继续发送视频）：{error}")
-                    await self._send_video_from_backend(event, video_message)
+                    if len(video_messages) > 1:
+                        # Prefer a single QQ merged-forward record so a
+                        # multi-video share remains one coherent chat item.
+                        if await self._send_video_bundle_from_backend(event, video_messages):
+                            with contextlib.suppress(Exception):
+                                await self._react_media_result(event, True)
+                            return
+                        delivered = 0
+                        for item in video_messages:
+                            if await self._send_video_from_backend(
+                                event, item, react_result=False, send_failure_notice=False,
+                            ):
+                                delivered += 1
+                        with contextlib.suppress(Exception):
+                            await self._react_media_result(event, delivered == len(video_messages))
+                        if delivered != len(video_messages) and delivered == 0:
+                            source_id = str(getattr(getattr(event, 'message_obj', None), 'message_id', '') or '')
+                            notice = '多视频分享发送失败，未收到 QQ 成功回执。请稍后重试，或点击分享前往平台观看。'
+                            with contextlib.suppress(Exception):
+                                segments = [{'type': 'text', 'data': {'text': notice}}]
+                                if source_id:
+                                    segments.insert(0, {'type': 'reply', 'data': {'id': source_id}})
+                                await asyncio.wait_for(event.bot.call_action(
+                                    'send_private_msg' if event.is_private_chat() else 'send_group_msg',
+                                    **({'user_id': int(event.get_sender_id())} if event.is_private_chat()
+                                       else {'group_id': int(event.get_group_id())}),
+                                    message=segments,
+                                ), timeout=15)
+                    else:
+                        await self._send_video_from_backend(event, video_message)
                     return
                 # 主动插话应该像群友自己发言，不挂在触发它的普通消息下面；明确
                 # @、引用和私聊等被动问答仍保留原有引用/送达前缀。
