@@ -1,4 +1,4 @@
-import { matchRelatedLongtuTags } from './longtu-tag-relations.js';
+import { containsLongtuTag, longtuTagInput, matchRelatedLongtuTags } from './longtu-tag-relations.js';
 
 const UNDO_DELETE_PATTERN = /(?:撤销|取消)(?:刚才|刚刚|上次)?删除|恢复(?:刚才|刚刚|上次)?删除(?:的龙图)?/;
 const STATUS_PATTERN = /(?:龙图|图库)(?:状态|统计|数量)|(?:状态|统计)(?:龙图|图库)/;
@@ -68,7 +68,7 @@ function extractAlias(text, patterns) {
 }
 
 /**
- * 只解析明确允许的三个图库斜杠命令。
+ * 只解析明确允许的图库及词族管理斜杠命令。
  * 其他以 / 开头的内容返回 ignored-slash，调用方必须静默丢弃，不能继续交给模型。
  */
 export function parseLongtuSlashCommand(content) {
@@ -267,7 +267,7 @@ export function matchLongtuAliasRequest(content, bindings = [], options = {}) {
   // configured relation group expands its candidate pool so the persistent
   // picker can rotate among related images instead of returning one fixed
   // hash forever (for example “nm” -> “nmb/mlgb/你妈”).
-  const related = matchRelatedLongtuTags(text, bindings, {
+  const related = matchRelatedLongtuTags(content, bindings, {
     ...options,
     allowHostile: options.allowHostile !== false,
   });
@@ -282,17 +282,20 @@ export function matchLongtuAliasRequest(content, bindings = [], options = {}) {
       bindings: [...merged.values()],
     };
   }
-  // Relation-only direct requests are deliberately opt-in. This prevents a
-  // normal group message such as “晚安” from unexpectedly becoming an image
-  // command; @bot/private requests can enable it at the call site.
-  if (options.allowRelatedDirect === true && related.length > 0) {
+  const directText = text
+    .replace(/^(?:给我)?(?:来|发|整|甩)(?:一)?(?:张|个)?/u, '')
+    .replace(/(?:龙图|图片|图|表情包)?(?:吧|呗|看看)?$/u, '');
+  const directRelated = related.filter((entry) => (
+    directText && normalizeLongtuAlias(entry.matchedKeyword) === directText
+  ));
+  if (options.allowRelatedDirect === true && directRelated.length > 0) {
     return {
-      alias: related[0].matchedKeyword || text,
+      alias: directText,
       source: 'relation',
-      sha256: related[0].sha256,
-      sha256s: [...new Set(related.map((entry) => entry.sha256))],
-      bindings: related,
-      matchedKeyword: related[0].matchedKeyword || text,
+      sha256: directRelated[0].sha256,
+      sha256s: [...new Set(directRelated.map((entry) => entry.sha256))],
+      bindings: directRelated,
+      matchedKeyword: directText,
       matchType: 'tag-relation',
     };
   }
@@ -319,8 +322,8 @@ export function matchLongtuContextAlias(content, bindings = [], options = {}) {
   }
   const match = [...groups.entries()]
     .sort((left, right) => right[0].length - left[0].length)
-    .find(([alias]) => text.includes(alias))?.[1];
-  const related = matchRelatedLongtuTags(text, bindings, {
+    .find(([alias]) => containsLongtuTag(content, alias))?.[1];
+  const related = matchRelatedLongtuTags(content, bindings, {
     ...options,
     allowHostile: options.allowHostile !== false,
   });
@@ -350,8 +353,8 @@ export function matchLongtuContextAlias(content, bindings = [], options = {}) {
  * 这是本地字符串匹配，不调用模型，也不会改变“发张龙图”的随机路径。
  */
 export function matchLongtuSceneAliases(content, answer, bindings = [], options = {}) {
-  const contentText = compactAliasRequest(content);
-  const answerText = compactAliasRequest(answer);
+  const contentText = longtuTagInput(content);
+  const answerText = longtuTagInput(answer);
   if (!contentText && !answerText) return [];
 
   const sceneText = (value) => String(value ?? '')
@@ -392,6 +395,7 @@ export function matchLongtuSceneAliases(content, answer, bindings = [], options 
       || RESERVED_ALIASES.has(alias)
       || SCENE_ALIAS_STOPWORDS.has(alias)
       || !binding?.sha256
+      || binding.deletedAt || binding.deleted_at || binding.blocked
     ) return [];
     return [{ binding, alias, normalizedAlias }];
   });
@@ -410,23 +414,19 @@ export function matchLongtuSceneAliases(content, answer, bindings = [], options 
   const manualMatches = prepared
     .filter((entry) => (
       entry.binding.source === 'manual'
-      && normalizedContent.includes(entry.normalizedAlias)
+      && (containsLongtuTag(contentText, entry.alias)
+        || containsLongtuTag(answerText, entry.alias))
     ))
     .sort((left, right) => right.normalizedAlias.length - left.normalizedAlias.length);
-  if (manualMatches.length > 0 || relationMatches.length > 0) {
-    const exactManual = manualMatches.length > 0
-      ? manualMatches
-        .filter((entry) => entry.normalizedAlias === manualMatches[0].normalizedAlias)
-        .map((entry) => ({ ...entry.binding, matchedKeyword: entry.alias }))
-      : [];
-    const merged = new Map();
-    for (const entry of [...exactManual, ...relationMatches]) {
-      if (entry?.sha256 && !merged.has(entry.sha256)) merged.set(entry.sha256, entry);
-    }
-    return [...merged.values()];
+  const semanticPool = new Map();
+  for (const entry of [
+    ...manualMatches.map((entry) => ({ ...entry.binding, matchedKeyword: entry.alias })),
+    ...relationMatches,
+  ]) {
+    if (!semanticPool.has(entry.sha256)) semanticPool.set(entry.sha256, entry);
   }
 
-  const findKeywordPool = (input, minimumTermLength) => {
+  const findKeywordPool = (input, minimumTermLength, rawInput) => {
     const boundedInput = input.slice(0, 160);
     const terms = new Set();
     const maximumTermLength = Math.min(6, boundedInput.length);
@@ -434,6 +434,7 @@ export function matchLongtuSceneAliases(content, answer, bindings = [], options 
       for (let start = 0; start + length <= boundedInput.length; start += 1) {
         const term = boundedInput.slice(start, start + length);
         if (SCENE_ALIAS_STOPWORDS.has(term) || RESERVED_ALIASES.has(term)) continue;
+        if (/^[a-z0-9]+$/u.test(term) && !containsLongtuTag(rawInput, term)) continue;
         terms.add(term);
       }
     }
@@ -443,6 +444,7 @@ export function matchLongtuSceneAliases(content, answer, bindings = [], options 
       const matches = uniqueBySha(prepared.filter((entry) => (
         entry.binding.source === 'ocr'
         && entry.normalizedAlias.includes(term)
+        && (!/^[a-z0-9]+$/u.test(term) || containsLongtuTag(entry.alias, term))
       )));
       // 两字短词只有命中多张图时才视作场景关键词池；单图短碰撞继续交给
       // 下方的长公共片段评分，避免普通聊天因常见双字词误触。
@@ -465,13 +467,18 @@ export function matchLongtuSceneAliases(content, answer, bindings = [], options 
 
   // 用户原话里的关键词优先。一条关键词可以对应多张图片，例如“原神”会
   // 形成一个候选池，由图库的持久化洗牌策略轮换，而不是永远固定一张。
-  const contentPool = findKeywordPool(normalizedContent, 2);
-  if (contentPool.length > 0) return contentPool;
-  const answerPool = findKeywordPool(normalizedAnswer, 3);
+  const contentPool = findKeywordPool(normalizedContent, 2, contentText);
+  for (const entry of contentPool) {
+    if (!semanticPool.has(entry.sha256)) semanticPool.set(entry.sha256, entry);
+  }
+  if (semanticPool.size > 0) return [...semanticPool.values()];
+  const answerPool = findKeywordPool(normalizedAnswer, 3, answerText);
   if (answerPool.length > 0) return answerPool;
 
-  const usefulOverlapLength = (overlap) => (
+  const usefulOverlapLength = (overlap, text, alias) => (
     overlap.length >= 2 && !SCENE_ALIAS_STOPWORDS.has(overlap)
+      && (!/^[a-z0-9]+$/u.test(overlap)
+        || (containsLongtuTag(text, overlap) && containsLongtuTag(alias, overlap)))
       ? overlap.length
       : 0
   );
@@ -479,8 +486,8 @@ export function matchLongtuSceneAliases(content, answer, bindings = [], options 
   for (const { binding, alias, normalizedAlias } of prepared) {
     const contentOverlap = longestCommonSubstring(normalizedContent, normalizedAlias);
     const answerOverlap = longestCommonSubstring(normalizedAnswer, normalizedAlias);
-    const contentOverlapLength = usefulOverlapLength(contentOverlap);
-    const answerOverlapLength = usefulOverlapLength(answerOverlap);
+    const contentOverlapLength = usefulOverlapLength(contentOverlap, contentText, alias);
+    const answerOverlapLength = usefulOverlapLength(answerOverlap, answerText, alias);
     const inContent = normalizedContent.includes(normalizedAlias);
     const inAnswer = normalizedAnswer.includes(normalizedAlias);
     if (contentOverlapLength < 2 && answerOverlapLength < 2) continue;
@@ -519,7 +526,8 @@ export function matchLongtuSceneAliases(content, answer, bindings = [], options 
   const best = scored[0];
   if (!best) return [];
 
-  return [{ ...best.binding, matchedKeyword: best.alias }];
+  return uniqueBySha(scored.filter((entry) => entry.score >= Math.max(best.score - 20, best.score * 0.8)))
+    .map((entry) => ({ ...entry.binding, matchedKeyword: entry.alias }));
 }
 
 export function matchLongtuSceneAlias(content, answer, bindings = [], options = {}) {

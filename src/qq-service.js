@@ -2507,7 +2507,7 @@ export class QqBotService {
               imageAnalysis?.scene,
             ].filter(Boolean).join('\n'),
             answer,
-            options.longtuAliases ?? [],
+            options.longtuAliases ?? this.longtuLibrary?.listAliases() ?? [],
             { relationGroups: this.longtuTagRelations },
           );
         const shouldAttachMeme = forceMeme || attachmentSha256s.length > 0
@@ -3705,14 +3705,14 @@ export class QqBotService {
       return this.handleManagementCommand(managementCommand, payload, message);
     }
 
-    let contextualAliasMatch = null;
     let longtuAliases = [];
+    let contextualAliasMatch = null;
     if (this.longtuLibrary && payload.text) {
       longtuAliases = this.longtuLibrary.listAliases();
       const aliasMatch = matchLongtuAliasRequest(payload.text, longtuAliases, {
         relationGroups: this.longtuTagRelations,
-        // Relation-only direct requests are intended for @bot/private turns;
-        // exact manual aliases keep their legacy behaviour in every context.
+        // Relation-only requests are available to both group @bot and private
+        // turns. Ordinary prose still goes through the reply/scene path.
         allowRelatedDirect: payload.messageType === 'private'
           || this.isDirectHumanMentionTrigger(payload),
       });
