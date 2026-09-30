@@ -347,6 +347,8 @@ sudo docker compose --env-file .env.qq -f docker-compose.server.yml up -d --buil
 
 在此基础上，QQ 运行时还会加载 `config/longtu-tag-relations.json` 的本地词族索引。它不调用模型、不改人格提示词，只把语义相近的 tag 池合并后交给原有持久化洗牌器。例如 `@机器人 nm` 会把 `nm`、`nmb`、`mlgb`、`nmsl`、`你妈` 等已绑定图片作为一个候选池，连续调用会按池去重轮换；普通群聊没有精确手动口令时不会因“晚安/无语”等词族自动抢答。可通过 `LONGTU_TAG_RELATIONS_FILE` 指定自定义 JSON，格式与仓库示例一致；修改后重启 `qq-bot` 即生效。
 
+管理员也可以直接在群里维护词族，不需要让模型猜关联：`/rel nm|nmb|mlgb|你妈` 会创建以 `nm` 为名称的词族，`/rel 对线=nm|nmb|mlgb|你妈` 可以指定名称；`/rel-list` 查看当前词族，`/rel-del 对线` 删除。命令只允许 `LONGTU_QQ_ADMIN_USERS` 中的管理员，Bridge 会在入口放行这三个命令；词族快照写入可写的 `data/longtu-tag-relations.custom.json`，容器重启和重建都会保留。若要恢复仓库默认词库，删除这个 custom 文件后重启即可。
+
 ## 4. 登录 NapCat 并连接 AstrBot
 
 查看 NapCat 日志，其中会打印 WebUI 地址和 Token：

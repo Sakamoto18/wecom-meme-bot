@@ -53,6 +53,7 @@ function createService(options = {}) {
     webSearchEnabled: options.webSearchEnabled ?? false,
     longtuLibrary: options.longtuLibrary,
     longtuTagRelations: options.longtuTagRelations,
+    persistLongtuTagRelations: options.persistLongtuTagRelations,
     adminUsers: options.adminUsers,
     protectedRoles: options.protectedRoles,
     // 默认关掉本地 OCR：绝大多数用例不该依赖宿主机是否装了 tesseract。
@@ -2707,6 +2708,34 @@ test('QQ 精确关键词从同名手动图片池选择而不是固定第一张',
   assert.equal(result.messages[0].filename, 'manual-yuan-shen-pool.png');
   assert.deepEqual(poolPicks[0], shas);
   assert.equal(calls.length, 0);
+});
+
+test('管理员可在群里手动维护词族并持久化', async () => {
+  let persisted = null;
+  const { service } = createService({
+    adminUsers: new Set(['admin-1']),
+    longtuLibrary: { listAliases: () => [] },
+    longtuTagRelations: [{
+      id: '旧词族', hostile: false, inputTerms: ['旧词'], poolTerms: ['旧词'],
+    }],
+    persistLongtuTagRelations: async (groups) => { persisted = groups; },
+  });
+  const added = await service.handleMessage({
+    message_id: 'relation-admin-add', message_type: 'group', group_id: 'g1',
+    user_id: 'admin-1', text: '/rel 对线=nm|nmb|mlgb|你妈',
+  });
+  assert.equal(added.mode, 'management-relation-upserted');
+  assert.deepEqual(persisted.at(-1), {
+    id: '对线', hostile: false,
+    inputTerms: ['nm', 'nmb', 'mlgb', '你妈'],
+    poolTerms: ['nm', 'nmb', 'mlgb', '你妈'],
+  });
+  const removed = await service.handleMessage({
+    message_id: 'relation-admin-del', message_type: 'group', group_id: 'g1',
+    user_id: 'admin-1', text: '/rel-del 旧词族',
+  });
+  assert.equal(removed.mode, 'management-relation-deleted');
+  assert.equal(persisted.some((group) => group.id === '旧词族'), false);
 });
 
 test('群聊 @bot 也能用关联词族选图，不局限于私聊', async () => {

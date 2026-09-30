@@ -28,7 +28,9 @@ const SCENE_ALIAS_STOPWORDS = new Set([
   '不过', '还是', '已经', '不会', '不能', '没有', '觉得', '时候', '东西',
 ]);
 const SLASH_COMMAND_PATTERN = /^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]*))?$/i;
-const ALLOWED_SLASH_COMMANDS = new Set(['add', 'tag', 'del']);
+const ALLOWED_SLASH_COMMANDS = new Set([
+  'add', 'tag', 'del', 'rel', 'rel-list', 'rel-del',
+]);
 const SHORT_ID_EXACT_PATTERN = /^LT-[A-F0-9]{8}$/i;
 
 export function normalizeLongtuAlias(value) {
@@ -104,6 +106,51 @@ export function parseLongtuSlashCommand(content) {
         message: '用法：/tag 标记名（请在同一条消息附图、引用图片，或先使用 /add）',
       };
   }
+  if (command === 'rel-list') {
+    return argument
+      ? {
+        action: 'invalid-slash', force: false, shortId: '', alias: '',
+        message: '用法：/rel-list（查看当前词族）',
+      }
+      : { action: 'relation-list', force: false, shortId: '', alias: '' };
+  }
+  if (command === 'rel-del') {
+    const relationId = parseRelationId(argument);
+    return relationId
+      ? {
+        action: 'relation-delete', force: false, shortId: '', alias: '', relationId,
+      }
+      : {
+        action: 'invalid-slash', force: false, shortId: '', alias: '',
+        message: '用法：/rel-del 词族名',
+      };
+  }
+  if (command === 'rel') {
+    if (!argument) {
+      return {
+        action: 'invalid-slash', force: false, shortId: '', alias: '',
+        message: '用法：/rel 词1|词2|词3，或 /rel 词族名=词1|词2|词3',
+      };
+    }
+    const separator = argument.search(/[=:：]/u);
+    const relationId = separator >= 0
+      ? parseRelationId(argument.slice(0, separator))
+      : '';
+    const terms = parseRelationTerms(separator >= 0
+      ? argument.slice(separator + 1)
+      : argument);
+    const effectiveId = relationId || terms[0] || '';
+    if (!effectiveId || terms.length < 2 || !terms.some((term) => term.length >= 2)) {
+      return {
+        action: 'invalid-slash', force: false, shortId: '', alias: '',
+        message: '用法：/rel 词1|词2|词3，至少提供两个词；也可写 /rel 词族名=词1|词2|词3',
+      };
+    }
+    return {
+      action: 'relation-upsert', force: false, shortId: '', alias: '',
+      relationId: effectiveId, relationTerms: terms,
+    };
+  }
   if (!argument) {
     return { action: 'delete-this', force: false, shortId: '', alias: '' };
   }
@@ -163,6 +210,21 @@ function compactAliasRequest(value) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseRelationTerms(value) {
+  return [...new Set(String(value ?? '')
+    .split(/[|,，、\s]+/u)
+    .map((term) => normalizeLongtuAlias(term))
+    .filter(Boolean))];
+}
+
+function parseRelationId(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/[\r\n]+/gu, ' ')
+    .trim()
+    .slice(0, 48);
 }
 
 export function matchLongtuAliasRequest(content, bindings = [], options = {}) {

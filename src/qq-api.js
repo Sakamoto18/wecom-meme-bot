@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -156,6 +156,19 @@ async function readLongtuTagRelations(filePath) {
       console.warn(`无法读取图库关联词库 ${filePath}：${error.message}，回退内置词库`);
     }
     return DEFAULT_LONGTU_TAG_RELATIONS;
+  }
+}
+
+async function readOptionalLongtuTagRelations(filePath) {
+  try {
+    const parsed = JSON.parse(await readFile(filePath, 'utf8'));
+    if (parsed?.override !== true) return null;
+    return normalizeLongtuTagRelations(parsed);
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn(`无法读取自定义图库词族 ${filePath}：${error.message}`);
+    }
+    return null;
   }
 }
 
@@ -557,12 +570,23 @@ export async function createQqRuntime() {
     projectRoot,
     process.env.LONGTU_TAG_RELATIONS_FILE?.trim() || 'config/longtu-tag-relations.json',
   );
-  const [systemPrompt, knowledgeContext, memberAliases, longtuTagRelations] = await Promise.all([
+  const longtuTagRelationsOverridesPath = path.resolve(
+    projectRoot,
+    process.env.LONGTU_TAG_RELATIONS_OVERRIDES_FILE?.trim()
+      || 'data/longtu-tag-relations.custom.json',
+  );
+  const [systemPrompt, knowledgeContext, memberAliases, configuredLongtuTagRelations,
+    customLongtuTagRelations] = await Promise.all([
     readOptionalConfig(promptPath, '角色设定'),
     readOptionalConfig(knowledgePath, '龙图知识'),
     readMemberAliases(aliasesPath),
     readLongtuTagRelations(longtuTagRelationsPath),
+    readOptionalLongtuTagRelations(longtuTagRelationsOverridesPath),
   ]);
+  // An administrator-managed file is a complete snapshot. This makes
+  // /rel-del durable too: deleted built-in groups are not reintroduced on
+  // every restart by merging the read-only defaults back in.
+  const longtuTagRelations = customLongtuTagRelations ?? configuredLongtuTagRelations;
 
   const chatClient = usageTracker.wrapChatClient(new OpenAICompatibleChatClient({
     apiKey: process.env.LLM_API_KEY,
@@ -717,6 +741,14 @@ export async function createQqRuntime() {
     memberAliases,
     longtuLibrary,
     longtuTagRelations,
+    persistLongtuTagRelations: async (groups) => {
+      await mkdir(path.dirname(longtuTagRelationsOverridesPath), { recursive: true });
+      await writeFile(
+        longtuTagRelationsOverridesPath,
+        `${JSON.stringify({ version: 1, override: true, groups }, null, 2)}\n`,
+        'utf8',
+      );
+    },
     adminUsers,
     personaManager: new QqPersonaManager({
       store: personaStore,

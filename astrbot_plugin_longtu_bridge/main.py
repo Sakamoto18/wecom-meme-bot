@@ -56,7 +56,8 @@ RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
 )
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
-    "/add", "/tag", "/del", "/stop", "/usage-report", "/persona",
+    "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
+    "/stop", "/usage-report", "/persona",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 

@@ -174,6 +174,20 @@ test('解析图库聊天管理指令', () => {
   assert.deepEqual(parseLongtuManagementCommand('/del lt-a1b2c3d4'), {
     action: 'delete-this', force: false, shortId: 'LT-A1B2C3D4', alias: '',
   });
+  assert.deepEqual(parseLongtuManagementCommand('/rel nm|nmb|mlgb|你妈'), {
+    action: 'relation-upsert', force: false, shortId: '', alias: '',
+    relationId: 'nm', relationTerms: ['nm', 'nmb', 'mlgb', '你妈'],
+  });
+  assert.deepEqual(parseLongtuManagementCommand('/rel 对线=nm|nmb|你妈'), {
+    action: 'relation-upsert', force: false, shortId: '', alias: '',
+    relationId: '对线', relationTerms: ['nm', 'nmb', '你妈'],
+  });
+  assert.deepEqual(parseLongtuManagementCommand('/rel-list'), {
+    action: 'relation-list', force: false, shortId: '', alias: '',
+  });
+  assert.deepEqual(parseLongtuManagementCommand('/rel-del 对线'), {
+    action: 'relation-delete', force: false, shortId: '', alias: '', relationId: '对线',
+  });
   assert.equal(parseLongtuManagementCommand('/help').action, 'ignored-slash');
   assert.equal(parseLongtuManagementCommand('/').action, 'ignored-slash');
   assert.equal(parseLongtuManagementCommand(' / ').action, 'ignored-slash');

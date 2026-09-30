@@ -1418,6 +1418,7 @@ export class QqBotService {
     // Relation vocabulary is a local, precompiled tag index. It only expands
     // image candidates; it never changes the model prompt or reply style.
     this.longtuTagRelations = options.longtuTagRelations ?? null;
+    this.persistLongtuTagRelations = options.persistLongtuTagRelations ?? null;
     this.personaManager = options.personaManager ?? null;
     this.adminUsers = options.adminUsers ?? new Set();
     this.protectedRoles = options.protectedRoles ?? new Map();
@@ -2937,6 +2938,71 @@ export class QqBotService {
               `管理员关键词池 ${stats.manualAliases ?? 0} 个、绑定 ${stats.manualAliasBindings ?? 0} 条；OCR 场景文字 ${stats.ocrAliases ?? 0} 个、绑定 ${stats.ocrAliasBindings ?? 0} 条`,
               '随机策略：会话独立洗牌，抽完整池前不重复，最近 12 次避开相似场景。',
             ].join('；'),
+          }],
+        };
+      }
+
+      if (command.action === 'relation-list') {
+        const relations = Array.isArray(this.longtuTagRelations)
+          ? this.longtuTagRelations : [];
+        return {
+          mode: 'management-relation-list',
+          messages: [{
+            type: 'text',
+            text: relations.length > 0
+              ? `当前词族 ${relations.length} 组：${relations.map((group) => (
+                `${group.id}=[${group.poolTerms.join('、')}]`
+              )).join('；')}`
+              : '当前没有可用的词族关联。',
+          }],
+        };
+      }
+
+      if (command.action === 'relation-upsert') {
+        if (typeof this.persistLongtuTagRelations !== 'function') {
+          throw new Error('当前部署未启用词族持久化，请直接修改 LONGTU_TAG_RELATIONS_FILE 后重启');
+        }
+        const terms = [...new Set((command.relationTerms ?? []).filter(Boolean))];
+        const relation = {
+          id: command.relationId,
+          hostile: false,
+          inputTerms: terms,
+          poolTerms: terms,
+        };
+        const current = Array.isArray(this.longtuTagRelations)
+          ? this.longtuTagRelations : [];
+        const next = [
+          ...current.filter((group) => group.id !== command.relationId),
+          relation,
+        ];
+        await this.persistLongtuTagRelations(next);
+        this.longtuTagRelations = next;
+        return {
+          mode: 'management-relation-upserted',
+          messages: [{
+            type: 'text',
+            text: `已保存词族“${command.relationId}”：${terms.join('、')}。群聊 @bot 和普通语境选图立即使用，重启后仍保留。`,
+          }],
+        };
+      }
+
+      if (command.action === 'relation-delete') {
+        if (typeof this.persistLongtuTagRelations !== 'function') {
+          throw new Error('当前部署未启用词族持久化，请直接修改 LONGTU_TAG_RELATIONS_FILE 后重启');
+        }
+        const current = Array.isArray(this.longtuTagRelations)
+          ? this.longtuTagRelations : [];
+        const next = current.filter((group) => group.id !== command.relationId);
+        if (next.length === current.length) {
+          throw new Error(`没有找到词族“${command.relationId}”`);
+        }
+        await this.persistLongtuTagRelations(next);
+        this.longtuTagRelations = next;
+        return {
+          mode: 'management-relation-deleted',
+          messages: [{
+            type: 'text',
+            text: `已删除词族“${command.relationId}”，后续选图不再自动合并这组 tag。`,
           }],
         };
       }
