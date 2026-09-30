@@ -34,7 +34,10 @@ BILIBILI_NAV_URL = 'https://api.bilibili.com/x/web-interface/nav'
 def is_real_video_url(url):
     low = str(url or '').lower()
     return low.startswith(('https://', 'http://')) and 'uuu_265.mp4' not in low and any(
-        token in low for token in ('.mp4', '.m3u8', 'playwm', 'play/')
+        token in low for token in (
+            '.mp4', '.m3u8', 'playwm', 'play/',
+            'douyinvod.com/', '/video/', 'mime_type=video_',
+        )
     )
 
 
@@ -275,23 +278,39 @@ EXTRACT_SCRIPT = r'''() => {
     const poster=[...document.querySelectorAll('video[poster], video')].map(v=>v.poster || '').find(Boolean) || '';
     const html=document.documentElement?.outerHTML || '';
     const urls=[...html.matchAll(/https?:\/\/[^"'\s<>]+/g)].map(m=>m[0].replaceAll('\/','/'));
-    const isVideo=(u)=>{ const low=String(u||'').toLowerCase(); return low.indexOf('uuu_265.mp4')<0 && (/\.(mp4|m3u8)(?:[?#]|$)/i.test(u)||/playwm|play\//i.test(u)); };
+    const isVideo=(u)=>{ const low=String(u||'').toLowerCase(); return low.indexOf('uuu_265.mp4')<0 && (/\.(mp4|m3u8)(?:[?#]|$)/i.test(u)||/playwm|play\//i.test(u)||/douyinvod\.com\/|\/video\/|mime_type=video_/i.test(u)); };
     const isCover=(u)=>{ const low=String(u||'').toLowerCase(); return Boolean(u) && !/douyindefault|default\.ee9da4401be3dae0|aweme-avatar|favicon|logo/.test(low); };
     // A Douyin multi-video share renders one player element per work. Keep the
     // URL/poster pair from those elements together; collecting every network
     // video request would also pull recommendation previews into the share.
-    const elementItems=videoElements.map(v=>({video:v.currentSrc||v.src||'',cover:isCover(v.poster||'') ? v.poster : ''}))
+    const elementItems=videoElements.map(v=>({
+      // The real stream is frequently attached to a child <source> after the
+      // initial shell; currentSrc is empty while that hydration is in flight.
+      video:v.currentSrc||v.src||v.querySelector('source')?.src||'',
+      cover:isCover(v.poster||'') ? v.poster : ''
+    }))
       .filter(item=>isVideo(item.video));
-    const candidates=[...videoElements.flatMap(v=>[v.currentSrc,v.src]),...resources,...urls].filter(Boolean);
+    const candidates=[...videoElements.flatMap(v=>[v.currentSrc,v.src,v.querySelector('source')?.src]),...resources,...urls].filter(Boolean);
     const fallbackVideo=candidates.find(isVideo) || '';
     const videos=[...new Map(elementItems.map(item=>[item.video,item])).values()];
     if (!videos.length && fallbackVideo) videos.push({video:fallbackVideo,cover:isCover(poster) ? poster : ''});
     const video=videos[0]?.video || '';
     const imageCandidates=[...document.images].map(img=>img.currentSrc || img.src || '').filter(Boolean);
-    const embeddedCover=imageCandidates.find(u=>{ const low=String(u).toLowerCase(); return !/aweme-avatar|icon|logo/.test(low) && /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(u); }) || '';
+    // Keep source order for multi-video notes. Emoji, avatars and comment
+    // stickers share this CDN, so only retain the two cover URL families.
+    const awemeCovers=[...new Set(imageCandidates.filter(u=>{
+      const low=String(u).toLowerCase();
+      return isCover(u) && /tplv-dy-aweme-images|biz_tag=aweme_images/.test(low);
+    }))];
+    const pcCovers=[...new Set(imageCandidates.filter(u=>{
+      const low=String(u).toLowerCase();
+      return isCover(u) && /biz_tag=pcweb_cover/.test(low);
+    }))];
+    const coverImages=awemeCovers.length ? awemeCovers : pcCovers;
+    const embeddedCover=coverImages[0] || imageCandidates.find(u=>{ const low=String(u).toLowerCase(); return !/aweme-avatar|icon|logo/.test(low) && /\.(?:jpe?g|png|webp)(?:[?#]|$)/i.test(u); }) || '';
     const coverCandidates=[meta('lark:url:video_cover_image_url'),document.querySelector('meta[property="og:image"]')?.content,poster,embeddedCover].filter(isCover);
     const pageCover=coverCandidates[0] || '';
-    return {title:document.title,desc:meta('description'),cover:pageCover,video,videos,author,avatar,tags:keywords};
+    return {title:document.title,desc:meta('description'),cover:pageCover,covers:coverImages.slice(0,18),video,videos,author,avatar,tags:keywords,path:location.pathname};
    }'''
 
 
@@ -404,6 +423,19 @@ async def read_page(page, url, video_requests, state, video_sizes=None):
     await page.wait_for_timeout(2500)
     state['stage'] = 'extract'
     data = await page.evaluate(EXTRACT_SCRIPT)
+    # ``/note/`` pages hydrate the real players and cover images after the
+    # initial shell. A single read around the four-second mark can therefore
+    # see only the uuu_265 placeholder. Poll this page type until the real
+    # player set and cover are present; ordinary video shares keep the fast
+    # path unchanged.
+    if '/note/' in str(data.get('path') or ''):
+        for _ in range(6):
+            playable = [item for item in (data.get('videos') or [])
+                        if isinstance(item, dict) and is_real_video_url(item.get('video'))]
+            if len(playable) >= 2 and (data.get('covers') or data.get('cover')):
+                break
+            await page.wait_for_timeout(650)
+            data = await page.evaluate(EXTRACT_SCRIPT)
     if not is_real_video_url(data.get('video')):
         data['video'] = next((u for u in reversed(video_requests) if is_real_video_url(u)), '')
     common = {
@@ -412,7 +444,8 @@ async def read_page(page, url, video_requests, state, video_sizes=None):
         'tags': data.get('tags', []),
     }
     video_items = []
-    for item in data.get('videos') or []:
+    cover_images = [str(item) for item in (data.get('covers') or []) if item]
+    for index, item in enumerate(data.get('videos') or []):
         if isinstance(item, dict):
             video_url = html.unescape(str(item.get('video') or item.get('url') or ''))
             cover = str(item.get('cover') or '')
@@ -424,7 +457,8 @@ async def read_page(page, url, video_requests, state, video_sizes=None):
             continue
         video_items.append({
             'video_url': video_url,
-            'cover': cover or data.get('cover', ''),
+            'cover': cover or (cover_images[index] if index < len(cover_images) else '')
+                or data.get('cover', ''),
             'size': video_sizes.get(video_url, 0),
         })
     if len(video_items) > 1:
