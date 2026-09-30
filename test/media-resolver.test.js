@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { MediaResolver, normalizeDownloadSource } from '../src/media-resolver.js';
 import {
   extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
@@ -235,4 +238,22 @@ test('B站简介和原作者经过播放代理仍完整保留', async () => {
     assert.equal(result.description, '第一行\n#高达 第二行');
     assert.equal(result.streamed, true);
   } finally { resolver.close(); }
+});
+
+test('本地动图媒体注册后保留 image/gif 类型', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'media-gif-'));
+  const filePath = path.join(directory, 'example.gif');
+  await writeFile(filePath, Buffer.from('GIF89a'));
+  const resolver = new MediaResolver({ enabled: true, cacheTtlMs: 60_000 });
+  try {
+    const result = resolver.registerMedia({
+      filePath, outputBytes: 6, mediaType: 'image/gif',
+    });
+    const resource = await resolver.getMediaFile(result.mediaId);
+    assert.equal(resource.mediaType, 'image/gif');
+    assert.equal(result.url, `http://qq-bot:8787/v1/qq/media/${result.mediaId}`);
+  } finally {
+    resolver.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });

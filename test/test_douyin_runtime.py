@@ -105,6 +105,10 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['data']['media_type'], 'images')
         self.assertEqual(result['data']['video_url'], '')
         self.assertEqual(result['data']['images'], images)
+        self.assertEqual(
+            [item['video_url'] for item in result['data']['animated_videos']],
+            ['https://cdn.example/animated-1.mp4', 'https://cdn.example/animated-2.mp4'],
+        )
         args = ns['collect_gallery'].await_args.args
         self.assertIs(args[0], page)
         self.assertIs(args[1], state)

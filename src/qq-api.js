@@ -287,7 +287,7 @@ export function createQqApiServer(options) {
           return;
         }
         response.writeHead(200, {
-          'Content-Type': 'video/mp4',
+          'Content-Type': mediaFile.mediaType || 'video/mp4',
           'Content-Length': String(mediaFile.size),
           'Cache-Control': 'private, max-age=600',
           'Content-Disposition': 'inline',
@@ -712,6 +712,7 @@ export async function createQqRuntime() {
   const mediaResolver = new MediaResolver({
     enabled: parseBoolean(process.env.QQ_MEDIA_EXTRACT_ENABLED, false),
     command: process.env.QQ_MEDIA_YTDLP_COMMAND?.trim() || 'yt-dlp',
+    ffmpegCommand: process.env.QQ_MEDIA_FFMPEG_COMMAND?.trim() || 'ffmpeg',
     cookiesFile: process.env.QQ_MEDIA_YTDLP_COOKIES_FILE?.trim() || '',
     cookie: process.env.QQ_MEDIA_YTDLP_COOKIE?.trim() || '',
     bilibiliCookie: process.env.QQ_BILIBILI_COOKIE?.trim() || '',
