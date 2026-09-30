@@ -3117,6 +3117,37 @@ test('视频卡片只透传原作者与正文话题，QQ发送者不覆盖作者
   assert.equal(result.messages[0].provider, 'xiaohongshu');
 });
 
+test('同一抖音分享卡中的多个链接会聚合成多个视频并附带多封面预览', async () => {
+  const resolved = new Map([
+    ['https://v.douyin.com/one/', {
+      url: 'https://cdn.example/video-1.mp4', coverUrl: 'https://cdn.example/cover-1.jpg', title: '第一条',
+    }],
+    ['https://v.douyin.com/two/', {
+      url: 'https://cdn.example/video-2.mp4', coverUrl: 'https://cdn.example/cover-2.jpg', title: '第二条',
+    }],
+  ]);
+  let calls = 0;
+  const { service } = createService({ mediaResolver: { enabled: true, async resolve(candidate) {
+    calls += 1;
+    return resolved.get(candidate.url);
+  } } });
+  const result = await service.handleMessage({
+    message_id: 'douyin-multi-card', message_type: 'group', group_id: '499615970', user_id: 'tester',
+    media_share: true,
+    text: 'https://v.douyin.com/one/ https://v.douyin.com/two/',
+  });
+  assert.equal(result.mode, 'media');
+  assert.equal(result.messages.length, 2);
+  assert.deepEqual(result.messages.map((item) => item.url), [
+    'https://cdn.example/video-1.mp4', 'https://cdn.example/video-2.mp4',
+  ]);
+  assert.deepEqual(result.messages[0].images, [
+    'https://cdn.example/cover-1.jpg', 'https://cdn.example/cover-2.jpg',
+  ]);
+  assert.equal(result.messages[1].images.length, 0);
+  assert.equal(calls, 2);
+});
+
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
   const received = [];
   const usageRequests = [];

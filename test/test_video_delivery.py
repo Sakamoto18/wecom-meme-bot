@@ -18,6 +18,7 @@ source = ast.parse((Path(__file__).resolve().parents[1] / 'astrbot_plugin_longtu
 bridge = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'LongtuQqBridge')
 methods = [n for n in bridge.body if getattr(n, 'name', '') in (
     '_call_video_send', '_call_video_forward', '_send_video_from_backend',
+    '_send_video_bundle_from_backend',
 )]
 namespace = dict(asyncio=asyncio, contextlib=contextlib, re=re, time=time,
                  AstrMessageEvent=object, VIDEO_SEND_TIMEOUT_SECONDS=480,
@@ -171,6 +172,29 @@ class VideoDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reactions, [True, True])
         self.assertEqual(actions[1][1]['group_id'], '913546080')
         await instance.video_delivery_cache.close()
+
+    async def test_multi_video_bundle_uses_one_forward_record(self):
+        calls = []
+        async def call_action(action, **params):
+            calls.append((action, params))
+            return {'message_id': 777}
+        instance = Bridge()
+        event = SimpleNamespace(
+            bot=SimpleNamespace(call_action=call_action),
+            is_private_chat=lambda: False, get_group_id=lambda: '499615970',
+            get_self_id=lambda: '2170902293', message_obj=SimpleNamespace(self_id='2170902293'),
+        )
+        messages = [
+            {'type': 'video', 'url': 'https://cdn/video-1.mp4'},
+            {'type': 'video', 'url': 'https://cdn/video-2.mp4'},
+        ]
+        self.assertTrue(await instance._send_video_bundle_from_backend(event, messages))
+        self.assertEqual(calls[0][0], 'send_group_forward_msg')
+        self.assertEqual(len(calls[0][1]['messages']), 2)
+        self.assertEqual(
+            [node['data']['content'][0]['data']['file'] for node in calls[0][1]['messages']],
+            ['https://cdn/video-1.mp4', 'https://cdn/video-2.mp4'],
+        )
 
 
 if __name__ == '__main__':
