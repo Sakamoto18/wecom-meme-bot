@@ -21,7 +21,7 @@ export function normalizeLongtuTagRelations(value) {
     .filter((item) => typeof item === 'string').map(normalize)
     .filter((item) => item.length >= minimum && item.length <= 32))];
   return groups.slice(0, 128).flatMap((group) => {
-    const inputTerms = terms(group?.inputTerms ?? group?.terms, 2);
+    const inputTerms = terms(group?.inputTerms ?? group?.terms, 1);
     const poolTerms = terms(group?.poolTerms ?? group?.terms ?? inputTerms, 1);
     if (!inputTerms.length || !poolTerms.length) return [];
     return [{ id: String(group.id || inputTerms[0]).slice(0, 48),
@@ -40,6 +40,20 @@ function matcher(term) {
     return new RegExp(`(?<![a-z0-9])${letters.join('[\\s._-]*')}(?![a-z0-9])`, 'u');
   }
   return new RegExp(quote(term), 'u');
+}
+
+// Keep Latin word boundaries through every selection path, including the old
+// OCR fallback. Otherwise nmcli or a numeric nanometre value can select nm.
+export function longtuTagInput(value) {
+  return normalize(value).slice(0, 2000)
+    .replace(/\d+(?:\.\d+)?\s*nm(?![a-z0-9])/gu, ' ');
+}
+
+export function containsLongtuTag(value, tag) {
+  const term = normalize(tag);
+  if (!term) return false;
+  const text = longtuTagInput(value);
+  return term.length === 1 ? text === term : matcher(term).test(text);
 }
 
 function getGroups(options) {
@@ -61,26 +75,12 @@ function poolHit(binding, group) {
     ? binding.source === 'manual' && alias === term : pattern.test(alias));
 }
 
-export function filterLongtuTagsForContext(bindings, options = {}) {
-  const hostileGroups = options.allowHostile === false
-    ? getGroups(options).filter((group) => group.hostile)
-    : [];
-  return (Array.isArray(bindings) ? bindings : []).filter((binding) => (
-    binding?.sha256
-    && binding?.alias
-    && !binding.deleted_at
-    && !binding.deletedAt
-    && !binding.blocked
-    && !hostileGroups.some((group) => poolHit(binding, group))
-  ));
-}
-
 export function matchRelatedLongtuTags(content, bindings, options = {}) {
-  const text = normalize(content).slice(0, 2000)
-    .replace(/\b\d+(?:\.\d+)?\s*nm\b/gu, '');
+  const text = longtuTagInput(content);
   if (!text) return [];
   const groups = getGroups(options).filter((group) => (!group.hostile || options.allowHostile !== false)
-    && group.inputs.some((pattern) => pattern.test(text)));
+    && group.inputs.some((pattern, index) => group.inputTerms[index].length === 1
+      ? text === group.inputTerms[index] : pattern.test(text)));
   if (!groups.length) return [];
   const unique = new Map();
   for (const binding of Array.isArray(bindings) ? bindings : []) {
