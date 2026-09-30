@@ -52,6 +52,7 @@ function createService(options = {}) {
     webSearch: options.webSearch,
     webSearchEnabled: options.webSearchEnabled ?? false,
     longtuLibrary: options.longtuLibrary,
+    longtuTagRelations: options.longtuTagRelations,
     adminUsers: options.adminUsers,
     protectedRoles: options.protectedRoles,
     // 默认关掉本地 OCR：绝大多数用例不该依赖宿主机是否装了 tesseract。
@@ -2706,6 +2707,37 @@ test('QQ 精确关键词从同名手动图片池选择而不是固定第一张',
   assert.equal(result.messages[0].filename, 'manual-yuan-shen-pool.png');
   assert.deepEqual(poolPicks[0], shas);
   assert.equal(calls.length, 0);
+});
+
+test('群聊 @bot 也能用关联词族选图，不局限于私聊', async () => {
+  const shas = ['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)];
+  const poolPicks = [];
+  const longtuLibrary = {
+    listAliases: () => [
+      { alias: 'nmb', sha256: shas[0], source: 'manual' },
+      { alias: 'mlgb', sha256: shas[1], source: 'manual' },
+      { alias: '你妈', sha256: shas[2], source: 'manual' },
+    ],
+  };
+  const memeStore = {
+    async pickByShas(candidateShas) {
+      poolPicks.push(candidateShas);
+      return createMeme('related-group.png');
+    },
+  };
+  const { service } = createService({ longtuLibrary, memeStore });
+  const result = await service.handleMessage({
+    message_id: 'related-group-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'someone-else',
+    bot_user_id: 'bot-1',
+    mentions: [{ user_id: 'bot-1', name: '龙玉涛' }],
+    text: 'nm',
+  });
+
+  assert.equal(result.mode, 'longtu');
+  assert.deepEqual(poolPicks, [shas]);
 });
 
 test('管理员可先用 /add 设定现有图目标，再用 /tag 连续绑定', async () => {
