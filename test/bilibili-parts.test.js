@@ -96,6 +96,35 @@ test('P2 选择自己的 cid、大小、标题和时长，保留原作者/简介
   assert.equal(result.cid, '436920316');
 });
 
+test('B站卡片优先使用原生稿件缩略图，不把播放器首帧当封面', async () => {
+  const data = {
+    ...metadata,
+    pages: metadata.pages.map((item) => ({
+      ...item,
+      first_frame: 'https://cdn.example/black-player-first-frame.jpg',
+    })),
+  };
+  const result = await resolveBilibiliMedia(VIDEO, {
+    fetchImpl: mockApi([], { data }),
+  });
+  assert.equal(result.coverUrl, metadata.pic);
+  assert.notEqual(result.coverUrl, data.pages[0].first_frame);
+});
+
+test('B站接口没有稿件缩略图时才使用播放器首帧兜底', async () => {
+  const firstFrame = 'https://cdn.example/player-first-frame.jpg';
+  const data = {
+    ...metadata,
+    pic: '',
+    cover: '',
+    pages: metadata.pages.map((item) => ({ ...item, first_frame: firstFrame })),
+  };
+  const result = await resolveBilibiliMedia(VIDEO, {
+    fetchImpl: mockApi([], { data }),
+  });
+  assert.equal(result.coverUrl, firstFrame);
+});
+
 test('B站 AI 总结使用 WBI 登录态并透传到解析结果', async () => {
   const calls = [];
   const data = { ...metadata, owner: { ...metadata.owner, mid: 4282930 } };

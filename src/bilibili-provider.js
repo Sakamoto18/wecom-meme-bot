@@ -183,7 +183,12 @@ export async function resolveBilibiliMedia(value, {
         ? `${title} · P${page}${partTitle && partTitle !== title ? ` ${partTitle}` : ''}`
         : title).slice(0, 200),
       description: String(metadata.desc || '').slice(0, 4000),
-      coverUrl: normalizeMediaUrl(selected?.first_frame || metadata.pic || metadata.cover || ''),
+      // `first_frame` is a player frame, not B 站分享卡的稿件缩略图. It can
+      // legitimately be black (or show a loading frame), which made the QQ
+      // card look as if the video had been extracted as an image. The native
+      // share card uses `pic` from the view API; only use a page first frame
+      // when the view API has no cover at all.
+      coverUrl: normalizeMediaUrl(metadata.pic || metadata.cover || selected?.first_frame || ''),
       author: String(metadata.owner?.name || ''),
       avatarUrl: normalizeMediaUrl(metadata.owner?.face || ''),
       aid: Number(metadata.aid || id.aid || 0) || 0,
