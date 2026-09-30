@@ -67,6 +67,12 @@ def runtime():
 
 
 class RequestTests(unittest.IsolatedAsyncioTestCase):
+    def test_douyin_vod_resource_is_a_real_video(self):
+        ns = runtime()
+        self.assertTrue(ns['is_real_video_url'](
+            'https://v26-web.douyinvod.com/abc/def/video/tos/cn/file?mime_type=video_mp4',
+        ))
+
     async def test_dom_timeout_still_extracts_loaded_video(self):
         ns = runtime()
         page = SimpleNamespace(goto=AsyncMock(side_effect=TimeoutError()), wait_for_timeout=AsyncMock(),
