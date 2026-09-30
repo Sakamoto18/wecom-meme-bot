@@ -426,9 +426,8 @@ async def read_page(page, url, video_requests, state, video_sizes=None):
     # ``/note/`` pages hydrate the real players and cover images after the
     # initial shell. A single read around the four-second mark can therefore
     # see only the uuu_265 placeholder. Poll this page type until the real
-    # player set and cover are present. Do not classify a /note/ page as a
-    # video until its gallery branch has had a chance to finish; animated MP4s
-    # on image-text notes are optional GIF sources, not the post type.
+    # player set and cover are present; ordinary video shares keep the fast
+    # path unchanged.
     if '/note/' in str(data.get('path') or ''):
         for _ in range(6):
             playable = [item for item in (data.get('videos') or [])
