@@ -1,3 +1,5 @@
+import { matchRelatedLongtuTags } from './longtu-tag-relations.js';
+
 const UNDO_DELETE_PATTERN = /(?:撤销|取消)(?:刚才|刚刚|上次)?删除|恢复(?:刚才|刚刚|上次)?删除(?:的龙图)?/;
 const STATUS_PATTERN = /(?:龙图|图库)(?:状态|统计|数量)|(?:状态|统计)(?:龙图|图库)/;
 const SHORT_ID_PATTERN = /\bLT-[A-F0-9]{8}\b/i;
@@ -163,7 +165,7 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function matchLongtuAliasRequest(content, bindings = []) {
+export function matchLongtuAliasRequest(content, bindings = [], options = {}) {
   const text = compactAliasRequest(content);
   if (!text) return null;
   const grouped = new Map();
@@ -184,6 +186,7 @@ export function matchLongtuAliasRequest(content, bindings = []) {
   const sorted = [...grouped.values()]
     // OCR 识别出的整句只参与语境匹配，不作为用户需要记忆的精确口令。
     .sort((left, right) => right.alias.length - left.alias.length);
+  let exactMatch = null;
   for (const group of sorted) {
     const alias = compactAliasRequest(group.alias);
     if (!alias) continue;
@@ -193,13 +196,48 @@ export function matchLongtuAliasRequest(content, bindings = []) {
       'i',
     );
     if (requestPattern.test(text)) {
-      return { ...group, sha256: group.sha256s[0] };
+      exactMatch = { ...group, sha256: group.sha256s[0] };
+      break;
     }
+  }
+
+  // A manually registered alias remains the direct-request anchor, but a
+  // configured relation group expands its candidate pool so the persistent
+  // picker can rotate among related images instead of returning one fixed
+  // hash forever (for example “nm” -> “nmb/mlgb/你妈”).
+  const related = matchRelatedLongtuTags(text, bindings, {
+    ...options,
+    allowHostile: options.allowHostile !== false,
+  });
+  if (exactMatch) {
+    const merged = new Map();
+    for (const binding of [...(exactMatch.bindings ?? []), ...related]) {
+      if (binding?.sha256 && !merged.has(binding.sha256)) merged.set(binding.sha256, binding);
+    }
+    return {
+      ...exactMatch,
+      sha256s: [...merged.keys()],
+      bindings: [...merged.values()],
+    };
+  }
+  // Relation-only direct requests are deliberately opt-in. This prevents a
+  // normal group message such as “晚安” from unexpectedly becoming an image
+  // command; @bot/private requests can enable it at the call site.
+  if (options.allowRelatedDirect === true && related.length > 0) {
+    return {
+      alias: related[0].matchedKeyword || text,
+      source: 'relation',
+      sha256: related[0].sha256,
+      sha256s: [...new Set(related.map((entry) => entry.sha256))],
+      bindings: related,
+      matchedKeyword: related[0].matchedKeyword || text,
+      matchType: 'tag-relation',
+    };
   }
   return null;
 }
 
-export function matchLongtuContextAlias(content, bindings = []) {
+export function matchLongtuContextAlias(content, bindings = [], options = {}) {
   const text = compactAliasRequest(content);
   if (!text) return null;
   const groups = new Map();
@@ -220,14 +258,36 @@ export function matchLongtuContextAlias(content, bindings = []) {
   const match = [...groups.entries()]
     .sort((left, right) => right[0].length - left[0].length)
     .find(([alias]) => text.includes(alias))?.[1];
-  return match ? { ...match, sha256: match.sha256s[0] } : null;
+  const related = matchRelatedLongtuTags(text, bindings, {
+    ...options,
+    allowHostile: options.allowHostile !== false,
+  });
+  if (!match && related.length === 0) return null;
+  const merged = new Map();
+  for (const binding of [...(match?.bindings ?? []), ...related]) {
+    if (binding?.sha256 && !merged.has(binding.sha256)) merged.set(binding.sha256, binding);
+  }
+  return {
+    ...(match ?? {
+      alias: related[0].matchedKeyword || text,
+      source: 'relation',
+      bindings: related,
+    }),
+    sha256s: [...merged.keys()],
+    bindings: [...merged.values()],
+    sha256: [...merged.keys()][0],
+    ...(related.length > 0 ? {
+      matchedKeyword: related[0].matchedKeyword || match?.alias || text,
+      matchType: 'tag-relation',
+    } : {}),
+  };
 }
 
 /**
  * 根据用户原话和模型刚生成的文案，寻找最可能对应的图库文字标签。
  * 这是本地字符串匹配，不调用模型，也不会改变“发张龙图”的随机路径。
  */
-export function matchLongtuSceneAliases(content, answer, bindings = []) {
+export function matchLongtuSceneAliases(content, answer, bindings = [], options = {}) {
   const contentText = compactAliasRequest(content);
   const answerText = compactAliasRequest(answer);
   if (!contentText && !answerText) return [];
@@ -278,6 +338,12 @@ export function matchLongtuSceneAliases(content, answer, bindings = []) {
     [entry.binding.sha256, entry]
   ))).values()];
 
+  const relationMatches = matchRelatedLongtuTags(
+    [contentText, answerText].filter(Boolean).join('\n'),
+    bindings,
+    { ...options, allowHostile: options.allowHostile !== false },
+  );
+
   // 管理员手动标记仍然是最高优先级的精确关系。
   const manualMatches = prepared
     .filter((entry) => (
@@ -285,10 +351,17 @@ export function matchLongtuSceneAliases(content, answer, bindings = []) {
       && normalizedContent.includes(entry.normalizedAlias)
     ))
     .sort((left, right) => right.normalizedAlias.length - left.normalizedAlias.length);
-  if (manualMatches.length > 0) {
-    const alias = manualMatches[0].normalizedAlias;
-    return uniqueBySha(manualMatches.filter((entry) => entry.normalizedAlias === alias))
-      .map((entry) => ({ ...entry.binding, matchedKeyword: entry.alias }));
+  if (manualMatches.length > 0 || relationMatches.length > 0) {
+    const exactManual = manualMatches.length > 0
+      ? manualMatches
+        .filter((entry) => entry.normalizedAlias === manualMatches[0].normalizedAlias)
+        .map((entry) => ({ ...entry.binding, matchedKeyword: entry.alias }))
+      : [];
+    const merged = new Map();
+    for (const entry of [...exactManual, ...relationMatches]) {
+      if (entry?.sha256 && !merged.has(entry.sha256)) merged.set(entry.sha256, entry);
+    }
+    return [...merged.values()];
   }
 
   const findKeywordPool = (input, minimumTermLength) => {
@@ -387,8 +460,8 @@ export function matchLongtuSceneAliases(content, answer, bindings = []) {
   return [{ ...best.binding, matchedKeyword: best.alias }];
 }
 
-export function matchLongtuSceneAlias(content, answer, bindings = []) {
-  return matchLongtuSceneAliases(content, answer, bindings)[0] ?? null;
+export function matchLongtuSceneAlias(content, answer, bindings = [], options = {}) {
+  return matchLongtuSceneAliases(content, answer, bindings, options)[0] ?? null;
 }
 
 export function parseAdminUsers(value) {

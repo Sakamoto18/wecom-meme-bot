@@ -11,6 +11,10 @@ import { PeerBotContinuationDecider } from './peer-bot-gate.js';
 import { MemeStore } from './meme-store.js';
 import { LongtuLibrary } from './longtu-library.js';
 import { parseAdminUsers, parseProtectedRoles } from './longtu-management.js';
+import {
+  DEFAULT_LONGTU_TAG_RELATIONS,
+  normalizeLongtuTagRelations,
+} from './longtu-tag-relations.js';
 import { QqMemoryStore } from './qq-memory-store.js';
 import { QqPersonaStore } from './qq-persona-store.js';
 import { QqPersonaManager } from './qq-persona-manager.js';
@@ -138,6 +142,20 @@ async function readMemberAliases(filePath) {
       console.warn(`无法读取 QQ 群成员标注 ${filePath}：${error.message}`);
     }
     return {};
+  }
+}
+
+async function readLongtuTagRelations(filePath) {
+  try {
+    const parsed = JSON.parse(await readFile(filePath, 'utf8'));
+    const relations = normalizeLongtuTagRelations(parsed);
+    if (relations.length === 0) throw new Error('没有可用的关联词族');
+    return relations;
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.warn(`无法读取图库关联词库 ${filePath}：${error.message}，回退内置词库`);
+    }
+    return DEFAULT_LONGTU_TAG_RELATIONS;
   }
 }
 
@@ -535,10 +553,15 @@ export async function createQqRuntime() {
     projectRoot,
     process.env.QQ_MEMBER_ALIASES_FILE?.trim() || 'data/qq-member-aliases.json',
   );
-  const [systemPrompt, knowledgeContext, memberAliases] = await Promise.all([
+  const longtuTagRelationsPath = path.resolve(
+    projectRoot,
+    process.env.LONGTU_TAG_RELATIONS_FILE?.trim() || 'config/longtu-tag-relations.json',
+  );
+  const [systemPrompt, knowledgeContext, memberAliases, longtuTagRelations] = await Promise.all([
     readOptionalConfig(promptPath, '角色设定'),
     readOptionalConfig(knowledgePath, '龙图知识'),
     readMemberAliases(aliasesPath),
+    readLongtuTagRelations(longtuTagRelationsPath),
   ]);
 
   const chatClient = usageTracker.wrapChatClient(new OpenAICompatibleChatClient({
@@ -693,6 +716,7 @@ export async function createQqRuntime() {
     knowledgeContext,
     memberAliases,
     longtuLibrary,
+    longtuTagRelations,
     adminUsers,
     personaManager: new QqPersonaManager({
       store: personaStore,

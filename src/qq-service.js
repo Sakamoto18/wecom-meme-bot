@@ -1415,6 +1415,9 @@ export class QqBotService {
     this.knowledgeContext = options.knowledgeContext ?? '';
     this.memberAliases = options.memberAliases ?? {};
     this.longtuLibrary = options.longtuLibrary ?? null;
+    // Relation vocabulary is a local, precompiled tag index. It only expands
+    // image candidates; it never changes the model prompt or reply style.
+    this.longtuTagRelations = options.longtuTagRelations ?? null;
     this.personaManager = options.personaManager ?? null;
     this.adminUsers = options.adminUsers ?? new Set();
     this.protectedRoles = options.protectedRoles ?? new Map();
@@ -2504,6 +2507,7 @@ export class QqBotService {
             ].filter(Boolean).join('\n'),
             answer,
             options.longtuAliases ?? [],
+            { relationGroups: this.longtuTagRelations },
           );
         const shouldAttachMeme = forceMeme || attachmentSha256s.length > 0
           || sceneAliasMatches.length > 0;
@@ -3013,6 +3017,7 @@ export class QqBotService {
             command.alias,
             '',
             this.longtuLibrary.listAliases(),
+            { relationGroups: this.longtuTagRelations },
           );
           if (sceneMatches.length > 0) {
             const meme = sceneMatches.length === 1
@@ -3638,13 +3643,21 @@ export class QqBotService {
     let longtuAliases = [];
     if (this.longtuLibrary && payload.text) {
       longtuAliases = this.longtuLibrary.listAliases();
-      const aliasMatch = matchLongtuAliasRequest(payload.text, longtuAliases);
+      const aliasMatch = matchLongtuAliasRequest(payload.text, longtuAliases, {
+        relationGroups: this.longtuTagRelations,
+        // Relation-only direct requests are intended for @bot/private turns;
+        // exact manual aliases keep their legacy behaviour in every context.
+        allowRelatedDirect: payload.messageType === 'private'
+          || this.isDirectHumanMentionTrigger(payload),
+      });
       if (aliasMatch) {
         return this.replyLongtu(`文字别名：${aliasMatch.alias}`, message, {
           sha256s: aliasMatch.sha256s,
         });
       }
-      contextualAliasMatch = matchLongtuContextAlias(payload.text, longtuAliases);
+      contextualAliasMatch = matchLongtuContextAlias(payload.text, longtuAliases, {
+        relationGroups: this.longtuTagRelations,
+      });
     }
 
     const conversationId = getConversationId(message);
