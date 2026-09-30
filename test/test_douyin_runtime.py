@@ -114,6 +114,33 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(args[1], state)
         self.assertEqual(args[2], gallery_hint)
 
+    async def test_single_video_note_ignores_unrelated_gallery_counter(self):
+        ns = runtime()
+        extracted = {
+            'path': '/note/video-example', 'title': '视频作品', 'desc': '正文',
+            'author': '作者', 'avatar': '', 'tags': [],
+            'cover': 'https://cdn.example/video-cover.jpg',
+            'videos': [{'video': 'https://cdn.example/video.mp4',
+                        'cover': 'https://cdn.example/video-cover.jpg'}],
+            'video': 'https://cdn.example/video.mp4',
+        }
+        # The page may contain an unrelated N/M counter, but no actual
+        # aweme-image gallery. It must stay on the single-video path.
+        gallery_hint = {'total': 9, 'current': 1, 'items': []}
+        page = SimpleNamespace(
+            goto=AsyncMock(), wait_for_timeout=AsyncMock(),
+            evaluate=AsyncMock(side_effect=[None, extracted, gallery_hint]),
+        )
+        ns['collect_gallery'] = AsyncMock(return_value=(
+            ['https://cdn.example/wrong-gallery.webp'], 9,
+        ))
+        result = await ns['read_page'](
+            page, 'https://www.douyin.com/note/video-example', [], {},
+        )
+        self.assertEqual(result['data']['media_type'], 'video')
+        self.assertEqual(result['data']['video_url'], 'https://cdn.example/video.mp4')
+        ns['collect_gallery'].assert_not_awaited()
+
     async def test_timeout_closes_page_releases_lock_and_next_request_succeeds(self):
         ns = runtime()
         page = SimpleNamespace(on=lambda *a: None, close=AsyncMock())

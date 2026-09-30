@@ -3096,6 +3096,31 @@ for (const messageType of ['group', 'private']) {
   }
 }
 
+test('真实多视频带封面预览时不能降级成图文图库', async () => {
+  const videos = [
+    { url: 'https://cdn.example/video-1.mp4', coverUrl: 'https://cdn.example/cover-1.jpg' },
+    { url: 'https://cdn.example/video-2.mp4', coverUrl: 'https://cdn.example/cover-2.jpg' },
+  ];
+  const { service } = createService({ mediaResolver: {
+    enabled: true,
+    async resolve() {
+      return {
+        mediaItems: videos,
+        images: videos.map((item) => item.coverUrl),
+        title: '多视频分享',
+        provider: 'douyin',
+      };
+    },
+  } });
+  const result = await service.handleMessage({
+    message_id: 'douyin-provider-multi', message_type: 'group', group_id: '1109147947',
+    user_id: 'tester', media_share: true, text: 'https://v.douyin.com/multi/',
+  });
+  assert.equal(result.mode, 'media');
+  assert.deepEqual(result.messages.map((item) => item.type), ['video', 'video']);
+  assert.deepEqual(result.messages.map((item) => item.url), videos.map((item) => item.url));
+});
+
 test('普通文字消息不能调用媒体解析器', async () => {
   let resolves = 0;
   const { service } = createService({ mediaResolver: { enabled: true, async resolve() { resolves++; } } });

@@ -3561,7 +3561,9 @@ export class QqBotService {
         });
         const partLog = resolved.page ? ` page=${resolved.page} cid=${resolved.cid || ''}` : '';
         this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0}${partLog} title=${String(resolved.title || '').slice(0, 120)} videos=${resolved.mediaItems?.length || 1} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} media_duration_s=${resolved.duration || 0} duration_ms=${Date.now() - startedAt}`);
-        if (!resolved.url && resolved.images?.length) {
+        const hasPlayableItems = Array.isArray(resolved.mediaItems)
+          && resolved.mediaItems.some((item) => item?.url);
+        if (!resolved.url && resolved.images?.length && !hasPlayableItems) {
           // 图集的兜底标题按来源平台走：抖音图文不能顶着“小红书图文”发出去。
           const galleryFallbackTitle = candidate.provider === 'douyin'
             ? '抖音图文' : '小红书图文';
