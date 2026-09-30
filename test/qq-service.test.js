@@ -3148,33 +3148,6 @@ test('同一抖音分享卡中的多个链接会聚合成多个视频并附带�
   assert.equal(calls, 2);
 });
 
-test('Provider 返回多个视频及封面预览时不能降级成图文图库', async () => {
-  const videos = [
-    { url: 'https://cdn.example/video-1.mp4', coverUrl: 'https://cdn.example/cover-1.jpg', title: '第一条' },
-    { url: 'https://cdn.example/video-2.mp4', coverUrl: 'https://cdn.example/cover-2.jpg', title: '第二条' },
-  ];
-  const { service } = createService({ mediaResolver: {
-    enabled: true,
-    async resolve() {
-      return {
-        mediaItems: videos,
-        images: videos.map((item) => item.coverUrl),
-        title: '双视频分享',
-        provider: 'douyin',
-      };
-    },
-  } });
-  const result = await service.handleMessage({
-    message_id: 'douyin-provider-multi', message_type: 'group', group_id: '1109147947',
-    user_id: 'tester', media_share: true, text: 'https://v.douyin.com/multi/',
-  });
-  assert.equal(result.mode, 'media');
-  assert.deepEqual(result.messages.map((item) => item.type), ['video', 'video']);
-  assert.deepEqual(result.messages.map((item) => item.url), videos.map((item) => item.url));
-  assert.deepEqual(result.messages[0].images, videos.map((item) => item.coverUrl));
-  assert.deepEqual(result.messages[1].images, []);
-});
-
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
   const received = [];
   const usageRequests = [];

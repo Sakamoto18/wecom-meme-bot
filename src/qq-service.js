@@ -3561,14 +3561,7 @@ export class QqBotService {
         });
         const partLog = resolved.page ? ` page=${resolved.page} cid=${resolved.cid || ''}` : '';
         this.logger.info(`媒体解析完成：group=${payload.groupId || ''} provider=${candidate.provider} extractor=${resolved.extractor || ''} quality=${resolved.quality || 0}${partLog} title=${String(resolved.title || '').slice(0, 120)} videos=${resolved.mediaItems?.length || 1} images=${resolved.images?.length || 0} output_bytes=${resolved.outputBytes || 0} media_duration_s=${resolved.duration || 0} duration_ms=${Date.now() - startedAt}`);
-        // A provider can return several videos without a single top-level
-        // `url`, while also attaching their cover previews in `images`.
-        // Treating that shape as a gallery drops every video and sends only
-        // the preview pictures. Gallery fallback is valid only when there is
-        // no playable media item at all.
-        const hasMultipleVideos = Array.isArray(resolved.mediaItems)
-          && resolved.mediaItems.some((item) => item?.url);
-        if (!resolved.url && resolved.images?.length && !hasMultipleVideos) {
+        if (!resolved.url && resolved.images?.length) {
           // 图集的兜底标题按来源平台走：抖音图文不能顶着“小红书图文”发出去。
           const galleryFallbackTitle = candidate.provider === 'douyin'
             ? '抖音图文' : '小红书图文';
