@@ -90,6 +90,11 @@ function cleanCrazyThursdayCopy(value) {
   if (text.length < 8) throw new Error('大模型返回的疯狂星期四文案过短');
   return text;
 }
+
+function needsCrazyThursdayRevision(value) {
+  const text = String(value ?? '');
+  return /(?:宇宙(?:给|通知)|有关部门(?:经研究)?|临时接管|接管快乐|绑(?:住|起来)星期四|从日历薅|下午三点统一发放)/iu.test(text);
+}
 // Keep a generous overlap so a line/paragraph crossing a cut is present in
 // both neighboring tiles.  Core + overlap stays below DeepSeek's 8192-pixel
 // single-side limit.
@@ -3486,36 +3491,51 @@ export class QqBotService {
     const holidayInstruction = useHolidayContext
       ? `本次可以酌情使用这段背景，但只有它能制造新转折时才使用：${holidayContext}`
       : '本次禁止使用节日、假期、调休或节后返工背景；把它当作普通星期四。';
+    const registers = [
+      '伪学术研究或医学说明',
+      '物业、人事、客服或行政通知',
+      '代码报错、产品复盘或项目周报',
+      '生活建议、新闻快讯或一段过分认真的对话',
+      '兼职清单、活动规则或考试题目',
+    ];
+    const selectedRegister = registers[Math.floor(Math.random() * registers.length)];
     const prompt = [
       '你要给 QQ 群生成一条“疯狂星期四”文案。',
       '',
-      '参考公开文案收录里更耐看的结构：不是喊口号，而是先让人相信一段',
-      '正常话，再在最后把逻辑拧歪。每次只选一种结构，不要把模板堆在一起：',
-      'A. 假通知：像天气、人事、物业或客服通知，最后一条细节突然离谱；',
-      'B. 伪科普：一本正经定义一种病、算法、报错或实验，结论才落到吃鸡；',
-      'C. 清单诱饵：列三到五项福利、兼职、攻略或活动，最后一项才是疯狂星期四；',
-      'D. 小故事/对话：铺垫两三句真实日常，最后偷换一个完全不相干的因果；',
-      'E. 文字游戏：利用成语、缩写、填空、代码报错或引用文体，让读者到末尾才懂。',
-      '荒诞要来自具体细节和突然转折，不是靠“宇宙、命运、时间管理”这些空词。',
+      '参考公开文案收录里最关键的节奏：先用一段完整、抽象但像真的正经理由',
+      '把读者带进另一个语境，最后只用一句短话突然揭开真实目的。笑点来自',
+      '前后因果断裂，不是靠堆“抽象、宇宙、命运”这些空词。',
+      `本次前半段使用${selectedRegister}的口吻，连续写 3 到 5 个有具体细节的句子。`,
+      '前半段暂时不要提肯德基、鸡块、星期四、转账或缺钱，让理由先独立成立。',
+      '最后一句必须短促反转：把前面严肃得像真的理由，突然解释成“还差一笔',
+      '吃疯狂星期四的钱”。可以说差 50 块、缺经费、样本费没凑齐或类似表达；',
+      '“v 我 50”只是其中一种说法，不是固定口号，不要每次都用，也不要单独收尾。',
+      '这种“正经铺垫 → 突然差一笔钱”的反差优先级高于其他花式结构。',
+      '结构示例（只学节奏，不要照抄）：先用一段研究结论证明人类需要补充能量，',
+      '最后说“结论通过了，鸡块还没买，样本经费差 50”；或先写一份严肃的项目复盘，',
+      '最后说“指标都达标，付款环节还差一笔”。前面的理由要独立成立，结尾才揭底。',
+      '不要把模板堆在一起，也不要为了显得抽象而连续换三个场景。',
+      '可以借临近节日或日期背景，但只有它能制造新转折时才使用；否则完全不提。',
       '节日、假期、调休不是固定主题；大多数时候完全不要提，也不要根据日期自行猜节日。',
       '不要照抄任何现成网络原句，只借结构和节奏。',
       '',
       '这是群聊里临时发的一段话，不是公告、客服话术或营销文案。',
       '自然、抽象、贫嘴但像真人在群里发的，60 到 150 个中文字符。',
-      '必须有一个可感知的具体物件、场景、名单或对话，再有一到两次升级，',
-      '最后用一句短促的反转收住。不要写标题、序号、解释、来源或提示语。',
+      '必须有一个可感知的具体物件、场景、名单或对话，再有一到两次升级。',
+      '不要写标题、序号、解释、来源或提示语。',
       '不要攻击具体群友，不要真实威胁、恶意诅咒或煽动转账。',
       '禁止用“我把星期四按住/绑起来/从日历薅出来”“接管快乐/删除键”、',
       '“有关部门经研究”“宇宙通知”“下午三点统一发放”等陈旧句式。',
       '不要以“今天是疯狂星期四”开头，不要机械复述节日和调休，也不要重复“国庆、假期、调休”。',
-      '“v 我 50”最多出现一次，也可以不出现；不能把它当唯一笑点，不能单独收尾。',
+      '“v 我 50”可以出现，也可以不出现；是否出现由当前结构决定，不要每次都用它，',
+      '更不能把它当唯一笑点或单独收尾。若使用，只能自然嵌在故事或清单里一次。',
       '',
       `日期：${date}`,
       `节日背景规则：${holidayInstruction}`,
       '',
       '请直接输出这一段文案。',
     ].join('\n');
-    const answer = await this.chatClient.complete([], prompt, {
+    const requestOptions = {
       usageSource: 'crazy-thursday',
       temperature: 1.15,
       maxTokens: 180,
@@ -3526,8 +3546,18 @@ export class QqBotService {
       // copy task; ask for the visible answer directly.
       thinking: { type: 'disabled' },
       additionalSystemPrompt: '只生成一条疯狂星期四群聊文案，不回答问题，不调用搜索，不输出任何解释。',
-    });
-    const text = cleanCrazyThursdayCopy(answer);
+    };
+    let answer = await this.chatClient.complete([], prompt, requestOptions);
+    let text = cleanCrazyThursdayCopy(answer);
+    if (needsCrazyThursdayRevision(text)) {
+      // 模型偶尔会被训练语料里的“v 我 50/有关部门”强行带偏。只对这种
+      // 明显套模板的成品补一次短复核，不把每次生成都变成双倍调用。
+      answer = await this.chatClient.complete([], prompt, {
+        ...requestOptions,
+        revisionSystemPrompt: '上一稿套用了陈旧模板。换成具体日常物件、伪科普、清单或文字游戏，避免宇宙、有关部门、接管星期四等空泛句式；v 我 50 不是必选项，若结构需要可以自然出现一次，但不要单独收尾。只输出新的成品。',
+      });
+      text = cleanCrazyThursdayCopy(answer);
+    }
     return {
       mode: 'crazy-thursday',
       messages: [{ type: 'text', text }],

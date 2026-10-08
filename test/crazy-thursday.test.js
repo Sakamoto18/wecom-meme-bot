@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
 
-function createService(answer = '疯狂星期四，今天的快乐已经被我临时接管，下午三点统一发放。') {
+function createService(answer = '楼下打印店把我的身份证复印了三份，说其中一份要参加周四面试。') {
   const calls = [];
   const service = new QqBotService({
     chatClient: {
@@ -61,6 +61,30 @@ test('manual crazy Thursday test is silent in group chats', async () => {
   assert.equal(result.mode, 'crazy-thursday-ignored');
   assert.deepEqual(result.messages, []);
   assert.equal(calls.length, 0);
+});
+
+test('cliche crazy Thursday copy gets one focused revision', async () => {
+  const calls = [];
+  const service = new QqBotService({
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push({ history, input, options });
+        return calls.length === 1
+          ? '宇宙通知：今天 v 我 50，下午三点统一发放。'
+          : '错误 503：快乐服务暂时不可用，排查结果是周四下午缺少一份鸡块。';
+      },
+    },
+    adminUsers: new Set(['admin']),
+  });
+  const result = await service.handleMessage({
+    message_id: 'crazy-5', message_type: 'private', user_id: 'admin',
+    text: '', crazy_thursday_request: true, crazy_thursday_test: true,
+  });
+  assert.equal(result.mode, 'crazy-thursday');
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].options.revisionSystemPrompt, /不是必选项/u);
+  assert.match(result.messages[0].text, /错误 503/u);
 });
 
 test('normal payloads preserve crazy Thursday fields only when explicitly set', () => {
