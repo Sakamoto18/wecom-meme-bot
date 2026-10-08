@@ -115,19 +115,21 @@
     "hint": "默认启用；目标群优先使用 crazy_thursday_groups，没有填写时沿用允许群列表"
   },
   "crazy_thursday_groups": {
-    "description": "疯狂星期四推送目标群",
+    "description": "（兼容旧配置）疯狂星期四推送目标群",
     "type": "string",
     "default": "",
-    "hint": "英文逗号分隔；留空时使用允许群列表，允许群为空则推送到机器人当前加入的群"
+    "hint": "定时推送现在固定发到机器人当前加入的所有群，此字段保留但不再筛选目标"
   },
   "crazy_thursday_hour": {
-    "description": "疯狂星期四推送小时（北京时间）",
+    "description": "（已弃用）疯狂星期四推送小时",
     "type": "int",
-    "default": 11
+    "default": 11,
+    "hint": "定时推送固定为 09:00、11:30、15:00、18:00，此字段保留兼容旧配置"
   },
   "crazy_thursday_minute": {
-    "description": "疯狂星期四推送分钟（北京时间）",
+    "description": "（已弃用）疯狂星期四推送分钟",
     "type": "int",
-    "default": 30
+    "default": 30,
+    "hint": "定时推送固定为 09:00、11:30、15:00、18:00，此字段保留兼容旧配置"
   }
 }

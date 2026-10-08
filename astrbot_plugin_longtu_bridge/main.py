@@ -56,6 +56,12 @@ RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
     r"(?:上面|刚才|刚刚|前面|上一张|前一张|这张(?:图|图片|封面|卡片|分享卡)|这个(?:图|图片|封面|卡片|分享卡)|图里|图片里|封面里|卡片里)",
 )
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
+CRAZY_THURSDAY_SLOTS = (
+    (9, 0),
+    (11, 30),
+    (15, 0),
+    (18, 0),
+)
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
     "/stop", "/usage-report", "/persona", "/crazy-thursday",
@@ -492,25 +498,12 @@ class LongtuQqBridge(Star):
             True,
         )
 
-    def _crazy_thursday_time(self) -> datetime_time:
-        def setting(name, key, default):
-            value = os.getenv(name) or self.config.get(key, default)
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return default
-        hour = min(23, max(0, setting("LONGTU_QQ_CRAZY_THURSDAY_HOUR", "crazy_thursday_hour", 11)))
-        minute = min(59, max(0, setting("LONGTU_QQ_CRAZY_THURSDAY_MINUTE", "crazy_thursday_minute", 30)))
-        return datetime_time(hour=hour, minute=minute, tzinfo=REPORT_TIMEZONE)
-
-    def _crazy_thursday_groups(self) -> set[str]:
-        configured = (
-            os.getenv("LONGTU_QQ_CRAZY_THURSDAY_GROUPS")
-            or self.config.get("crazy_thursday_groups")
-            or ""
+    @staticmethod
+    def _crazy_thursday_times() -> tuple[datetime_time, ...]:
+        return tuple(
+            datetime_time(hour=hour, minute=minute, tzinfo=REPORT_TIMEZONE)
+            for hour, minute in CRAZY_THURSDAY_SLOTS
         )
-        explicit = {item.strip() for item in str(configured).split(",") if item.strip().isdigit()}
-        return explicit
 
     async def _generate_crazy_thursday_text(self, target_date, *, group_id: str = "", user_id: str = "system-crazy-thursday", scheduled: bool = False) -> str:
         """Ask the Node model for one copy and keep a safe local fallback."""
@@ -541,14 +534,14 @@ class LongtuQqBridge(Star):
         bot = getattr(platform, "bot", None) if platform else None
         if not bot:
             raise RuntimeError("未找到已启用的 aiocqhttp 平台")
-        groups = self._crazy_thursday_groups()
-        if not groups:
-            groups = set((await self._group_catalog()).keys())
+        # 定时推送按用户要求覆盖机器人当前加入的全部群；不继承允许群或
+        # crazy_thursday_groups 的旧筛选，避免新增群静默漏收。每个时点只
+        # 生成一条，再复用给所有群，控制模型调用次数。
+        groups = set((await self._group_catalog()).keys())
         if not groups:
             logger.warning("疯狂星期四未发送：没有可用 QQ 群目标")
             return 0
         platform_id = platform.meta().id
-        # 同一周四只生成一次，所有群复用，避免群数放大模型调用和费用。
         text = await self._generate_crazy_thursday_text(target_date, scheduled=True)
         sent_count = 0
         for group_id in sorted(groups):
@@ -563,17 +556,31 @@ class LongtuQqBridge(Star):
                     logger.warning(f"疯狂星期四发送失败：group={group_id}")
             except Exception as error:
                 logger.warning(f"疯狂星期四发送失败：group={group_id} error={error}")
-        logger.info(f"疯狂星期四已推送：date={target_date} groups={sent_count}/{len(groups)}")
+        logger.info(
+            f"疯狂星期四已推送：date={target_date} groups={sent_count}/{len(groups)}",
+        )
         return sent_count
 
     async def _crazy_thursday_loop(self) -> None:
         while not self.report_stop.is_set():
             now = datetime.now(REPORT_TIMEZONE)
-            target = datetime.combine(now.date(), self._crazy_thursday_time())
-            days_until_thursday = (3 - now.weekday()) % 7
-            target += timedelta(days=days_until_thursday)
-            if target <= now:
-                target += timedelta(days=7)
+            candidates = []
+            for day_offset in range(0, 8):
+                day = now.date() + timedelta(days=day_offset)
+                if day.weekday() != 3:
+                    continue
+                candidates.extend(
+                    datetime.combine(day, slot)
+                    for slot in self._crazy_thursday_times()
+                )
+            target = next((item for item in candidates if item > now), None)
+            if target is None:
+                # The loop above always includes the next Thursday, but keep a
+                # defensive fallback so a malformed clock never busy-loops.
+                target = datetime.combine(
+                    now.date() + timedelta(days=7),
+                    self._crazy_thursday_times()[0],
+                )
             try:
                 await asyncio.wait_for(
                     self.report_stop.wait(),

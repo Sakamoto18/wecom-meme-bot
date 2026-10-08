@@ -95,3 +95,22 @@ test('QQ Bridge 在默认 LLM 启动前兜底接管漏过 Adapter handler 的纯
   assert.match(hook, /event\.stop_event\(\)/);
   assert.ok(hook.indexOf('await event.send') < hook.lastIndexOf('event.stop_event()'));
 });
+
+test('QQ Bridge 继承按群媒体平台白名单，排除群仍可放行指定抖音', async () => {
+  const compose = await readFile(
+    new URL('../docker-compose.qq.yml', import.meta.url),
+    'utf8',
+  );
+  assert.match(compose, /QQ_MEDIA_EXCLUDED_GROUPS:\s*\$\{QQ_MEDIA_EXCLUDED_GROUPS:-\}/u);
+  assert.match(compose, /QQ_MEDIA_GROUP_ALLOWED_PROVIDERS:\s*\$\{QQ_MEDIA_GROUP_ALLOWED_PROVIDERS:-\}/u);
+});
+
+test('疯狂星期四调度固定为四个时点并覆盖当前全部群', async () => {
+  const source = await readFile(
+    new URL('../astrbot_plugin_longtu_bridge/main.py', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /CRAZY_THURSDAY_SLOTS\s*=\s*\(\s*\(9, 0\),\s*\(11, 30\),\s*\(15, 0\),\s*\(18, 0\),/su);
+  assert.match(source, /groups = set\(\(await self\._group_catalog\(\)\)\.keys\(\)\)/u);
+  assert.match(source, /for slot in self\._crazy_thursday_times\(\)/u);
+});
