@@ -107,5 +107,27 @@
     "description": "后端不可用时回复的提示",
     "type": "string",
     "default": "龙图服务暂时不可用，请稍后再试。"
+  },
+  "crazy_thursday_enabled": {
+    "description": "每周四定时向目标群推送疯狂星期四抽象文案",
+    "type": "bool",
+    "default": true,
+    "hint": "默认启用；目标群优先使用 crazy_thursday_groups，没有填写时沿用允许群列表"
+  },
+  "crazy_thursday_groups": {
+    "description": "疯狂星期四推送目标群",
+    "type": "string",
+    "default": "",
+    "hint": "英文逗号分隔；留空时使用允许群列表，允许群为空则推送到机器人当前加入的群"
+  },
+  "crazy_thursday_hour": {
+    "description": "疯狂星期四推送小时（北京时间）",
+    "type": "int",
+    "default": 11
+  },
+  "crazy_thursday_minute": {
+    "description": "疯狂星期四推送分钟（北京时间）",
+    "type": "int",
+    "default": 30
   }
 }

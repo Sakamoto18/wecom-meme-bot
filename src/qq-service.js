@@ -66,6 +66,30 @@ const MAX_IMAGE_TILES_PER_SOURCE = 8;
 const MAX_IMAGE_RETRY_ATTEMPTS = 4;
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 export const MAX_IMAGE_SIDE_PIXELS = 8_192;
+
+function cleanCrazyThursdayCopy(value) {
+  let text = String(value ?? '')
+    .replace(/```[\s\S]*?```/gu, (block) => block
+      .replace(/^```(?:text|markdown)?\s*/iu, '')
+      .replace(/```\s*$/u, ''))
+    .replace(/[“”「」『』]/gu, '')
+    .replace(/^(?:文案|疯狂星期四文案|输出)\s*[:：]\s*/iu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (!text) throw new Error('大模型返回了空的疯狂星期四文案');
+  // QQ 群里不需要一面墙；截断前优先保留完整句子。
+  if (text.length > 160) {
+    const shortened = text.slice(0, 160);
+    const boundary = Math.max(
+      shortened.lastIndexOf('。'),
+      shortened.lastIndexOf('！'),
+      shortened.lastIndexOf('？'),
+    );
+    text = shortened.slice(0, boundary >= 40 ? boundary + 1 : 160).trim();
+  }
+  if (text.length < 8) throw new Error('大模型返回的疯狂星期四文案过短');
+  return text;
+}
 // Keep a generous overlap so a line/paragraph crossing a cut is present in
 // both neighboring tiles.  Core + overlap stays below DeepSeek's 8192-pixel
 // single-side limit.
@@ -991,6 +1015,14 @@ export function normalizeQqPayload(payload) {
       ? payload.rich_segments.slice(0, 8)
       : [],
     mediaShare: payload.media_share === true,
+    crazyThursdayRequest: payload.crazy_thursday_request === true,
+    crazyThursdayTest: payload.crazy_thursday_test === true,
+    crazyThursdayScheduled: payload.crazy_thursday_scheduled === true,
+    crazyThursdayDate: normalizeString(payload.crazy_thursday_date, 32),
+    crazyThursdayHolidayContext: normalizeString(
+      payload.crazy_thursday_holiday_context,
+      120,
+    ),
   };
   if (normalized.botUserId && normalized.quotedAuthor?.userId === normalized.botUserId
     && !parseLongtuManagementCommand(normalized.text)) {
@@ -3343,6 +3375,10 @@ export class QqBotService {
       source: payload.observeOnly ? 'observed-message' : 'direct-message',
     });
 
+    if (payload.crazyThursdayRequest) {
+      return this.handleCrazyThursdayRequest(payload);
+    }
+
     const preemptiveAdminStop = payload.messageType === 'group'
       && isLongtuAdministrator(payload.userId, this.adminUsers)
       && (
@@ -3419,6 +3455,53 @@ export class QqBotService {
       }
       throw error;
     }
+  }
+
+  async handleCrazyThursdayRequest(payload) {
+    if (!payload.crazyThursdayScheduled
+      && !isLongtuAdministrator(payload.userId, this.adminUsers)) {
+      return {
+        mode: 'crazy-thursday-denied',
+        messages: [{ type: 'text', text: '只有超级管理员可以测试疯狂星期四文案。' }],
+      };
+    }
+    if (!this.chatClient?.isConfigured) {
+      throw new Error('普通对话服务尚未配置');
+    }
+    const date = /^\d{4}-\d{2}-\d{2}$/u.test(payload.crazyThursdayDate)
+      ? payload.crazyThursdayDate
+      : new Date().toISOString().slice(0, 10);
+    const holidayContext = payload.crazyThursdayHolidayContext || '无特别节日背景';
+    const prompt = [
+      '你要给 QQ 群生成一条“疯狂星期四”文案。',
+      '',
+      '参考网络热门疯狂星期四文案的共同气质：荒诞、一本正经地胡说、',
+      '假装掌控排班/时间/命运、轻度威胁或突然反转。可以出现“v 我 50”，',
+      '但最多出现一次，也可以完全不出现；不要把整段写成重复索要转账。',
+      '不要照抄任何现成网络原句。',
+      '',
+      '这是群聊里临时发的一段话，不是公告、客服话术或营销文案。',
+      '自然、抽象、有一点贫嘴，40 到 120 个中文字符。不要写标题、序号、',
+      '解释、来源或提示语，不要攻击具体群友，不要真实威胁或恶意诅咒。',
+      '不要机械复述节日和调休；只有能形成笑点时才自然带入，普通场景自由发挥。',
+      '',
+      `日期：${date}`,
+      `临近节日/日期背景：${holidayContext}`,
+      '',
+      '请直接输出这一段文案。',
+    ].join('\n');
+    const answer = await this.chatClient.complete([], prompt, {
+      usageSource: 'crazy-thursday',
+      temperature: 1.15,
+      maxTokens: 180,
+      timeoutMs: 20_000,
+      additionalSystemPrompt: '只生成一条疯狂星期四群聊文案，不回答问题，不调用搜索，不输出任何解释。',
+    });
+    const text = cleanCrazyThursdayCopy(answer);
+    return {
+      mode: 'crazy-thursday',
+      messages: [{ type: 'text', text }],
+    };
   }
 
   async handleNormalizedMessage(payload) {

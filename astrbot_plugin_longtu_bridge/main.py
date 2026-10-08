@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from .video_card import render_video_card
 from .video_delivery_cache import VideoDeliveryCache, VideoForwardRejected
 from .qq_sticker import QqSticker
+from .crazy_thursday import generate_crazy_thursday_copy, nearby_holiday_context
 
 import aiohttp
 from aiohttp import web
@@ -57,7 +58,7 @@ RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
-    "/stop", "/usage-report", "/persona",
+    "/stop", "/usage-report", "/persona", "/crazy-thursday",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
@@ -134,6 +135,7 @@ class LongtuQqBridge(Star):
         self.cover_cache: dict[str, tuple[float, bytes]] = {}
         self.video_delivery_cache = VideoDeliveryCache(logger=logger)
         self.report_task: asyncio.Task | None = None
+        self.crazy_thursday_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
         self.internal_send_runner: web.AppRunner | None = None
         # get_image 熔断状态：连续失败到阈值后在一段时间内直接走下载回退。
@@ -153,6 +155,11 @@ class LongtuQqBridge(Star):
             self.report_task = asyncio.create_task(
                 self._daily_usage_report_loop(),
                 name="longtu-daily-usage-report",
+            )
+        if self._crazy_thursday_enabled():
+            self.crazy_thursday_task = asyncio.create_task(
+                self._crazy_thursday_loop(),
+                name="longtu-crazy-thursday",
             )
 
     def _api_url(self) -> str:
@@ -477,6 +484,110 @@ class LongtuQqBridge(Star):
 
     def _daily_report_enabled(self) -> bool:
         return self._enabled(self.config.get("daily_usage_report_enabled", True), True)
+
+    def _crazy_thursday_enabled(self) -> bool:
+        return self._enabled(
+            os.getenv("LONGTU_QQ_CRAZY_THURSDAY_ENABLED")
+            or self.config.get("crazy_thursday_enabled", True),
+            True,
+        )
+
+    def _crazy_thursday_time(self) -> datetime_time:
+        def setting(name, key, default):
+            value = os.getenv(name) or self.config.get(key, default)
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+        hour = min(23, max(0, setting("LONGTU_QQ_CRAZY_THURSDAY_HOUR", "crazy_thursday_hour", 11)))
+        minute = min(59, max(0, setting("LONGTU_QQ_CRAZY_THURSDAY_MINUTE", "crazy_thursday_minute", 30)))
+        return datetime_time(hour=hour, minute=minute, tzinfo=REPORT_TIMEZONE)
+
+    def _crazy_thursday_groups(self) -> set[str]:
+        configured = (
+            os.getenv("LONGTU_QQ_CRAZY_THURSDAY_GROUPS")
+            or self.config.get("crazy_thursday_groups")
+            or ""
+        )
+        explicit = {item.strip() for item in str(configured).split(",") if item.strip().isdigit()}
+        return explicit
+
+    async def _generate_crazy_thursday_text(self, target_date, *, group_id: str = "", user_id: str = "system-crazy-thursday", scheduled: bool = False) -> str:
+        """Ask the Node model for one copy and keep a safe local fallback."""
+        payload = {
+            "message_type": "group" if group_id else "private",
+            "group_id": str(group_id or ""),
+            "user_id": str(user_id or "system-crazy-thursday"),
+            "text": "",
+            "crazy_thursday_request": True,
+            "crazy_thursday_scheduled": bool(scheduled),
+            "crazy_thursday_date": target_date.isoformat(),
+            "crazy_thursday_holiday_context": nearby_holiday_context(target_date),
+        }
+        try:
+            response = await self._request_backend(payload)
+            for item in response.get("messages", []):
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text = str(item.get("text") or "").strip()
+                    if text:
+                        return text
+            raise RuntimeError("模型没有返回疯狂星期四文案")
+        except Exception as error:
+            logger.warning(f"疯狂星期四模型生成失败，使用本地兜底：{error}")
+            return generate_crazy_thursday_copy(target_date, seed=group_id or user_id)
+
+    async def _send_crazy_thursday(self, target_date) -> int:
+        platform = self._qq_platform()
+        bot = getattr(platform, "bot", None) if platform else None
+        if not bot:
+            raise RuntimeError("未找到已启用的 aiocqhttp 平台")
+        groups = self._crazy_thursday_groups()
+        if not groups:
+            groups = set((await self._group_catalog()).keys())
+        if not groups:
+            logger.warning("疯狂星期四未发送：没有可用 QQ 群目标")
+            return 0
+        platform_id = platform.meta().id
+        # 同一周四只生成一次，所有群复用，避免群数放大模型调用和费用。
+        text = await self._generate_crazy_thursday_text(target_date, scheduled=True)
+        sent_count = 0
+        for group_id in sorted(groups):
+            try:
+                sent = await self.context.send_message(
+                    f"{platform_id}:GroupMessage:{group_id}",
+                    MessageChain(chain=[Comp.Plain(text)]),
+                )
+                if sent:
+                    sent_count += 1
+                else:
+                    logger.warning(f"疯狂星期四发送失败：group={group_id}")
+            except Exception as error:
+                logger.warning(f"疯狂星期四发送失败：group={group_id} error={error}")
+        logger.info(f"疯狂星期四已推送：date={target_date} groups={sent_count}/{len(groups)}")
+        return sent_count
+
+    async def _crazy_thursday_loop(self) -> None:
+        while not self.report_stop.is_set():
+            now = datetime.now(REPORT_TIMEZONE)
+            target = datetime.combine(now.date(), self._crazy_thursday_time())
+            days_until_thursday = (3 - now.weekday()) % 7
+            target += timedelta(days=days_until_thursday)
+            if target <= now:
+                target += timedelta(days=7)
+            try:
+                await asyncio.wait_for(
+                    self.report_stop.wait(),
+                    timeout=max(1, (target - now).total_seconds()),
+                )
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await self._send_crazy_thursday(target.date())
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.error(f"疯狂星期四生成或发送失败：{error}")
 
     def _daily_report_time(self) -> datetime_time:
         hour = min(23, max(0, int(self.config.get("daily_usage_report_hour", 9))))
@@ -1147,6 +1258,11 @@ class LongtuQqBridge(Star):
             re.IGNORECASE,
         )
         return None if not matched else str(matched.group(1) or "").strip()
+
+    @classmethod
+    def _crazy_thursday_command(cls, event: AstrMessageEvent) -> bool:
+        raw_text = (cls._raw_text(event) or event.message_str or "").strip()
+        return bool(re.fullmatch(r"/crazy-thursday(?:\s+test)?\s*", raw_text, re.IGNORECASE))
 
     @staticmethod
     def _usage_report_period(argument: str, now: datetime | None = None):
@@ -2755,6 +2871,37 @@ class LongtuQqBridge(Star):
                 # 停止，避免 /w、/help 等内置命令或其他插件被误触发。
                 if not self._is_allowed_bridge_slash_command(event):
                     return
+                if self._crazy_thursday_command(event):
+                    requested_by = str(event.get_sender_id() or "").strip()
+                    target_date = datetime.now(REPORT_TIMEZONE).date()
+                    test_payload = {
+                        "message_id": str(event.message_obj.message_id or ""),
+                        "message_type": "private" if event.is_private_chat() else "group",
+                        "group_id": event.get_group_id(),
+                        "user_id": requested_by,
+                        "sender_name": event.get_sender_name(),
+                        "text": "",
+                        "crazy_thursday_request": True,
+                        "crazy_thursday_test": True,
+                        "crazy_thursday_date": target_date.isoformat(),
+                        "crazy_thursday_holiday_context": nearby_holiday_context(target_date),
+                    }
+                    try:
+                        response = await self._request_backend(test_payload)
+                        texts = [
+                            str(item.get("text") or "").strip()
+                            for item in response.get("messages", [])
+                            if isinstance(item, dict) and item.get("type") == "text"
+                        ]
+                        if texts:
+                            for generated in texts:
+                                yield event.plain_result(generated)
+                        else:
+                            yield event.plain_result("没有生成文案，请检查 QQ Bot 服务日志。")
+                    except Exception as error:
+                        logger.error(f"手动测试疯狂星期四失败：{error}")
+                        yield event.plain_result("疯狂星期四测试失败，请检查服务日志。")
+                    return
                 usage_report_argument = self._usage_report_command_argument(event)
                 if usage_report_argument is not None:
                     requested_by = str(event.get_sender_id() or "")
@@ -3222,10 +3369,11 @@ class LongtuQqBridge(Star):
         if getattr(self, 'video_delivery_cache', None):
             await self.video_delivery_cache.close()
         self.report_stop.set()
-        if self.report_task:
-            self.report_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self.report_task
+        for task in (self.report_task, self.crazy_thursday_task):
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         if self.session and not self.session.closed:
             await self.session.close()
         if self.internal_send_runner:
