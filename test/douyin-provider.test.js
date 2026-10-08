@@ -22,7 +22,7 @@ test('抖音 HTTP 响应经 Provider 和媒体解析器生成代理视频，跨�
     assert.equal(endpoint, 'http://provider.test/resolve');
     assert.deepEqual(JSON.parse(options.body), { url: 'https://v.douyin.com/example/' });
     return new Response(JSON.stringify({ status: 'success', data: {
-      media_type: 'video', video_url: 'https://cdn.example/work.mp4',
+      type_verified: true, source_id: '123456789', media_type: 'video', video_url: 'https://cdn.example/work.mp4',
       size: 1234,
       cover: 'https://cdn.example/cover.jpg', title: '作品标题', description: '作品正文',
       author: '原作者', avatar_url: 'https://cdn.example/avatar.jpg', tags: ['话题'],
@@ -64,7 +64,7 @@ test('抖音 Provider 拒绝假成功/占位文件，非抖音链接不会请求
   const provider = createDouyinProvider({ providerUrl: 'http://provider.test/resolve' });
   assert.equal(await provider({ platform: 'bilibili' }), null);
   assert.equal(calls, 0);
-  await assert.rejects(provider({ platform: 'douyin', url: 'https://v.douyin.com/example/' }), /未返回可用视频地址/);
-  data = { video_url: 'https://lf-douyin-pc-web.douyinstatic.com/obj/douyin-pc-web/uuu_265.mp4' };
+  await assert.rejects(provider({ platform: 'douyin', url: 'https://v.douyin.com/example/' }), /未返回当前作品的可用资源|作品类型未确认/);
+  data = { type_verified: true, source_id: '123456789', media_type: 'video', video_url: 'https://lf-douyin-pc-web.douyinstatic.com/obj/douyin-pc-web/uuu_265.mp4' };
   await assert.rejects(provider({ platform: 'douyin' }), /占位视频/);
 });

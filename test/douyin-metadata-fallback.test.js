@@ -1,10 +1,4 @@
-/**
- * Provider 拿不到可播媒体时，页面元数据必须留给 yt-dlp 结果补全。
- *
- * 线上现象：同一条抖音链接，第一次 provider 成功 → 卡片有作者/头像/封面/简介；
- * 第二次 provider 偶发失败 → 走 yt-dlp → 卡片只剩一个标题（14 KB 空卡）。
- * provider 其实已经从页面拿到了那些元数据，只是在没有媒体时把它们一起丢了。
- */
+/** Douyin must not guess video from metadata when the work type is unavailable. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -26,49 +20,39 @@ function mockProvider(payload) {
   return createDouyinProvider({ providerUrl: 'http://provider.test/resolve' });
 }
 
-test('metadata-only 结果不再被当成失败，且带齐卡片字段', async () => {
+test('metadata-only 不降级猜视频', async () => {
   const provider = mockProvider({ status: 'success', data: {
     media_type: 'metadata', video_url: '', images: [], ...META,
   } });
-  const resolved = await provider({ platform: 'douyin', url: 'https://v.douyin.com/x/' });
-  assert.equal(resolved.metadataOnly, true);
-  assert.equal(resolved.mediaUrl, '', '没有可播地址');
-  assert.deepEqual(resolved.images, []);
-  // 这些字段就是卡片上缺掉的东西。
-  assert.equal(resolved.author, '空之狸');
-  assert.equal(resolved.avatarUrl, META.avatar_url);
-  assert.equal(resolved.coverUrl, META.cover);
-  assert.equal(resolved.title, META.title);
-  assert.match(resolved.description, /空之狸/);
-  assert.deepEqual(resolved.tags, META.tags);
+  await assert.rejects(provider({ platform: 'douyin', url: 'https://v.douyin.com/x/' }), /作品类型未确认/);
 });
 
 test('真正一无所获时仍然报失败', async () => {
   const provider = mockProvider({ status: 'success', data: {
-    media_type: 'metadata', video_url: '', images: [],
+    type_verified: true, source_id: '123456789', media_type: 'metadata', video_url: '', images: [],
   } });
   await assert.rejects(
     provider({ platform: 'douyin', url: 'https://v.douyin.com/x/' }),
-    /未返回可用视频地址/,
+    /未返回当前作品的可用资源|作品类型未确认/,
   );
 });
 
 test('视频与图集结果不受 metadata 分支影响', async () => {
   let provider = mockProvider({ status: 'success', data: {
-    media_type: 'video', video_url: 'https://cdn.example/v.mp4', ...META,
+    type_verified: true, source_id: '123456789', media_type: 'video', video_url: 'https://cdn.example/v.mp4', ...META,
   } });
   let resolved = await provider({ platform: 'douyin', url: 'https://v.douyin.com/v/' });
   assert.equal(resolved.mediaUrl, 'https://cdn.example/v.mp4');
-  assert.equal(resolved.metadataOnly, false);
+  assert.ok(['video', 'gallery'].includes(resolved.contentKind));
 
   provider = mockProvider({ status: 'success', data: {
-    media_type: 'images', video_url: '',
+    type_verified: true, source_id: '123456789', media_type: 'images', video_url: '',
     images: ['https://p3.douyinpic.com/a~tplv-dy-aweme-images:q75.webp'], ...META,
   } });
   resolved = await provider({ platform: 'douyin', url: 'https://v.douyin.com/n/' });
   assert.equal(resolved.mediaUrl, '');
   assert.equal(resolved.images.length, 1);
-  assert.equal(resolved.metadataOnly, false);
+  assert.ok(['video', 'gallery'].includes(resolved.contentKind));
 });
 
 test('Provider 元数据覆盖公开页面，但不抹掉公开页面独有的字段', async () => {

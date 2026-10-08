@@ -78,11 +78,11 @@ test('被删页面残留的零碎元数据不能让判定退化成降级', async
   });
 });
 
-test('普通 provider 失败仍然降级到 yt-dlp', async () => {
-  await withResolver(async () => { throw new Error('抖音 Provider 失败 stage=browser'); },
+test('其他平台普通 provider 失败仍然降级到 yt-dlp', async () => {
+  await withResolver(async () => { throw new Error('Provider 失败 stage=browser'); },
     async (resolver, lines) => {
       await assert.rejects(
-        resolver.resolve({ url: 'https://v.douyin.com/x/', provider: 'douyin' }),
+        resolver.resolve({ url: 'https://example.test/video', provider: 'unknown' }),
         (error) => {
           // 证明确实尝试过 yt-dlp
           assert.match(error.message, /must-not-run-yt-dlp|ENOENT/);

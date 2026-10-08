@@ -521,9 +521,12 @@ export class MediaResolver {
     const animatedItems = Array.isArray(provided?.animatedItems)
       ? provided.animatedItems : [];
     if (!animatedItems.length || !Array.isArray(images) || !images.length) return images;
-    const count = Math.min(animatedItems.length, images.length);
-    const replacements = await Promise.all(images.slice(0, count).map(async (image, index) => {
-      const item = animatedItems[index];
+    const byIndex = new Map(animatedItems.map((item, index) => [
+      Number.isInteger(item.imageIndex) ? item.imageIndex : index, item,
+    ]));
+    const replacements = await Promise.all(images.map(async (image, index) => {
+      const item = byIndex.get(index);
+      if (!item) return image;
       try {
         const converted = await convertAnimatedMediaToGif(item, {
           timeoutMs: Math.min(Math.max(1_000, Number(timeoutMs) || 1_000), 30_000),
@@ -547,7 +550,7 @@ export class MediaResolver {
         return image;
       }
     }));
-    return [...replacements, ...images.slice(count)];
+    return replacements;
   }
 
   registerRemoteMedia(value) {
@@ -589,6 +592,7 @@ export class MediaResolver {
     return {
       url: `${this.publicBaseUrl}/v1/qq/media/${id}`,
       mediaId: id,
+      ...(value.sourceId ? { sourceId: value.sourceId, contentKind: value.contentKind } : {}),
       title: value.title || '',
       coverUrl: value.coverUrl || '',
       author: value.author || '',
@@ -700,6 +704,7 @@ export class MediaResolver {
                 const itemUrl = normalizeMediaUrl(item?.mediaUrl || item?.url || item?.videoUrl);
                 if (!itemUrl) continue;
                 const itemMetadata = {
+                  sourceId: provided.sourceId, contentKind: provided.contentKind,
                   mediaUrl: itemUrl,
                   title: item.title || provided.title || '',
                   coverUrl: item.coverUrl || item.cover_url || item.cover
@@ -729,6 +734,7 @@ export class MediaResolver {
                 const coverImages = [...new Set(registeredItems
                   .map((item) => item.coverUrl).filter(Boolean))].slice(0, 18);
                 return {
+                  sourceId: provided.sourceId, contentKind: provided.contentKind,
                   mediaItems: registeredItems,
                   images: coverImages,
                   title: provided.title || registeredItems[0].title || '',
@@ -762,6 +768,7 @@ export class MediaResolver {
                 } catch { /* provider video remains usable without card metadata */ }
               }
               const directMedia = {
+                sourceId: provided.sourceId, contentKind: provided.contentKind,
                 mediaUrl: provided.mediaUrl,
                 title, coverUrl: coverUrl || (provided.images && provided.images[0]) || '',
                 author: cardMetadata.author || '', avatarUrl: cardMetadata.avatarUrl || '',
@@ -795,6 +802,7 @@ export class MediaResolver {
                 remainingTimeout(),
               );
               return {
+                sourceId: provided.sourceId, contentKind: provided.contentKind,
                 images: galleryImages, title: provided.title || '',
                 coverUrl: galleryImages[0] || provided.images[0] || '',
                 author: provided.author || '', avatarUrl: provided.avatarUrl || '', tags: provided.tags || [],
@@ -825,8 +833,13 @@ export class MediaResolver {
               throw error;
             }
             if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
+            // A failed Douyin type check must never become a guessed video or enter cache.
+            if (candidate?.provider === 'douyin') throw error;
             this.logger.warn(`媒体 Provider 失败，尝试公开页面解析：${error.message}`);
           }
+        }
+        if (candidate?.provider === 'douyin') {
+          throw new Error('抖音作品类型未确认，请稍后重试');
         }
         let bilibiliSource = null;
         try {
@@ -950,7 +963,8 @@ export class MediaResolver {
     })();
     this.inflight.set(key, task);
     const value = await task;
-    if (this.cacheTtlMs > 0) {
+    if (this.cacheTtlMs > 0 && (candidate?.provider !== 'douyin'
+      || (value.sourceId && ['gallery', 'video'].includes(value.contentKind)))) {
       this.cache.set(key, { value, expiresAt: Date.now() + this.cacheTtlMs });
       if (this.cache.size > 500) {
         const oldest = this.cache.keys().next().value;

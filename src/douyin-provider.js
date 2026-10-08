@@ -22,18 +22,20 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
       throw new Error(message);
     }
     const data = payload.data || payload;
-    // 图文笔记没有视频流，走和小红书图集一样的 images 字段；两者互斥，
-    // 图集绝不能把封面当成单图视频发出去。
-    const kind = String(data.media_type || data.mediaKind || data.type || '');
-    const gallery = ['images', 'image', 'gallery', 'note'].includes(kind);
-    // 页面上没有可播媒体、但标题/作者/封面已经拿到的情形。这里不算失败：让
-    // 上游走 yt-dlp 取视频，再用这份元数据补齐卡片。
-    const metadataOnly = kind === 'metadata';
+    const kind = String(data.media_type || '');
+    const gallery = kind === 'images';
+    const sourceId = String(data.source_id || '');
+    const requestedId = String(url || '').match(/\/(?:note|video)\/(\d+)(?:[/?#]|$)/u)?.[1];
+    if (data.type_verified !== true || !/^\d+$/u.test(sourceId)
+      || (requestedId && requestedId !== sourceId)
+      || !['images', 'video', 'videos'].includes(kind)) {
+      throw new Error('抖音作品类型未确认，请稍后重试');
+    }
     const rawImages = data.images || data.image_list;
     const images = [...new Set((Array.isArray(rawImages) ? rawImages : [])
       .map((item) => normalizeMediaUrl(typeof item === 'string' ? item : item?.url || item?.url_default))
       .filter(Boolean))].slice(0, 18);
-    const rawVideoItems = data.videos || data.video_items || data.videoItems
+    const rawVideoItems = gallery ? [] : data.videos || data.video_items || data.videoItems
       || data.video_urls || data.videoUrls || data.mediaUrls;
     const mediaItems = [...new Map((Array.isArray(rawVideoItems) ? rawVideoItems : [])
       .map((item) => {
@@ -64,6 +66,7 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
           coverUrl: normalizeMediaUrl(typeof item === 'object'
             ? item?.coverUrl || item?.cover_url || item?.cover : '') || '',
           size: Number(typeof item === 'object' ? item?.size || item?.video_size || item?.videoSize : 0) || 0,
+          imageIndex: Number.isInteger(item?.image_index) ? item.image_index : undefined,
           requestHeaders: {
             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
             Referer: 'https://www.douyin.com/',
@@ -71,15 +74,10 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
         }];
       }).filter(Boolean)).values()];
     // Playwright returns video_url/cover; MediaResolver requires mediaUrl/coverUrl.
-    const mediaUrl = (gallery || metadataOnly || mediaItems.length > 1)
+    const mediaUrl = (gallery || mediaItems.length > 1)
       ? '' : normalizeMediaUrl(data.mediaUrl || data.video_url || data.videoUrl);
-    // 声明了 metadata 却什么都没带，等于一无所获，不能当成功放过去。
-    const usefulMetadata = metadataOnly && Boolean(
-      data.title || data.author || data.description
-      || data.cover || data.cover_url || data.coverUrl,
-    );
-    if (!mediaUrl && !mediaItems.length && !images.length && !usefulMetadata) {
-      throw new Error('抖音 Provider 未返回可用视频地址');
+    if (gallery ? !images.length : (!mediaUrl && !mediaItems.length)) {
+      throw new Error('抖音 Provider 未返回当前作品的可用资源');
     }
     if (mediaUrl && new URL(mediaUrl).pathname.endsWith('/uuu_265.mp4')) {
       throw new Error('抖音 Provider 返回了页面占位视频');
@@ -96,8 +94,9 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
       images: mediaItems.length > 1
         ? [...new Set(mediaItems.map((item) => item.coverUrl).filter(Boolean))].slice(0, 18)
         : (mediaUrl ? [] : images),
-      metadataOnly,
-      coverUrl: normalizeMediaUrl(data.coverUrl || data.cover_url || data.cover) || images[0] || '',
+      contentKind: gallery ? 'gallery' : 'video',
+      sourceId,
+      coverUrl: normalizeMediaUrl(data.coverUrl || data.cover_url || data.cover) || (gallery ? images[0] : '') || '',
       title: String(data.title || ''),
       description,
       author: String(data.author || ''),
