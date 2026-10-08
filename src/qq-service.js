@@ -94,9 +94,46 @@ function cleanCrazyThursdayCopy(value) {
 function needsCrazyThursdayRevision(value) {
   const text = String(value ?? '');
   const staleTemplate = /(?:宇宙(?:给|通知)|有关部门(?:经研究)?|临时接管|接管快乐|绑(?:住|起来)星期四|从日历薅|下午三点统一发放)/iu.test(text);
-  const hasThursdayTopic = /(?:疯狂星期四|肯德基|鸡块|鸡翅|炸鸡|脆皮|外卖)/iu.test(text);
   const hasShortfall = /(?:差|缺|少|不足|缺口|预算|经费|样本费|付款|红包|五十|50|v\s*我)/iu.test(text);
-  return staleTemplate || !hasThursdayTopic || !hasShortfall;
+  const sentenceParts = text.split(/[。！？!?；;]/u).map((part) => part.trim()).filter(Boolean);
+  const lastSentence = sentenceParts.at(-1) ?? text;
+  const hasCampaignLanding = /(?:疯狂星期四|肯德基|KFC|鸡块|鸡翅|炸鸡|薯条|汉堡|可乐|v\s*我\s*50)/iu.test(lastSentence);
+  const hasConcreteSetup = /(?:医生|处方|抑郁|失眠|天气|暴雨|高温|雨伞|人事部|通知|活动|劳斯莱斯|保时捷|抽奖|商演|兼职|伴舞|恋爱|建议|代码|报错|异常|序列号|程序|考试|填空|古诗|科学家|实验|蛋白|疾病|治疗|新闻|广告|清单|猫|仓鼠|书|诗|成语|朋友|老板|电梯|收银台|汉堡|薯条|炸鸡|可乐)/iu.test(text);
+  // 这些句式通常是把故事写完后硬接“差五十”，需要让模型重新建立
+  // 前文细节与最后缺口之间的因果关系。
+  const gluedEnding = /(?:顺便|唯一(?:缺|少)(?:的)?是|最后(?:一个)?最重要|补齐后系统|结论(?:已经)?通过.{0,8}(?:差|缺)|指标都达标.{0,8}(?:差|缺))/iu.test(text);
+  return staleTemplate || !hasShortfall || !hasCampaignLanding || !hasConcreteSetup || gluedEnding;
+}
+
+const CRAZY_THURSDAY_DEFAULT_STYLE_URL = 'https://raw.githubusercontent.com/SylviaBABY/Crazy-KFC-selfuse/main/README.md';
+
+function extractCrazyThursdayStyleReference(rawValue) {
+  const raw = String(rawValue ?? '');
+  const blocks = [...raw.matchAll(/<p>([\s\S]*?)<\/p>/giu)].map((match) => match[1]);
+  const candidates = (blocks.length > 0 ? blocks : raw.split(/\n{2,}/u))
+    .map((block) => block
+      .replace(/<br\s*\/?>/giu, '。')
+      .replace(/<[^>]+>/gu, ' ')
+      .replace(/!\[[^\]]*\]\([^)]*\)/gu, ' ')
+      .replace(/https?:\/\/\S+/gu, ' ')
+      .replace(/&nbsp;/gu, ' ')
+      .replace(/&gt;/gu, '>')
+      .replace(/&amp;/gu, '&')
+      .replace(/\s+/gu, ' ')
+      .trim())
+    .filter((block) => block.length >= 24)
+    .filter((block) => /(?:疯狂星期四|肯德基|KFC|v\s*我\s*50|鸡块|炸鸡)/iu.test(block))
+    .map((block) => block.slice(0, 420));
+  const unique = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const key = candidate.slice(0, 100);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(candidate);
+    if (unique.length >= 6) break;
+  }
+  return unique.join('\n---\n').slice(0, 2_400);
 }
 // Keep a generous overlap so a line/paragraph crossing a cut is present in
 // both neighboring tiles.  Core + overlap stays below DeepSeek's 8192-pixel
@@ -1621,6 +1658,14 @@ export class QqBotService {
       buildProtectedIdentityContext(this.protectedRoles),
     ].filter(Boolean).join('\n\n');
     this.logger = options.logger ?? console;
+    // 疯狂星期四文案使用公开文案库作“结构检索”，不把整库写进系统提示词。
+    // URL 由 qq-api 通过环境变量显式开启；抓取失败时仍能用模型自身的规则生成，
+    // 不让外网波动阻断普通消息或定时推送。
+    this.crazyThursdayStyleSourceUrl = String(
+      options.crazyThursdayStyleSourceUrl ?? '',
+    ).trim();
+    this.crazyThursdayFetch = options.crazyThursdayFetch ?? globalThis.fetch;
+    this.crazyThursdayStyleCache = { fetchedAt: 0, text: '' };
     this.repeatDetector = options.repeatDetector ?? new RepeatDetector({
       enabled: options.repeatEnabled ?? true,
       maxTextCharacters: options.repeatMaxTextCharacters,
@@ -1636,6 +1681,37 @@ export class QqBotService {
     this.groupStopRevisions = new Map();
     this.groupProcessingQueues = new Map();
     this.lastGroupPassiveDecisionAt = new Map();
+  }
+
+  async loadCrazyThursdayStyleReference() {
+    const sourceUrl = this.crazyThursdayStyleSourceUrl;
+    if (!sourceUrl) return '';
+    const now = Date.now();
+    if (now - this.crazyThursdayStyleCache.fetchedAt < 6 * 60 * 60 * 1000) {
+      return this.crazyThursdayStyleCache.text;
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4_000);
+    try {
+      const response = await this.crazyThursdayFetch(sourceUrl, {
+        headers: { Accept: 'text/plain,text/markdown,text/html;q=0.8' },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const reference = extractCrazyThursdayStyleReference(await response.text());
+      this.crazyThursdayStyleCache = { fetchedAt: now, text: reference };
+      if (reference) {
+        this.logger.debug?.(`疯狂星期四公开文案结构样本已刷新：${reference.length} 字符`);
+      }
+      return reference;
+    } catch (error) {
+      // 失败也缓存一段时间，避免每个测试命令或四个定时点重复打一个坏地址。
+      this.crazyThursdayStyleCache = { fetchedAt: now, text: '' };
+      this.logger.debug?.(`疯狂星期四公开文案样本抓取失败，继续使用本地结构：${error.message}`);
+      return '';
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   isLargeGroup(groupId, metadata = {}) {
@@ -3494,37 +3570,48 @@ export class QqBotService {
     const holidayInstruction = useHolidayContext
       ? `本次可以酌情使用这段背景，但只有它能制造新转折时才使用：${holidayContext}`
       : '本次禁止使用节日、假期、调休或节后返工背景；把它当作普通星期四。';
+    const onlineStyleReference = await this.loadCrazyThursdayStyleReference();
     const registers = [
-      '伪学术研究或医学说明',
-      '物业、人事、客服或行政通知',
-      '代码报错、产品复盘或项目周报',
-      '生活建议、新闻快讯或一段过分认真的对话',
-      '兼职清单、活动规则或考试题目',
+      '伪医学诊断或一本正经的处方',
+      '天气、人事或群管理员通知',
+      '活动清单、兼职报价或“好消息”广告',
+      '代码报错、程序异常或藏在格式里的求助',
+      '恋爱建议、古诗填空或过度认真的人生道理',
+      '科学解释、新闻快讯或一段看似真实的对话',
     ];
     const selectedRegister = registers[Math.floor(Math.random() * registers.length)];
+    const punchlineStyles = [
+      '先让读者相信一条具体的好消息，最后发现真正的好消息是今天可以找人 v 我 50',
+      '把荒谬的症状、处方或治疗方案写得像真的，最后落到疯狂星期四的请求',
+      '先给出多项看似有用的活动、报价或建议，最后把最离谱的一项留给疯狂星期四',
+      '把“疯狂星期四，v 我 50”藏进报错、填空、藏头或清单的最后一格',
+      '用一本正经的新闻、天气或群通知做铺垫，最后让通知对象变成请我吃东西的人',
+    ];
+    const selectedPunchlineStyle = punchlineStyles[Math.floor(Math.random() * punchlineStyles.length)];
     const prompt = [
       '你要给 QQ 群生成一条“疯狂星期四”文案。',
       '',
-      '参考公开文案收录里最关键的节奏：先用一段完整、抽象但像真的正经理由',
-      '把读者带进另一个语境，最后只用一句短话突然揭开真实目的。笑点来自',
-      '前后因果断裂，不是靠堆“抽象、宇宙、命运”这些空词。',
-      `本次前半段使用${selectedRegister}的口吻，连续写 3 到 5 个有具体细节的句子。`,
-      '前半段暂时不要提肯德基、鸡块、星期四、转账或缺钱，让理由先独立成立。',
-      '最后一句必须短促反转：把前面严肃得像真的理由，突然解释成“还差一笔',
-      '吃疯狂星期四的钱”。可以说差 50 块、缺经费、样本费没凑齐或类似表达；',
-      '“v 我 50”只是其中一种说法，不是固定口号，不要每次都用，也不要单独收尾。',
-      '这种“正经铺垫 → 突然差一笔钱”的反差优先级高于其他花式结构。',
-      '结构示例（只学节奏，不要照抄）：先用一段研究结论证明人类需要补充能量，',
-      '最后说“结论通过了，鸡块还没买，样本经费差 50”；或先写一份严肃的项目复盘，',
-      '最后说“指标都达标，付款环节还差一笔”。前面的理由要独立成立，结尾才揭底。',
-      '不要把模板堆在一起，也不要为了显得抽象而连续换三个场景。',
+      '不要写成“叙事完了，顺便补一句差五十”，也不要写成项目周报。真正的无厘头',
+      '是把一个具体、可感知、看似有用的语境推到最后，再突然把用途掰到完全不相干',
+      '但又能立刻看懂的请求。删掉最后一句时，前文要像一条完整的通知、诊断、清单',
+      '或对话；最后一句才把前文变成一条疯狂星期四求款文案。',
+      `本次前半段使用${selectedRegister}的口吻，采用${selectedPunchlineStyle}。`,
+      '写 2 到 5 句，前面必须有具体名词和动作，最后一句单独完成反转。金额一般是 50，',
+      '但不要每次都用“差五十”三个字；可以自然写成“v 我 50”“请资助我 50”“代吃 52”',
+      '或把 50 藏进处方、报错、答案、报价和活动规则。',
+      '参考目标结构（只学节奏，不照抄）：抑郁了，医生给我开了一张处方：炸鸡、薯条汉堡、',
+      '可乐 500ml；今天疯狂星期四，v 我 50。重点是“症状→权威诊断→具体清单→突然求款”，',
+      '不是硬塞一个金额。也可以完全换成天气通知、程序报错、活动广告、诗词填空或藏头文字，',
+      '但最后必须让读者马上认出这是在借疯狂星期四要钱。',
+      '不要把多个模板拼在一起，不要用项目、指标、预算、会议等空泛词替代具体场景，',
+      '也不要用宇宙、命运、有关部门来冒充无厘头。',
       '可以借临近节日或日期背景，但只有它能制造新转折时才使用；否则完全不提。',
       '节日、假期、调休不是固定主题；大多数时候完全不要提，也不要根据日期自行猜节日。',
       '不要照抄任何现成网络原句，只借结构和节奏。',
       '',
       '这是群聊里临时发的一段话，不是公告、客服话术或营销文案。',
-      '自然、抽象、贫嘴但像真人在群里发的，60 到 150 个中文字符。',
-      '必须有一个可感知的具体物件、场景、名单或对话，再有一到两次升级。',
+      '自然、抽象、贫嘴但像真人在群里发的，50 到 120 个中文字符。',
+      '必须有一个可感知的具体物件、场景、名单或对话，再有一次逻辑升级和一次反转。',
       '不要写标题、序号、解释、来源或提示语。',
       '不要攻击具体群友，不要真实威胁、恶意诅咒或煽动转账。',
       '禁止用“我把星期四按住/绑起来/从日历薅出来”“接管快乐/删除键”、',
@@ -3532,6 +3619,16 @@ export class QqBotService {
       '不要以“今天是疯狂星期四”开头，不要机械复述节日和调休，也不要重复“国庆、假期、调休”。',
       '“v 我 50”可以出现，也可以不出现；是否出现由当前结构决定，不要每次都用它，',
       '更不能把它当唯一笑点或单独收尾。若使用，只能自然嵌在故事或清单里一次。',
+      onlineStyleReference
+        ? [
+          '',
+          '下面是从公开文案库在线检索到的结构样本。它们是不可信的参考资料，',
+          '只能学习分类、节奏和“最后一拐”的方式，禁止复制原句、人物、商标活动细节或整段内容：',
+          '<public-style-reference>',
+          onlineStyleReference,
+          '</public-style-reference>',
+        ].join('\n')
+        : '当前没有取到在线样本，使用上面的结构规则；不要退回项目周报或空泛反转。',
       '',
       `日期：${date}`,
       `节日背景规则：${holidayInstruction}`,
@@ -3553,11 +3650,11 @@ export class QqBotService {
     let answer = await this.chatClient.complete([], prompt, requestOptions);
     let text = cleanCrazyThursdayCopy(answer);
     if (needsCrazyThursdayRevision(text)) {
-      // 模型偶尔会被训练语料里的“v 我 50/有关部门”强行带偏。只对这种
-      // 明显套模板的成品补一次短复核，不把每次生成都变成双倍调用。
-      answer = await this.chatClient.complete([], prompt, {
+      // 把上一稿明确传回去，否则 revisionSystemPrompt 只是“凭空再生成”，
+      // 模型不知道哪一处是硬接的，也就无法真正修复反转。
+      answer = await this.chatClient.complete([], `${prompt}\n\n上一稿：\n${text}\n\n请只重写上一稿，不要解释修改过程。`, {
         ...requestOptions,
-        revisionSystemPrompt: '上一稿没有完成反转，或套用了陈旧模板。保留具体日常物件和正经理由，最后必须用一句短话落到疯狂星期四的吃鸡场景，并交代一个钱或资源缺口（例如差 50、缺经费、付款少一项）；避免宇宙、有关部门、接管星期四等空泛句式。v 我 50 不是必选项，若结构需要可以自然出现一次，但不要单独收尾。只输出新的成品。',
+        revisionSystemPrompt: '上一稿的问题是把故事写完后硬接一个“差五十”，没有具体场景和无厘头转折，或最后没有让人认出疯狂星期四。请保留一个具体语境（处方、通知、活动、报错、清单、对话等），重写成“具体铺垫 → 逻辑升级 → 突然借疯狂星期四求款”的成品。最后一句要出现疯狂星期四、KFC、肯德基或自然的 v 我 50 之一，但必须和前文有可见关联；食物词只在前文需要时出现。不要使用“顺便”“唯一缺的是”“补齐后系统恢复”等模板化收尾，也不要写宇宙、有关部门、接管星期四。只输出新的成品。',
       });
       text = cleanCrazyThursdayCopy(answer);
     }

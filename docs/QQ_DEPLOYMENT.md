@@ -261,10 +261,11 @@ WEB_SEARCH_LONGTU_CACHE_TTL_MS=86400000
 
 Bridge 插件默认在北京时间每天 09:00，把上一自然日的群用量排行私聊发送给 `.env.qq` 中的 `LONGTU_QQ_USAGE_REPORT_USERS`。日报收件人和超管权限完全分离：加入收件人列表不会获得图库管理、`/stop` 或手动触发日报的权限。日报包含群名和群号、原始/折算 Token、LLM 输入缓存率、真实搜索与缓存命中率、主要消耗环节和拦截次数；还会显示首次回复数、二次风格复核数、复核放大率，以及节流跳过次数和基于该群最近复核均值估算的 Token/金额节省。发送时间可在 AstrBot 的“龙图 QQ Bridge”插件配置中调整；Node 的 `GET /v1/qq/usage` 接口使用与消息接口相同的 Bearer Token，不对公网开放。
 
-Bridge 会在北京时间每周四 09:00、11:30、15:00、18:00 各推送一条“疯狂星期四”抽象文案。四个时点分别独立生成，单个时点的成品复用给机器人当前加入的全部 QQ 群；不会按群重复调用模型。文案通过现有模型调用生成，参考热门疯狂星期四的荒诞通知、一本正经胡说和突然反转风格；节日与调休只作为可选上下文，不会机械套用。模型暂时不可用时会退回本地文案。可通过服务器 `.env.qq` 关闭：
+Bridge 会在北京时间每周四 09:00、11:30、15:00、18:00 各推送一条“疯狂星期四”抽象文案。四个时点分别独立生成，单个时点的成品复用给机器人当前加入的全部 QQ 群；不会按群重复调用模型。文案生成前会从公开文案库抓取少量结构样本，参考其中的荒诞通知、伪诊断、活动清单、报错、藏头和突然转折套路，再由模型重写，禁止照抄原句。生成失败或外网样本暂时不可用时会退回本地文案。可通过服务器 `.env.qq` 关闭在线样本检索（留空即可），或关闭整项推送：
 
 ```dotenv
 LONGTU_QQ_CRAZY_THURSDAY_ENABLED=true
+QQ_CRAZY_THURSDAY_STYLE_URL=https://raw.githubusercontent.com/SylviaBABY/Crazy-KFC-selfuse/main/README.md
 ```
 
 旧版本中的 `LONGTU_QQ_CRAZY_THURSDAY_GROUPS`、`LONGTU_QQ_CRAZY_THURSDAY_HOUR` 和 `LONGTU_QQ_CRAZY_THURSDAY_MINUTE` 会被保留但不再筛选目标或改变时点。关闭功能只需设置 `LONGTU_QQ_CRAZY_THURSDAY_ENABLED=false`，修改 `.env.qq` 后重启 AstrBot Bridge 插件。
