@@ -58,6 +58,10 @@ services:
       LONGTU_QQ_IGNORE_SLASH_COMMANDS: ${LONGTU_QQ_IGNORE_SLASH_COMMANDS:-true}
       LONGTU_QQ_REPLY_ONLY_WHEN_AT: ${LONGTU_QQ_REPLY_ONLY_WHEN_AT:-true}
       QQ_MEDIA_EXCLUDED_GROUPS: ${QQ_MEDIA_EXCLUDED_GROUPS:-}
+      # Keep the native media acknowledgement in the same source of truth as
+      # qq-bot's .env.qq.  Without this, an old AstrBot plugin config can
+      # silently override the operator's selected QQ reaction.
+      QQ_MEDIA_ACK_EMOJI_ID: ${QQ_MEDIA_ACK_EMOJI_ID:-128524}
     ports:
       - "6185:6185"
       # NapCat 与 AstrBot 在同一 Docker 网络时无需把 6199 暴露给宿主机。
