@@ -2872,6 +2872,10 @@ class LongtuQqBridge(Star):
                 if not self._is_allowed_bridge_slash_command(event):
                     return
                 if self._crazy_thursday_command(event):
+                    # /crazy-thursday 是超管私聊调试入口；群聊只保留定时推送，
+                    # 不回权限提示，避免把测试命令本身刷进群里。
+                    if not event.is_private_chat():
+                        return
                     requested_by = str(event.get_sender_id() or "").strip()
                     target_date = datetime.now(REPORT_TIMEZONE).date()
                     test_payload = {

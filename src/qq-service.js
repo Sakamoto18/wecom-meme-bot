@@ -3458,6 +3458,12 @@ export class QqBotService {
   }
 
   async handleCrazyThursdayRequest(payload) {
+    // 手动测试只开放给超管私聊；群里的 /crazy-thursday 由 Bridge 静默丢弃，
+    // 防止误触发把权限提示或错误信息刷到群里。定时推送使用 scheduled 标记，
+    // 不受这条私聊限制影响。
+    if (payload.crazyThursdayTest && payload.messageType !== 'private') {
+      return { mode: 'crazy-thursday-ignored', messages: [] };
+    }
     if (!payload.crazyThursdayScheduled
       && !isLongtuAdministrator(payload.userId, this.adminUsers)) {
       return {
@@ -3472,6 +3478,14 @@ export class QqBotService {
       ? payload.crazyThursdayDate
       : new Date().toISOString().slice(0, 10);
     const holidayContext = payload.crazyThursdayHolidayContext || '无特别节日背景';
+    // 节日只是偶尔的可选素材，不能因为上下文里出现了“国庆”就每次都套
+    // 节后返工。按日期做稳定采样，保证同一周重试时策略一致，也避免线上
+    // 测试恰好重复出节日模板。
+    const dateDay = Number(date.slice(-2));
+    const useHolidayContext = Number.isInteger(dateDay) && dateDay % 5 === 0;
+    const holidayInstruction = useHolidayContext
+      ? `本次可以酌情使用这段背景，但只有它能制造新转折时才使用：${holidayContext}`
+      : '本次禁止使用节日、假期、调休或节后返工背景；把它当作普通星期四。';
     const prompt = [
       '你要给 QQ 群生成一条“疯狂星期四”文案。',
       '',
@@ -3483,7 +3497,7 @@ export class QqBotService {
       'D. 小故事/对话：铺垫两三句真实日常，最后偷换一个完全不相干的因果；',
       'E. 文字游戏：利用成语、缩写、填空、代码报错或引用文体，让读者到末尾才懂。',
       '荒诞要来自具体细节和突然转折，不是靠“宇宙、命运、时间管理”这些空词。',
-      '可以借临近节日或日期背景，但只有它能产生新笑点时才使用；不要硬讲调休。',
+      '节日、假期、调休不是固定主题；大多数时候完全不要提，也不要根据日期自行猜节日。',
       '不要照抄任何现成网络原句，只借结构和节奏。',
       '',
       '这是群聊里临时发的一段话，不是公告、客服话术或营销文案。',
@@ -3497,7 +3511,7 @@ export class QqBotService {
       '“v 我 50”最多出现一次，也可以不出现；不能把它当唯一笑点，不能单独收尾。',
       '',
       `日期：${date}`,
-      `临近节日/日期背景：${holidayContext}`,
+      `节日背景规则：${holidayInstruction}`,
       '',
       '请直接输出这一段文案。',
     ].join('\n');

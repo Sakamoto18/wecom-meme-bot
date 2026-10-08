@@ -30,6 +30,7 @@ test('crazy Thursday request uses the tracked chat client and cleans output', as
   assert.equal(calls[0].options.usageSource, 'crazy-thursday');
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
   assert.match(calls[0].input, /不要机械复述节日和调休/u);
+  assert.match(calls[0].input, /大多数时候完全不要提/u);
 });
 
 test('crazy Thursday manual test is admin-only while scheduled push is trusted', async () => {
@@ -48,6 +49,18 @@ test('crazy Thursday manual test is admin-only while scheduled push is trusted',
   });
   assert.equal(scheduled.mode, 'crazy-thursday');
   assert.equal(calls.length, 1);
+});
+
+test('manual crazy Thursday test is silent in group chats', async () => {
+  const { service, calls } = createService();
+  const result = await service.handleMessage({
+    message_id: 'crazy-4', message_type: 'group', group_id: '123',
+    user_id: 'admin', text: '', crazy_thursday_request: true,
+    crazy_thursday_test: true,
+  });
+  assert.equal(result.mode, 'crazy-thursday-ignored');
+  assert.deepEqual(result.messages, []);
+  assert.equal(calls.length, 0);
 });
 
 test('normal payloads preserve crazy Thursday fields only when explicitly set', () => {
