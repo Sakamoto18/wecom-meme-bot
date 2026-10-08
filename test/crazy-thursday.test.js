@@ -28,6 +28,7 @@ test('crazy Thursday request uses the tracked chat client and cleans output', as
   assert.equal(result.messages[0].text, '疯狂星期四，今天的快乐由我暂存，周末再统一发放。');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.usageSource, 'crazy-thursday');
+  assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
   assert.match(calls[0].input, /不要机械复述节日和调休/u);
 });
 

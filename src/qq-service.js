@@ -3495,6 +3495,11 @@ export class QqBotService {
       temperature: 1.15,
       maxTokens: 180,
       timeoutMs: 20_000,
+      // DeepSeek Flash enables reasoning by default.  Its reasoning tokens
+      // consume the whole 180-token budget, leaving message.content empty and
+      // making the manual test look like a service failure.  This is a short
+      // copy task; ask for the visible answer directly.
+      thinking: { type: 'disabled' },
       additionalSystemPrompt: '只生成一条疯狂星期四群聊文案，不回答问题，不调用搜索，不输出任何解释。',
     });
     const text = cleanCrazyThursdayCopy(answer);
