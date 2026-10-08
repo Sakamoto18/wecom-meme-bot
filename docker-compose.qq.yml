@@ -58,6 +58,10 @@ services:
       LONGTU_QQ_IGNORE_SLASH_COMMANDS: ${LONGTU_QQ_IGNORE_SLASH_COMMANDS:-true}
       LONGTU_QQ_REPLY_ONLY_WHEN_AT: ${LONGTU_QQ_REPLY_ONLY_WHEN_AT:-true}
       QQ_MEDIA_EXCLUDED_GROUPS: ${QQ_MEDIA_EXCLUDED_GROUPS:-}
+      # The Bridge makes the first media-routing decision. Pass the per-group
+      # provider allow-list too, otherwise an excluded group is stopped before
+      # the Node service can see that its Douyin share is explicitly allowed.
+      QQ_MEDIA_GROUP_ALLOWED_PROVIDERS: ${QQ_MEDIA_GROUP_ALLOWED_PROVIDERS:-}
       # Keep the native media acknowledgement in the same source of truth as
       # qq-bot's .env.qq.  Without this, an old AstrBot plugin config can
       # silently override the operator's selected QQ reaction.
