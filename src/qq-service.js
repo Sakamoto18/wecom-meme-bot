@@ -93,7 +93,10 @@ function cleanCrazyThursdayCopy(value) {
 
 function needsCrazyThursdayRevision(value) {
   const text = String(value ?? '');
-  return /(?:宇宙(?:给|通知)|有关部门(?:经研究)?|临时接管|接管快乐|绑(?:住|起来)星期四|从日历薅|下午三点统一发放)/iu.test(text);
+  const staleTemplate = /(?:宇宙(?:给|通知)|有关部门(?:经研究)?|临时接管|接管快乐|绑(?:住|起来)星期四|从日历薅|下午三点统一发放)/iu.test(text);
+  const hasThursdayTopic = /(?:疯狂星期四|肯德基|鸡块|鸡翅|炸鸡|脆皮|外卖)/iu.test(text);
+  const hasShortfall = /(?:差|缺|少|不足|缺口|预算|经费|样本费|付款|红包|五十|50|v\s*我)/iu.test(text);
+  return staleTemplate || !hasThursdayTopic || !hasShortfall;
 }
 // Keep a generous overlap so a line/paragraph crossing a cut is present in
 // both neighboring tiles.  Core + overlap stays below DeepSeek's 8192-pixel
@@ -3554,7 +3557,7 @@ export class QqBotService {
       // 明显套模板的成品补一次短复核，不把每次生成都变成双倍调用。
       answer = await this.chatClient.complete([], prompt, {
         ...requestOptions,
-        revisionSystemPrompt: '上一稿套用了陈旧模板。换成具体日常物件、伪科普、清单或文字游戏，避免宇宙、有关部门、接管星期四等空泛句式；v 我 50 不是必选项，若结构需要可以自然出现一次，但不要单独收尾。只输出新的成品。',
+        revisionSystemPrompt: '上一稿没有完成反转，或套用了陈旧模板。保留具体日常物件和正经理由，最后必须用一句短话落到疯狂星期四的吃鸡场景，并交代一个钱或资源缺口（例如差 50、缺经费、付款少一项）；避免宇宙、有关部门、接管星期四等空泛句式。v 我 50 不是必选项，若结构需要可以自然出现一次，但不要单独收尾。只输出新的成品。',
       });
       text = cleanCrazyThursdayCopy(answer);
     }

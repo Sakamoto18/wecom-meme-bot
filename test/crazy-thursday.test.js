@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
 
-function createService(answer = '楼下打印店把我的身份证复印了三份，说其中一份要参加周四面试。') {
+function createService(answer = '项目复盘指标都达标，付款环节还差 50，顺便疯狂星期四。') {
   const calls = [];
   const service = new QqBotService({
     chatClient: {
@@ -18,14 +18,14 @@ function createService(answer = '楼下打印店把我的身份证复印了三�
 }
 
 test('crazy Thursday request uses the tracked chat client and cleans output', async () => {
-  const { service, calls } = createService('```\n文案：疯狂星期四，今天的快乐由我暂存，周末再统一发放。\n```');
+  const { service, calls } = createService('```\n文案：项目复盘指标都达标，付款环节还差 50，顺便疯狂星期四。\n```');
   const result = await service.handleMessage({
     message_id: 'crazy-1', message_type: 'private', user_id: 'admin',
     text: '', crazy_thursday_request: true, crazy_thursday_test: true,
     crazy_thursday_date: '2026-10-08', crazy_thursday_holiday_context: '国庆节刚过7天',
   });
   assert.equal(result.mode, 'crazy-thursday');
-  assert.equal(result.messages[0].text, '疯狂星期四，今天的快乐由我暂存，周末再统一发放。');
+  assert.equal(result.messages[0].text, '项目复盘指标都达标，付款环节还差 50，顺便疯狂星期四。');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.usageSource, 'crazy-thursday');
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
