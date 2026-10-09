@@ -217,6 +217,7 @@ test('unsafe public entries are filtered before direct delivery', async () => {
   const result = await service.handleMessage({
     message_id: 'crazy-7', message_type: 'private', user_id: 'admin',
     text: '', crazy_thursday_request: true, crazy_thursday_test: true,
+    crazy_thursday_date: '2026-10-08',
   });
   assert.equal(result.messages[0].text, '医生开了处方：炸鸡、薯条和可乐。今天疯狂星期四，v 我 50。');
 });

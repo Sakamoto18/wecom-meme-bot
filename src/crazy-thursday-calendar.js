@@ -6,6 +6,11 @@ const FIXED_HOLIDAYS = new Map([
   ['万圣节', '10-31'], ['双十一', '11-11'], ['平安夜', '12-24'], ['圣诞节', '12-25'],
 ]);
 const HOLIDAY = '六一儿童节|国庆节|圣诞节|情人节|劳动节|儿童节|妇女节|教师节|万圣节|平安夜|双十一|元旦|五一|六一|国庆|七夕|中秋节?|端午节?|春节|除夕|元宵节?|清明节?|跨年|新年';
+const RELATIVE_DAY_OFFSETS = {
+  今天: 0, 今日: 0, 现在: 0,
+  明天: 1, 明日: 1, 后天: 2, 大后天: 3,
+  昨天: -1, 昨日: -1, 前天: -2,
+};
 
 function chineseNumber(value) {
   if (/^\d+$/u.test(value)) return Number(value);
@@ -30,6 +35,22 @@ export function crazyThursdayCalendarRejection(original, date) {
   const month = current.getUTCMonth() + 1;
   const day = current.getUTCDate();
   const dayOfYear = Math.floor((current - Date.UTC(year, 0, 1)) / DAY_MS) + 1;
+
+  // “明天周四了／明天星期四”只在它描述的相对日期确实是周四时成立。
+  // 这类句子不能靠 adaptCrazyThursdayDate 改写，必须直接从日常池排除。
+  // Keep the bridge short and explicit. A broad span would incorrectly join
+  // “明天是元旦，今天疯狂星期四” and validate the weekday against “明天”.
+  const relativeWeekdays = [...text.matchAll(
+    /(今天|今日|现在|明天|明日|后天|大后天|昨天|昨日|前天)(?:是|又|到了|就是|正是|的|肯德基|疯狂|kfc|了|[，,、\s]){0,12}(?:周|星期|礼拜)([一二三四五六日天1-7])/giu,
+  )];
+  const weekdayNumber = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 };
+  for (const match of relativeWeekdays) {
+    const expected = /^\d$/u.test(match[2])
+      ? (Number(match[2]) === 7 ? 0 : Number(match[2]))
+      : weekdayNumber[match[2]];
+    const target = new Date(current.getTime() + RELATIVE_DAY_OFFSETS[match[1]] * DAY_MS);
+    if (target.getUTCDay() !== expected) return 'wrong-relative-weekday';
+  }
 
   const ordinals = [...text.matchAll(/(最后一|第[\d一二三四五六七八九十两]+)[次个回](?:(?:kfc|肯德基|的|疯狂))*(?:星期四|期星四|周四)/gu)];
   if (ordinals.length) {

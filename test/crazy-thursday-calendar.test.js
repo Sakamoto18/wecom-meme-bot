@@ -75,3 +75,18 @@ test('present seasonal claims are gated while narrative dates, seasons, numbers 
     '蝴蝶效应使得春天来临的速度加快，所以更多鸡肉，疯狂星期四，v我50。',
   ]) assert.equal(rejection(text, '2026-10-08'), '', text);
 });
+
+test('relative weekday claims must match the actual relative day', () => {
+  const tomorrowThursday = '明天周四了，又到了令人无比激动的 KFC 疯狂星期四，v我50。';
+  assert.equal(rejection(tomorrowThursday, '2026-10-07'), '');
+  assert.equal(rejection(tomorrowThursday, '2026-10-08'), 'wrong-relative-weekday');
+  assert.equal(rejection(tomorrowThursday, '2026-10-09'), 'wrong-relative-weekday');
+  assert.equal(rejection('明天星期四，谁请我吃肯德基疯狂星期四，v我50。', '2026-10-07'), '');
+  assert.equal(rejection('明日礼拜四，v我50。', '2026-10-08'), 'wrong-relative-weekday');
+  assert.equal(rejection('昨天周四，v我50。', '2026-10-09'), '');
+  assert.equal(rejection('后天星期四，v我50。', '2026-10-06'), '');
+  assert.equal(rejection('前天周四，v我50。', '2026-10-10'), '');
+  assert.equal(rejection('今天周四，v我50。', '2026-10-08'), '');
+  assert.equal(rejection('今天周四，v我50。', '2026-10-09'), 'wrong-relative-weekday');
+  assert.equal(rejection('每周四给我转账，今天疯狂星期四v我50。', '2026-10-08'), '');
+});
