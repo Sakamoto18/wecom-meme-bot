@@ -43,6 +43,7 @@ test('current-date references are updated without rewriting the story or its his
     ['今天7月11号', '今天10月8号'],
     ['今日是2024年7月11日', '今日是2026年10月8日'],
     ['今天是七月十一日', '今天是10月8日'],
+    ['现在是 4 月 7 日', '现在是 10 月 8 日'],
     ['今天是 2024-07-11', '今天是 2026-10-08'],
     ['今日：07/11', '今日：10/08'],
     ['今天是7.11', '今天是10.8'],
@@ -149,6 +150,55 @@ test('same date avoids repeating an exact quote until the public pool is exhaust
   const first = await request('crazy-5');
   const second = await request('crazy-6');
   assert.notEqual(first.messages[0].text, second.messages[0].text);
+});
+
+test('cached entries are calendar-filtered for both scheduled and private requests on each date', async () => {
+  const seasonal = '今天是今年最后一次KFC疯狂星期四，把握住最后一个星期四，也把握住我。';
+  const ordinary = '医生说我需要补充能量，处方是炸鸡一份。今天疯狂星期四，v我50。';
+  const entries = [seasonal, ordinary];
+  let fetchCount = 0;
+  const { service, calls } = createService({
+    crazyThursdayStyleSourceUrl: 'https://example.test/v50.json',
+    crazyThursdayFetch: async () => {
+      fetchCount += 1;
+      return { ok: true, text: async () => JSON.stringify(entries) };
+    },
+  });
+  const request = (date, scheduled) => service.handleMessage({
+    message_type: scheduled ? 'group' : 'private', group_id: scheduled ? '123' : '',
+    user_id: scheduled ? 'system-crazy-thursday' : 'admin',
+    crazy_thursday_request: true, crazy_thursday_scheduled: scheduled,
+    crazy_thursday_test: !scheduled, crazy_thursday_date: date,
+  });
+  for (const scheduled of [true, false]) {
+    for (let i = 0; i < 4; i += 1) {
+      assert.equal((await request('2026-10-08', scheduled)).messages[0].text, ordinary);
+    }
+  }
+  const yearEnd = [await request('2026-12-31', true), await request('2026-12-31', true)];
+  assert.deepEqual(new Set(yearEnd.map((result) => result.messages[0].text)), new Set(entries));
+  assert.equal(fetchCount, 1);
+  assert.deepEqual(service.crazyThursdayStyleCache.entries, entries);
+  assert.equal(calls.length, 0);
+});
+
+test('an all-expired online pool falls back to eligible local originals without LLM calls', async () => {
+  const expired = '今天是2024年最后一次KFC疯狂星期四，前51个你们都没请我吃，也把握住我。';
+  const { service, calls } = createService({
+    crazyThursdayStyleSourceUrl: 'https://example.test/v50.json',
+    crazyThursdayFetch: async () => ({ ok: true, text: async () => JSON.stringify([expired]) }),
+  });
+  for (let i = 0; i < 12; i += 1) {
+    const result = await service.handleMessage({
+      message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
+      crazy_thursday_test: true, crazy_thursday_date: '2026-07-09',
+    });
+    assert.equal(result.mode, 'crazy-thursday');
+    assert.ok(result.messages[0].text);
+    assert.notEqual(result.messages[0].text, expired);
+    assert.doesNotMatch(result.messages[0].text, /冬天/u);
+  }
+  assert.equal(calls.length, 0);
 });
 
 test('unsafe public entries are filtered before direct delivery', async () => {

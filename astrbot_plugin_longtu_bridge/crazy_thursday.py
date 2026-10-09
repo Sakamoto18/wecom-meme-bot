@@ -104,7 +104,9 @@ def generate_crazy_thursday_copy(day: date, *, seed: str = "") -> str:
         "老师问三个学生，你们用什么东西可以填满一整个房间。第一个学生找来稻草铺满地板，老师摇了摇头。第二个学生找来一根蜡烛点燃，屋子里充满了光，老师还是摇了摇头，因为学生的影子没有被照到。这时第三个学生拿出肯德基疯狂星期四的黄金小酥肉，顿时香味充满了整个房间",
         "真正被爱的人都是直接提需求。没有自信的人，才会在长篇大论里藏一句 v 我 50。你害怕被拒绝的尴尬，把需求都讲成了玩笑话。 所以快 v 我 50",
     )
-    text = rng.choice(templates)
+    # Node 暂时不可用时也不能在夏天回退到“冬天已悄悄而至”。
+    eligible = tuple(text for text in templates if "冬天" not in text or day.month in (12, 1, 2))
+    text = rng.choice(eligible)
     if context_line:
         text = f"{text}{context_line}"
     return text

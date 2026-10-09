@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { isRemovedError } from './media-removed.js';
 import { isMediaExtractionTimeoutError, isMediaTooLargeError } from './media-limits.js';
+import { crazyThursdayCalendarRejection } from './crazy-thursday-calendar.js';
 import { isBilibiliPartError } from './bilibili-provider.js';
 import {
   buildImageInformationPolicy,
@@ -136,13 +137,13 @@ function adaptCrazyThursdayDate(text, date) {
   // 只替换明确指向“今天”的日期；故事中的历史日期、时长和金额保留原文。
   return text
     .replace(
-      /((?:今天|今日)\s*(?:是\s*)?[，,:：]?\s*)(?:([\d〇零一二三四五六七八九]{4})(\s*年\s*))?([\d一二三四五六七八九十]{1,3})(\s*月\s*)([\d一二三四五六七八九十]{1,3})(\s*[日号])/gu,
+      /((?:今天|今日|现在)\s*(?:是\s*)?[，,:：]?\s*)(?:([\d〇零一二三四五六七八九]{4})(\s*年\s*))?([\d一二三四五六七八九十]{1,3})(\s*月\s*)([\d一二三四五六七八九十]{1,3})(\s*[日号])/gu,
       (_match, prefix, oldYear, yearUnit, _month, monthUnit, _day, dayUnit) => (
         `${prefix}${oldYear ? year + yearUnit : ''}${Number(month)}${monthUnit}${Number(day)}${dayUnit}`
       ),
     )
     .replace(
-      /((?:今天|今日)\s*(?:是\s*)?[，,:：]?\s*)(?:(\d{4})(\s*[-/.]\s*))?(0?[1-9]|1[0-2])(\s*[-/.]\s*)(0?[1-9]|[12]\d|3[01])(?![\d./-]|\s*(?:元|块|万|亿|折|%|％))/gu,
+      /((?:今天|今日|现在)\s*(?:是\s*)?[，,:：]?\s*)(?:(\d{4})(\s*[-/.]\s*))?(0?[1-9]|1[0-2])(\s*[-/.]\s*)(0?[1-9]|[12]\d|3[01])(?![\d./-]|\s*(?:元|块|万|亿|折|%|％))/gu,
       (_match, prefix, oldYear, yearSeparator, oldMonth, separator, oldDay) => {
         const width = oldYear || oldMonth.startsWith('0') || oldDay.startsWith('0') ? 2 : 1;
         return `${prefix}${oldYear ? year + yearSeparator : ''}`
@@ -1735,8 +1736,11 @@ export class QqBotService {
 
   pickCrazyThursdayEntry(entries, date) {
     const available = Array.isArray(entries) && entries.length > 0
-      ? entries
+      ? entries.filter((entry) => !crazyThursdayCalendarRejection(entry, date))
       : [];
+    if (Array.isArray(entries) && available.length < entries.length) {
+      this.logger.debug?.(`疯狂星期四日期筛选：${date}，可用 ${available.length}/${entries.length} 条原文`);
+    }
     if (available.length === 0) return '';
     const key = String(date || '').slice(0, 10) || 'default';
     const used = this.crazyThursdayUsedEntries.get(key) ?? new Set();
@@ -3602,10 +3606,9 @@ export class QqBotService {
     // 这里故意不调用大模型：用户要的是公开文案原文，不是模型二次创作。
     // 在线库按 6 小时缓存，同一天的多次定时推送避免重复选同一条。
     const onlineEntries = await this.loadCrazyThursdayStyleEntries();
-    const text = this.pickCrazyThursdayEntry(
-      onlineEntries.length > 0 ? onlineEntries : CRAZY_THURSDAY_LOCAL_ENTRIES,
-      date,
-    );
+    // 每次按推送日期筛选，原文缓存不变；线上库全部过期时从本地原文选取。
+    const text = this.pickCrazyThursdayEntry(onlineEntries, date)
+      || this.pickCrazyThursdayEntry(CRAZY_THURSDAY_LOCAL_ENTRIES, date);
     if (!text) throw new Error('没有可用的疯狂星期四公开文案');
     return {
       mode: 'crazy-thursday',
