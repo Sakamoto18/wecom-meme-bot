@@ -270,7 +270,9 @@ QQ_CRAZY_THURSDAY_STYLE_URL=https://cdn.jsdmirror.com/gh/vikiboss/v50@main/stati
 
 旧版本中的 `LONGTU_QQ_CRAZY_THURSDAY_GROUPS`、`LONGTU_QQ_CRAZY_THURSDAY_HOUR` 和 `LONGTU_QQ_CRAZY_THURSDAY_MINUTE` 会被保留但不再筛选目标或改变时点。关闭功能只需设置 `LONGTU_QQ_CRAZY_THURSDAY_ENABLED=false`，修改 `.env.qq` 后重启 AstrBot Bridge 插件。
 
-超管可以在私聊或群聊发送 `/crazy-thursday` 手动生成一条随机文案进行测试。命令只回复当前会话，不会广播到其他群；非 `LONGTU_QQ_ADMIN_USERS` 中的账号会被拒绝。
+发送前会把原文中“今天是 7 月 11 日”“今日 2024-07-11”等明确指当天的日期替换为北京时间的推送日期；故事中的历史日期、其他数字和文案内容保持原样。替换在抽取原文之后执行，不修改共享文案缓存，次日复用时会使用新的日期。
+
+超管可以在私聊发送 `/crazy-thursday` 随机抽取一条原文进行测试，日期同样按测试当天替换。命令只回复当前私聊，不会广播到其他群；群聊中的测试命令静默忽略，非 `LONGTU_QQ_ADMIN_USERS` 中的账号会被拒绝。
 
 日报还会按每次 LLM 调用发生的北京时间计算 DeepSeek 人民币费用，而不是拿总 Token 乘统一价格。当前官方 `deepseek-v4-flash` 与 `deepseek-v4-flash-vision-exp` 价格（2026-08-31 核对）相同：工作日 09:00–12:00、14:00–18:00 的高峰时段，缓存命中输入/缓存未命中输入/输出分别是 0.10/3.0/9.0 元每百万 Token；其余空闲时段分别是 0.05/1.5/4.5 元每百万 Token。日报总计和费用包含群聊与私聊，私聊仅显示合计用量（不展示 QQ 号或对象）；群排行仍只按群聊统计。金额不包含 Exa 联网搜索费用；价格可能变化，需以 [DeepSeek 官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) 为准。
 

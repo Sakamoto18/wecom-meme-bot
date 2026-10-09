@@ -37,6 +37,68 @@ test('crazy Thursday request sends an exact public-library entry without LLM rew
   assert.equal(calls.length, 0);
 });
 
+test('current-date references are updated without rewriting the story or its historical dates', async () => {
+  const cases = [
+    ['今天是 7 月 11 日', '今天是 10 月 8 日'],
+    ['今天7月11号', '今天10月8号'],
+    ['今日是2024年7月11日', '今日是2026年10月8日'],
+    ['今天是七月十一日', '今天是10月8日'],
+    ['今天是 2024-07-11', '今天是 2026-10-08'],
+    ['今日：07/11', '今日：10/08'],
+    ['今天是7.11', '今天是10.8'],
+    ['今天是9.9元，今日8.8折', '今天是9.9元，今日8.8折'],
+  ];
+  for (const [before, after] of cases) {
+    const ending = '，我们和平分手。去年7月11日的事还记得，已经过去1年4天21小时。今天疯狂星期四，v我50。';
+    const { service, calls } = createService({
+      crazyThursdayStyleSourceUrl: 'https://example.test/v50.json',
+      crazyThursdayFetch: async () => ({ ok: true, text: async () => JSON.stringify([before + ending]) }),
+    });
+    const result = await service.handleMessage({
+      message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
+      crazy_thursday_test: true, crazy_thursday_date: '2026-10-08',
+    });
+    assert.equal(result.messages[0].text, after + ending, before);
+    assert.equal(calls.length, 0);
+  }
+});
+
+test('cached public originals adapt to each scheduled date, including across years', async () => {
+  const original = '今天是2024年7月11日，还是分手了，谢谢大家。今天疯狂星期四，v我50。';
+  let fetchCount = 0;
+  const { service } = createService({
+    crazyThursdayStyleSourceUrl: 'https://example.test/v50.json',
+    crazyThursdayFetch: async () => {
+      fetchCount += 1;
+      return { ok: true, text: async () => JSON.stringify([original]) };
+    },
+  });
+  for (const [date, displayedDate] of [['2026-12-31', '2026年12月31日'], ['2027-01-07', '2027年1月7日']]) {
+    const result = await service.handleMessage({
+      message_type: 'group', group_id: '123', user_id: 'system-crazy-thursday',
+      crazy_thursday_request: true, crazy_thursday_scheduled: true, crazy_thursday_date: date,
+    });
+    assert.equal(result.messages[0].text, original.replace('2024年7月11日', displayedDate));
+  }
+  assert.equal(fetchCount, 1);
+  assert.deepEqual(service.crazyThursdayStyleCache.entries, [original]);
+});
+
+test('missing push date uses the current Shanghai day instead of the UTC day', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-07T16:30:00Z') });
+  const { service } = createService({
+    crazyThursdayStyleSourceUrl: 'https://example.test/v50.json',
+    crazyThursdayFetch: async () => ({
+      ok: true,
+      text: async () => JSON.stringify(['今天是7月11日，还是分手了，谢谢大家。今天疯狂星期四，v我50。']),
+    }),
+  });
+  const result = await service.handleMessage({
+    message_type: 'private', user_id: 'admin', crazy_thursday_request: true, crazy_thursday_test: true,
+  });
+  assert.equal(result.messages[0].text, '今天是10月8日，还是分手了，谢谢大家。今天疯狂星期四，v我50。');
+});
+
 test('crazy Thursday manual test is admin-only while scheduled push is trusted', async () => {
   const { service, calls } = createService();
   const denied = await service.handleMessage({
