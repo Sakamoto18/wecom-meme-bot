@@ -2,36 +2,39 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
 
-function createService(answer = '抑郁了，医生给我开了一张处方：炸鸡、薯条汉堡、可乐 500ml。今天疯狂星期四，v 我 50。') {
+function createService(options = {}) {
   const calls = [];
   const service = new QqBotService({
     chatClient: {
-      isConfigured: true,
-      async complete(history, input, options) {
-        calls.push({ history, input, options });
-        return answer;
+      isConfigured: options.chatConfigured ?? false,
+      async complete(history, input, requestOptions) {
+        calls.push({ history, input, options: requestOptions });
+        return '不应该调用模型';
       },
     },
     adminUsers: new Set(['admin']),
+    ...options,
   });
   return { service, calls };
 }
 
-test('crazy Thursday request uses the tracked chat client and cleans output', async () => {
-  const { service, calls } = createService('```\n文案：抑郁了，医生给我开了一张处方：炸鸡、薯条汉堡、可乐 500ml。今天疯狂星期四，v 我 50。\n```');
+test('crazy Thursday request sends an exact public-library entry without LLM rewriting', async () => {
+  const original = '抑郁了，医生给我开了一张处方：炸鸡、薯条汉堡、可乐 500ml；今天疯狂星期四，v 我 50。';
+  const { service, calls } = createService({
+    crazyThursdayStyleSourceUrl: 'https://example.test/v50.json',
+    crazyThursdayFetch: async () => ({
+      ok: true,
+      async text() { return JSON.stringify([original]); },
+    }),
+  });
   const result = await service.handleMessage({
     message_id: 'crazy-1', message_type: 'private', user_id: 'admin',
     text: '', crazy_thursday_request: true, crazy_thursday_test: true,
     crazy_thursday_date: '2026-10-08', crazy_thursday_holiday_context: '国庆节刚过7天',
   });
   assert.equal(result.mode, 'crazy-thursday');
-  assert.equal(result.messages[0].text, '抑郁了，医生给我开了一张处方：炸鸡、薯条汉堡、可乐 500ml。今天疯狂星期四，v 我 50。');
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].options.usageSource, 'crazy-thursday');
-  assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
-  assert.match(calls[0].input, /不要机械复述节日和调休/u);
-  assert.match(calls[0].input, /大多数时候完全不要提/u);
-  assert.match(calls[0].input, /不要写成“叙事完了，顺便补一句差五十”/u);
+  assert.equal(result.messages[0].text, original);
+  assert.equal(calls.length, 0);
 });
 
 test('crazy Thursday manual test is admin-only while scheduled push is trusted', async () => {
@@ -49,7 +52,7 @@ test('crazy Thursday manual test is admin-only while scheduled push is trusted',
     crazy_thursday_scheduled: true,
   });
   assert.equal(scheduled.mode, 'crazy-thursday');
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 0);
 });
 
 test('manual crazy Thursday test is silent in group chats', async () => {
@@ -64,44 +67,49 @@ test('manual crazy Thursday test is silent in group chats', async () => {
   assert.equal(calls.length, 0);
 });
 
-test('cliche crazy Thursday copy gets one focused revision', async () => {
-  const calls = [];
-  const service = new QqBotService({
-    chatClient: {
-      isConfigured: true,
-      async complete(history, input, options) {
-        calls.push({ history, input, options });
-        return calls.length === 1
-          ? '宇宙通知：今天 v 我 50，下午三点统一发放。'
-          : '错误 503：快乐服务暂时不可用，排查结果是接口全部正常，今天疯狂星期四，v 我 50。';
+test('same date avoids repeating an exact quote until the public pool is exhausted', async () => {
+  const entries = [
+    '医生说我需要补充能量，处方是炸鸡一份。今天疯狂星期四，v 我 50。',
+    '天气预报说明天有雨，出门记得带伞。今天疯狂星期四，v 我 50。',
+  ];
+  const { service } = createService({
+    crazyThursdayStyleSourceUrl: 'https://example.test/v50.json',
+    crazyThursdayFetch: async () => ({
+      ok: true,
+      async text() { return JSON.stringify(entries); },
+    }),
+  });
+  const request = (id) => service.handleMessage({
+    message_id: id, message_type: 'group', group_id: '123',
+    user_id: 'system-crazy-thursday', text: '', crazy_thursday_request: true,
+    crazy_thursday_scheduled: true, crazy_thursday_date: '2026-10-08',
+  });
+  const first = await request('crazy-5');
+  const second = await request('crazy-6');
+  assert.notEqual(first.messages[0].text, second.messages[0].text);
+});
+
+test('unsafe public entries are filtered before direct delivery', async () => {
+  const { service } = createService({
+    crazyThursdayStyleSourceUrl: 'https://example.test/v50.json',
+    crazyThursdayFetch: async () => ({
+      ok: true,
+      async text() {
+        return JSON.stringify([
+          '我今天要跳楼，疯狂星期四 v 我 50。',
+          '医生开了处方：炸鸡、薯条和可乐。今天疯狂星期四，v 我 50。',
+        ]);
       },
-    },
-    adminUsers: new Set(['admin']),
+    }),
   });
   const result = await service.handleMessage({
-    message_id: 'crazy-5', message_type: 'private', user_id: 'admin',
+    message_id: 'crazy-7', message_type: 'private', user_id: 'admin',
     text: '', crazy_thursday_request: true, crazy_thursday_test: true,
   });
-  assert.equal(result.mode, 'crazy-thursday');
-  assert.equal(calls.length, 2);
-  assert.match(calls[1].options.revisionSystemPrompt, /突然借疯狂星期四求款/u);
-  assert.match(calls[1].input, /上一稿：/u);
-  assert.match(result.messages[0].text, /错误 503/u);
+  assert.equal(result.messages[0].text, '医生开了处方：炸鸡、薯条和可乐。今天疯狂星期四，v 我 50。');
 });
 
-test('a concrete absurd turn is valid without food keywords', async () => {
-  const { service, calls } = createService(
-    '老板让我把本周工作写成七条人生建议，我认真写完前六条，最后一条是：今天疯狂星期四，v 我 50。',
-  );
-  const result = await service.handleMessage({
-    message_id: 'crazy-6', message_type: 'private', user_id: 'admin',
-    text: '', crazy_thursday_request: true, crazy_thursday_test: true,
-  });
-  assert.equal(result.mode, 'crazy-thursday');
-  assert.equal(calls.length, 1);
-});
-
-test('online public copy is reduced to bounded style samples', async () => {
+test('online public copy is parsed as complete entries', async () => {
   const service = new QqBotService({
     crazyThursdayStyleSourceUrl: 'https://example.test/crazy.md',
     crazyThursdayFetch: async () => ({
@@ -113,9 +121,8 @@ test('online public copy is reduced to bounded style samples', async () => {
     }),
     logger: { debug() {} },
   });
-  const reference = await service.loadCrazyThursdayStyleReference();
-  assert.match(reference, /人事部通知/u);
-  assert.doesNotMatch(reference, /无关的普通说明/u);
+  const entries = await service.loadCrazyThursdayStyleEntries();
+  assert.deepEqual(entries, ['人事部通知：暴雨预警，请参加肯德基疯狂星期四的同事带好雨具，v我50。']);
 });
 
 test('normal payloads preserve crazy Thursday fields only when explicitly set', () => {

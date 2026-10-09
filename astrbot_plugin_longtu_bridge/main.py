@@ -506,7 +506,7 @@ class LongtuQqBridge(Star):
         )
 
     async def _generate_crazy_thursday_text(self, target_date, *, group_id: str = "", user_id: str = "system-crazy-thursday", scheduled: bool = False) -> str:
-        """Ask the Node model for one copy and keep a safe local fallback."""
+        """Ask Node for one public-library original and keep a local original fallback."""
         payload = {
             "message_type": "group" if group_id else "private",
             "group_id": str(group_id or ""),
@@ -524,9 +524,9 @@ class LongtuQqBridge(Star):
                     text = str(item.get("text") or "").strip()
                     if text:
                         return text
-            raise RuntimeError("模型没有返回疯狂星期四文案")
+            raise RuntimeError("没有返回疯狂星期四公开文案原文")
         except Exception as error:
-            logger.warning(f"疯狂星期四模型生成失败，使用本地兜底：{error}")
+            logger.warning(f"疯狂星期四公开文案获取失败，使用本地原文兜底：{error}")
             return generate_crazy_thursday_copy(target_date, seed=group_id or user_id)
 
     async def _send_crazy_thursday(self, target_date) -> int:

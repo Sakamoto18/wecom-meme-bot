@@ -67,74 +67,70 @@ const MAX_IMAGE_RETRY_ATTEMPTS = 4;
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 export const MAX_IMAGE_SIDE_PIXELS = 8_192;
 
-function cleanCrazyThursdayCopy(value) {
-  let text = String(value ?? '')
-    .replace(/```[\s\S]*?```/gu, (block) => block
-      .replace(/^```(?:text|markdown)?\s*/iu, '')
-      .replace(/```\s*$/u, ''))
-    .replace(/[“”「」『』]/gu, '')
-    .replace(/^(?:文案|疯狂星期四文案|输出)\s*[:：]\s*/iu, '')
-    .replace(/\s+/gu, ' ')
+const CRAZY_THURSDAY_UNSAFE_PATTERN = /(?:跳楼|跳下去|自杀|自残|不想活|裸奔|脱光|开房|强奸|奸尸|未成年|儿童色情|密码|apikey|api\s*key|诈骗|骗取|押金|缅甸北部|转账\s*\d{3,}|借我\s*\d{3,})/iu;
+// 在线文案库不可用时仍然直发原文，不再调用模型自创兜底。
+const CRAZY_THURSDAY_LOCAL_ENTRIES = [
+  '抑郁了，医生给我开了一张处方：炸鸡、薯条汉堡、可乐 500ml；今天疯狂星期四，v 我 50。',
+  '郑重声明：\n很抱歉打扰大家，本人于今天上午查出饿了，情况紧急\n所幸有个朋友的姥爷是中医，\n让我照着这个药方抓药:  \n鸡肉卷 * 1\n烤翅 * 3 对 \n上校鸡块 * 2\n薯条 * 2   \n可乐 * 700ml\n脆皮鸡 * 2 \n谁 v 我 50 去抓药',
+  '今天学了一个新成语叫做闻鸡起舞，意思是闻到肯德基的味道，起码找别人要五十',
+  '通知：今天群里禁止发送肯德基文案，有一个算一个，发一次罚 50，罚款交到我这里',
+  '人一但有了爱情，智商情商都会提高95% ，烦恼也会消失95%。但问题来了 爱情从哪里来？科学家却不肯说，只留下了一串奇怪的符号：KFC Crazy Thursday',
+  '给年轻人的八条建议：1.谈恋爱首先要找你爱的，如果结婚就要找爱你的 2.千万别输在“等”这个字身上 3.永远留住30%的神秘 4.不要低估任何一个人 5.别把没教养当做有气场 6.谈恋爱可以穷，结婚不可以 7.谈恋爱一定要自由 8.v50请我吃肯德基疯狂星期四',
+  '早上辛苦写了一早上代码，突然报错，找不到原因。java.lang.NoMoneyException: KFC_CRAZY_THURSDAY_VME50',
+  '家人们求助，求姻缘应该去哪个寺庙啊？\nA、灵隐寺\nB、弘法寺\nC、甘露寺\nD、肯德基疯狂星期寺',
+  '我有个朋友每个月都会进行几次神秘仪式，和一帮信徒去红色庙里吃禽类碎尸块，还会放上红色和白色的粘稠物质。今天就是他们仪式的日子，v 我 50，我去现场直播给你们看。',
+  '寒风吹起，细雨飘落，才察觉严寒的冬天已悄悄而至，这一刻兴许什么都会忘却，唯独不能忘的是向远在他乡的你轻轻说声：“今天肯德基疯狂星期四，V 我 50。”',
+  '老师问三个学生，你们用什么东西可以填满一整个房间。第一个学生找来稻草铺满地板，老师摇了摇头。第二个学生找来一根蜡烛点燃，屋子里充满了光，老师还是摇了摇头，因为学生的影子没有被照到。这时第三个学生拿出肯德基疯狂星期四的黄金小酥肉，顿时香味充满了整个房间',
+  '真正被爱的人都是直接提需求。没有自信的人，才会在长篇大论里藏一句 v 我 50。你害怕被拒绝的尴尬，把需求都讲成了玩笑话。 所以快 v 我 50',
+];
+
+function decodeCrazyThursdayHtml(value) {
+  return String(value ?? '')
+    .replace(/<br\s*\/?>/giu, '\n')
+    .replace(/<[^>]+>/gu, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/gu, '')
+    .replace(/https?:\/\/\S+/gu, '')
+    .replace(/&nbsp;/gu, ' ')
+    .replace(/&gt;/gu, '>')
+    .replace(/&lt;/gu, '<')
+    .replace(/&amp;/gu, '&')
+    .replace(/\r\n?/gu, '\n')
+    .replace(/[ \t]+/gu, ' ')
+    .replace(/\n{3,}/gu, '\n\n')
     .trim();
-  if (!text) throw new Error('大模型返回了空的疯狂星期四文案');
-  // QQ 群里不需要一面墙；截断前优先保留完整句子。
-  if (text.length > 160) {
-    const shortened = text.slice(0, 160);
-    const boundary = Math.max(
-      shortened.lastIndexOf('。'),
-      shortened.lastIndexOf('！'),
-      shortened.lastIndexOf('？'),
-    );
-    text = shortened.slice(0, boundary >= 40 ? boundary + 1 : 160).trim();
+}
+
+function isSafeCrazyThursdayEntry(value) {
+  const text = String(value ?? '').trim();
+  return text.length >= 18
+    && text.length <= 2_000
+    && !CRAZY_THURSDAY_UNSAFE_PATTERN.test(text)
+    && /(?:疯狂星期四|疯狂星期寺|肯德基|KFC|v\s*(?:我\s*)?50|v50|炸鸡|鸡块|鸡翅|薯条|汉堡|可乐)/iu.test(text);
+}
+
+function extractCrazyThursdayEntries(rawValue) {
+  const raw = String(rawValue ?? '').trim();
+  let values = [];
+  try {
+    const parsed = JSON.parse(raw);
+    values = Array.isArray(parsed)
+      ? parsed
+      : (Array.isArray(parsed?.data) ? parsed.data : []);
+  } catch {
+    const blocks = [...raw.matchAll(/<p>([\s\S]*?)<\/p>/giu)].map((match) => match[1]);
+    values = blocks.length > 0 ? blocks : raw.split(/\n{2,}/u);
   }
-  if (text.length < 8) throw new Error('大模型返回的疯狂星期四文案过短');
-  return text;
-}
-
-function needsCrazyThursdayRevision(value) {
-  const text = String(value ?? '');
-  const staleTemplate = /(?:宇宙(?:给|通知)|有关部门(?:经研究)?|临时接管|接管快乐|绑(?:住|起来)星期四|从日历薅|下午三点统一发放)/iu.test(text);
-  const hasShortfall = /(?:差|缺|少|不足|缺口|预算|经费|样本费|付款|红包|五十|50|v\s*我)/iu.test(text);
-  const sentenceParts = text.split(/[。！？!?；;]/u).map((part) => part.trim()).filter(Boolean);
-  const lastSentence = sentenceParts.at(-1) ?? text;
-  const hasCampaignLanding = /(?:疯狂星期四|肯德基|KFC|鸡块|鸡翅|炸鸡|薯条|汉堡|可乐|v\s*我\s*50)/iu.test(lastSentence);
-  const hasConcreteSetup = /(?:医生|处方|抑郁|失眠|天气|暴雨|高温|雨伞|人事部|通知|活动|劳斯莱斯|保时捷|抽奖|商演|兼职|伴舞|恋爱|建议|代码|报错|异常|序列号|程序|考试|填空|古诗|科学家|实验|蛋白|疾病|治疗|新闻|广告|清单|猫|仓鼠|书|诗|成语|朋友|老板|电梯|收银台|汉堡|薯条|炸鸡|可乐)/iu.test(text);
-  // 这些句式通常是把故事写完后硬接“差五十”，需要让模型重新建立
-  // 前文细节与最后缺口之间的因果关系。
-  const gluedEnding = /(?:顺便|唯一(?:缺|少)(?:的)?是|最后(?:一个)?最重要|补齐后系统|结论(?:已经)?通过.{0,8}(?:差|缺)|指标都达标.{0,8}(?:差|缺))/iu.test(text);
-  return staleTemplate || !hasShortfall || !hasCampaignLanding || !hasConcreteSetup || gluedEnding;
-}
-
-const CRAZY_THURSDAY_DEFAULT_STYLE_URL = 'https://raw.githubusercontent.com/SylviaBABY/Crazy-KFC-selfuse/main/README.md';
-
-function extractCrazyThursdayStyleReference(rawValue) {
-  const raw = String(rawValue ?? '');
-  const blocks = [...raw.matchAll(/<p>([\s\S]*?)<\/p>/giu)].map((match) => match[1]);
-  const candidates = (blocks.length > 0 ? blocks : raw.split(/\n{2,}/u))
-    .map((block) => block
-      .replace(/<br\s*\/?>/giu, '。')
-      .replace(/<[^>]+>/gu, ' ')
-      .replace(/!\[[^\]]*\]\([^)]*\)/gu, ' ')
-      .replace(/https?:\/\/\S+/gu, ' ')
-      .replace(/&nbsp;/gu, ' ')
-      .replace(/&gt;/gu, '>')
-      .replace(/&amp;/gu, '&')
-      .replace(/\s+/gu, ' ')
-      .trim())
-    .filter((block) => block.length >= 24)
-    .filter((block) => /(?:疯狂星期四|肯德基|KFC|v\s*我\s*50|鸡块|炸鸡)/iu.test(block))
-    .map((block) => block.slice(0, 420));
-  const unique = [];
+  const entries = [];
   const seen = new Set();
-  for (const candidate of candidates) {
-    const key = candidate.slice(0, 100);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(candidate);
-    if (unique.length >= 6) break;
+  for (const value of values) {
+    const entry = decodeCrazyThursdayHtml(value);
+    if (!isSafeCrazyThursdayEntry(entry) || seen.has(entry)) continue;
+    seen.add(entry);
+    entries.push(entry);
   }
-  return unique.join('\n---\n').slice(0, 2_400);
+  return entries;
 }
+
 // Keep a generous overlap so a line/paragraph crossing a cut is present in
 // both neighboring tiles.  Core + overlap stays below DeepSeek's 8192-pixel
 // single-side limit.
@@ -1658,14 +1654,14 @@ export class QqBotService {
       buildProtectedIdentityContext(this.protectedRoles),
     ].filter(Boolean).join('\n\n');
     this.logger = options.logger ?? console;
-    // 疯狂星期四文案使用公开文案库作“结构检索”，不把整库写进系统提示词。
-    // URL 由 qq-api 通过环境变量显式开启；抓取失败时仍能用模型自身的规则生成，
-    // 不让外网波动阻断普通消息或定时推送。
+    // 疯狂星期四直接复用公开文案库原文，不让模型改写成泛泛的项目周报。
+    // URL 由 qq-api 通过环境变量配置；抓取失败时退回本地同类原文兜底。
     this.crazyThursdayStyleSourceUrl = String(
       options.crazyThursdayStyleSourceUrl ?? '',
     ).trim();
     this.crazyThursdayFetch = options.crazyThursdayFetch ?? globalThis.fetch;
-    this.crazyThursdayStyleCache = { fetchedAt: 0, text: '' };
+    this.crazyThursdayStyleCache = { fetchedAt: 0, text: '', entries: [] };
+    this.crazyThursdayUsedEntries = new Map();
     this.repeatDetector = options.repeatDetector ?? new RepeatDetector({
       enabled: options.repeatEnabled ?? true,
       maxTextCharacters: options.repeatMaxTextCharacters,
@@ -1683,12 +1679,13 @@ export class QqBotService {
     this.lastGroupPassiveDecisionAt = new Map();
   }
 
-  async loadCrazyThursdayStyleReference() {
+
+  async loadCrazyThursdayStyleEntries() {
     const sourceUrl = this.crazyThursdayStyleSourceUrl;
-    if (!sourceUrl) return '';
+    if (!sourceUrl) return [];
     const now = Date.now();
     if (now - this.crazyThursdayStyleCache.fetchedAt < 6 * 60 * 60 * 1000) {
-      return this.crazyThursdayStyleCache.text;
+      return this.crazyThursdayStyleCache.entries;
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 4_000);
@@ -1698,20 +1695,43 @@ export class QqBotService {
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const reference = extractCrazyThursdayStyleReference(await response.text());
-      this.crazyThursdayStyleCache = { fetchedAt: now, text: reference };
-      if (reference) {
-        this.logger.debug?.(`疯狂星期四公开文案结构样本已刷新：${reference.length} 字符`);
+      const entries = extractCrazyThursdayEntries(await response.text());
+      const reference = entries.slice(0, 6).join('\n---\n').slice(0, 2_400);
+      this.crazyThursdayStyleCache = { fetchedAt: now, text: reference, entries };
+      if (entries.length > 0) {
+        this.logger.debug?.(`疯狂星期四公开文案原文已刷新：${entries.length} 条`);
       }
-      return reference;
+      return entries;
     } catch (error) {
       // 失败也缓存一段时间，避免每个测试命令或四个定时点重复打一个坏地址。
-      this.crazyThursdayStyleCache = { fetchedAt: now, text: '' };
-      this.logger.debug?.(`疯狂星期四公开文案样本抓取失败，继续使用本地结构：${error.message}`);
-      return '';
+      this.crazyThursdayStyleCache = { fetchedAt: now, text: '', entries: [] };
+      this.logger.debug?.(`疯狂星期四公开文案原文抓取失败，继续使用本地原文：${error.message}`);
+      return [];
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  pickCrazyThursdayEntry(entries, date) {
+    const available = Array.isArray(entries) && entries.length > 0
+      ? entries
+      : [];
+    if (available.length === 0) return '';
+    const key = String(date || '').slice(0, 10) || 'default';
+    const used = this.crazyThursdayUsedEntries.get(key) ?? new Set();
+    let candidates = available.filter((entry) => !used.has(entry));
+    if (candidates.length === 0) {
+      used.clear();
+      candidates = available;
+    }
+    const entry = candidates[Math.floor(Math.random() * candidates.length)];
+    used.add(entry);
+    this.crazyThursdayUsedEntries.set(key, used);
+    if (this.crazyThursdayUsedEntries.size > 8) {
+      const oldest = this.crazyThursdayUsedEntries.keys().next().value;
+      this.crazyThursdayUsedEntries.delete(oldest);
+    }
+    return entry;
   }
 
   isLargeGroup(groupId, metadata = {}) {
@@ -3555,113 +3575,22 @@ export class QqBotService {
         messages: [{ type: 'text', text: '只有超级管理员可以测试疯狂星期四文案。' }],
       };
     }
-    if (!this.chatClient?.isConfigured) {
-      throw new Error('普通对话服务尚未配置');
-    }
     const date = /^\d{4}-\d{2}-\d{2}$/u.test(payload.crazyThursdayDate)
       ? payload.crazyThursdayDate
       : new Date().toISOString().slice(0, 10);
-    const holidayContext = payload.crazyThursdayHolidayContext || '无特别节日背景';
-    // 节日只是偶尔的可选素材，不能因为上下文里出现了“国庆”就每次都套
-    // 节后返工。按日期做稳定采样，保证同一周重试时策略一致，也避免线上
-    // 测试恰好重复出节日模板。
-    const dateDay = Number(date.slice(-2));
-    const useHolidayContext = Number.isInteger(dateDay) && dateDay % 5 === 0;
-    const holidayInstruction = useHolidayContext
-      ? `本次可以酌情使用这段背景，但只有它能制造新转折时才使用：${holidayContext}`
-      : '本次禁止使用节日、假期、调休或节后返工背景；把它当作普通星期四。';
-    const onlineStyleReference = await this.loadCrazyThursdayStyleReference();
-    const registers = [
-      '伪医学诊断或一本正经的处方',
-      '天气、人事或群管理员通知',
-      '活动清单、兼职报价或“好消息”广告',
-      '代码报错、程序异常或藏在格式里的求助',
-      '恋爱建议、古诗填空或过度认真的人生道理',
-      '科学解释、新闻快讯或一段看似真实的对话',
-    ];
-    const selectedRegister = registers[Math.floor(Math.random() * registers.length)];
-    const punchlineStyles = [
-      '先让读者相信一条具体的好消息，最后发现真正的好消息是今天可以找人 v 我 50',
-      '把荒谬的症状、处方或治疗方案写得像真的，最后落到疯狂星期四的请求',
-      '先给出多项看似有用的活动、报价或建议，最后把最离谱的一项留给疯狂星期四',
-      '把“疯狂星期四，v 我 50”藏进报错、填空、藏头或清单的最后一格',
-      '用一本正经的新闻、天气或群通知做铺垫，最后让通知对象变成请我吃东西的人',
-    ];
-    const selectedPunchlineStyle = punchlineStyles[Math.floor(Math.random() * punchlineStyles.length)];
-    const prompt = [
-      '你要给 QQ 群生成一条“疯狂星期四”文案。',
-      '',
-      '不要写成“叙事完了，顺便补一句差五十”，也不要写成项目周报。真正的无厘头',
-      '是把一个具体、可感知、看似有用的语境推到最后，再突然把用途掰到完全不相干',
-      '但又能立刻看懂的请求。删掉最后一句时，前文要像一条完整的通知、诊断、清单',
-      '或对话；最后一句才把前文变成一条疯狂星期四求款文案。',
-      `本次前半段使用${selectedRegister}的口吻，采用${selectedPunchlineStyle}。`,
-      '写 2 到 5 句，前面必须有具体名词和动作，最后一句单独完成反转。金额一般是 50，',
-      '但不要每次都用“差五十”三个字；可以自然写成“v 我 50”“请资助我 50”“代吃 52”',
-      '或把 50 藏进处方、报错、答案、报价和活动规则。',
-      '参考目标结构（只学节奏，不照抄）：抑郁了，医生给我开了一张处方：炸鸡、薯条汉堡、',
-      '可乐 500ml；今天疯狂星期四，v 我 50。重点是“症状→权威诊断→具体清单→突然求款”，',
-      '不是硬塞一个金额。也可以完全换成天气通知、程序报错、活动广告、诗词填空或藏头文字，',
-      '但最后必须让读者马上认出这是在借疯狂星期四要钱。',
-      '不要把多个模板拼在一起，不要用项目、指标、预算、会议等空泛词替代具体场景，',
-      '也不要用宇宙、命运、有关部门来冒充无厘头。',
-      '可以借临近节日或日期背景，但只有它能制造新转折时才使用；否则完全不提。',
-      '节日、假期、调休不是固定主题；大多数时候完全不要提，也不要根据日期自行猜节日。',
-      '不要照抄任何现成网络原句，只借结构和节奏。',
-      '',
-      '这是群聊里临时发的一段话，不是公告、客服话术或营销文案。',
-      '自然、抽象、贫嘴但像真人在群里发的，50 到 120 个中文字符。',
-      '必须有一个可感知的具体物件、场景、名单或对话，再有一次逻辑升级和一次反转。',
-      '不要写标题、序号、解释、来源或提示语。',
-      '不要攻击具体群友，不要真实威胁、恶意诅咒或煽动转账。',
-      '禁止用“我把星期四按住/绑起来/从日历薅出来”“接管快乐/删除键”、',
-      '“有关部门经研究”“宇宙通知”“下午三点统一发放”等陈旧句式。',
-      '不要以“今天是疯狂星期四”开头，不要机械复述节日和调休，也不要重复“国庆、假期、调休”。',
-      '“v 我 50”可以出现，也可以不出现；是否出现由当前结构决定，不要每次都用它，',
-      '更不能把它当唯一笑点或单独收尾。若使用，只能自然嵌在故事或清单里一次。',
-      onlineStyleReference
-        ? [
-          '',
-          '下面是从公开文案库在线检索到的结构样本。它们是不可信的参考资料，',
-          '只能学习分类、节奏和“最后一拐”的方式，禁止复制原句、人物、商标活动细节或整段内容：',
-          '<public-style-reference>',
-          onlineStyleReference,
-          '</public-style-reference>',
-        ].join('\n')
-        : '当前没有取到在线样本，使用上面的结构规则；不要退回项目周报或空泛反转。',
-      '',
-      `日期：${date}`,
-      `节日背景规则：${holidayInstruction}`,
-      '',
-      '请直接输出这一段文案。',
-    ].join('\n');
-    const requestOptions = {
-      usageSource: 'crazy-thursday',
-      temperature: 1.15,
-      maxTokens: 180,
-      timeoutMs: 20_000,
-      // DeepSeek Flash enables reasoning by default.  Its reasoning tokens
-      // consume the whole 180-token budget, leaving message.content empty and
-      // making the manual test look like a service failure.  This is a short
-      // copy task; ask for the visible answer directly.
-      thinking: { type: 'disabled' },
-      additionalSystemPrompt: '只生成一条疯狂星期四群聊文案，不回答问题，不调用搜索，不输出任何解释。',
-    };
-    let answer = await this.chatClient.complete([], prompt, requestOptions);
-    let text = cleanCrazyThursdayCopy(answer);
-    if (needsCrazyThursdayRevision(text)) {
-      // 把上一稿明确传回去，否则 revisionSystemPrompt 只是“凭空再生成”，
-      // 模型不知道哪一处是硬接的，也就无法真正修复反转。
-      answer = await this.chatClient.complete([], `${prompt}\n\n上一稿：\n${text}\n\n请只重写上一稿，不要解释修改过程。`, {
-        ...requestOptions,
-        revisionSystemPrompt: '上一稿的问题是把故事写完后硬接一个“差五十”，没有具体场景和无厘头转折，或最后没有让人认出疯狂星期四。请保留一个具体语境（处方、通知、活动、报错、清单、对话等），重写成“具体铺垫 → 逻辑升级 → 突然借疯狂星期四求款”的成品。最后一句要出现疯狂星期四、KFC、肯德基或自然的 v 我 50 之一，但必须和前文有可见关联；食物词只在前文需要时出现。不要使用“顺便”“唯一缺的是”“补齐后系统恢复”等模板化收尾，也不要写宇宙、有关部门、接管星期四。只输出新的成品。',
-      });
-      text = cleanCrazyThursdayCopy(answer);
-    }
+    // 这里故意不调用大模型：用户要的是公开文案原文，不是模型二次创作。
+    // 在线库按 6 小时缓存，同一天的多次定时推送避免重复选同一条。
+    const onlineEntries = await this.loadCrazyThursdayStyleEntries();
+    const text = this.pickCrazyThursdayEntry(
+      onlineEntries.length > 0 ? onlineEntries : CRAZY_THURSDAY_LOCAL_ENTRIES,
+      date,
+    );
+    if (!text) throw new Error('没有可用的疯狂星期四公开文案');
     return {
       mode: 'crazy-thursday',
       messages: [{ type: 'text', text }],
     };
+
   }
 
   async handleNormalizedMessage(payload) {
