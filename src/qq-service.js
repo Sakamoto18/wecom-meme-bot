@@ -1688,7 +1688,7 @@ export class QqBotService {
       return this.crazyThursdayStyleCache.entries;
     }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4_000);
+    const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
       const response = await this.crazyThursdayFetch(sourceUrl, {
         headers: { Accept: 'text/plain,text/markdown,text/html;q=0.8' },

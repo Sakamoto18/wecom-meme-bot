@@ -265,7 +265,7 @@ Bridge 会在北京时间每周四 09:00、11:30、15:00、18:00 各推送一条
 
 ```dotenv
 LONGTU_QQ_CRAZY_THURSDAY_ENABLED=true
-QQ_CRAZY_THURSDAY_STYLE_URL=https://raw.githubusercontent.com/vikiboss/v50/main/static/v50.json
+QQ_CRAZY_THURSDAY_STYLE_URL=https://cdn.jsdmirror.com/gh/vikiboss/v50@main/static/v50.json
 ```
 
 旧版本中的 `LONGTU_QQ_CRAZY_THURSDAY_GROUPS`、`LONGTU_QQ_CRAZY_THURSDAY_HOUR` 和 `LONGTU_QQ_CRAZY_THURSDAY_MINUTE` 会被保留但不再筛选目标或改变时点。关闭功能只需设置 `LONGTU_QQ_CRAZY_THURSDAY_ENABLED=false`，修改 `.env.qq` 后重启 AstrBot Bridge 插件。
