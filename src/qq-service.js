@@ -131,6 +131,27 @@ function extractCrazyThursdayEntries(rawValue) {
   return entries;
 }
 
+function adaptCrazyThursdayDate(text, date) {
+  const [year, month, day] = date.split('-');
+  // 只替换明确指向“今天”的日期；故事中的历史日期、时长和金额保留原文。
+  return text
+    .replace(
+      /((?:今天|今日)\s*(?:是\s*)?[，,:：]?\s*)(?:([\d〇零一二三四五六七八九]{4})(\s*年\s*))?([\d一二三四五六七八九十]{1,3})(\s*月\s*)([\d一二三四五六七八九十]{1,3})(\s*[日号])/gu,
+      (_match, prefix, oldYear, yearUnit, _month, monthUnit, _day, dayUnit) => (
+        `${prefix}${oldYear ? year + yearUnit : ''}${Number(month)}${monthUnit}${Number(day)}${dayUnit}`
+      ),
+    )
+    .replace(
+      /((?:今天|今日)\s*(?:是\s*)?[，,:：]?\s*)(?:(\d{4})(\s*[-/.]\s*))?(0?[1-9]|1[0-2])(\s*[-/.]\s*)(0?[1-9]|[12]\d|3[01])(?![\d./-]|\s*(?:元|块|万|亿|折|%|％))/gu,
+      (_match, prefix, oldYear, yearSeparator, oldMonth, separator, oldDay) => {
+        const width = oldYear || oldMonth.startsWith('0') || oldDay.startsWith('0') ? 2 : 1;
+        return `${prefix}${oldYear ? year + yearSeparator : ''}`
+          + `${String(Number(month)).padStart(width, '0')}${separator}`
+          + `${String(Number(day)).padStart(width, '0')}`;
+      },
+    );
+}
+
 // Keep a generous overlap so a line/paragraph crossing a cut is present in
 // both neighboring tiles.  Core + overlap stays below DeepSeek's 8192-pixel
 // single-side limit.
@@ -3577,7 +3598,7 @@ export class QqBotService {
     }
     const date = /^\d{4}-\d{2}-\d{2}$/u.test(payload.crazyThursdayDate)
       ? payload.crazyThursdayDate
-      : new Date().toISOString().slice(0, 10);
+      : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
     // 这里故意不调用大模型：用户要的是公开文案原文，不是模型二次创作。
     // 在线库按 6 小时缓存，同一天的多次定时推送避免重复选同一条。
     const onlineEntries = await this.loadCrazyThursdayStyleEntries();
@@ -3588,7 +3609,7 @@ export class QqBotService {
     if (!text) throw new Error('没有可用的疯狂星期四公开文案');
     return {
       mode: 'crazy-thursday',
-      messages: [{ type: 'text', text }],
+      messages: [{ type: 'text', text: adaptCrazyThursdayDate(text, date) }],
     };
 
   }
