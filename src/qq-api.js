@@ -737,7 +737,7 @@ export async function createQqRuntime() {
     // 使用公开文案库只提取结构样本，默认指向一个可审计的 GitHub 原始文件；
     // 设置为空即可关闭外网检索，不影响模型和本地兜底。
     crazyThursdayStyleSourceUrl: process.env.QQ_CRAZY_THURSDAY_STYLE_URL?.trim()
-      || 'https://raw.githubusercontent.com/vikiboss/v50/main/static/v50.json',
+      || 'https://cdn.jsdmirror.com/gh/vikiboss/v50@main/static/v50.json',
     conversationStore,
     memeStore,
     webSearch: usageTracker.wrapWebSearch(webSearch),
