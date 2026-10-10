@@ -1754,7 +1754,10 @@ export class QqBotService {
     if (!this.webSearchEnabled) return false;
     const groupId = String(message?.chatid ?? '').trim();
     if (!groupId || !this.passiveSearchDisabledGroups.has(groupId)) return true;
-    if (options.activeReply !== true) return true;
+    // This is a group-level safety gate. Some ingress paths do not carry the
+    // observe_only/activeReply marker consistently, so do not rely on that
+    // flag to identify passive traffic. Only a real quote or an explicit
+    // mention of the bot may opt back into paid web search.
     const hasQuote = Boolean(message?.quote);
     const directMention = options.directBotMention === true;
     if (hasQuote || directMention) return true;

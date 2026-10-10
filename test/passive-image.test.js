@@ -45,12 +45,14 @@ async function fixture({ low = false, visionFailed = false } = {}) {
       bot_user_id: 'bot', message_id: String(++id), text: '', observe_only: true, image_base64s: [image], ...overrides }); } };
 }
 
-test('密集信息图走 OCR→语义→视觉候选平台→检索→人格短评，同图 OCR 只执行一次', async () => {
+test('密集信息图走 OCR→语义→视觉候选平台→人格短评，评价请求不触发搜索且同图 OCR 只执行一次', async () => {
   const f = await fixture();
   const result = await f.send();
   assert.equal(result.messages[0].text, answer);
   assert.equal(f.ocrCalls(), 1);
-  assert.deepEqual(f.searches.map(call => call.options.includeDomains), [['reddit.com'], []]);
+  // Passive image handling uses an evaluation question; image evaluation is
+  // deliberately local and must not spend web-search quota.
+  assert.deepEqual(f.searches, []);
   assert.ok(f.decider.getGroupEngagement('g'));
   const prompt = f.calls.find(call => call.options.usageSource === 'active-reply').options;
   assert.match(prompt.additionalSystemPrompt, /保留会改变含义的主体、关键数字及单位/);

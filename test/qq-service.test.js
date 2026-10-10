@@ -1277,6 +1277,10 @@ test('指定大型群的被动主动插话不联网，明确引用仍允许检�
   });
   assert.equal(result.mode, 'model');
   assert.equal(searches, 0);
+  // The ingress flag is not part of the policy decision: an unaddressed
+  // message in this group must stay offline even when activeReply is absent.
+  await service.replyConversation(message, '查一下这个说法', '群友');
+  assert.equal(searches, 0);
   const quoted = { ...message, quote: { msgtype: 'text', text: { content: '原帖内容' } } };
   await service.replyConversation(quoted, '找下原帖', '群友', {
     activeReply: true,

@@ -11,8 +11,8 @@ test('裁剪评论按界面特征生成候选，逐图绑定范围，不把私�
   assert.match(IMAGE_SOURCE_PROMPT, /没有平台名或 logo/);
   assert.match(IMAGE_SOURCE_PROMPT, /回复缩进与层级/);
   const plan = buildImageSearchPlan({ items: [
-    { sourceCandidates: reddit, searchQueries: ['Linux kernel changes'] },
-    { sourceCandidates: normalizeSourceCandidates([{ platform: 'github', confidence: 'high', evidence: 'issue 标签与编号布局' }]), searchQueries: ['Linux kernel changes'] },
+    { sourceCandidates: reddit, searchQueries: ['Linux kernel changes'], visibleText: ['Linux kernel changes discussed in a long forum thread with several replies and concrete details about the release timeline.'] },
+    { sourceCandidates: normalizeSourceCandidates([{ platform: 'github', confidence: 'high', evidence: 'issue 标签与编号布局' }]), searchQueries: ['Linux kernel changes'], visibleText: ['The issue contains a long technical discussion with version details, reproduction steps, and several concrete replies from maintainers.'] },
     { sourceCandidates: reddit, keywords: ['secret'], searchQueries: [] },
   ] }, '请核实这两条来源');
   assert.equal(plan.length, 2);
