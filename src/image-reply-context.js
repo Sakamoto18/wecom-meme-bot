@@ -15,6 +15,7 @@ const GENERIC_IMAGE_TERMS = new Set([
 ]);
 
 const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|辟谣|谣言|真实吗|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景)/u;
+const IMAGE_EVALUATION_PATTERN = /(?:评价|点评|评一下|说说(?:这|该)?(?:张|幅)?图|怎么看(?:这|该)?(?:张|幅)?图|赏析|吐槽(?:一下)?(?:这|该)?(?:张|幅)?图|好不好看)/u;
 const IMAGE_INFORMATION_PATTERN = /(?:长文|文章|公告|新闻|论坛|帖子|评论区|聊天记录|对话|多格|漫画|表格|数据|图表|教程|报错|故障|说明书|规则|通知|投票|调查|对比|时间线)/u;
 const UI_NOISE_PATTERN = /(?:点赞|评论|转发|收藏|播放|浏览|粉丝|关注|分享|登录|注册|首页|搜索|推荐|热门|账号|用户名|用户名称|up主|作者|发布于|在线|分钟前|小时前|昨天|第\s*\d+楼)/iu;
 
@@ -224,6 +225,10 @@ export function hasExplicitImageSearchIntent(content = '') {
   return EXPLICIT_IMAGE_SEARCH_PATTERN.test(compactText(content));
 }
 
+export function isImageEvaluationIntent(content = '') {
+  return IMAGE_EVALUATION_PATTERN.test(compactText(content));
+}
+
 export function isImageSearchEligible(item, subject) {
   return hasUsefulImageClue(subject, item);
 }
@@ -269,6 +274,10 @@ export const ART_APPRAISAL_REPLY_PROMPT = [
 
 export function buildImageSearchPlan(analysis, content = '') {
   if (/(?:不要|不用|不必|无需|禁止|别).{0,6}(?:联网|上网|搜索|检索)/u.test(content)) return [];
+  // Image evaluation is a local conversation task. Do not turn a request
+  // such as “评价这张图” into a paid web lookup, even when the vision model
+  // happens to invent a plausible title or watermark clue.
+  if (isImageEvaluationIntent(content)) return [];
   const items = analysis?.items?.length ? analysis.items : (analysis ? [analysis] : []);
   const explicitIntent = hasExplicitImageSearchIntent(content);
   const maxQueries = explicitIntent
@@ -283,6 +292,11 @@ export function buildImageSearchPlan(analysis, content = '') {
     const itemPolicy = classifyImageInformation(item);
     // Low-information images are searchable only for an explicit source/meme
     // lookup. Ordinary “评价一下” requests must not create API spend.
+    // Low-density images (reaction memes, covers, watermarks, account chrome
+    // and short emotional screenshots) are never search eligible. Explicit
+    // source requests still get a concise local answer instead of a noisy
+    // generic lookup; dense evidence can still be searched when requested.
+    if (itemPolicy.level === 'low_information') continue;
     if (!itemPolicy.searchEligible && !explicitIntent) continue;
     // An explicit empty array means vision found no suitable public search
     // clue (for example a private chat screenshot); don't send its OCR online.

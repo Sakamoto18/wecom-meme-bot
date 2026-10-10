@@ -1548,6 +1548,14 @@ export class QqBotService {
     this.memeStore = options.memeStore;
     this.webSearch = options.webSearch;
     this.webSearchEnabled = options.webSearchEnabled ?? true;
+    // Some large groups generate a high volume of passive “read the air”
+    // replies. Keep their normal replies, but do not let those observations
+    // spend search quota; direct @/quote requests remain eligible.
+    this.passiveSearchDisabledGroups = new Set(
+      [...(options.passiveSearchDisabledGroups ?? [])]
+        .map((groupId) => String(groupId ?? '').trim())
+        .filter(Boolean),
+    );
     this.knowledgeContext = options.knowledgeContext ?? '';
     this.memberAliases = options.memberAliases ?? {};
     this.longtuLibrary = options.longtuLibrary ?? null;
@@ -1740,6 +1748,18 @@ export class QqBotService {
     this.groupStopRevisions = new Map();
     this.groupProcessingQueues = new Map();
     this.lastGroupPassiveDecisionAt = new Map();
+  }
+
+  searchEnabledForMessage(message, options = {}) {
+    if (!this.webSearchEnabled) return false;
+    const groupId = String(message?.chatid ?? '').trim();
+    if (!groupId || !this.passiveSearchDisabledGroups.has(groupId)) return true;
+    if (options.activeReply !== true) return true;
+    const hasQuote = Boolean(message?.quote);
+    const directMention = options.directBotMention === true;
+    if (hasQuote || directMention) return true;
+    this.logger.log?.(`QQ 被动搜索已关闭：group=${groupId}`);
+    return false;
   }
 
 
@@ -2628,7 +2648,10 @@ export class QqBotService {
         requiredIdentityRole,
         chatClient: this.chatClient,
         webSearch: this.webSearch,
-        webSearchEnabled: this.webSearchEnabled,
+        webSearchEnabled: this.searchEnabledForMessage(message, {
+          activeReply: options.activeReply === true,
+          directBotMention: options.directBotMention === true,
+        }),
         knowledgeContext: this.knowledgeContext,
         pureBotMention: options.pureBotMention === true,
         directBotMention: options.directBotMention === true,

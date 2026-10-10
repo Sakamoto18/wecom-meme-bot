@@ -794,6 +794,9 @@ export async function createQqRuntime() {
     mediaGroupAllowedProviders: parseGroupProviderMap(
       process.env.QQ_MEDIA_GROUP_ALLOWED_PROVIDERS,
     ),
+    passiveSearchDisabledGroups: parseIdentifierSet(
+      process.env.QQ_USAGE_PASSIVE_SEARCH_DISABLED_GROUPS,
+    ),
     largeGroupIds: parseIdentifierSet(process.env.QQ_USAGE_LARGE_GROUPS),
     largeGroupExcludedIds: parseIdentifierSet(
       process.env.QQ_USAGE_LARGE_GROUP_EXCLUDES,

@@ -5,6 +5,7 @@ import {
   classifyImageAnalysis,
   classifyImageInformation,
   isArtAppraisalIntent,
+  isImageEvaluationIntent,
 } from '../src/image-reply-context.js';
 import { generateConversationReply } from '../src/reply-engine.js';
 import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
@@ -40,8 +41,8 @@ test('画作赏析提示要求一个主体关系和一句话落点', async () =>
 
 test('图片检索限定具体线索，去重并限制查询预算，不把整段 OCR 发给搜索', () => {
   const queries = buildImageSearchQueries({ items: [
-    { visibleText: ['整段私人对话，不应上传'], searchQueries: ['xkcd Standards', 'xkcd Standards'] },
-    { searchQueries: ['This is fine KC Green', 'Distracted boyfriend'] },
+    { visibleText: ['整段私人对话，不应上传，但这里还有明确的漫画台词'], searchQueries: ['xkcd Standards', 'xkcd Standards'] },
+    { visibleText: ['This is fine KC Green 的漫画台词和完整上下文'], searchQueries: ['This is fine KC Green', 'Distracted boyfriend'] },
     { searchQueries: ['fourth topic'] },
   ] }, '这几个是什么梗');
   assert.deepEqual(queries, ['xkcd Standards 来源 含义', 'This is fine KC Green 来源 含义']);
@@ -54,16 +55,16 @@ test('视觉明确没有公开线索、识别失败或用户不允许联网时�
   assert.deepEqual(buildImageSearchQueries({ searchQueries: ['https://example.com/steal', 'QQ 123456789'] }), []);
 });
 
-test('无文字或纯情绪梗图默认不搜索，明确核实时也只接受具体线索', () => {
+test('无文字或纯情绪梗图和低密度图片一律不搜索', () => {
   assert.deepEqual(buildImageSearchQueries({ items: [
     { searchQueries: ['哈哈哈哈'], visibleText: [], keywords: ['表情包'] },
     { searchQueries: ['猫咪 反应图'], visibleText: [], keywords: ['猫咪', '反应图'] },
   ] }, '看看这图'), []);
   assert.deepEqual(buildImageSearchQueries({ searchQueries: ['表情包'] }, '这是什么梗'), []);
   assert.deepEqual(buildImageSearchQueries({ searchQueries: ['Distracted boyfriend'] }, '评价一下这图'), []);
-  assert.deepEqual(buildImageSearchQueries({ searchQueries: ['This is fine KC Green'] }, '这是什么梗'), [
-    'This is fine KC Green 来源 含义',
-  ]);
+  assert.deepEqual(buildImageSearchQueries({ searchQueries: ['This is fine KC Green'] }, '这是什么梗'), []);
+  assert.equal(isImageEvaluationIntent('评价一下这张图'), true);
+  assert.equal(isImageEvaluationIntent('找下这张截图的原帖'), false);
 });
 
 test('水印、账号名和互动计数不会伪装成高密度信息图', () => {

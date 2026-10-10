@@ -72,6 +72,7 @@ function createService(options = {}) {
     mediaResolver: options.mediaResolver,
     mediaUsageTracker: options.mediaUsageTracker,
     mediaExcludedGroups: options.mediaExcludedGroups,
+    passiveSearchDisabledGroups: options.passiveSearchDisabledGroups,
     largeGroupIds: options.largeGroupIds,
     largeGroupExcludedIds: options.largeGroupExcludedIds,
     largeGroupMemberThreshold: options.largeGroupMemberThreshold,
@@ -1256,6 +1257,33 @@ test('明确查原帖时用截图正文和引用文字补检索，不把视觉�
   const finalCall = calls.find((call) => call.options.usageSource !== 'image-understanding');
   assert.equal(typeof finalCall.input, 'string');
   assert.doesNotMatch(finalCall.input, /data:image/);
+});
+
+test('指定大型群的被动主动插话不联网，明确引用仍允许检索', async () => {
+  let searches = 0;
+  const { service } = createService({
+    webSearchEnabled: true,
+    passiveSearchDisabledGroups: new Set(['298818522']),
+    webSearch: { async search() { searches += 1; return { context: 'x', resultCount: 1 }; } },
+    chatClient: { isConfigured: true, async complete() { return '先接住这句，再补一点。'; } },
+  });
+  const message = {
+    chattype: 'group', chatid: '298818522', from: { userid: 'u', name: '群友' },
+    text: { content: '评价一下这个说法' },
+  };
+  const result = await service.replyConversation(message, '评价一下这个说法', '群友', {
+    activeReply: true,
+    activeReplyPriority: 'may',
+  });
+  assert.equal(result.mode, 'model');
+  assert.equal(searches, 0);
+  const quoted = { ...message, quote: { msgtype: 'text', text: { content: '原帖内容' } } };
+  await service.replyConversation(quoted, '找下原帖', '群友', {
+    activeReply: true,
+    activeReplyPriority: 'must',
+    directBotMention: true,
+  });
+  assert.equal(searches, 1, '明确引用请求仍应保留普通联网资格');
 });
 
 test('合并转发图片会和普通图片一起进入视觉链路', async () => {
