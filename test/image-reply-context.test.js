@@ -4,11 +4,39 @@ import {
   buildImageSearchQueries,
   classifyImageAnalysis,
   classifyImageInformation,
+  isArtAppraisalIntent,
 } from '../src/image-reply-context.js';
 import { generateConversationReply } from '../src/reply-engine.js';
 import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
 
 const answer = '这图是在讽刺各自发明新标准反而制造更多标准，再统一一次就凑齐第十五套了。';
+
+test('只有明确赏析画作时进入单句画面判断模式', () => {
+  assert.equal(isArtAppraisalIntent('赏析一下这幅奶蛙画'), true);
+  assert.equal(isArtAppraisalIntent('如何评价这张表情包'), false);
+  assert.equal(isArtAppraisalIntent('这张视频封面是什么平台'), false);
+});
+
+test('画作赏析提示要求一个主体关系和一句话落点', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '赏析一下这幅奶蛙画',
+    currentQuestion: '赏析一下这幅奶蛙画',
+    modelInput: '图片描述：奶蛙群体与墙上单独一只奶蛙',
+    hasImageContext: true,
+    artAppraisal: true,
+    imageSearchQueries: [],
+    webSearchEnabled: false,
+    chatClient: { isConfigured: true, async complete(_history, _input, options) {
+      calls.push(options);
+      return '群体在麻木同行，唯独高墙上的脱队者在孤独思考蛙生。(¬◡¬)';
+    } },
+  });
+  assert.equal(result.answer, '群体在麻木同行，唯独高墙上的脱队者在孤独思考蛙生。(¬◡¬)');
+  assert.match(calls[0].additionalSystemPrompt, /一句话画面赏析/);
+  assert.match(calls[0].stableSystemPrompt, /15～60/);
+  assert.match(calls[0].stableSystemPrompt, /只抓一个最有画面感的主体关系/);
+});
 
 test('图片检索限定具体线索，去重并限制查询预算，不把整段 OCR 发给搜索', () => {
   const queries = buildImageSearchQueries({ items: [

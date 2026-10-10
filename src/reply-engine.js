@@ -29,7 +29,11 @@ import {
   isDirectBotAttack,
   hasAnswerRequest,
 } from './response-style.js';
-import { IMAGE_MEANING_PROMPT, FORWARD_SUMMARY_PROMPT } from './image-reply-context.js';
+import {
+  ART_APPRAISAL_REPLY_PROMPT,
+  IMAGE_MEANING_PROMPT,
+  FORWARD_SUMMARY_PROMPT,
+} from './image-reply-context.js';
 import { MENTION_INTENT_PROMPT, parseMentionIntent, shouldCheckMentionIntent } from './mention-intent.js';
 import { sourceDisplayPrompt, suppressUnrequestedSourceNotes } from './source-display.js';
 
@@ -265,6 +269,7 @@ export async function generateConversationReply(options) {
     hasImageContext = imageBlocks.length > 0,
     hasQuotedContent = false,
     passiveImageComment = false,
+    artAppraisal = false,
     imageSearchQueries,
     imageSearchPlan,
     imageInformationPolicy = null,
@@ -279,6 +284,7 @@ export async function generateConversationReply(options) {
   const revisionUserContent = modelInput;
   const imageSafetyPrompt = [
     hasImageContext ? `${IMAGE_INPUT_SAFETY_PROMPT}\n\n${passiveImageComment ? PASSIVE_IMAGE_COMMENT_PROMPT : IMAGE_MEANING_PROMPT}` : '',
+    hasImageContext && artAppraisal ? ART_APPRAISAL_REPLY_PROMPT : '',
     imageInformationPrompt,
     recordSummary ? FORWARD_SUMMARY_PROMPT : '',
   ].filter(Boolean).join('\n\n');
@@ -538,10 +544,11 @@ export async function generateConversationReply(options) {
   const detailedAnswerRequested = recordSummary
     || (!passiveImageComment && !compactActiveReply && shouldRequestDetailedAnswer(currentQuestion));
   const compactResponse = !detailedAnswerRequested;
+  const shortChat = compactResponse && !passiveImageComment && !recordSummary;
   const lowInformationImage = hasImageContext && imageInformationPolicy?.level === 'low_information';
   const responseMaxTokens = lowInformationImage
     ? 260
-    : (compactActiveReply ? 280 : (compactResponse ? 650 : 8_000));
+    : (compactActiveReply ? 280 : (compactResponse ? 420 : 8_000));
   const webSearchStatus = buildWebSearchStatus({
     requested: imageSearch ? queries.length > 0
       : (useCurrentInformation || useMemeKnowledge || searchMode === 'general'),
@@ -559,6 +566,8 @@ export async function generateConversationReply(options) {
     activeReplyPriority,
     replySequence,
     passiveImageComment,
+    artAppraisal,
+    shortChat: compactResponse && !passiveImageComment && !recordSummary,
     attackDuringAnswer: attackStyle && !pureAttack,
   };
   const personaDemonstration = !attackStyle
@@ -662,6 +671,8 @@ export async function generateConversationReply(options) {
     activeReply,
     activeReplyPriority,
     passiveImageComment,
+    artAppraisal,
+    shortChat,
     attackDuringAnswer: attackStyle && !pureAttack,
   });
   if (!review.valid && attempts < 2) {
@@ -699,6 +710,8 @@ export async function generateConversationReply(options) {
               activeReply,
               activeReplyPriority,
               passiveImageComment,
+              artAppraisal,
+              shortChat,
               attackDuringAnswer: attackStyle && !pureAttack,
             }),
           maxTokens: responseMaxTokens,
@@ -715,6 +728,8 @@ export async function generateConversationReply(options) {
           activeReply,
           activeReplyPriority,
           passiveImageComment,
+          artAppraisal,
+          shortChat,
           attackDuringAnswer: attackStyle && !pureAttack,
         });
         attempts += 1;
@@ -739,6 +754,8 @@ export async function generateConversationReply(options) {
       activeReply,
       activeReplyPriority,
       passiveImageComment,
+      artAppraisal,
+      shortChat,
       attackDuringAnswer: attackStyle && !pureAttack,
       requireRoleVoice: false,
     });
@@ -839,6 +856,8 @@ export async function generateConversationReply(options) {
     activeReply,
     activeReplyPriority,
     passiveImageComment,
+    artAppraisal,
+    shortChat,
     attackDuringAnswer: attackStyle && !pureAttack,
   });
 

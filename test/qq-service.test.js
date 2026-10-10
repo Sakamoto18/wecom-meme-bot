@@ -788,6 +788,35 @@ test('本地 OCR 结果作为待校对资料进入视觉模型提示词', async 
   assert.match(promptText, /以图片为准/);
 });
 
+test('画作赏析使用主体关系取证，不复用通用图片缓存', async () => {
+  const prompts = [];
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, modelInput) {
+        prompts.push(modelInput);
+        return JSON.stringify({
+          description: '奶蛙群体挤在墙下，另一只坐在墙顶',
+          subject: '奶蛙',
+          composition: '下方群体与墙顶单体形成上下对照',
+          relationship: '群体向前挤，墙顶个体停留旁观',
+          interpretation: '脱队者也被自己的位置困住',
+          confidence: 'high',
+          visible_text: [], keywords: ['奶蛙'], scene: '厚涂画面',
+          search_queries: [], source_candidates: [],
+        });
+      },
+    },
+  });
+  const png = (await createPng()).toString('base64');
+  const blocks = (await prepareImageBlocks({ imageBase64s: [png] })).blocks;
+  const analysis = await service.analyzeImages(blocks, '赏析一下这幅奶蛙画', '', { artAppraisal: true });
+  assert.equal(analysis.items[0].subject, '奶蛙');
+  assert.equal(analysis.items[0].relationship, '群体向前挤，墙顶个体停留旁观');
+  assert.match(prompts[0].find((block) => block?.type === 'text').text, /不要把它泛化成“黄色生物”/);
+  assert.match(prompts[0].find((block) => block?.type === 'text').text, /search_queries 必须保持空数组/);
+});
+
 test('本地 OCR 不可用时退回纯视觉识别且不影响回复', async () => {
   const { service } = createService({
     imageOcrEnabled: true,
