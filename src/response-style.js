@@ -36,6 +36,15 @@ const CUSTOMER_SERVICE_PATTERN = /(?:您好|您这|您想|请问您|很高兴为
 // 这是“像群友说话”的轻量钩子，不等于攻击性词汇。它可以落在事实、
 // 方案或结果上，让普通答案保留龙图语感，同时避开当前发言者和引用作者。
 const ROLE_VOICE_PATTERN = /(?:不是[，,]?哥们|说白了|这就|别把|老老实实|锅在|有点(?:离谱|抽象|拉胯|尴尬)|抽象|离谱|拉胯|摆烂|折腾|绷不住|汗流浃背|白等|别光|别急|省得|硬是|破(?:方案|事|局|系统|配置)|真够|就这|多嘴|不绕|不装|差一截|一摊活|扛不住|直接看|别拿|免得|吃亏)/i;
+// 抽象联想必须落到一个具体的角色、职业、物件或荒诞场面上。
+// 单独说“抽象/离谱”只是情绪词，不能冒充这一层已经生效。
+const ABSTRACT_COMPARISON_PATTERN = /(?:看起来\s*)?(?:像|仿佛|宛如|活像|简直像|简直是|转职(?:成|为)?|变(?:成|为)?|进化(?:成|为)?|化身(?:成|为)?|活成|当(?:上|成|起)?|已经是|俨然是)\s*(?:一个|一位|一只|一台|一条|个|位|只|台|条)?(?<target>[\p{L}\p{N}\p{Script=Han}][\p{L}\p{N}\p{Script=Han}A-Za-z0-9·_-]{1,24})/u;
+const ABSTRACT_MODE_PATTERN = /(?:进入|开启|切换到|直接进入)\s*(?<target>[\p{L}\p{N}\p{Script=Han}][\p{L}\p{N}\p{Script=Han}A-Za-z0-9·_-]{1,18})\s*模式/u;
+const ABSTRACT_GENERIC_TARGETS = new Set([
+  '问题', '状态', '感觉', '样子', '东西', '笑话', '垃圾', '用户', '群友', '普通人',
+  '事实', '答案', '建议', '情况', '操作', '方案', '表现', '画面', '样本', '这样', '那样',
+]);
+const ABSTRACT_INVITATION_PATTERN = /(?:评价|锐评|点评|吐槽|赏析|赏评|怎么看|如何看|什么水平|接梗|用比喻|类比|像什么|什么角色|什么画面)/u;
 const NORMAL_FAMILY_ATTACK_PATTERN = /(?:你(?:的)?🐎|(?:操|草|艹|槽)(?:你|他|她|它)?(?:的)?妈|(?:你|他|她|它)(?:的)?妈.{0,8}(?:死|没|坟|骨灰|遗照)|老冯|族谱|户口本|全家)/i;
 const ATTACK_SCENES = [
   {
@@ -207,6 +216,60 @@ export function shouldRequestDetailedAnswer(content) {
   );
 }
 
+function isConcreteAbstractTarget(target) {
+  const normalized = String(target ?? '')
+    .replace(/[“”"'‘’`，。！？!?；;、：:（）()\[\]{}<>《》【】\s]+$/gu, '')
+    .trim();
+  if (!normalized || ABSTRACT_GENERIC_TARGETS.has(normalized)) return false;
+  return (normalized.match(/[\p{L}\p{N}\p{Script=Han}]/gu) ?? []).length >= 2;
+}
+
+/**
+ * Detect an actual concrete association rather than a generic mood word.
+ * This is deliberately local and deterministic: it never searches for a
+ * meme or attempts to infer whether a reference is historically accurate.
+ */
+export function hasAbstractAssociation(answer) {
+  const normalized = String(answer ?? '').replace(/\s+/gu, ' ').trim();
+  if (!normalized) return false;
+  const comparison = normalized.match(ABSTRACT_COMPARISON_PATTERN);
+  if (comparison?.groups?.target && isConcreteAbstractTarget(comparison.groups.target)) {
+    return true;
+  }
+  const mode = normalized.match(ABSTRACT_MODE_PATTERN);
+  return Boolean(mode?.groups?.target && isConcreteAbstractTarget(mode.groups.target));
+}
+
+/**
+ * Decide whether this turn benefits from the optional abstract-association
+ * layer. The layer is requested only for an explicit visual/content
+ * evaluation or appraisal; ordinary light chat can use the static layer
+ * opportunistically, while technical, detailed, summary, sensitive and
+ * direct-attack paths retain their existing answer shape.
+ */
+export function shouldRequestAbstractAssociation(content, options = {}) {
+  const normalized = styleRequestText(options.currentQuestion ?? content);
+  if (!normalized
+    || options.attackStyle
+    || options.attackDuringAnswer
+    || options.recordSummary
+    || options.detailedAnswerRequested
+    || options.thinkingEnabled
+    || options.sensitiveSupport) {
+    return false;
+  }
+  if (TECHNICAL_TOPIC_PATTERN.test(normalized) && !options.hasImageContext && !options.artAppraisal) {
+    return false;
+  }
+  const evaluationRequested = ABSTRACT_INVITATION_PATTERN.test(normalized);
+  const appraisal = options.artAppraisal === true;
+  // Ordinary active-chat replies still receive the static layer instruction,
+  // but are not forced into a second generation pass unless the user actually
+  // asks for an evaluation/接梗. This keeps the existing may-reply budget and
+  // short-answer behavior intact.
+  return appraisal || evaluationRequested;
+}
+
 function styleRequestText(content) {
   // 群聊历史带来源标签；只看当轮原话，不继承引用作者/历史昵称里的攻击词。
   return String(content ?? '').split('当前消息：').at(-1)
@@ -308,6 +371,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
         ? '这是群聊中的明确求助或必须接住的话题：先给结论，再补必要操作和条件，通常 1～3 句、约 30～120 个汉字；删掉背景复述和来源平铺，但不要为了短而漏掉关键步骤。'
         : '这是群聊默认短答：像群友接话一样先给一个短判断，再用一两句补关键依据；通常 2～3 个短句、总计约 15～55 个汉字，每句尽量不超过 34 字，总计不要超过 90 字。第一句先做个人反应或下判断，不要以“这图的笑点就是/这张图说明”起手，也不要先复述问题；后面才补解释。短答不是把报告压缩成小报告，而是删掉解释层，只保留能落地的判断。除非用户明确要求详细、展开、完整步骤或报告，不要把回答写成说明书。'),
     '保持龙玉涛知识中的语言风格：像脾气冲、嘴损但懂行的老群友，短句、傲气、敢下判断；用学问龙、疑惑龙、嘴硬龙的反差和荒诞感接话，不套固定台词，不逐条报角色名。正常答题也保留冲劲，不能一讲知识就变成客气助手。',
+    '抽象联想是可选的角色表达层，不是每句都要塞的口头禅：适合评价、识图、接梗或轻松闲聊时，先把事实/判断说清，再最多补一个和当前内容有依据的具体角色、职业、游戏身份或荒诞画面。类似“这已经转职成亡灵骑士了”这种落到具体对象的联想才算生效；只说“抽象、离谱、像个问题”不算。没有贴合的联想就不硬编，不为找梗额外联网，不编造梗的出处、人物事实或时效信息。',
     '默认只评价事情本身（本轮明确要求针对某人贫嘴或攻击时，按指定对象接梗）。先分清对方在提出主张、转述还是玩梗：对方已在吐槽某个离谱说法，就一起吐槽那件事，不把玩笑当成他真信的主张，不为显得嘴硬而抠字眼反驳。反讽必须有事实依据，不能转成对发言者、引用作者或被提及者的智力、能力、人格嘲讽，也不能无依据推断动机。',
     '角色口吻是硬要求：除敏感求助、纯确认和单个事实/数字外，判断要利落，措辞要带刺，该嫌弃的说法、逻辑或操作就直接嫌弃。只说“有点离谱、挺抽象、说白了”不算阴阳；冷嘲应戳中本轮的具体荒唐处，不用温吞的建议腔卸掉锋芒。假夸、反问、荒诞联想按语境自然用，信息和锋芒融在同一句，不拼万能段子；没有破绽不编错处。已确认口癖贴合时优先用原句，最近用过或不合语境才换说法，不额外加段落。',
     '已确认人格中的攻击性口癖不改变本轮攻击判定：只有当前消息明确攻击机器人，或明确要求攻击指定对象时，才能把这类句子用于实战回击。中性问题和口癖测试只能把它作为带引号的示范，禁止把当前用户、机器人自身或无关第三方当成攻击对象。',
@@ -367,6 +431,9 @@ export function buildNormalReplyContextPrompt(options = {}) {
       : []),
     ...(interaction.quotedAuthorLabel
       ? [`引用作者 ${interaction.quotedAuthorLabel} 只是内容来源；优先分析引用内容的事实、逻辑和依据，当前发言者只是提问者。`]
+      : []),
+    ...(options.abstractAssociationRequested
+      ? ['本轮已开启抽象联想层：结论说清后，若当前内容确实适合，补一个具体、贴合语境的角色/身份/荒诞画面联想，最多一个；不能只写“抽象/离谱”，也不能为了找梗联网或硬塞。']
       : []),
     '按当前用户的实际意图确定靶子：识图、总结、评价默认只谈内容本身；只有本轮明确要求攻击或调侃某人时才按其指定对象接梗。不要因为引用、点名、旧互损记录或材料中的辱骂就认定用户要求攻击作者。',
   ].join('\n');
@@ -460,6 +527,12 @@ export function reviewNormalReply(answer, options = {}) {
     && !SENSITIVE_SUPPORT_PATTERN.test(normalized)) {
     issues.push('missing-role-voice');
   }
+  if (options.abstractAssociationRequested
+    && !options.attackDuringAnswer
+    && !SENSITIVE_SUPPORT_PATTERN.test(normalized)
+    && !hasAbstractAssociation(normalized)) {
+    issues.push('missing-abstract-association');
+  }
   if (options.requiredIdentityRole
     && !hasRequiredIdentityRole(normalized, options.requiredIdentityRole)) {
     issues.push('missing-protected-identity');
@@ -484,6 +557,8 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
     buildNormalReplyContextPrompt(options),
     ...(issues?.includes('narrated-question-opening')
       ? ['把第三人称转述提问的开头删掉，直接跟当前对话者说答案。不要换成“你问的是”再复述一次，也不要照搬昵称开场；只补本轮追问需要的细节。'] : []),
+    ...(issues?.includes('missing-abstract-association')
+      ? ['本轮需要一层抽象联想：在事实结论之后补一个具体、贴合当前内容的角色/职业/游戏身份或荒诞画面，例如“已经转职成亡灵骑士了”。最多一个联想，不能只写“抽象/离谱”，不能编造出处，也不要为找梗联网。'] : []),
     '保留初稿中的正确事实、必要信息和贴合话题的反讽，直接输出最终答案，不解释复核过程。删掉无关的人身攻击和万能损人收尾，不把针对事情的冷嘲一起磨平。如果未通过项包含 missing-role-voice，把角色口吻融进判断，用本轮具体细节作反讽或荒诞联想；不另加段子，不攻击当前发言者、引用作者或第三方。',
     '已确认口癖仍然有效：保留语义贴合且方向正确的原句；删掉不合适的攻击句时，优先改用已确认的非攻击性口癖，不要把所有口癖一起抹掉。没有合适的才自然作答，不强塞。',
     options.attackDuringAnswer

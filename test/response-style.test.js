@@ -12,6 +12,7 @@ import {
   buildSeriousReplyRetryPrompt,
   containsLiteralLatinMa,
   hasRequiredIdentityRole,
+  hasAbstractAssociation,
   isThinSeriousReply,
   isHostileContent,
   isDirectBotAttack,
@@ -26,6 +27,7 @@ import {
   shouldUseThinking,
   shouldUseAttackStyle,
   shouldRequestDetailedAnswer,
+  shouldRequestAbstractAssociation,
 } from '../src/response-style.js';
 
 test('发送回复前隐藏内部群成员编号', () => {
@@ -268,6 +270,33 @@ test('普通正经回答也明确要求带事情本身的贫嘴口吻', () => {
   assert.match(prompt, /角色口吻是硬要求/);
   assert.match(prompt, /判断要利落，措辞要带刺/);
   assert.match(prompt, /不用温吞的建议腔卸掉锋芒/);
+});
+
+test('抽象联想只认可具体角色或画面，不把抽象情绪词当成联想', () => {
+  assert.equal(hasAbstractAssociation('这已经转职成亡灵骑士了。'), true);
+  assert.equal(hasAbstractAssociation('这人直接进入 NPC 模式。'), true);
+  assert.equal(hasAbstractAssociation('这事有点抽象，绷不住了。'), false);
+  assert.equal(hasAbstractAssociation('这就是个问题。'), false);
+  assert.equal(shouldRequestAbstractAssociation('如何评价这张图', { hasImageContext: true }), true);
+  assert.equal(shouldRequestAbstractAssociation('帮我部署这个服务', {
+    thinkingEnabled: true,
+    detailedAnswerRequested: true,
+  }), false);
+  assert.equal(shouldRequestAbstractAssociation('如何评价这个部署方案'), false);
+  assert.equal(shouldRequestAbstractAssociation('一加一等于几', {}), false);
+});
+
+test('抽象联想层写进统一基座和本轮上下文，复核提示要求最多一个具体联想', () => {
+  const prompt = buildNormalReplyPrompt({ abstractAssociationRequested: true });
+  assert.match(prompt, /抽象联想是可选的角色表达层/);
+  assert.match(prompt, /本轮已开启抽象联想层/);
+  assert.match(prompt, /转职成亡灵骑士/);
+  assert.match(buildNormalReplyRetryPrompt(
+    '如何评价这张图',
+    '这张图挺离谱。',
+    ['missing-abstract-association'],
+    { abstractAssociationRequested: true },
+  ), /具体、贴合当前内容的角色/);
 });
 
 test('普通回复质量复核要求角色钩子但不把角色钩子等同于骂人', () => {

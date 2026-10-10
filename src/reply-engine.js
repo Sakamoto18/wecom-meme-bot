@@ -12,6 +12,7 @@ import {
   buildPureMentionReplyPrompt,
   buildSeriousReplyRetryPrompt,
   hasRequiredIdentityRole,
+  shouldRequestAbstractAssociation,
   isInvalidPureMentionReply,
   isThinSeriousReply,
   removeInternalParticipantIds,
@@ -564,6 +565,20 @@ export async function generateConversationReply(options) {
     || (!passiveImageComment && !compactActiveReply && shouldRequestDetailedAnswer(currentQuestion));
   const compactResponse = !detailedAnswerRequested;
   const shortChat = compactResponse && !passiveImageComment && !recordSummary;
+  const abstractAssociationRequested = shouldRequestAbstractAssociation(content, {
+    currentQuestion,
+    activeReply,
+    activeReplyPriority,
+    artAppraisal,
+    hasImageContext,
+    hasQuotedContent,
+    passiveImageComment,
+    recordSummary,
+    detailedAnswerRequested,
+    thinkingEnabled,
+    attackStyle,
+    attackDuringAnswer: attackStyle && !pureAttack,
+  });
   const lowInformationImage = hasImageContext && imageInformationPolicy?.level === 'low_information';
   const responseMaxTokens = lowInformationImage
     ? 260
@@ -588,6 +603,7 @@ export async function generateConversationReply(options) {
     replySequence,
     passiveImageComment,
     artAppraisal,
+    abstractAssociationRequested,
     shortChat: compactResponse && !passiveImageComment && !recordSummary,
     attackDuringAnswer: attackStyle && !pureAttack,
   };
@@ -693,6 +709,7 @@ export async function generateConversationReply(options) {
     activeReplyPriority,
     passiveImageComment,
     artAppraisal,
+    abstractAssociationRequested,
     shortChat,
     attackDuringAnswer: attackStyle && !pureAttack,
   });
@@ -732,6 +749,7 @@ export async function generateConversationReply(options) {
               activeReplyPriority,
               passiveImageComment,
               artAppraisal,
+              abstractAssociationRequested,
               shortChat,
               attackDuringAnswer: attackStyle && !pureAttack,
             }),
@@ -750,6 +768,7 @@ export async function generateConversationReply(options) {
           activeReplyPriority,
           passiveImageComment,
           artAppraisal,
+          abstractAssociationRequested,
           shortChat,
           attackDuringAnswer: attackStyle && !pureAttack,
         });
@@ -776,6 +795,7 @@ export async function generateConversationReply(options) {
       activeReplyPriority,
       passiveImageComment,
       artAppraisal,
+      abstractAssociationRequested,
       shortChat,
       attackDuringAnswer: attackStyle && !pureAttack,
       requireRoleVoice: false,
@@ -884,6 +904,7 @@ export async function generateConversationReply(options) {
     activeReplyPriority,
     passiveImageComment,
     artAppraisal,
+    abstractAssociationRequested,
     shortChat,
     attackDuringAnswer: attackStyle && !pureAttack,
   });
@@ -980,6 +1001,7 @@ export async function generateConversationReply(options) {
     detailedAnswerRequested,
     compactResponse: !detailedAnswerRequested && !recordSummary && !passiveImageComment,
     artAppraisal,
+    abstractAssociationRequested,
     activeReply,
     seriousAnswerExpanded,
     normalPersonaRewritten,

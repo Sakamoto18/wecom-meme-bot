@@ -15,6 +15,54 @@ test('普通评价不输出检索媒体尾注，明确追问出处时保留', as
   }
 });
 
+test('图片评价开启抽象联想层，初稿缺少具体联想时复用现有复核调用补齐', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '如何评价这张图',
+    currentQuestion: '如何评价这张图',
+    modelInput: '如何评价这张图',
+    hasImageContext: true,
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push({ history, input, options });
+        return calls.length === 1
+          ? '画面信息很密，重点是人物把局面弄得很乱。'
+          : '画面信息很密，重点是人物把局面弄得很乱，已经转职成亡灵骑士了。';
+      },
+    },
+  });
+
+  assert.equal(result.abstractAssociationRequested, true);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].options.additionalSystemPrompt, /本轮已开启抽象联想层/);
+  assert.match(calls[1].options.revisionSystemPrompt, /具体、贴合当前内容的角色/);
+  assert.match(result.answer, /转职成亡灵骑士/);
+  assert.equal(result.review.valid, true);
+});
+
+test('技术深度问答不强制抽象联想，保持原有一次生成路径', async () => {
+  const calls = [];
+  const answer = '先备份配置，再检查服务日志和端口占用，最后重启对应进程。';
+  const result = await generateConversationReply({
+    content: '帮我部署这个服务并排查端口占用',
+    modelInput: '帮我部署这个服务并排查端口占用',
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push(options);
+        return answer;
+      },
+    },
+  });
+
+  assert.equal(result.abstractAssociationRequested, false);
+  assert.equal(calls.length, 1);
+  assert.equal(result.answer, answer);
+});
+
 test('技术问题允许内部推理，但正确短答不自动扩写', async () => {
   const calls = [];
   const answer = '用五口千兆交换机就行，四台设备接进去，再留一口接路由器；先确认网线和设备端口也都是千兆。';
