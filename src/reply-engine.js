@@ -72,6 +72,12 @@ function removeInternalReplyMetadata(value) {
     .trim();
 }
 
+function removeLeadingModelMention(value) {
+  return String(value ?? '')
+    .replace(/^\s*@[^\s\n，。！？!?：:]{1,60}\s*/u, '')
+    .trim();
+}
+
 function personaPhrasesFromContext(personaContext) {
   return [...String(personaContext ?? '').matchAll(/偏好口癖：([^\n]+)/gu)]
     .flatMap((match) => String(match[1]).split('、'))
@@ -849,12 +855,11 @@ export async function generateConversationReply(options) {
   answer = removeInternalReplyMetadata(
     attackStyle ? removeLiteralLatinMa(answer) : answer,
   ) || buildNormalReplyFallback();
-  if (artAppraisal) {
+  if (!attackStyle && !requiredIdentityRole) {
     // QQ already shows the reply target. A model-added leading @mention is
-    // usually a copied prompt fragment and makes a one-line appraisal feel
+    // usually a copied prompt fragment and makes a short group reply feel
     // like a narrated report.
-    answer = answer.replace(/^\s*@[^\s\n，。！？!?：:]{1,40}\s*/u, '').trim()
-      || buildNormalReplyFallback();
+    answer = removeLeadingModelMention(answer) || buildNormalReplyFallback();
   }
   answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle);
   review = reviewNormalReply(answer, {
@@ -940,10 +945,8 @@ export async function generateConversationReply(options) {
     }
   }
 
-  const finalAnswer = artAppraisal
-    ? (String(answer ?? '')
-      .replace(/^\s*@[^\s\n，。！？!?：:]{1,40}\s*/u, '')
-      .trim() || buildNormalReplyFallback())
+  const finalAnswer = (!attackStyle && !requiredIdentityRole)
+    ? (removeLeadingModelMention(answer) || buildNormalReplyFallback())
     : answer;
   return {
     answer: suppressUnrequestedSourceNotes(removeInternalParticipantIds(finalAnswer), currentQuestion, searchResult),
@@ -962,6 +965,9 @@ export async function generateConversationReply(options) {
     thinkingEnabled,
     thinkingFallback,
     detailedAnswerRequested,
+    compactResponse: !detailedAnswerRequested && !recordSummary && !passiveImageComment,
+    artAppraisal,
+    activeReply,
     seriousAnswerExpanded,
     normalPersonaRewritten,
     normalPersonaReviewSkipped,

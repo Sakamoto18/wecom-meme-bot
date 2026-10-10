@@ -33,9 +33,9 @@ test('画作赏析提示要求一个主体关系和一句话落点', async () =>
     } },
   });
   assert.equal(result.answer, '群体在麻木同行，唯独高墙上的脱队者在孤独思考蛙生。(¬◡¬)');
-  assert.match(calls[0].additionalSystemPrompt, /一句话画面赏析/);
-  assert.match(calls[0].stableSystemPrompt, /18～45/);
-  assert.match(calls[0].stableSystemPrompt, /只抓一个最有画面感的主体关系/);
+  assert.match(calls[0].additionalSystemPrompt, /短句画面赏析/);
+  assert.match(calls[0].stableSystemPrompt, /18～55/);
+  assert.match(calls[0].stableSystemPrompt, /第一句先像群友接梗一样下判断/);
 });
 
 test('图片检索限定具体线索，去重并限制查询预算，不把整段 OCR 发给搜索', () => {

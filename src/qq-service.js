@@ -1253,14 +1253,21 @@ export function splitReplyText(value, options = {}) {
   if (!normalized) return [];
   const maxPartCharacters = Math.max(1, Number(options.maxPartCharacters ?? 180));
   const maxParts = Math.max(1, Number(options.maxParts ?? 4));
+  const splitSentences = options.splitSentences === true;
   const paragraphs = normalized.split(/\n{2,}/u).map((part) => part.trim()).filter(Boolean);
   const parts = [];
   for (const paragraph of paragraphs) {
-    if (paragraph.length <= maxPartCharacters) {
+    if (paragraph.length <= maxPartCharacters && !splitSentences) {
       parts.push(paragraph);
       continue;
     }
-    const sentences = paragraph.split(/(?<=[。！？!?；;])\s*/u).filter(Boolean);
+    const sentences = paragraph
+      .split(/(?<=[。！？!?；;])\s*/u)
+      .filter(Boolean)
+      .flatMap((sentence) => {
+        if (!splitSentences || sentence.length <= maxPartCharacters) return [sentence];
+        return sentence.split(/(?<=[：:，,])\s*/u).filter(Boolean);
+      });
     let current = '';
     for (const sentence of sentences) {
       const candidate = current ? `${current}${sentence}` : sentence;
@@ -2534,13 +2541,22 @@ export class QqBotService {
       const recordContext = options.forwardedContext ?? '';
       const recordSummary = Boolean(recordContext
         && /总结|概括|梳理|提炼|汇总/u.test(options.imageQuestion ?? content));
+      const imageQuestion = options.imageQuestion ?? content;
+      // A quoted screenshot often contains the title or the original question
+      // that the user wants us to verify. Keep that text as search context,
+      // but keep imageQuestion itself as the user's actual question for the
+      // final answer so the model does not answer the quote instead.
+      const quotedQuestionContext = extractMessageText(message?.quote);
+      const imageSearchQuestion = [imageQuestion, quotedQuestionContext]
+        .filter(Boolean)
+        .join('\n');
       const artAppraisal = isArtAppraisalIntent(
-        [content, options.imageQuestion].filter(Boolean).join('\n'),
+        [content, imageQuestion].filter(Boolean).join('\n'),
       );
       const imageAnalysis = options.imageAnalysis
         ?? await this.analyzeImages(
           imageBlocks,
-          options.imageQuestion ?? content,
+          imageQuestion,
           recordContext,
           {
             artAppraisal,
@@ -2561,23 +2577,34 @@ export class QqBotService {
       const imageCount = imageBlocks.filter((block) => block?.type === 'image_url').length;
       const hasImageContext = imageCount > 0 || Boolean(imageAnalysis);
       const imageInformationPolicy = classifyImageAnalysis(imageAnalysis);
-      const explicitImageSearch = hasExplicitImageSearchIntent(options.imageQuestion ?? content);
+      const explicitImageSearch = hasExplicitImageSearchIntent(imageSearchQuestion);
       const imageInformationPrompt = hasImageContext
         ? buildImageInformationPolicy(imageInformationPolicy, { explicitSearch: explicitImageSearch })
         : '';
       const imageSearchPlan = recordSummary ? [] : hasImageContext
-        ? buildImageSearchPlan(imageAnalysis, options.imageQuestion ?? content) : undefined;
+        ? buildImageSearchPlan(imageAnalysis, imageSearchQuestion) : undefined;
       const imageSearchQueries = imageSearchPlan?.map(plan => plan.query);
-      // 多图已经逐张完成视觉识别，最终回复只使用带序号的文字结果，避免
-      // 回复模型再次自行挑图或重排；单图仍保留原图以便处理细节问题。
-      const replyImageBlocks = imageAnalysis && (imageCount > 1 || options.passiveImageComment)
-        ? [] : imageBlocks;
+      const imageAnalysisSucceeded = Boolean(
+        imageAnalysis?.items?.some((item) => !item.failed),
+      );
+      // analyzeImages already made the visual call with the same image. Reusing
+      // the original block here caused a second vision read for every ordinary
+      // single-image question. Feed the structured result to the answer model;
+      // retain the raw image only when analysis failed, so the failure fallback
+      // still has a chance to answer from pixels.
+      const replyImageBlocks = imageAnalysisSucceeded ? [] : imageBlocks;
+      this.logger.log?.(
+        `QQ 图片链路：images=${imageCount}`
+        + ` analyzed=${imageAnalysisSucceeded ? 'yes' : 'no'}`
+        + ` search=${imageSearchQueries?.length ?? 0}`
+        + ` raw_reply_image=${replyImageBlocks.length > 0 ? 'yes' : 'no'}`,
+      );
       let modelInput = [imageAnalysisContext, baseModelInput]
         .filter(Boolean)
         .join('\n\n');
       const generateReply = (input, blocks) => generateConversationReply({
         content,
-        currentQuestion: options.imageQuestion ?? content,
+        currentQuestion: imageQuestion,
         modelInput: input,
         imageBlocks: blocks,
         hasImageContext,
@@ -2711,7 +2738,12 @@ export class QqBotService {
       )) {
         this.scheduleMemorySummary(conversationId);
       }
-      const messages = splitReplyText(answer).map((text) => ({ type: 'text', text }));
+      const compactOutbound = generated.compactResponse === true;
+      const messages = splitReplyText(answer, {
+        splitSentences: compactOutbound,
+        maxPartCharacters: compactOutbound ? (generated.artAppraisal ? 30 : 40) : 180,
+        maxParts: compactOutbound ? 3 : 4,
+      }).map((text) => ({ type: 'text', text }));
 
       try {
         const selectionOptions = {

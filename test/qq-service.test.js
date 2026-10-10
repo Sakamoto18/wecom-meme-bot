@@ -110,6 +110,14 @@ test('普通长答拆成连续完整消息，保留每句条件并不超过四�
     '如果仍然失败，检查容器网络和监听地址；最后看日志里的具体错误。',
   ]);
   assert.equal(splitReplyText('甲。乙。丙。丁。戊。己。', { maxPartCharacters: 3 }).length, 4);
+  assert.deepEqual(
+    splitReplyText('先别急着夸，这图的因果链断了，笑点就在这里。', {
+      splitSentences: true,
+      maxPartCharacters: 20,
+      maxParts: 3,
+    }),
+    ['先别急着夸，这图的因果链断了，', '笑点就在这里。'],
+  );
 });
 
 test('普通场景无语境匹配时只发文字，明确攻击仍在末尾强制附图', async () => {
@@ -1006,10 +1014,9 @@ test('QQ 图片会以视觉消息进入模型，并用 OCR 结果选择契合龙
   assert.equal(calls[0].modelInput.find((part) => part.type === 'image_url')
     ?.image_url.detail, 'original');
   assert.equal(calls[0].options.usageSource, 'image-understanding');
-  assert.ok(Array.isArray(calls[1].modelInput));
-  assert.match(calls[1].modelInput[0].text, /图片可见文字：原神/);
-  assert.equal(calls[1].modelInput.find((part) => part.type === 'image_url')
-    ?.image_url.url, `data:image/png;base64,${png}`);
+  assert.equal(typeof calls[1].modelInput, 'string');
+  assert.match(calls[1].modelInput, /图片可见文字：原神/);
+  assert.equal(calls[1].modelInput.includes('data:image/'), false);
   assert.deepEqual(result.messages.map((message) => message.type), ['text', 'image']);
 });
 
@@ -1196,6 +1203,59 @@ test('同一张引用图片在同一服务实例内复用视觉摘要，不重�
   await service.analyzeImages(blocks, '解释这张图');
   await service.analyzeImages(blocks, '解释这张图');
   assert.equal(imageCalls, 1);
+});
+
+test('明确查原帖时用截图正文和引用文字补检索，不把视觉读取当成回答', async () => {
+  const png = (await createPng()).toString('base64');
+  const queries = [];
+  const webSearch = {
+    async search(query) {
+      queries.push(query);
+      return {
+        context: '找到原帖及对应回复',
+        query,
+        resultCount: 1,
+        results: [],
+        endpoint: 'https://example.com/search',
+      };
+    },
+  };
+  const calls = [];
+  const { service } = createService({
+    webSearch,
+    webSearchEnabled: true,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, input, options) {
+        calls.push({ input, options });
+        if (options.usageSource === 'image-understanding') {
+          return JSON.stringify({
+            description: '知乎问题截图及一条回答',
+            visible_text: ['如何看待哔哩哔哩推出的大会员服务？', '今天我一直在看大家的意见，做一个集中回复'],
+            keywords: ['知乎 大会员'],
+            search_queries: [],
+          });
+        }
+        return '找到了。叔叔那条回复就在原帖下面，核心是集中回应用户意见。';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_type: 'private',
+    user_id: 'quote-search-user',
+    text: '你能找下原帖，再看看叔叔的回复内容吗？',
+    quoted_text: '引用的截图内容',
+    quoted_image_base64: png,
+    has_image: true,
+  });
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /如何看待哔哩哔哩推出的大会员服务/);
+  assert.match(queries[0], /来源|含义/);
+  assert.match(result.messages[0].text, /找到了/);
+  assert.equal(calls.filter((call) => call.options.usageSource === 'image-understanding').length, 1);
+  const finalCall = calls.find((call) => call.options.usageSource !== 'image-understanding');
+  assert.equal(typeof finalCall.input, 'string');
+  assert.doesNotMatch(finalCall.input, /data:image/);
 });
 
 test('合并转发图片会和普通图片一起进入视觉链路', async () => {

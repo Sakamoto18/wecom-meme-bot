@@ -199,7 +199,7 @@ test('主动 may 插话要求单句短评，过长草稿会被风格复核拦截
     activeReplyPriority: 'may',
   });
   assert.match(prompt, /机器人自己选择加入的主动插话/);
-  assert.match(prompt, /最终只发 1 句/);
+  assert.match(prompt, /最终只发 1～2 个短句/);
   assert.match(prompt, /15～55 个汉字/);
 
   const longDraft = `这段话没必要写这么长，蠢货。${'还在重复同一个结论'.repeat(12)}`;
@@ -226,7 +226,7 @@ test('主动 may 插话要求单句短评，过长草稿会被风格复核拦截
 
 test('画作赏析拦截清单式长句和模型自加的 @ 提问者', () => {
   const prompt = buildNormalReplyPrompt({ artAppraisal: true, shortChat: true });
-  assert.match(prompt, /18～45 个汉字/);
+  assert.match(prompt, /18～55 个汉字/);
   assert.match(prompt, /不要在答案开头点名/);
 
   const listed = reviewNormalReply(
@@ -234,6 +234,7 @@ test('画作赏析拦截清单式长句和模型自加的 @ 提问者', () => {
     { artAppraisal: true, compactResponse: true, shortChat: true },
   );
   assert.ok(listed.issues.includes('too-long-for-chat'));
+  assert.ok(listed.issues.includes('long-sentence-for-chat'));
   assert.ok(listed.issues.includes('art-appraisal-mentions-speaker'));
   assert.ok(listed.issues.includes('art-appraisal-item-list'));
 
@@ -243,6 +244,13 @@ test('画作赏析拦截清单式长句和模型自加的 @ 提问者', () => {
     shortChat: true,
   });
   assert.equal(concise.valid, true);
+
+  const twoShortSentences = reviewNormalReply('这画先别急着夸。墙顶那只蛙已经看穿全场了。', {
+    artAppraisal: true,
+    compactResponse: true,
+    shortChat: true,
+  });
+  assert.equal(twoShortSentences.valid, true);
 });
 
 test('普通回复保留龙玉涛语感但不强制攻击任何参与者', () => {

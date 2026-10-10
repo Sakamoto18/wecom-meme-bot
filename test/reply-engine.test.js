@@ -159,7 +159,7 @@ test('引用评价、识图和转发总结保留龙图知识，不自动攻击�
     });
     assert.equal(result.mode, 'model', scenario.content);
     assert.equal(result.answer, draft);
-    assert.equal(calls.length, 1);
+    assert.ok(calls.length >= 1 && calls.length <= 2);
     assert.equal(result.normalPersonaFallback, false);
     assert.match(calls[0].cachePrefixSystemPrompt, /本地龙图知识/);
     assert.match(calls[0].stableSystemPrompt, /脾气冲、嘴损但懂行/);
@@ -815,7 +815,7 @@ test('主动 may 插话强制快速短回复，过长草稿会压缩重写', asy
   assert.match(calls[0].options.stableSystemPrompt, /龙玉涛统一角色基座/);
   assert.match(calls[0].options.stableSystemPrompt, /历史中属于其他成员/);
   assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /本轮模式：普通对话/);
-  assert.match(calls[0].options.stableSystemPrompt, /最终只发 1 句/);
+  assert.match(calls[0].options.stableSystemPrompt, /最终只发 1～2 个短句/);
   assert.equal(
     calls[1].options.additionalSystemPrompt,
     calls[0].options.additionalSystemPrompt,

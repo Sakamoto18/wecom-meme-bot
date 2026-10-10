@@ -208,6 +208,18 @@ function hasUsefulImageClue(subject, item = {}) {
   return false;
 }
 
+function explicitVisibleTextClue(item = {}) {
+  const lines = normalizedTextList(item.visibleText)
+    .map((line) => line.replace(/https?:\/\/\S+/giu, ' ').replace(/\s+/gu, ' ').trim())
+    .filter((line) => meaningfulCharacters(line) >= 8)
+    .filter((line) => !UI_NOISE_PATTERN.test(line) || meaningfulCharacters(line) >= 18)
+    .sort((left, right) => meaningfulCharacters(right) - meaningfulCharacters(left));
+  if (lines.length === 0) return '';
+  // Keep the query short enough for a source lookup, while retaining two
+  // distinctive lines when the screenshot contains a title and a reply.
+  return lines.slice(0, 2).join(' ').slice(0, 180);
+}
+
 export function hasExplicitImageSearchIntent(content = '') {
   return EXPLICIT_IMAGE_SEARCH_PATTERN.test(compactText(content));
 }
@@ -228,6 +240,7 @@ export const IMAGE_MEANING_PROMPT = [
   '【本轮图片回答方式】',
   '保留龙玉涛知识里的嘴欠、反差和接梗语感，评论图中内容与事情本身；识图和总结不等于邀请攻击发图者、引用作者或提问者，除非当前用户明确要求，否则不顺带损这些人。',
   '先直接回答当前消息的具体问题，图片只是证据。除非用户明确要求“图里是什么”“描述一下”“识别图片”“逐张总结”或询问图片含义，否则不要主动描述画面、复述图片文字或解释图片是什么。用户问“怎么选/哪个/怎么办/是否”等选择题时，直接给选择或建议，再用图片中最相关的一点作依据。',
+  '如果当前消息要求找原帖、查出处、核实真伪或补充某条回复，先给这件事的检索结论；找不到时只用一句话说明缺口和下一步。不要把“我读到了图片”“我只抓到界面证据”当成最终回答，更不要连续输出两段同义的免责声明。',
   '不要照抄内部的“图片描述 / 可见文字 / 关键词 / 场景”字段，也不要固定套“图片识别—联网结果—总结”的模板。用自然的群聊表达把含义、画面依据和必要背景连起来。',
   '用户询问梗的含义时才说明笑点和反差；询问观点真伪时区分图中声称的事与检索能证实的事；问操作就给下一步，问选择就给选择，不另做整图解说。',
   '多图也只提取回答当前问题所需的信息；只有用户要求逐张或按顺序总结时才逐张列出，不要强制每张图都做一份独立报告。',
@@ -247,8 +260,8 @@ export const ART_APPRAISAL_VISION_PROMPT = [
 ].join('\n');
 
 export const ART_APPRAISAL_REPLY_PROMPT = [
-  '【本轮最终表达：一句话画面赏析】',
-  '只挑一个最鲜明的主体关系，把画面动作、构图和隐喻揉成一句群聊式判断；默认 18～45 个汉字，硬上限 55 字，只发一句。',
+  '【本轮最终表达：短句画面赏析】',
+  '只挑一个最鲜明的主体关系，把画面动作、构图和隐喻拆成 2～3 个短句；总计 18～55 个汉字，每句尽量不超过 28 字。第一句先像群友一样接梗或下判断，第二句再补一个画面依据。',
   '不要逐项复述 subject/composition/palette/relationship，也不要枚举画面里三个以上物件；不写“图片描述”“分析如下”，不打分，不讲艺术史，不把“从众、孤独、荒诞”单独堆成结论。',
   '直接说画面哪里最荒唐、最拧巴或最有意思，落到一个具体关系上；不要在答案开头加 @昵称、复述提问或点名发图的人。',
   '优先使用用户已经确认的具体主体和语境词，把它变成自然落点；主体不确定时用“像/更接近”，不要硬认。参考节奏：“群体在麻木同行，唯独高墙上的脱队者在孤独思考蛙生。”',
@@ -273,9 +286,15 @@ export function buildImageSearchPlan(analysis, content = '') {
     if (!itemPolicy.searchEligible && !explicitIntent) continue;
     // An explicit empty array means vision found no suitable public search
     // clue (for example a private chat screenshot); don't send its OCR online.
-    const proposed = Array.isArray(item.searchQueries)
+    const explicitClue = explicitVisibleTextClue(item);
+    const proposed = Array.isArray(item.searchQueries) && item.searchQueries.length > 0
       ? item.searchQueries
-      : (item.keywords?.length ? [item.keywords.slice(0, 5).join(' ')] : []);
+      : (explicitIntent
+        // One focused source lookup is enough. Sending both OCR and keyword
+        // variants here made a single “找原帖” question pay for duplicate
+        // searches before the answer was generated.
+        ? [explicitClue || (item.keywords?.length ? item.keywords.slice(0, 5).join(' ') : '')]
+        : (item.keywords?.length ? [item.keywords.slice(0, 5).join(' ')] : []));
     for (const value of proposed) {
       const subject = String(value ?? '').replace(/[\u0000-\u001f\u007f]/gu, ' ')
         .replace(/\s+/gu, ' ').trim().slice(0, 140);
