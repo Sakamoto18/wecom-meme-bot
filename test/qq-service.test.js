@@ -1981,7 +1981,7 @@ test('真人艾特后开启群级话题窗口，其他真人相关发言选择�
   }), null);
 });
 
-test('群话题窗口内连续艾特按群短节流且不会重置发起者和计数', async () => {
+test('群话题窗口内不同群友的艾特分别处理，同一群友仍受短节流', async () => {
   let currentTime = 10_000;
   let replyCalls = 0;
   const chatClient = {
@@ -2023,9 +2023,13 @@ test('群话题窗口内连续艾特按群短节流且不会重置发起者和�
     mention('mention-cooldown-2', 'human-2', '@龙玉涛 我也要说'),
   );
   const callsAfterBurst = replyCalls;
+  const repeatedBurst = await service.handleMessage(
+    mention('mention-cooldown-2-repeat', 'human-2', '@龙玉涛 我再补一句'),
+  );
+  const callsAfterRepeatedBurst = replyCalls;
   currentTime += 4_000;
   const admitted = await service.handleMessage(
-    mention('mention-cooldown-3', 'human-2', '@龙玉涛 现在轮到我了吧'),
+    mention('mention-cooldown-3', 'human-3', '@龙玉涛 现在轮到我了吧'),
   );
   const callsAfterAdmitted = replyCalls;
   const stateBeforeEnd = activeReplyDecider.getGroupEngagement(
@@ -2037,13 +2041,16 @@ test('群话题窗口内连续艾特按群短节流且不会重置发起者和�
   );
 
   assert.equal(first.messages.length > 0, true);
-  assert.deepEqual(burst, { mode: 'observed', messages: [] });
+  assert.equal(burst.messages.length > 0, true);
+  assert.deepEqual(repeatedBurst, { mode: 'observed', messages: [] });
   assert.equal(admitted.messages.length > 0, true);
-  assert.equal(callsAfterBurst, callsAfterFirst);
+  assert.equal(callsAfterBurst > callsAfterFirst, true);
+  assert.equal(callsAfterRepeatedBurst, callsAfterBurst);
   assert.equal(callsAfterAdmitted > callsAfterBurst, true);
   assert.equal(stateBeforeEnd?.ownerUserId, 'human-1');
-  assert.equal(stateBeforeEnd?.replyCount, 2);
+  assert.equal(stateBeforeEnd?.replyCount, 3);
   assert.equal(stateBeforeEnd?.participantUserIds.has('human-2'), true);
+  assert.equal(stateBeforeEnd?.participantUserIds.has('human-3'), true);
   assert.equal(stateBeforeEnd?.expiresAt, 115_000);
   assert.deepEqual(ended, { mode: 'observed', messages: [] });
   assert.equal(replyCalls, callsAfterAdmitted);

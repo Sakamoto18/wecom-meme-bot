@@ -694,7 +694,7 @@ test('peer Bot 不会继承或续期真人群话题窗口', async () => {
   assert.equal(decider.getEngagement(owner)?.replyCount, 0);
 });
 
-test('群话题达到补充上限后，窗口内再次艾特只续期且受短节流', async () => {
+test('群话题达到补充上限后，不同群友可分别艾特，同一群友仍受短节流', async () => {
   let currentTime = 10_000;
   const decider = new ActiveReplyDecider({
     chatClient: {
@@ -737,16 +737,23 @@ test('群话题达到补充上限后，窗口内再次艾特只续期且受短�
     text: '@龙玉涛 还有我',
     mentions: [{ userId: 'bot', name: '龙玉涛' }],
   });
-  const throttled = decider.admitDirectMention(burstMention);
+  const admittedDifferentUser = decider.admitDirectMention(burstMention);
+  const repeatedMention = groupPayload({
+    userId: 'u2',
+    text: '@龙玉涛 我再补一句',
+    mentions: [{ userId: 'bot', name: '龙玉涛' }],
+  });
+  const throttledSameUser = decider.admitDirectMention(repeatedMention);
   const state = decider.getEngagement(owner);
 
   assert.equal(first.reply, true);
   assert.equal(second.reply, true);
   assert.deepEqual(limited, { reply: false, reason: 'engagement-reply-limit' });
   assert.deepEqual(admitted, { reply: true, reason: 'engagement-mention-must' });
-  assert.equal(throttled.reply, false);
-  assert.equal(throttled.reason, 'engagement-mention-cooldown');
-  assert.equal(throttled.retryAfterMs, 4_000);
+  assert.equal(admittedDifferentUser.reply, true);
+  assert.equal(throttledSameUser.reply, false);
+  assert.equal(throttledSameUser.reason, 'engagement-mention-cooldown');
+  assert.equal(throttledSameUser.retryAfterMs, 4_000);
   assert.equal(state?.replyCount, 2);
   assert.equal(state?.ownerUserId, 'u1');
   assert.equal(state?.participantUserIds.has('u3'), true);

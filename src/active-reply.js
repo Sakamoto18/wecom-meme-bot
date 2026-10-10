@@ -114,6 +114,27 @@ function isLikelyEngagementFollowup(payload) {
   return ENGAGEMENT_FOLLOWUP_PATTERN.test(normalizeEngagementText(payload?.text));
 }
 
+function mentionReplyTimes(state, now, windowMs) {
+  const times = new Map();
+  if (state?.lastMentionReplyAtByUser instanceof Map) {
+    for (const [userId, timestamp] of state.lastMentionReplyAtByUser) {
+      const normalizedUserId = String(userId ?? '').trim();
+      const normalizedTimestamp = Number(timestamp);
+      if (!normalizedUserId || !Number.isFinite(normalizedTimestamp)) continue;
+      if (windowMs > 0 && now - normalizedTimestamp >= windowMs) continue;
+      times.set(normalizedUserId, normalizedTimestamp);
+    }
+  } else if (state?.ownerUserId) {
+    // Keep states created by older in-memory code safe during a hot reload.
+    const legacyTimestamp = Number(state.lastMentionReplyAt);
+    if (Number.isFinite(legacyTimestamp)
+      && (windowMs <= 0 || now - legacyTimestamp < windowMs)) {
+      times.set(String(state.ownerUserId), legacyTimestamp);
+    }
+  }
+  return times;
+}
+
 export function isExplicitEngagementEnd(value) {
   const normalized = String(value ?? '')
     .normalize('NFKC')
@@ -343,8 +364,16 @@ export class ActiveReplyDecider {
     if (current) {
       const participantUserIds = new Set(current.participantUserIds);
       const mutedUserIds = new Set(current.mutedUserIds);
+      const lastMentionReplyAtByUser = mentionReplyTimes(
+        current,
+        now,
+        this.engagementWindowMs,
+      );
       participantUserIds.add(ownerUserId);
       mutedUserIds.delete(ownerUserId);
+      if (this.isDirectMention(payload)) {
+        lastMentionReplyAtByUser.set(ownerUserId, now);
+      }
       this.engagements.delete(key);
       this.engagements.set(key, {
         ...current,
@@ -355,6 +384,7 @@ export class ActiveReplyDecider {
         lastMentionReplyAt: this.isDirectMention(payload)
           ? now
           : current.lastMentionReplyAt,
+        lastMentionReplyAtByUser,
         expiresAt: now + this.engagementWindowMs,
         participantUserIds,
         mutedUserIds,
@@ -367,11 +397,16 @@ export class ActiveReplyDecider {
     while (this.engagements.size >= this.maxEngagements) {
       this.engagements.delete(this.engagements.keys().next().value);
     }
+    const lastMentionReplyAtByUser = new Map();
+    if (this.isDirectMention(payload)) {
+      lastMentionReplyAtByUser.set(ownerUserId, now);
+    }
     this.engagements.set(key, {
       openedAt: now,
       lastActivityAt: now,
       lastReplyAt: now,
       lastMentionReplyAt: this.isDirectMention(payload) ? now : null,
+      lastMentionReplyAtByUser,
       expiresAt: now + this.engagementWindowMs,
       ownerUserId,
       participantUserIds: new Set([ownerUserId]),
@@ -399,6 +434,11 @@ export class ActiveReplyDecider {
       participantUserIds.add(userId);
       mutedUserIds.delete(userId);
     }
+    const lastMentionReplyAtByUser = mentionReplyTimes(
+      state,
+      now,
+      this.engagementWindowMs,
+    );
     this.engagements.delete(key);
     this.engagements.set(key, {
       ...state,
@@ -406,12 +446,16 @@ export class ActiveReplyDecider {
       expiresAt: now + this.engagementWindowMs,
       participantUserIds,
       mutedUserIds,
+      lastMentionReplyAtByUser,
     });
 
-    const hasMentionReplyAt = state.lastMentionReplyAt !== null
-      && state.lastMentionReplyAt !== undefined;
-    const lastMentionReplyAt = Number(state.lastMentionReplyAt);
-    const elapsedMs = now - lastMentionReplyAt;
+    // The cooldown is per sender. A burst of different people addressing the
+    // bot should be processed one by one; only one person's repeated @ spam
+    // is throttled. This keeps the group queue as the ordering guard without
+    // silently dropping the rest of the group.
+    const lastMentionReplyAt = lastMentionReplyAtByUser.get(userId);
+    const hasMentionReplyAt = lastMentionReplyAt !== undefined;
+    const elapsedMs = hasMentionReplyAt ? now - lastMentionReplyAt : 0;
     if (this.engagementMentionCooldownMs > 0
       && hasMentionReplyAt
       && Number.isFinite(lastMentionReplyAt)
