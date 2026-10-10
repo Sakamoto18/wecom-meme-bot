@@ -563,6 +563,40 @@ test('联网搜索达到单群日上限后只跳过上游请求', async () => {
   }
 });
 
+test('搜索 API 日额度只计算真实上游请求，缓存命中不消耗额度', async () => {
+  const fixture = createTracker({ maxGroupSearchCallsPerDay: 1 });
+  let upstreamCalls = 0;
+  const search = fixture.tracker.wrapWebSearch(new LongtuWebSearch({
+    provider: 'exa',
+    exaApiKey: 'test-key',
+    fallbackEndpoint: null,
+    fetchImpl: async () => {
+      upstreamCalls += 1;
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    },
+  }));
+
+  try {
+    const cachedQuery = () => search.search('同一个问题', { mode: 'general' });
+    await fixture.tracker.runWithContext({ groupId: 'search-cache-limit' }, cachedQuery);
+    await fixture.tracker.runWithContext({ groupId: 'search-cache-limit' }, cachedQuery);
+    await assert.rejects(
+      fixture.tracker.runWithContext({ groupId: 'search-cache-limit' }, () => (
+        search.search('另一个问题', { mode: 'general' })
+      )),
+      (error) => error instanceof QqUsageLimitError
+        && error.metric === 'search-calls',
+    );
+    const report = fixture.tracker.getReport();
+    assert.equal(upstreamCalls, 1);
+    assert.equal(report.groups[0].searchCalls, 1);
+    assert.equal(report.groups[0].searchCacheHits, 1);
+    assert.equal(report.groups[0].blockedSearchCalls, 1);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('图片联网搜索额外按群做分钟级限流，普通文字搜索不受影响', async () => {
   let now = Date.UTC(2026, 7, 25, 4);
   const fixture = createTracker({

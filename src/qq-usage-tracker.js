@@ -933,6 +933,9 @@ export class QqUsageTracker {
     const context = this.currentContext();
     const now = this.now();
     const database = this.ensureOpen();
+    // This reservation is made immediately before the provider request. A
+    // cache hit never reaches this method and is recorded separately, so the
+    // daily quota is strictly a quota for real upstream Search API calls.
     const limit = this.groupSearchLimit(context);
     if (context.groupId && limit > 0) {
       const used = Number(database.prepare(`

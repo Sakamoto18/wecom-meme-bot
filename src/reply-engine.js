@@ -579,6 +579,16 @@ export async function generateConversationReply(options) {
     attackStyle,
     attackDuringAnswer: attackStyle && !pureAttack,
   });
+  // The association capability is always present in the persona prompt, but
+  // a missing association should only trigger the existing secondary review
+  // on turns where the user is actually asking to interpret visual/quoted
+  // material. Ordinary facts, technical answers and active short replies keep
+  // their single generation budget.
+  const associationReviewText = [content, currentQuestion].filter(Boolean).join('\n');
+  const abstractAssociationReviewRequired = abstractAssociationRequested
+    && (artAppraisal
+      || ((hasImageContext || hasQuotedContent)
+        && /(?:评价|锐评|赏析|赏评|怎么看|如何看|为什么|为何|什么梗|啥意思|接梗|像什么|什么水平)/u.test(associationReviewText)));
   const lowInformationImage = hasImageContext && imageInformationPolicy?.level === 'low_information';
   const responseMaxTokens = lowInformationImage
     ? 260
@@ -604,6 +614,7 @@ export async function generateConversationReply(options) {
     passiveImageComment,
     artAppraisal,
     abstractAssociationRequested,
+    abstractAssociationReviewRequired,
     shortChat: compactResponse && !passiveImageComment && !recordSummary,
     attackDuringAnswer: attackStyle && !pureAttack,
   };
@@ -710,6 +721,7 @@ export async function generateConversationReply(options) {
     passiveImageComment,
     artAppraisal,
     abstractAssociationRequested,
+    abstractAssociationReviewRequired,
     shortChat,
     attackDuringAnswer: attackStyle && !pureAttack,
   });
@@ -750,6 +762,7 @@ export async function generateConversationReply(options) {
               passiveImageComment,
               artAppraisal,
               abstractAssociationRequested,
+              abstractAssociationReviewRequired,
               shortChat,
               attackDuringAnswer: attackStyle && !pureAttack,
             }),
@@ -769,6 +782,7 @@ export async function generateConversationReply(options) {
           passiveImageComment,
           artAppraisal,
           abstractAssociationRequested,
+          abstractAssociationReviewRequired,
           shortChat,
           attackDuringAnswer: attackStyle && !pureAttack,
         });
@@ -796,6 +810,7 @@ export async function generateConversationReply(options) {
       passiveImageComment,
       artAppraisal,
       abstractAssociationRequested,
+      abstractAssociationReviewRequired,
       shortChat,
       attackDuringAnswer: attackStyle && !pureAttack,
       requireRoleVoice: false,
@@ -905,6 +920,7 @@ export async function generateConversationReply(options) {
     passiveImageComment,
     artAppraisal,
     abstractAssociationRequested,
+    abstractAssociationReviewRequired,
     shortChat,
     attackDuringAnswer: attackStyle && !pureAttack,
   });
@@ -1002,6 +1018,7 @@ export async function generateConversationReply(options) {
     compactResponse: !detailedAnswerRequested && !recordSummary && !passiveImageComment,
     artAppraisal,
     abstractAssociationRequested,
+    abstractAssociationReviewRequired,
     activeReply,
     seriousAnswerExpanded,
     normalPersonaRewritten,

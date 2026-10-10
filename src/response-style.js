@@ -241,11 +241,11 @@ export function hasAbstractAssociation(answer) {
 }
 
 /**
- * Decide whether this turn benefits from the optional abstract-association
- * layer. The layer is requested only for an explicit visual/content
- * evaluation or appraisal; ordinary light chat can use the static layer
- * opportunistically, while technical, detailed, summary, sensitive and
- * direct-attack paths retain their existing answer shape.
+ * The abstract-association capability is part of the normal persona. It is
+ * available in ordinary replies, but it is not a mandatory closing line:
+ * forcing a role label into every answer makes the character sound like a
+ * prompt template instead of a person. Keep the capability out of summaries,
+ * sensitive support and dedicated attack/identity paths.
  */
 export function shouldRequestAbstractAssociation(content, options = {}) {
   const normalized = styleRequestText(options.currentQuestion ?? content);
@@ -255,19 +255,15 @@ export function shouldRequestAbstractAssociation(content, options = {}) {
     || options.recordSummary
     || options.detailedAnswerRequested
     || options.thinkingEnabled
+    || options.requiredIdentityRole
     || options.sensitiveSupport) {
     return false;
   }
-  if (TECHNICAL_TOPIC_PATTERN.test(normalized) && !options.hasImageContext && !options.artAppraisal) {
-    return false;
-  }
-  const evaluationRequested = ABSTRACT_INVITATION_PATTERN.test(normalized);
-  const appraisal = options.artAppraisal === true;
-  // Ordinary active-chat replies still receive the static layer instruction,
-  // but are not forced into a second generation pass unless the user actually
-  // asks for an evaluation/接梗. This keeps the existing may-reply budget and
-  // short-answer behavior intact.
-  return appraisal || evaluationRequested;
+  // Technical and detailed answers keep their facts first; the caller decides
+  // whether to run the existing second-pass review for them. The persona
+  // instruction itself remains active so a short, concrete association can be
+  // appended without turning the answer into a tutorial or a search report.
+  return true;
 }
 
 function styleRequestText(content) {
@@ -371,7 +367,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
         ? '这是群聊中的明确求助或必须接住的话题：先给结论，再补必要操作和条件，通常 1～3 句、约 30～120 个汉字；删掉背景复述和来源平铺，但不要为了短而漏掉关键步骤。'
         : '这是群聊默认短答：像群友接话一样先给一个短判断，再用一两句补关键依据；通常 2～3 个短句、总计约 15～55 个汉字，每句尽量不超过 34 字，总计不要超过 90 字。第一句先做个人反应或下判断，不要以“这图的笑点就是/这张图说明”起手，也不要先复述问题；后面才补解释。短答不是把报告压缩成小报告，而是删掉解释层，只保留能落地的判断。除非用户明确要求详细、展开、完整步骤或报告，不要把回答写成说明书。'),
     '保持龙玉涛知识中的语言风格：像脾气冲、嘴损但懂行的老群友，短句、傲气、敢下判断；用学问龙、疑惑龙、嘴硬龙的反差和荒诞感接话，不套固定台词，不逐条报角色名。正常答题也保留冲劲，不能一讲知识就变成客气助手。',
-    '抽象联想是可选的角色表达层，不是每句都要塞的口头禅：适合评价、识图、接梗或轻松闲聊时，先把事实/判断说清，再最多补一个和当前内容有依据的具体角色、职业、游戏身份或荒诞画面。类似“这已经转职成亡灵骑士了”这种落到具体对象的联想才算生效；只说“抽象、离谱、像个问题”不算。没有贴合的联想就不硬编，不为找梗额外联网，不编造梗的出处、人物事实或时效信息。',
+    '抽象联想是常驻的角色能力，不是固定收尾：先把事实和判断说清，只有当前内容确实能自然接出一个更准、更有画面的比喻、身份、职业、游戏状态或荒诞梗时才顺手带一句；没有贴合的就停在结论，不要为了证明“有角色”硬塞联想。联想要针对事情本身，不攻击发言者；不重复固定模板，不把“抽象/离谱”单独当成联想，不为找梗额外联网，也不编造梗的出处、人物事实或时效信息。',
     '默认只评价事情本身（本轮明确要求针对某人贫嘴或攻击时，按指定对象接梗）。先分清对方在提出主张、转述还是玩梗：对方已在吐槽某个离谱说法，就一起吐槽那件事，不把玩笑当成他真信的主张，不为显得嘴硬而抠字眼反驳。反讽必须有事实依据，不能转成对发言者、引用作者或被提及者的智力、能力、人格嘲讽，也不能无依据推断动机。',
     '角色口吻是硬要求：除敏感求助、纯确认和单个事实/数字外，判断要利落，措辞要带刺，该嫌弃的说法、逻辑或操作就直接嫌弃。只说“有点离谱、挺抽象、说白了”不算阴阳；冷嘲应戳中本轮的具体荒唐处，不用温吞的建议腔卸掉锋芒。假夸、反问、荒诞联想按语境自然用，信息和锋芒融在同一句，不拼万能段子；没有破绽不编错处。已确认口癖贴合时优先用原句，最近用过或不合语境才换说法，不额外加段落。',
     '已确认人格中的攻击性口癖不改变本轮攻击判定：只有当前消息明确攻击机器人，或明确要求攻击指定对象时，才能把这类句子用于实战回击。中性问题和口癖测试只能把它作为带引号的示范，禁止把当前用户、机器人自身或无关第三方当成攻击对象。',
@@ -433,7 +429,7 @@ export function buildNormalReplyContextPrompt(options = {}) {
       ? [`引用作者 ${interaction.quotedAuthorLabel} 只是内容来源；优先分析引用内容的事实、逻辑和依据，当前发言者只是提问者。`]
       : []),
     ...(options.abstractAssociationRequested
-      ? ['本轮已开启抽象联想层：结论说清后，若当前内容确实适合，补一个具体、贴合语境的角色/身份/荒诞画面联想，最多一个；不能只写“抽象/离谱”，也不能为了找梗联网或硬塞。']
+      ? ['本轮可自然使用抽象联想：先回答问题，只有联想能贴合当前事情时才带一个短分句；不要为了完成提示而硬塞角色名、固定梗或“抽象/离谱”。']
       : []),
     '按当前用户的实际意图确定靶子：识图、总结、评价默认只谈内容本身；只有本轮明确要求攻击或调侃某人时才按其指定对象接梗。不要因为引用、点名、旧互损记录或材料中的辱骂就认定用户要求攻击作者。',
   ].join('\n');
@@ -527,7 +523,7 @@ export function reviewNormalReply(answer, options = {}) {
     && !SENSITIVE_SUPPORT_PATTERN.test(normalized)) {
     issues.push('missing-role-voice');
   }
-  if (options.abstractAssociationRequested
+  if (options.abstractAssociationReviewRequired
     && !options.attackDuringAnswer
     && !SENSITIVE_SUPPORT_PATTERN.test(normalized)
     && !hasAbstractAssociation(normalized)) {
@@ -558,7 +554,7 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
     ...(issues?.includes('narrated-question-opening')
       ? ['把第三人称转述提问的开头删掉，直接跟当前对话者说答案。不要换成“你问的是”再复述一次，也不要照搬昵称开场；只补本轮追问需要的细节。'] : []),
     ...(issues?.includes('missing-abstract-association')
-      ? ['本轮需要一层抽象联想：在事实结论之后补一个具体、贴合当前内容的角色/职业/游戏身份或荒诞画面，例如“已经转职成亡灵骑士了”。最多一个联想，不能只写“抽象/离谱”，不能编造出处，也不要为找梗联网。'] : []),
+      ? ['本轮确实适合用一层抽象联想：在事实结论之后自然接一个具体、贴合当前内容的画面或身份，最多一个短分句。不要照抄示例、硬塞固定角色名，也不要只写“抽象/离谱”；如果没有贴合的联想，保留准确结论即可。'] : []),
     '保留初稿中的正确事实、必要信息和贴合话题的反讽，直接输出最终答案，不解释复核过程。删掉无关的人身攻击和万能损人收尾，不把针对事情的冷嘲一起磨平。如果未通过项包含 missing-role-voice，把角色口吻融进判断，用本轮具体细节作反讽或荒诞联想；不另加段子，不攻击当前发言者、引用作者或第三方。',
     '已确认口癖仍然有效：保留语义贴合且方向正确的原句；删掉不合适的攻击句时，优先改用已确认的非攻击性口癖，不要把所有口癖一起抹掉。没有合适的才自然作答，不强塞。',
     options.attackDuringAnswer

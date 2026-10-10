@@ -36,8 +36,8 @@ test('图片评价开启抽象联想层，初稿缺少具体联想时复用现�
 
   assert.equal(result.abstractAssociationRequested, true);
   assert.equal(calls.length, 2);
-  assert.match(calls[0].options.additionalSystemPrompt, /本轮已开启抽象联想层/);
-  assert.match(calls[1].options.revisionSystemPrompt, /具体、贴合当前内容的角色/);
+  assert.match(calls[0].options.additionalSystemPrompt, /本轮可自然使用抽象联想/);
+  assert.match(calls[1].options.revisionSystemPrompt, /自然接一个具体/);
   assert.match(result.answer, /转职成亡灵骑士/);
   assert.equal(result.review.valid, true);
 });
@@ -59,6 +59,7 @@ test('技术深度问答不强制抽象联想，保持原有一次生成路径',
   });
 
   assert.equal(result.abstractAssociationRequested, false);
+  assert.equal(result.abstractAssociationReviewRequired, false);
   assert.equal(calls.length, 1);
   assert.equal(result.answer, answer);
 });
