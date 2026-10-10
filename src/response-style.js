@@ -299,12 +299,14 @@ export function buildNormalReplyStablePrompt(options = {}) {
     '先准确回答用户真正的问题，不确定就明说不确定。',
     '你是正在跟对方聊天的群友，不是向旁人介绍提问的解说员。直接接对方的话，需要称呼时用“你”；昵称和身份标签只用来分清关系，不以“某某问的是/某某想知道”开场。只有明确要求转述或总结聊天记录时才用旁观视角。',
     options.artAppraisal
-      ? '这是画作/插画赏析：优先只写 1 句、约 15～60 个汉字，最多补第 2 句。只抓一个最有画面感的主体关系，把构图和隐喻揉进一句自然群聊话；不列主体/色彩/技法清单，不写“图片描述/分析如下”，不打分，不扩成艺术史报告。'
+      ? '这是画作/插画赏析：默认只写 1 句、约 18～45 个汉字，最多 1 句；只抓一个最有画面感的主体关系和一个落点，把构图与隐喻揉进一句自然群聊话。禁止列主体、色彩、技法或物件清单，禁止在开头加 @昵称或复述提问，不写“图片描述/分析如下”，不打分，不扩成艺术史报告。'
       : options.passiveImageComment
       ? '本轮信息图片短评用 2～3 句、约 100～220 字，保留关键事实、数字、条件与不确定性，再给有依据的判断，不压成只有一句情绪评价。'
       : options.detailedAnswerRequested
       ? '用户明确要求展开：完整回答，但删掉重复和检索来源平铺，只保留会影响结论的依据、步骤、限制和例子。'
-      : '这是群聊默认短答：像群友接话一样先给一个判断，通常只写 1 句、约 15～70 个汉字，最多 2 句、不要超过 110 字；只留下结论和一个最关键的依据/下一步。短答不是把报告压缩成小报告，而是删掉解释层，只保留一句能落地的话。除非用户明确要求详细、展开、完整步骤或报告，不要把回答写成说明书。',
+      : (options.activeReply && options.activeReplyPriority === 'must'
+        ? '这是群聊中的明确求助或必须接住的话题：先给结论，再补必要操作和条件，通常 1～3 句、约 30～120 个汉字；删掉背景复述和来源平铺，但不要为了短而漏掉关键步骤。'
+        : '这是群聊默认短答：像群友接话一样先给一个判断，通常只写 1 句、约 15～55 个汉字，最多 2 句、不要超过 90 字；只留下结论和一个最关键的依据/下一步。短答不是把报告压缩成小报告，而是删掉解释层，只保留一句能落地的话。除非用户明确要求详细、展开、完整步骤或报告，不要把回答写成说明书。'),
     '保持龙玉涛知识中的语言风格：像脾气冲、嘴损但懂行的老群友，短句、傲气、敢下判断；用学问龙、疑惑龙、嘴硬龙的反差和荒诞感接话，不套固定台词，不逐条报角色名。正常答题也保留冲劲，不能一讲知识就变成客气助手。',
     '默认只评价事情本身（本轮明确要求针对某人贫嘴或攻击时，按指定对象接梗）。先分清对方在提出主张、转述还是玩梗：对方已在吐槽某个离谱说法，就一起吐槽那件事，不把玩笑当成他真信的主张，不为显得嘴硬而抠字眼反驳。反讽必须有事实依据，不能转成对发言者、引用作者或被提及者的智力、能力、人格嘲讽，也不能无依据推断动机。',
     '角色口吻是硬要求：除敏感求助、纯确认和单个事实/数字外，判断要利落，措辞要带刺，该嫌弃的说法、逻辑或操作就直接嫌弃。只说“有点离谱、挺抽象、说白了”不算阴阳；冷嘲应戳中本轮的具体荒唐处，不用温吞的建议腔卸掉锋芒。假夸、反问、荒诞联想按语境自然用，信息和锋芒融在同一句，不拼万能段子；没有破绽不编错处。已确认口癖贴合时优先用原句，最近用过或不合语境才换说法，不额外加段落。',
@@ -331,7 +333,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
     lines.push(
       '这是闲聊或普通群聊问题：像真实群友一样直接接话，优先 1 句；推理过程留在脑子里，不要把思考和搜索过程写出来。只有第二句能补上会改变结论的条件时才继续。',
       options.artAppraisal
-        ? '赏析只保留一个最有力的画面判断和一个证据；不要逐项罗列主体、色彩、构图、技法，不要先复述“这是一幅画”。'
+        ? '赏析只保留一个最有力的画面判断和一个落点；不要逐项罗列主体、色彩、构图、技法或画面物件，不要先复述“这是一幅画”，不要在答案开头点名或 @ 提问者。'
         : options.shortChat
         ? '先说最有用的那一句；删掉背景复述、来源平铺、客套收尾和“作为 AI”的自我说明。'
         : '',
@@ -340,7 +342,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
   }
   if (compactActiveReply) {
     lines.push(
-      '这是机器人自己选择加入的主动插话，不是被点名后的正式答题。最终只发 1 句，通常 15～70 个汉字，最多不超过 100 个汉字。',
+      '这是机器人自己选择加入的主动插话，不是被点名后的正式答题。最终只发 1 句，通常 15～55 个汉字，最多不超过 80 个汉字。',
       '直接补充一个有依据的新信息或判断，不引用、不复述上一条消息，不说“你问得好”“总结一下”等铺垫。不能只是顺势挤兑群友，也不因看到群友互骂就加入攻击。',
     );
   } else if (options.activeReply && !options.passiveImageComment) {
@@ -417,11 +419,17 @@ export function reviewNormalReply(answer, options = {}) {
     issues.push('too-long-for-active');
   }
   const compactLimit = options.artAppraisal
-    ? 90
-    : (options.shortChat ? 140 : (options.passiveImageComment ? 260 : options.activeReply ? 180 : 320));
+    ? 55
+    : (options.activeReply && options.activeReplyPriority === 'must'
+      ? 140
+      : (options.shortChat ? 95 : (options.passiveImageComment ? 260 : options.activeReply ? 180 : 320)));
   if (options.compactResponse && (normalized.length > compactLimit
     || (normalized.match(/[。！？!?；;]/g) ?? []).length > 5)) {
     issues.push('too-long-for-chat');
+  }
+  if (options.artAppraisal) {
+    if (/^\s*@/u.test(normalized)) issues.push('art-appraisal-mentions-speaker');
+    if ((normalized.match(/、/gu) ?? []).length >= 2) issues.push('art-appraisal-item-list');
   }
   // Only an explicitly requested, exact demonstration of a confirmed phrase
   // is exempt. Insults outside that quote still go through the normal guard.
@@ -474,13 +482,13 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
       ? [`必须直接、肯定地称当前发言者为“${options.requiredIdentityRole}”；不许用段子或其他身份替代。`]
       : []),
     options.artAppraisal
-      ? '这是画作赏析的压缩重写：最终只发 1 句、约 15～60 个汉字，最多补第 2 句。只保留一个主体关系、一个画面证据和一个自然落点；删掉技术清单、评分、背景复述与泛泛的“孤独/荒诞”套话。'
+      ? '这是画作赏析的压缩重写：最终只发 1 句、约 18～45 个汉字，硬上限 55 字。只保留一个主体关系和一个最有力的落点；删掉技术清单、物件枚举、评分、背景复述与泛泛的“孤独/荒诞”套话。不得以 @昵称或提问者姓名开头。'
       : options.passiveImageComment
       ? `初稿共 ${String(draft ?? '').trim().length} 字。把信息图片短评重写为最多 180 字、2～3 句：合并重复主张，删掉“第一条说/下面的回复说”这类逐条转述，不重复长英文名，只留核心事实、改变结论的数字/条件与一个判断。核实程度有必要时用短语交代，不另写一段免责声明。禁止继续扩写。`
       : options.activeReply && options.activeReplyPriority !== 'must'
       ? '这是主动插话的压缩重写：最终只发 1 句、15～70 个汉字，最多 100 个汉字；留下一个关于事情本身的最有价值的信息或判断，不复述上下文，不挤兑群友。'
       : (options.shortChat
-        ? '这是普通群聊短答的压缩重写（默认群聊短答的压缩重写）：优先只发 1 句、约 15～70 个汉字，最多 2 句、不要超过 110 字。留下结论和一个最关键的依据/下一步，删掉背景复述、来源平铺和客套收尾。'
+        ? '这是普通群聊短答的压缩重写（默认群聊短答的压缩重写）：优先只发 1 句、约 15～55 个汉字，最多 2 句、不要超过 90 字。留下结论和一个最关键的依据/下一步，删掉背景复述、来源平铺和客套收尾。'
         : (options.compactResponse
         ? '这是默认群聊短答的压缩重写：只保留本轮新问的结论或操作，必要时补一个条件，最终 1～2 句、约 30～120 个汉字；不要平铺搜索来源，不重讲上一轮已解释的步骤，不攻击引用作者或提问者。'
         : (options.thinkingEnabled

@@ -34,7 +34,7 @@ test('画作赏析提示要求一个主体关系和一句话落点', async () =>
   });
   assert.equal(result.answer, '群体在麻木同行，唯独高墙上的脱队者在孤独思考蛙生。(¬◡¬)');
   assert.match(calls[0].additionalSystemPrompt, /一句话画面赏析/);
-  assert.match(calls[0].stableSystemPrompt, /15～60/);
+  assert.match(calls[0].stableSystemPrompt, /18～45/);
   assert.match(calls[0].stableSystemPrompt, /只抓一个最有画面感的主体关系/);
 });
 

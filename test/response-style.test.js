@@ -200,7 +200,7 @@ test('主动 may 插话要求单句短评，过长草稿会被风格复核拦截
   });
   assert.match(prompt, /机器人自己选择加入的主动插话/);
   assert.match(prompt, /最终只发 1 句/);
-  assert.match(prompt, /15～70 个汉字/);
+  assert.match(prompt, /15～55 个汉字/);
 
   const longDraft = `这段话没必要写这么长，蠢货。${'还在重复同一个结论'.repeat(12)}`;
   const reviewed = reviewNormalReply(longDraft, {
@@ -222,6 +222,27 @@ test('主动 may 插话要求单句短评，过长草稿会被风格复核拦截
     { activeReply: true, activeReplyPriority: 'may' },
   );
   assert.match(retryPrompt, /主动插话的压缩重写/);
+});
+
+test('画作赏析拦截清单式长句和模型自加的 @ 提问者', () => {
+  const prompt = buildNormalReplyPrompt({ artAppraisal: true, shortChat: true });
+  assert.match(prompt, /18～45 个汉字/);
+  assert.match(prompt, /不要在答案开头点名/);
+
+  const listed = reviewNormalReply(
+    '@真正的龙玉涛 光影、褶皱、纸纹都很到位，太极、月牙、十字架、红衣主教帽全挤在一起，像宗教展板打翻了还要开发布会。',
+    { artAppraisal: true, compactResponse: true, shortChat: true },
+  );
+  assert.ok(listed.issues.includes('too-long-for-chat'));
+  assert.ok(listed.issues.includes('art-appraisal-mentions-speaker'));
+  assert.ok(listed.issues.includes('art-appraisal-item-list'));
+
+  const concise = reviewNormalReply('一群蛙挤着赶路，墙顶那只已经提前退群了。', {
+    artAppraisal: true,
+    compactResponse: true,
+    shortChat: true,
+  });
+  assert.equal(concise.valid, true);
 });
 
 test('普通回复保留龙玉涛语感但不强制攻击任何参与者', () => {

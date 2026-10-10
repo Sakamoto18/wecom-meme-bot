@@ -548,7 +548,9 @@ export async function generateConversationReply(options) {
   const lowInformationImage = hasImageContext && imageInformationPolicy?.level === 'low_information';
   const responseMaxTokens = lowInformationImage
     ? 260
-    : (compactActiveReply ? 280 : (compactResponse ? 420 : 8_000));
+    : (artAppraisal
+      ? 180
+      : (compactActiveReply ? 280 : (compactResponse ? 420 : 8_000)));
   const webSearchStatus = buildWebSearchStatus({
     requested: imageSearch ? queries.length > 0
       : (useCurrentInformation || useMemeKnowledge || searchMode === 'general'),
@@ -847,6 +849,13 @@ export async function generateConversationReply(options) {
   answer = removeInternalReplyMetadata(
     attackStyle ? removeLiteralLatinMa(answer) : answer,
   ) || buildNormalReplyFallback();
+  if (artAppraisal) {
+    // QQ already shows the reply target. A model-added leading @mention is
+    // usually a copied prompt fragment and makes a one-line appraisal feel
+    // like a narrated report.
+    answer = answer.replace(/^\s*@[^\s\n，。！？!?：:]{1,40}\s*/u, '').trim()
+      || buildNormalReplyFallback();
+  }
   answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle);
   review = reviewNormalReply(answer, {
     ...dialogueReviewContext,
@@ -931,8 +940,13 @@ export async function generateConversationReply(options) {
     }
   }
 
+  const finalAnswer = artAppraisal
+    ? (String(answer ?? '')
+      .replace(/^\s*@[^\s\n，。！？!?：:]{1,40}\s*/u, '')
+      .trim() || buildNormalReplyFallback())
+    : answer;
   return {
-    answer: suppressUnrequestedSourceNotes(removeInternalParticipantIds(answer), currentQuestion, searchResult),
+    answer: suppressUnrequestedSourceNotes(removeInternalParticipantIds(finalAnswer), currentQuestion, searchResult),
     mode: requiredIdentityRole
       ? 'protected-identity'
       : (useLongtuKnowledge
