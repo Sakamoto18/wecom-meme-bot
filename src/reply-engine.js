@@ -33,6 +33,7 @@ import {
   ART_APPRAISAL_REPLY_PROMPT,
   IMAGE_MEANING_PROMPT,
   FORWARD_SUMMARY_PROMPT,
+  isImageEvaluationIntent,
 } from './image-reply-context.js';
 import { MENTION_INTENT_PROMPT, parseMentionIntent, shouldCheckMentionIntent } from './mention-intent.js';
 import { sourceDisplayPrompt, suppressUnrequestedSourceNotes } from './source-display.js';
@@ -495,12 +496,24 @@ export async function generateConversationReply(options) {
   const useCurrentInformation = !attackStyle && !useLongtuKnowledge
     && shouldSearchCurrentInformation(content);
   const imageSearch = Array.isArray(imageSearchQueries);
-  const queries = imageSearch ? imageSearchQueries.slice(0, 3) : [content];
+  const evaluationQuestion = [content, currentQuestion]
+    .filter(Boolean)
+    .join('\n');
+  // If QQ failed to attach the image payload, a phrase such as “评价这张图”
+  // must not fall through to the ordinary paid web-search path. Keep ordinary
+  // fact/opinion questions searchable; this guard only applies when the text
+  // itself clearly refers to an image-like object.
+  const imageEvaluationRequest = isImageEvaluationIntent(evaluationQuestion)
+    && /(?:图|图片|截图|照片|表情(?:包)?|画面|封面)/u.test(evaluationQuestion);
+  const queries = imageEvaluationRequest
+    ? []
+    : (imageSearch ? imageSearchQueries.slice(0, 3) : [content]);
   const searchMode = imageSearch ? 'general' : useLongtuKnowledge
     ? 'longtu'
     : (useCurrentInformation ? 'current' : 'general');
   const searchAttempted = Boolean(
     !attackStyle
+    && !imageEvaluationRequest
     && webSearchEnabled
     && webSearch
     && searchMode
@@ -558,8 +571,8 @@ export async function generateConversationReply(options) {
       ? 180
       : (compactActiveReply ? 280 : (compactResponse ? 420 : 8_000)));
   const webSearchStatus = buildWebSearchStatus({
-    requested: imageSearch ? queries.length > 0
-      : (useCurrentInformation || useMemeKnowledge || searchMode === 'general'),
+    requested: imageEvaluationRequest ? false : (imageSearch ? queries.length > 0
+      : (useCurrentInformation || useMemeKnowledge || searchMode === 'general')),
     mode: searchMode,
     enabled: webSearchEnabled,
     webSearchAvailable: Boolean(webSearch),

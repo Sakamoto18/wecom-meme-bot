@@ -67,6 +67,22 @@ test('无文字或纯情绪梗图和低密度图片一律不搜索', () => {
   assert.equal(isImageEvaluationIntent('找下这张截图的原帖'), false);
 });
 
+test('图片附件缺失时评价图片也不回退到通用联网搜索', async () => {
+  let searches = 0;
+  const result = await generateConversationReply({
+    content: '评价一下这张图片',
+    currentQuestion: '评价一下这张图片',
+    modelInput: '用户请求评价图片，但当前图片附件不可用',
+    hasImageContext: false,
+    webSearchEnabled: true,
+    webSearch: { async search() { searches += 1; throw new Error('must not search'); } },
+    chatClient: { isConfigured: true, async complete() { return '这句先不联网，没图就别硬评。'; } },
+  });
+  assert.equal(searches, 0);
+  assert.equal(result.searchAttempted, false);
+  assert.equal(result.answer, '这句先不联网，没图就别硬评。');
+});
+
 test('水印、账号名和互动计数不会伪装成高密度信息图', () => {
   const item = {
     description: 'B站视频截图，画面右上角有账号名和点赞数',
