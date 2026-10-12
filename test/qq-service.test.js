@@ -774,7 +774,7 @@ test('本地 OCR 结果作为待校对资料进入视觉模型提示词', async 
       isConfigured: true,
       async complete(_history, modelInput) {
         prompts.push(modelInput);
-        return '{"description":"聊天记录截图","visible_text":["预算已经批了"],"keywords":[],"scene":"群聊"}';
+        return '{"description":"聊天记录截图","visual_wordplay":"预算→预言","visible_text":["预算已经批了"],"keywords":[],"scene":"群聊"}';
       },
     },
   });
@@ -795,6 +795,8 @@ test('本地 OCR 结果作为待校对资料进入视觉模型提示词', async 
   assert.match(promptText, /周五复盘/);
   // OCR 是资料而非事实来源，提示词必须要求模型对照图片校正。
   assert.match(promptText, /以图片为准/);
+  assert.match(promptText, /visual_wordplay/);
+  assert.equal(analysis.items[0].visualWordplay, '预算→预言');
 });
 
 test('画作赏析使用主体关系取证，不复用通用图片缓存', async () => {
@@ -1259,6 +1261,55 @@ test('明确查原帖时用截图正文和引用文字补检索，不把视觉�
   assert.doesNotMatch(finalCall.input, /data:image/);
 });
 
+test('明确 @ 图片时最终回答保留原图，避免 OCR/截图文字误导视觉结论', async () => {
+  const png = (await createPng()).toString('base64');
+  const calls = [];
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push({ history, input, options });
+        if (options.usageSource === 'image-understanding') {
+          return JSON.stringify({
+            description: '截图文字称它是奶龙，但画面主体需要独立核对',
+            visual_subject: '黄色恐龙形象，视觉身份未确认',
+            visual_confidence: 'low',
+            text_claims: ['这个瘦巴巴的奶龙出自什么动漫啊？'],
+            visible_text: ['这个瘦巴巴的奶龙出自什么动漫啊？'],
+            keywords: ['角色出处'],
+            scene: '评论截图',
+            search_queries: [],
+            source_candidates: [],
+          });
+        }
+        return '先按画面核对，截图里的称呼不能直接当答案。';
+      },
+    },
+  });
+  const blocks = (await prepareImageBlocks({ imageBase64s: [png] })).blocks;
+  const result = await service.replyConversation(
+    {
+      chattype: 'group',
+      chatid: 'vision-direct-group',
+      from: { userid: 'vision-user', name: '提问者' },
+      text: { content: '这张图到底是什么' },
+    },
+    '这张图到底是什么',
+    '提问者',
+    { imageBlocks: blocks, directBotMention: true },
+  );
+  assert.equal(result.mode, 'model');
+  const finalCall = calls.find((call) => call.options.usageSource === 'conversation-reply');
+  assert.ok(finalCall);
+  assert.ok(Array.isArray(finalCall.input));
+  assert.equal(
+    finalCall.input.filter((part) => part.type === 'image_url').length,
+    1,
+  );
+  assert.match(finalCall.options.additionalSystemPrompt, /原图的像素观察为第一证据/);
+  assert.match(finalCall.options.additionalSystemPrompt, /图片文字主张/);
+});
+
 test('指定大型群的被动主动插话不联网，明确引用仍允许检索', async () => {
   let searches = 0;
   const { service } = createService({
@@ -1551,6 +1602,47 @@ test('相关成员画像和越过近期窗口的历史原文会按需注入回�
   assert.match(calls[0].modelInput, /按相关成员定位到的较早群聊原文/);
   assert.match(calls[0].modelInput, /我养了一只猫/);
   assert.match(calls[0].modelInput, /当前消息：你还记得我之前说过什么吗/);
+});
+
+test('普通当前话题不注入无关成员旧画像，避免把旧地点食物硬套成新梗', async () => {
+  const calls = [];
+  const conversationStore = {
+    recordGroupMember() {},
+    getGroupMemberAliases: () => ({}),
+    getGroupMemberMemories: () => [{
+      userId: 'u-memory',
+      speakerId: 'abc123',
+      name: '小蓝',
+      memory: '旧梗：总去龙华寺吃素面。',
+    }],
+    getGroupMemberHistory: () => [],
+    runExclusive: (_conversationId, task) => task(),
+    get: () => [],
+    getSummary: () => '',
+    appendExchange() {},
+    scheduleSummary: () => Promise.resolve(false),
+  };
+  const { service } = createService({
+    conversationStore,
+    chatClient: {
+      isConfigured: true,
+      async complete(history, modelInput, options) {
+        calls.push({ history, modelInput, options });
+        return '这事先看眼前的逻辑，别翻旧账。';
+      },
+    },
+  });
+  await service.handleMessage({
+    message_id: 'member-memory-unrelated-1',
+    message_type: 'group',
+    group_id: 'g-memory-unrelated',
+    user_id: 'u-memory',
+    sender_name: '小蓝',
+    text: '霸凌杀人犯的儿子怎么处理',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.doesNotMatch(calls[0].modelInput, /龙华寺|素面|相关群成员的独立持久画像/);
 });
 
 test('无关成员回复隔离其他人的受保护头衔并记录机器人当轮回复对象', async () => {

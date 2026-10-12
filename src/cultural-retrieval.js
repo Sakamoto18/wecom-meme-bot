@@ -11,6 +11,20 @@ const STOP_TERMS = new Set([
 const ATTACK_TERMS = /(?:攻击|挑衅|辱母|双亲|亲属|你妈|你🐎|死妈|老冯|族谱|户口本|嘴硬|龙怒|红温)/u;
 const CULTURE_TERMS = /(?:梗|反差|场景|双关|转职|职业|游戏|龙图|表情包|荒诞|语感|语境)/u;
 
+// These are reusable association directions rather than canned punchlines.
+// They give a model with weak internet priors a few semantic bridges from the
+// current turn, while leaving the wording and final image to the model.
+const ASSOCIATION_DIRECTION_RULES = [
+  { pattern: /(?:文字|大字|字样|字幕|标题|海报|遮住|挡住|看起来像|错字|拆字|谐音|图上)/u, direction: '字形错视、遮挡拆字、谐音或黑白幻视' },
+  { pattern: /(?:父亲|母亲|妈妈|爸爸|儿子|女儿|孩子|家人|亲属|家庭|族谱|户口|继承)/u, direction: '家庭售后、族谱关系、继承人或户口本现场' },
+  { pattern: /(?:霸凌|欺负|打人|杀人|凶手|犯罪|攻击|冲突|挨打|互殴)/u, direction: '副本战斗、竞技场、庭审或战斗状态' },
+  { pattern: /(?:寻找|失踪|找不到|消失|线索|踪迹|多年|儿子)/u, direction: '寻人启事、支线任务、失踪人口或悬案现场' },
+  { pattern: /(?:方案|项目|上线|部署|故障|报错|预算|甲方|客户|系统)/u, direction: '项目上线、客服工单、甲方验收或事故复盘' },
+  { pattern: /(?:吃|饭|面|炸鸡|处方|药|菜单|饥|饿|可乐)/u, direction: '菜单、处方、体检报告或食堂现场' },
+  { pattern: /(?:车|汽车|开路|驾驶|发动机|速度|亮|闪|灯|震撼)/u, direction: '车展发布会、驾驶副本、灯光事故或现场转职' },
+  { pattern: /(?:像什么|什么角色|评价|锐评|怎么看|接梗|抽象|离谱|反差|荒诞)/u, direction: '具体职业、游戏状态、影视角色或荒诞现场' },
+];
+
 function normalizeText(value) {
   return String(value ?? '')
     .normalize('NFKC')
@@ -49,6 +63,15 @@ function scoreLine(line, terms, options = {}) {
   if (options.attackDuringAnswer && ATTACK_TERMS.test(line)) score += 3;
   if (/^(?:公开资料来源|资料只用于)/u.test(line)) score -= 6;
   return score;
+}
+
+export function buildAssociationDirections(value) {
+  const text = normalizeText(value);
+  if (!text) return [];
+  return ASSOCIATION_DIRECTION_RULES
+    .filter((rule) => rule.pattern.test(text))
+    .map((rule) => rule.direction)
+    .slice(0, 3);
 }
 
 function compactLines(lines) {
@@ -90,6 +113,7 @@ export function buildCultureRecallContext(options = {}) {
     .filter((entry) => entry.score > 0)
     .sort((left, right) => right.score - left.score || left.index - right.index);
   const matches = compactLines(ranked.slice(0, MAX_RECALL_LINES).map((entry) => entry.line));
+  const associationDirections = buildAssociationDirections(`${content}\n${currentQuestion}`);
   const mode = options.attackStyle
     ? '当前是角色回击：优先召回龙图里的嘴硬、红温、辱亲属和荒诞画面语感。'
     : '当前是普通对话：优先召回贴合当前词语、动作或关系的反差、双关、转职和具体场景。';
@@ -103,6 +127,10 @@ export function buildCultureRecallContext(options = {}) {
     mode,
     attackRule,
     ...(matches.length > 0 ? [`召回素材：${matches.join('；')}`] : ['未命中具体素材，使用龙玉涛知识中的临场语感，不要退回客服腔。']),
+    ...(associationDirections.length > 0
+      ? [`当前语境的发散方向（不是答案，不要逐字照抄）：${associationDirections.join('；')}`]
+      : []),
+    '发散方向只用来帮助把当前细节转成一个新画面；优先抓本轮新出现的词、动作、关系或字形，禁止调用无关旧画像里的地点、食物和成员段子充数。',
     '把素材揉进最终短回复，不播报“召回、知识库、素材”或候选过程。',
   ].join('\n');
 

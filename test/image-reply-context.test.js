@@ -128,6 +128,28 @@ test('热词必须同时有上下文，单独出现在水印中不会触发搜�
   }).level, 'hot_topic');
 });
 
+test('明确正文或问题不因长度不足被归为低信息，未命中热词也不会伪装成热词', () => {
+  const policy = classifyImageInformation({
+    description: '社交平台评论截图，画面里有人询问角色出处',
+    visibleText: ['这个瘦巴巴的奶龙出自什么动漫啊？'],
+    keywords: ['角色出处', '评论截图'],
+    scene: '评论区',
+  });
+  assert.equal(policy.level, 'informative_clue');
+  assert.equal(policy.hotTopic, false);
+  assert.equal(policy.hotTopics, false);
+  assert.equal(policy.searchEligible, false);
+
+  const noTopic = classifyImageInformation({
+    description: '一段普通说明文字',
+    visibleText: ['这是一段包含具体事实和问题的普通说明文字，请判断是否准确。'],
+    keywords: ['普通说明'],
+    scene: '截图',
+  });
+  assert.notEqual(noTopic.level, 'hot_topic');
+  assert.equal(noTopic.hotTopic, false);
+});
+
 test('图片线索走真实搜索接口，结果进入自然解释提示，人格生成路径保留', async () => {
   const searches = [], modelCalls = [];
   const result = await generateConversationReply({

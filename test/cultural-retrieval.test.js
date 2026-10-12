@@ -45,6 +45,27 @@ test('没有本地知识时仍执行文化层，但不伪造具体梗出处', ()
   assert.match(result.prompt, /未命中具体素材/);
 });
 
+test('文化层根据当前语境提供可组合的发散方向，不把旧段子当答案', () => {
+  const result = buildCultureRecallContext({
+    content: '霸凌杀人犯的儿子还要找失踪多年的孩子',
+    currentQuestion: '怎么接这句话',
+    knowledgeContext: '',
+  });
+  assert.match(result.prompt, /家庭售后|族谱关系/);
+  assert.match(result.prompt, /副本战斗|庭审/);
+  assert.match(result.prompt, /寻人启事|支线任务/);
+  assert.match(result.prompt, /禁止调用无关旧画像/);
+});
+
+test('文化层识别遮挡文字的错视联想方向', () => {
+  const result = buildCultureRecallContext({
+    content: '尊字被人挡住后看起来像奠，怎么评价这张图',
+    currentQuestion: '这是什么梗',
+    knowledgeContext: '',
+  });
+  assert.match(result.prompt, /字形错视|遮挡拆字|黑白幻视/);
+});
+
 test('总结和受保护身份路径跳过文化素材注入', () => {
   assert.equal(buildCultureRecallContext({ content: '总结聊天', recordSummary: true }).used, false);
   assert.equal(buildCultureRecallContext({ content: '我是谁', requiredIdentityRole: '真龙王' }).used, false);

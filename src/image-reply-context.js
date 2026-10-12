@@ -17,6 +17,7 @@ const GENERIC_IMAGE_TERMS = new Set([
 const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|辟谣|谣言|真实吗|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景)/u;
 const IMAGE_EVALUATION_PATTERN = /(?:评价|点评|评一下|说说(?:这|该)?(?:张|幅)?图|怎么看(?:这|该)?(?:张|幅)?图|赏析|吐槽(?:一下)?(?:这|该)?(?:张|幅)?图|好不好看)/u;
 const IMAGE_INFORMATION_PATTERN = /(?:长文|文章|公告|新闻|论坛|帖子|评论区|聊天记录|对话|多格|漫画|表格|数据|图表|教程|报错|故障|说明书|规则|通知|投票|调查|对比|时间线)/u;
+const IMAGE_QUESTION_OR_CLAIM_PATTERN = /[?？]|(?:什么|哪个|哪种|谁|哪里|为何|为什么|怎么(?:样|办|回事)?|是否|是不是|能不能|可不可以|出处|来源|原帖|真假|真的|假的|原因|办法|建议|价格|时间|多少)/u;
 const UI_NOISE_PATTERN = /(?:点赞|评论|转发|收藏|播放|浏览|粉丝|关注|分享|登录|注册|首页|搜索|推荐|热门|账号|用户名|用户名称|up主|作者|发布于|在线|分钟前|小时前|昨天|第\s*\d+楼)/iu;
 
 const CURRENT_FILE = fileURLToPath(import.meta.url);
@@ -113,14 +114,26 @@ export function classifyImageInformation(item = {}) {
   const hasStructure = IMAGE_INFORMATION_PATTERN.test([
     item.description, item.scene, item.keywords?.join(' '),
   ].join(' '));
-  const hasHotTopic = hotTopicMatches(item);
+  const hasHotTopic = hotTopicMatches(item).length > 0;
   const dense = meaningful >= 100 && unique >= 25;
   const structured = visibleText.length >= 4 && meaningful >= 45 && unique >= 18 && hasStructure;
   const highDensity = dense || structured;
+  // A short screenshot can still contain the actual question or a concrete
+  // claim. Keep it out of the low-information bucket even when it is nowhere
+  // near the long-form/structured thresholds above. UI-only lines have already
+  // been removed by noiseFreeVisibleText, so a single substantive question is
+  // enough to preserve the normal image-answer path.
+  const hasSubstantiveText = (
+    (meaningful >= 10 && IMAGE_QUESTION_OR_CLAIM_PATTERN.test(text))
+    || (meaningful >= 18 && visibleText.length >= 2)
+    || (meaningful >= 16 && /[。！!；;：:]/u.test(text))
+  );
   return {
     level: highDensity
       ? 'high_density'
-      : (hasHotTopic && meaningful >= 24 ? 'hot_topic' : (specificClue ? 'informative_clue' : 'low_information')),
+      : (hasHotTopic && meaningful >= 24
+        ? 'hot_topic'
+        : (specificClue || hasSubstantiveText ? 'informative_clue' : 'low_information')),
     highDensity,
     hotTopic: hasHotTopic && meaningful >= 24,
     hotTopics: hasHotTopic,
@@ -132,7 +145,9 @@ export function classifyImageInformation(item = {}) {
       ? '正文密度或结构足够'
       : (hasHotTopic && meaningful >= 24
         ? '命中近期热词且有上下文'
-        : (specificClue ? '包含可核实的具体公开线索' : '低信息或仅含界面噪声')),
+        : (specificClue
+          ? '包含可核实的具体公开线索'
+          : (hasSubstantiveText ? '包含正文或明确问题' : '低信息或仅含界面噪声'))),
   };
 }
 
@@ -142,11 +157,15 @@ export function classifyImageAnalysis(analysis) {
   const highDensity = classifications.some(item => item.highDensity);
   const hotTopic = classifications.some(item => item.hotTopic);
   const specificClue = classifications.some(item => item.specificClue);
+  const informativeClue = classifications.some(item => item.level === 'informative_clue');
   const allLowInformation = classifications.length > 0 && classifications.every(item => item.level === 'low_information');
   return {
-    level: highDensity ? 'high_density' : (hotTopic ? 'hot_topic' : (specificClue ? 'informative_clue' : 'low_information')),
+    level: highDensity
+      ? 'high_density'
+      : (hotTopic ? 'hot_topic' : (informativeClue ? 'informative_clue' : 'low_information')),
     highDensity,
     hotTopic,
+    informativeClue,
     allLowInformation,
     items: classifications,
     searchEligible: highDensity || hotTopic || specificClue,
@@ -164,7 +183,7 @@ export function buildImageInformationPolicy(policy = {}, { explicitSearch = fals
     return '这张图命中近期热词且包含一定上下文。只核实与当前问题直接相关的热词背景，不要因为热词本身平铺搜索报告。';
   }
   if (policy.level === 'informative_clue') {
-    return '这张图包含可核实的具体公开线索。只围绕这条线索补充背景，不要把界面字段或搜索过程写成报告。';
+    return '这张图包含正文、明确问题或可核实线索。先按图片像素核对主体，再区分图片里的文字主张与视觉事实；只围绕当前问题补充背景，不要把界面字段或搜索过程写成报告。';
   }
   return '这张图达到高密度信息标准。优先提炼正文、数字、时间、条件和观点；只有当前问题确实需要外部背景时才联网。';
 }
@@ -244,6 +263,8 @@ export const FORWARD_SUMMARY_PROMPT = [
 export const IMAGE_MEANING_PROMPT = [
   '【本轮图片回答方式】',
   '保留龙玉涛知识里的嘴欠、反差和接梗语感，评论图中内容与事情本身；识图和总结不等于邀请攻击发图者、引用作者或提问者，除非当前用户明确要求，否则不顺带损这些人。',
+  '视觉核对优先于截图文字：图片里的标题、评论、字幕和提问可能只是别人提出的猜测或错误答案。先看原图主体，再回答文字问题；如果两者冲突，明确保留“文字声称什么”和“画面实际像什么”的区别，不要顺着文字硬认角色或出处。',
+  '遇到大字被人物、物件或阴影遮住的海报/截图，要额外检查遮挡后形成的错字、拆字、谐音、黑白幻视和视觉文字双关；把“原字”“遮挡后像什么”与“这层反差如何服务笑点”分开记录，不能只做 OCR 直读。',
   '先直接回答当前消息的具体问题，图片只是证据。除非用户明确要求“图里是什么”“描述一下”“识别图片”“逐张总结”或询问图片含义，否则不要主动描述画面、复述图片文字或解释图片是什么。用户问“怎么选/哪个/怎么办/是否”等选择题时，直接给选择或建议，再用图片中最相关的一点作依据。',
   '如果当前消息要求找原帖、查出处、核实真伪或补充某条回复，先给这件事的检索结论；找不到时只用一句话说明缺口和下一步。不要把“我读到了图片”“我只抓到界面证据”当成最终回答，更不要连续输出两段同义的免责声明。',
   '不要照抄内部的“图片描述 / 可见文字 / 关键词 / 场景”字段，也不要固定套“图片识别—联网结果—总结”的模板。用自然的群聊表达把含义、画面依据和必要背景连起来。',
