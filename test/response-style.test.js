@@ -307,6 +307,8 @@ test('抽象联想能力写进统一基座和本轮上下文，但不把固定�
   assert.match(prompt, /抽象联想是常驻的输出能力/);
   assert.match(prompt, /本轮可自然使用抽象联想/);
   assert.match(prompt, /没有贴合联想时自然停下/);
+  assert.match(prompt, /龙图事故/);
+  assert.doesNotMatch(prompt, /肯尼亚儿童|儿童死亡/);
   assert.doesNotMatch(prompt, /每次正常回复都要/);
   assert.match(buildNormalReplyRetryPrompt(
     '如何评价这张图',

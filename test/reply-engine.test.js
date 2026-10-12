@@ -4,7 +4,7 @@ import { generateConversationReply } from '../src/reply-engine.js';
 
 test('普通评价不输出检索媒体尾注，明确追问出处时保留', async () => {
   const draft='请三天（3天年假）连休13天（新京报）。';
-  for(const [currentQuestion,expected] of [['如何评价请三休十三','请三天（3天年假）连休13天。'],['来源呢',draft]]) {
+  for(const [currentQuestion,expected] of [['如何评价请三休十三',draft],['来源呢',draft]]) {
     const result=await generateConversationReply({
       content:currentQuestion,currentQuestion,modelInput:currentQuestion,
       history:[{role:'user',content:'上次给我看来源'}],
@@ -12,7 +12,65 @@ test('普通评价不输出检索媒体尾注，明确追问出处时保留', as
       chatClient:{isConfigured:true,async complete(){return draft;}},
     });
     assert.equal(result.answer,expected);
+    assert.equal(result.searchAttempted, currentQuestion === '来源呢');
   }
+});
+
+test('普通闲聊不默认搜索，文化问题只走文化轨', async () => {
+  let searchCalls = 0;
+  const complete = async () => '先接一句，别把闲聊写成百科。';
+  const webSearch = { async search() { searchCalls += 1; return { context: '', resultCount: 0 }; } };
+  const idle = await generateConversationReply({
+    content: '你好', modelInput: '你好', webSearch, webSearchEnabled: true,
+    chatClient: { isConfigured: true, complete },
+  });
+  assert.equal(idle.searchAttempted, false);
+  assert.equal(idle.searchGateReason, 'no-search-intent');
+  assert.equal(searchCalls, 0);
+
+  const culture = await generateConversationReply({
+    content: '这是什么网络梗', modelInput: '这是什么网络梗', webSearch, webSearchEnabled: true,
+    chatClient: { isConfigured: true, complete },
+  });
+  assert.equal(culture.factSearchAttempted, false);
+  assert.equal(culture.cultureSearchAttempted, true);
+  assert.equal(searchCalls, 1);
+});
+
+test('事实和文化意图会并行检索，文化结果只注入短卡', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '这个网络梗的来源和原帖是什么',
+    modelInput: '这个网络梗的来源和原帖是什么',
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        calls.push({ query, options });
+        return options.mode === 'current' || options.mode === 'general'
+          ? {
+            context: '事实摘要：公开页面记录了该梗的传播时间。', resultCount: 1,
+            results: [{ title: '原帖记录', description: '传播时间与原帖线索', url: 'https://example.com/fact' }],
+          }
+          : {
+            context: '文化摘要：进入女鬼电梯后，通过双关转职成亡灵骑士。', resultCount: 1,
+            results: [{ title: '女鬼电梯语境', description: '通过双关转职成亡灵骑士。', url: 'https://example.com/culture' }],
+          };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        assert.match(options.additionalSystemPrompt, /本轮文化检索短卡/);
+        assert.match(options.additionalSystemPrompt, /后台互联网素材/);
+        assert.doesNotMatch(options.additionalSystemPrompt, /文化摘要：进入女鬼电梯/);
+        return '原帖线索要再核对，别把传播摘要当判决书。';
+      },
+    },
+  });
+  assert.equal(result.factSearchAttempted, true);
+  assert.equal(result.cultureSearchAttempted, true);
+  assert.equal(result.searchAttempted, true);
+  assert.equal(calls.length, 2);
 });
 
 test('搜索素材只在后台消化，搜索播报初稿会按短答重写', async () => {
@@ -147,7 +205,7 @@ test('技术问题允许内部推理，但正确短答不自动扩写', async ()
   assert.equal(result.review.valid, true);
 });
 
-test('默认长草稿压缩成短答，保留检索证据和连续对话上下文', async () => {
+test('默认长草稿压缩成短答，普通追问不额外消耗搜索额度', async () => {
   const history = [{role: 'user', content: '详细介绍千兆交换机'}, {role: 'assistant', content: '五口交换机即可连接四台设备。'}];
   const calls = [];
   const answer = '五口就够了，四台设备占四口，最后一口接路由器。';
@@ -164,8 +222,9 @@ test('默认长草稿压缩成短答，保留检索证据和连续对话上下�
   assert.deepEqual(calls[0].h, history);
   assert.deepEqual(calls[1].h, history);
   assert.equal(result.detailedAnswerRequested, false);
-  assert.match(calls[1].o.additionalSystemPrompt, /厂商资料/);
+  assert.doesNotMatch(calls[1].o.additionalSystemPrompt, /厂商资料/);
   assert.match(calls[1].o.revisionSystemPrompt, /默认群聊短答的压缩重写/);
+  assert.equal(result.searchAttempted, false);
   assert.equal(result.review.valid, true);
 });
 
@@ -469,7 +528,7 @@ test('纯攻击中的孤立 ma 会触发一次模型重写', async () => {
   assert.doesNotMatch(result.answer, /(?:^|[^a-z])ma(?:$|[^a-z])/i);
 });
 
-test('普通闲聊保留通用联网，正常答案不因缺少骂人词而重写', async () => {
+test('普通闲聊不默认联网，正常答案不因缺少骂人词而重写', async () => {
   let modelCalls = 0;
   let searchCalls = 0;
   const result = await generateConversationReply({
@@ -503,11 +562,11 @@ test('普通闲聊保留通用联网，正常答案不因缺少骂人词而重�
   });
 
   assert.equal(result.answer, '普通模型答案');
-  assert.equal(result.mode, 'web-knowledge');
+  assert.equal(result.mode, 'model');
   assert.equal(modelCalls, 1);
-  assert.equal(searchCalls, 1);
-  assert.equal(result.searchAttempted, true);
-  assert.equal(result.searchMode, 'general');
+  assert.equal(searchCalls, 0);
+  assert.equal(result.searchAttempted, false);
+  assert.equal(result.searchMode, '');
   assert.equal(result.normalPersonaRewritten, false);
   assert.equal(result.normalPersonaFallback, false);
   assert.equal(result.review.valid, true);
@@ -571,7 +630,7 @@ test('普通问题中的未授权亲属攻击会被删除', async () => {
   assert.doesNotMatch(result.answer, /你🐎|你的🐎/u);
 });
 
-test('未命中专用规则的评价问题会先通用联网再按人格回答', async () => {
+test('未命中事实或文化意图的评价问题不默认联网', async () => {
   const searchCalls = [];
   const modelCalls = [];
   const result = await generateConversationReply({
@@ -601,16 +660,14 @@ test('未命中专用规则的评价问题会先通用联网再按人格回答',
     },
   });
 
-  assert.equal(result.mode, 'web-knowledge');
-  assert.equal(result.searchAttempted, true);
-  assert.equal(result.searchMode, 'general');
-  assert.equal(searchCalls.length, 1);
-  assert.equal(searchCalls[0].options.mode, 'general');
-  assert.match(modelCalls[0].options.additionalSystemPrompt, /通用联网检索摘要/);
-  assert.doesNotMatch(result.answer, /example\.com/);
+  assert.equal(result.mode, 'model');
+  assert.equal(result.searchAttempted, false);
+  assert.equal(result.searchMode, '');
+  assert.equal(searchCalls.length, 0);
+  assert.ok(modelCalls.length >= 1);
 });
 
-test('复合热门话题不因“是什么梗”被限制为 meme 搜索', async () => {
+test('复合热门话题进入文化搜索轨', async () => {
   const searchCalls = [];
   const result = await generateConversationReply({
     content: '竹知了和玄武之声到底是什么梗',
@@ -636,9 +693,9 @@ test('复合热门话题不因“是什么梗”被限制为 meme 搜索', async
   });
 
   assert.equal(result.mode, 'web-knowledge');
-  assert.equal(result.searchMode, 'general');
+  assert.equal(result.searchMode, 'meme');
   assert.equal(searchCalls.length, 1);
-  assert.equal(searchCalls[0].options.mode, 'general');
+  assert.equal(searchCalls[0].options.mode, 'meme');
   assert.doesNotMatch(result.answer, /sina\.com\.cn/);
 });
 
@@ -800,7 +857,7 @@ test('截图中的无实质请求艾特先判意图，同次生成回怼且不�
   assert.match(calls[0].options.cachePrefixSystemPrompt,/龙玉涛角色知识/);
 });
 
-test('有上下文的简短追问、检查失败或格式错误都保留正常回答与搜索', async () => {
+test('有上下文的简短追问、检查失败或格式错误仍保留正常回答但不默认搜索', async () => {
   for (const decision of ['{"kind":"continue"}','不是 JSON',new Error('timeout')]) {
     let searches=0;
     const calls=[];
@@ -810,9 +867,10 @@ test('有上下文的简短追问、检查失败或格式错误都保留正常�
       webSearch:{async search(){searches++;return {context:'产品资料：五个千兆网口',resultCount:1};}},
       chatClient:{isConfigured:true,async complete(h,input,options){calls.push(options);if(calls.length===1){if(decision instanceof Error)throw decision;return decision;}return '五口正好够，四台设备加一个上联。';}},
     });
-    assert.equal(result.mode,'web-knowledge');
+    assert.equal(result.mode,'model');
     assert.equal(result.answer,'五口正好够，四台设备加一个上联。');
-    assert.equal(searches,1);
+    assert.equal(searches,0);
+    assert.equal(result.searchAttempted,false);
     assert.equal(calls.length,2);
     assert.equal(result.attempts,2);
     assert.equal(calls[0].cachePrefixSystemPrompt,calls[1].cachePrefixSystemPrompt);
@@ -1073,7 +1131,7 @@ test('询问龙图出处时使用本地知识和专用联网摘要', async () =>
   assert.match(calls[0].options.additionalSystemPrompt, /本轮联网摘要/);
 });
 
-test('网络梗问题也使用通用信息检索，含攻击词的释义问题不会误走对线', async () => {
+test('网络梗问题走文化检索，含攻击词的释义问题不会误走对线', async () => {
   const modelCalls = [];
   const searchCalls = [];
   const result = await generateConversationReply({
@@ -1105,10 +1163,10 @@ test('网络梗问题也使用通用信息检索，含攻击词的释义问题�
 
   assert.equal(result.mode, 'web-knowledge');
   assert.equal(result.searchAttempted, true);
-  assert.equal(result.searchMode, 'general');
+  assert.equal(result.searchMode, 'meme');
   assert.equal(searchCalls.length, 1);
-  assert.equal(searchCalls[0].options.mode, 'general');
-  assert.match(modelCalls[0].options.additionalSystemPrompt, /通用联网检索摘要/);
+  assert.equal(searchCalls[0].options.mode, 'meme');
+  assert.match(modelCalls[0].options.additionalSystemPrompt, /文化检索短卡|文化检索状态/);
 });
 
 test('通用信息检索无结果时要求模型明确标注未联网核实', async () => {

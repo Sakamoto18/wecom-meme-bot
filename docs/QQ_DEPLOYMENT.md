@@ -258,6 +258,9 @@ WEB_SEARCH_CURRENT_CACHE_TTL_MS=900000
 WEB_SEARCH_GENERAL_CACHE_TTL_MS=21600000
 WEB_SEARCH_MEME_CACHE_TTL_MS=43200000
 WEB_SEARCH_LONGTU_CACHE_TTL_MS=86400000
+QQ_CULTURE_CACHE_DATABASE_FILE=data/qq-culture.sqlite
+QQ_CULTURE_CACHE_TTL_DAYS=30
+QQ_CULTURE_CACHE_MAX_ENTRIES=2000
 ```
 
 Bridge 插件默认在北京时间每天 09:00，把上一自然日的群用量排行私聊发送给 `.env.qq` 中的 `LONGTU_QQ_USAGE_REPORT_USERS`。日报收件人和超管权限完全分离：加入收件人列表不会获得图库管理、`/stop` 或手动触发日报的权限。日报包含群名和群号、原始/折算 Token、LLM 输入缓存率、真实搜索与缓存命中率、主要消耗环节和拦截次数；还会显示首次回复数、二次风格复核数、复核放大率，以及节流跳过次数和基于该群最近复核均值估算的 Token/金额节省。发送时间可在 AstrBot 的“龙图 QQ Bridge”插件配置中调整；Node 的 `GET /v1/qq/usage` 接口使用与消息接口相同的 Bearer Token，不对公网开放。

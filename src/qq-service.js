@@ -1548,6 +1548,7 @@ export class QqBotService {
     this.memeStore = options.memeStore;
     this.webSearch = options.webSearch;
     this.webSearchEnabled = options.webSearchEnabled ?? true;
+    this.cultureCache = options.cultureCache ?? null;
     // Some large groups generate a high volume of passive “read the air”
     // replies. Keep their normal replies, but do not let those observations
     // spend search quota; direct @/quote requests remain eligible.
@@ -2648,6 +2649,7 @@ export class QqBotService {
         passiveImageComment: options.passiveImageComment === true,
         imageSearchQueries,
         imageSearchPlan,
+        explicitImageSearch,
         imageInformationPolicy,
         imageInformationPrompt,
         artAppraisal,
@@ -2664,6 +2666,7 @@ export class QqBotService {
         requiredIdentityRole,
         chatClient: this.chatClient,
         webSearch: this.webSearch,
+        cultureCache: this.cultureCache,
         webSearchEnabled: this.searchEnabledForMessage(message, {
           activeReply: options.activeReply === true,
           directBotMention: options.directBotMention === true,
@@ -2754,6 +2757,15 @@ export class QqBotService {
           `QQ 联网检索（${generated.searchMode}）：${generated.searchResult.resultCount} 条`
           + `，来源=${sourceDomain}`
           + (generated.searchResult.fromCache ? '（缓存）' : ''),
+        );
+      }
+      if (generated.searchPolicy) {
+        this.logger.log?.(
+          `QQ 搜索资格门：${generated.searchGateReason || generated.searchPolicy.reason}`
+          + `，fact=${generated.factSearchAttempted ? 'on' : 'off'}`
+          + `，culture=${generated.cultureSearchAttempted ? 'on' : 'off'}`
+          + `，culture_cache=${generated.cultureCacheHit ? 'hit' : 'miss'}`
+          + `，culture_card=${generated.cultureCardUsed ? 'yes' : 'no'}`,
         );
       }
 

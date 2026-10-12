@@ -27,6 +27,7 @@ import { MediaUsageTracker } from './media-usage-tracker.js';
 import { createXhsProvider } from './xhs-provider.js';
 import { createDouyinProvider } from './douyin-provider.js';
 import { createBilibiliSessionProvider } from './bilibili-session-provider.js';
+import { CultureCache } from './culture-cache.js';
 
 // DeepSeek Vision's inline request limit is 48 MiB. Keep the bridge/API
 // aligned with that limit so multi-image payloads are not rejected locally.
@@ -553,6 +554,16 @@ export async function createQqRuntime() {
       process.env.WEB_SEARCH_EXA_MAX_CONTENT_CHARACTERS,
     ),
   });
+  const cultureCache = new CultureCache({
+    databaseFilePath: path.resolve(
+      projectRoot,
+      process.env.QQ_CULTURE_CACHE_DATABASE_FILE?.trim() || 'data/qq-culture.sqlite',
+    ),
+    ttlMs: (parsePositiveNumber(process.env.QQ_CULTURE_CACHE_TTL_DAYS) ?? 30)
+      * 24 * 60 * 60 * 1000,
+    maxEntries: parsePositiveInteger(process.env.QQ_CULTURE_CACHE_MAX_ENTRIES) ?? 2_000,
+    logger: console,
+  });
 
   const promptPath = path.resolve(
     projectRoot,
@@ -742,6 +753,7 @@ export async function createQqRuntime() {
     memeStore,
     webSearch: usageTracker.wrapWebSearch(webSearch),
     webSearchEnabled,
+    cultureCache,
     knowledgeContext,
     memberAliases,
     longtuLibrary,
@@ -886,6 +898,7 @@ export async function createQqRuntime() {
     longtuLibrary,
     memberAliases,
     webSearch,
+    cultureCache,
     usageTracker,
     mediaUsageTracker,
     mediaResolver,
@@ -935,6 +948,7 @@ export async function startQqApi() {
         model_configured: runtime.chatClient.isConfigured,
         web_search_enabled: runtime.webSearchEnabled,
         web_search_provider: runtime.webSearch.provider,
+        culture_cache: runtime.cultureCache.getStats(),
         active_reply_enabled: runtime.activeReplyEnabled,
         repeat_enabled: runtime.repeatEnabled,
         peer_bot_context_gate_enabled: runtime.peerBotContextGateEnabled,
@@ -960,8 +974,9 @@ export async function startQqApi() {
     ? `QQ 普通对话已启用：${runtime.chatClient.model}`
     : 'QQ 普通对话未启用：缺少大模型配置');
   console.log(runtime.webSearchEnabled
-    ? `QQ 联网检索已启用：${runtime.webSearch.provider}；普通模型回复默认先检索，其余查询走 general 模式`
+    ? `QQ 联网检索已启用：${runtime.webSearch.provider}；已启用事实/文化资格门，普通闲聊不默认搜索`
     : 'QQ 联网检索已关闭');
+  console.log('QQ 文化短卡缓存已启用：独立 SQLite + FTS5');
   console.log(runtime.activeReplyEnabled
     ? 'QQ 群主动回复已启用：语义续聊 / 具体帮助 / 可选插话 + 热度与退场判定，回复仍走现有 Node 引擎'
     : 'QQ 群主动回复已关闭');
@@ -986,6 +1001,7 @@ export async function startQqApi() {
     runtime.usageTracker.close();
     runtime.mediaUsageTracker.close();
     runtime.mediaResolver.close();
+    runtime.cultureCache.close();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
