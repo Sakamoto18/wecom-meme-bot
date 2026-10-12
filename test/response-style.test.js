@@ -290,6 +290,7 @@ test('普通正经回答也明确要求带事情本身的贫嘴口吻', () => {
 test('抽象联想只认可具体角色或画面，不把抽象情绪词当成联想', () => {
   assert.equal(hasAbstractAssociation('这已经转职成亡灵骑士了。'), true);
   assert.equal(hasAbstractAssociation('这人直接进入 NPC 模式。'), true);
+  assert.equal(hasAbstractAssociation('一个负责发疯，一个负责补刀，配合得挺默契。'), true);
   assert.equal(hasAbstractAssociation('这事有点抽象，绷不住了。'), false);
   assert.equal(hasAbstractAssociation('这就是个问题。'), false);
   assert.equal(shouldRequestAbstractAssociation('如何评价这张图', { hasImageContext: true }), true);
