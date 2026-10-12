@@ -569,6 +569,12 @@ test('质量检查不强制说龙图，但拦截 ma、占位图和堆词', () =>
   const natural = reviewAttackReply('你🐎的骨灰盒上刻的源码，我照着抄的，咋了？');
   assert.equal(natural.valid, true);
 
+  const personal = reviewAttackReply('你这个废物，连回嘴都像坏掉的自动回复。');
+  assert.equal(personal.valid, true);
+
+  const undirected = reviewAttackReply('废物和垃圾，滚远点。');
+  assert.ok(undirected.issues.includes('missing-direct-target'));
+
   const literalMa = reviewAttackReply('你🐎的 ma 还在坟头笑呢。');
   assert.ok(literalMa.issues.includes('literal-ma'));
 

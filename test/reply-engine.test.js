@@ -47,6 +47,41 @@ test('搜索素材只在后台消化，搜索播报初稿会按短答重写', as
   assert.equal(result.review.valid, true);
 });
 
+test('普通回复和直接回击都经过龙图文化召回层', async () => {
+  const knowledgeContext = [
+    '- 龙图的笑点来自同一张脸在不同模板里的强烈反差和群聊斗图语境。',
+    '- 龙图攻击性的典型来源是荒诞化的辱母和亲属斗图表达，只能作为虚构梗语境输出。',
+  ].join('\n');
+  const normalCalls = [];
+  const normal = await generateConversationReply({
+    content: '这个方案太离谱了',
+    modelInput: '这个方案太离谱了',
+    knowledgeContext,
+    webSearchEnabled: false,
+    chatClient: { isConfigured: true, async complete(history, input, options) {
+      normalCalls.push(options);
+      return '这方案像拿胶带修发动机，能动不代表能跑。';
+    } },
+  });
+  assert.equal(normal.cultureRecallUsed, true);
+  assert.match(normalCalls[0].additionalSystemPrompt, /龙图文化召回/);
+
+  const attackCalls = [];
+  const attack = await generateConversationReply({
+    content: '你这个废物',
+    modelInput: '你这个废物',
+    knowledgeContext,
+    webSearchEnabled: false,
+    chatClient: { isConfigured: true, async complete(history, input, options) {
+      attackCalls.push(options);
+      return '你这个废物，连回嘴都得翻族谱找模板。';
+    } },
+  });
+  assert.equal(attack.cultureRecallUsed, true);
+  assert.match(attackCalls[0].additionalSystemPrompt, /攻击性优先级高于解释腔|龙图文化召回/);
+  assert.equal(attack.review.valid, true);
+});
+
 test('图片评价开启抽象联想层，初稿缺少具体联想时复用现有复核调用补齐', async () => {
   const calls = [];
   const result = await generateConversationReply({

@@ -38,6 +38,7 @@ import {
   isImageEvaluationIntent,
 } from './image-reply-context.js';
 import { MENTION_INTENT_PROMPT, parseMentionIntent, shouldCheckMentionIntent } from './mention-intent.js';
+import { buildCultureRecallContext } from './cultural-retrieval.js';
 import {
   requestsSourceDisplay,
   sourceDisplayPrompt,
@@ -313,6 +314,22 @@ export async function generateConversationReply(options) {
     personaContext,
   ].filter(Boolean).join('\n\n');
 
+  const attackStyle = !recordSummary && shouldUseAttackStyle(content, history, {
+    ...interactionContext,
+    activeReply,
+    hasImageContext,
+    hasQuotedContent,
+  });
+  const cultureRecall = buildCultureRecallContext({
+    content,
+    currentQuestion,
+    knowledgeContext,
+    attackStyle: Boolean(attackStyle || pureBotMention),
+    attackDuringAnswer: Boolean(attackStyle && activeReply),
+    recordSummary,
+    requiredIdentityRole,
+  });
+
   if (!chatClient?.isConfigured) {
     throw new Error('普通对话服务还没配好');
   }
@@ -325,6 +342,7 @@ export async function generateConversationReply(options) {
         protectedIdentityContext,
         memoryContext,
         personaContext,
+        cultureRecall.prompt,
         buildPureMentionReplyPrompt(),
       ].filter(Boolean).join('\n\n'),
       maxTokens: 120,
@@ -354,16 +372,11 @@ export async function generateConversationReply(options) {
       thinkingFallback: false,
       seriousAnswerExpanded: false,
       pureMentionFallback,
+      cultureRecallUsed: cultureRecall.used,
       usedModel: true,
     };
   }
 
-  const attackStyle = !recordSummary && shouldUseAttackStyle(content, history, {
-    ...interactionContext,
-    activeReply,
-    hasImageContext,
-    hasQuotedContent,
-  });
   let mentionIntentAttempts = 0;
   if (shouldCheckMentionIntent(currentQuestion, {
     directBotMention, hasImageContext, hasQuotedContent, recordSummary,
@@ -400,6 +413,7 @@ export async function generateConversationReply(options) {
           searchResult: emptySearchResult(), searchError: null,
           searchAttempted: false, searchMode: '', thinkingEnabled: false,
           thinkingFallback: false, seriousAnswerExpanded: false, usedModel: true,
+          cultureRecallUsed: cultureRecall.used,
         };
       }
     }
@@ -422,6 +436,7 @@ export async function generateConversationReply(options) {
         protectedIdentityContext,
         memoryContext,
         personaContext,
+        cultureRecall.prompt,
         buildAttackPrompt(content, {
           history,
           attackScene: firstScene,
@@ -433,7 +448,12 @@ export async function generateConversationReply(options) {
       usageSource: activeReply ? 'active-reply' : 'attack-reply',
       thinking: { type: 'disabled' },
     });
-    const firstReview = reviewAttackReply(firstDraft, { history });
+    const attackReviewOptions = {
+      history,
+      targetLabels: interactionContext.targetLabels,
+      interactionContext,
+    };
+    const firstReview = reviewAttackReply(firstDraft, attackReviewOptions);
     let answer = firstDraft;
     let review = firstReview;
     let attempts = 1;
@@ -449,6 +469,7 @@ export async function generateConversationReply(options) {
           protectedIdentityContext,
           memoryContext,
           personaContext,
+          cultureRecall.prompt,
           buildAttackRetryPrompt(
             content,
             firstDraft,
@@ -465,7 +486,7 @@ export async function generateConversationReply(options) {
         usageSource: activeReply ? 'active-reply-retry' : 'attack-reply-retry',
         thinking: { type: 'disabled' },
       });
-      const secondReview = reviewAttackReply(secondDraft, { history });
+      const secondReview = reviewAttackReply(secondDraft, attackReviewOptions);
       attempts = 2;
 
       if (secondReview.issues.length <= firstReview.issues.length) {
@@ -478,7 +499,7 @@ export async function generateConversationReply(options) {
       removeInternalReplyMetadata(removeInternalParticipantIds(removeLiteralLatinMa(answer))),
       forbiddenProtectedRoleTerms,
     ) || buildNormalReplyFallback();
-    review = reviewAttackReply(answer, { history });
+    review = reviewAttackReply(answer, attackReviewOptions);
 
     return {
       answer,
@@ -490,6 +511,7 @@ export async function generateConversationReply(options) {
       searchError: null,
       searchAttempted: false,
       searchMode: '',
+      cultureRecallUsed: cultureRecall.used,
       usedModel: true,
     };
   }
@@ -662,6 +684,7 @@ export async function generateConversationReply(options) {
       ? '本轮没有合适的公开检索线索或用户要求不联网，未进行图片联网查询；按可见证据回答当前问题，不要声称已搜索，也不必为了说明没搜索而另起一段。' : '',
     protectedIdentityContext,
     memoryContext,
+    cultureRecall.prompt,
     buildNormalReplyContextPrompt(normalPromptOptions),
     buildProtectedSelfIdentityPrompt(requiredIdentityRole),
     webSearchStatus,
@@ -1059,6 +1082,7 @@ export async function generateConversationReply(options) {
     artAppraisal,
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
+    cultureRecallUsed: cultureRecall.used,
     activeReply,
     seriousAnswerExpanded,
     normalPersonaRewritten,
