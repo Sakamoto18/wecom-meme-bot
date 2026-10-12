@@ -4,6 +4,7 @@ import {
   buildAttackPrompt,
   buildNormalReplyPrompt,
   buildNormalReplyStablePrompt,
+  buildGroupChatOutputPrompt,
   buildNormalReplyRetryPrompt,
   buildNormalReplyFallback,
   buildProtectedIdentityFallback,
@@ -20,6 +21,7 @@ import {
   removeInternalParticipantIds,
   reviewAttackReply,
   reviewNormalReply,
+  hasSearchExplanationLeak,
   selectAttackScene,
   shouldSearchLongtuKnowledge,
   shouldSearchMemeKnowledge,
@@ -170,6 +172,19 @@ test('正经问题开启思考，攻击和简单闲聊保持快速模式', () =>
   assert.equal(shouldUseThinking('你妈死了'), false);
 });
 
+test('群聊评价和选择默认保持短答，明确分析要求仍可开启思考', () => {
+  for (const content of [
+    '明总如何评价',
+    '这个方案如何选择',
+    '这两个哪个好',
+    '怎么看这张图',
+  ]) assert.equal(shouldUseThinking(content), false, content);
+  for (const content of [
+    '这个方案如何选择，详细比较优缺点',
+    '怎么看这个部署方案，请解释原理和步骤',
+  ]) assert.equal(shouldUseThinking(content), true, content);
+});
+
 test('正经问答提示不受群聊短句限制，并检测内容单薄的答案', () => {
   const prompt = buildNormalReplyPrompt({ thinkingEnabled: true, detailedAnswerRequested: true });
   assert.match(prompt, /完整不等于冗长/);
@@ -288,9 +303,9 @@ test('抽象联想只认可具体角色或画面，不把抽象情绪词当成�
 
 test('抽象联想能力写进统一基座和本轮上下文，但不把固定梗当成必答模板', () => {
   const prompt = buildNormalReplyPrompt({ abstractAssociationRequested: true });
-  assert.match(prompt, /抽象联想是常驻的角色能力/);
+  assert.match(prompt, /抽象联想是常驻的输出能力/);
   assert.match(prompt, /本轮可自然使用抽象联想/);
-  assert.match(prompt, /没有贴合的就停在结论/);
+  assert.match(prompt, /没有贴合联想时自然停下/);
   assert.doesNotMatch(prompt, /每次正常回复都要/);
   assert.match(buildNormalReplyRetryPrompt(
     '如何评价这张图',
@@ -298,6 +313,30 @@ test('抽象联想能力写进统一基座和本轮上下文，但不把固定�
     ['missing-abstract-association'],
     { abstractAssociationReviewRequired: true },
   ), /自然接一个具体/);
+});
+
+test('统一群聊输出契约要求先接话并隐藏搜索播报', () => {
+  const prompt = buildGroupChatOutputPrompt({});
+  assert.match(prompt, /先像熟悉的群友开口/);
+  assert.match(prompt, /后台互联网素材只能被消化/);
+  assert.match(prompt, /禁止输出“根据搜索结果”/);
+  assert.match(prompt, /保持当前角色人格和现有短回复长度/);
+  assert.match(buildGroupChatOutputPrompt({ sourceDisplayRequested: true }), /只列必要且真实存在的来源/);
+  assert.doesNotMatch(buildGroupChatOutputPrompt({ sourceDisplayRequested: true }), /禁止输出“根据搜索结果”/);
+  assert.equal(buildGroupChatOutputPrompt({ recordSummary: true }), '');
+});
+
+test('搜索解释泄漏只拦截后台播报，明确要求出处时不拦截', () => {
+  assert.equal(hasSearchExplanationLeak('根据搜索结果，这个梗已经流行很久了。'), true);
+  assert.equal(hasSearchExplanationLeak('这电梯直接转职成亡灵骑士了。'), false);
+  assert.equal(reviewNormalReply('根据搜索结果，这个梗已经流行很久了。', {
+    searchEvidenceAvailable: true,
+    suppressSearchNarration: true,
+  }).issues.includes('search-explanation-leak'), true);
+  assert.equal(reviewNormalReply('根据搜索结果，这个梗已经流行很久了。', {
+    searchEvidenceAvailable: true,
+    suppressSearchNarration: false,
+  }).issues.includes('search-explanation-leak'), false);
 });
 
 test('普通回复质量复核要求角色钩子但不把角色钩子等同于骂人', () => {

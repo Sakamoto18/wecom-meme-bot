@@ -15,6 +15,38 @@ test('普通评价不输出检索媒体尾注，明确追问出处时保留', as
   }
 });
 
+test('搜索素材只在后台消化，搜索播报初稿会按短答重写', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '如何评价这个网络热梗',
+    currentQuestion: '如何评价这个网络热梗',
+    modelInput: '如何评价这个网络热梗',
+    webSearch: {
+      async search() {
+        return {
+          context: '公开网页提到这个梗在电梯女鬼语境里流传。',
+          resultCount: 1,
+        };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push({ history, input, options });
+        return calls.length === 1
+          ? '根据搜索结果，这个梗指的是一种网络表达。'
+          : '这电梯直接转职成亡灵骑士了。';
+      },
+    },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].options.additionalSystemPrompt, /后台互联网素材/);
+  assert.match(calls[1].options.revisionSystemPrompt, /删除搜索播报/);
+  assert.equal(result.answer, '这电梯直接转职成亡灵骑士了。');
+  assert.equal(result.review.valid, true);
+});
+
 test('图片评价开启抽象联想层，初稿缺少具体联想时复用现有复核调用补齐', async () => {
   const calls = [];
   const result = await generateConversationReply({
