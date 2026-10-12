@@ -2082,6 +2082,35 @@ test('peer Bot 明确艾特不会开启真人接管窗口', async () => {
   assert.equal(engagementOpens, 0);
 });
 
+test('peer Bot 未直接艾特或引用本 Bot 时只观察，不自动接话', async () => {
+  let replyCalls = 0;
+  const { service } = createService({
+    peerBotUsers: new Set(['peer-bot']),
+    activeReplyDecider: {
+      async shouldReply() {
+        replyCalls += 1;
+        return { reply: true, reason: 'ai-must' };
+      },
+      recordBotReply() {},
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'peer-no-address-1',
+    message_type: 'group',
+    group_id: 'g-peer-no-address',
+    user_id: 'peer-bot',
+    sender_name: '另一个机器人',
+    text: '我已经回答完这个问题了',
+    bot_user_id: 'longtu-bot',
+    mentions: [],
+    observe_only: true,
+  });
+
+  assert.deepEqual(result, { mode: 'observed', messages: [] });
+  assert.equal(replyCalls, 0);
+});
+
 test('超级管理员自然语言结束指令优先关闭全群真人窗口并熔断所有 peer Bot', async () => {
   const activeReplyDecider = new ActiveReplyDecider({
     chatClient: { isConfigured: true },
@@ -2299,7 +2328,9 @@ test('同群 peer Bot 最多连续回复两次，真人插话后解除静默', a
     group_id: 'g-loop',
     user_id: 'peer-bot',
     sender_name: '另一个机器人',
-    text: '你说得对，但我还要接一句',
+    text: '@龙玉涛 你说得对，但我还要接一句',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
     observe_only: true,
   });
 
@@ -2348,7 +2379,9 @@ test('peer Bot 循环窗口过期后自动恢复回复额度', async () => {
     group_id: 'g-expire',
     user_id: 'peer-bot',
     sender_name: '另一个机器人',
-    text: '继续循环',
+    text: '@龙玉涛 继续循环',
+    bot_user_id: 'longtu-bot',
+    mentions: [{ user_id: 'longtu-bot', name: '龙玉涛' }],
     observe_only: true,
   });
 

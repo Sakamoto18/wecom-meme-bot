@@ -1406,7 +1406,13 @@ class LongtuQqBridge(Star):
 
     @classmethod
     def _reply_prefix(cls, event: AstrMessageEvent, components: list) -> list:
-        """群聊回复引用原消息，并把回复明确送达被艾特的成员。"""
+        """群聊回复引用原消息；不把原消息里的第三方 @ 转发到回复。
+
+        一条消息可能同时 @ 机器人和另一个群友/Bot。原先这里把除发送者
+        与机器人的所有 At 都复制到回复前缀，导致机器人回复看起来像是在
+        主动艾特被提问者指定的另一方。QQ 的 Reply 已经保留了原消息关系；
+        只有用户明确 @ 本机器人时，才补 @ 发言者以便在群里明确送达。
+        """
         if event.is_private_chat():
             return []
 
@@ -1417,34 +1423,14 @@ class LongtuQqBridge(Star):
         if message_id:
             prefix.append(Comp.Reply(id=message_id))
 
-        bot_user_id = str(event.get_self_id() or "").strip()
         sender_id = str(event.get_sender_id() or "").strip()
-        targets = []
-        seen = set()
-        for component in components:
-            if not isinstance(component, Comp.At):
-                continue
-            user_id = str(getattr(component, "qq", "") or "").strip()
-            if (
-                not user_id
-                or user_id.lower() == "all"
-                or user_id in {bot_user_id, sender_id}
-                or user_id in seen
-            ):
-                continue
-            seen.add(user_id)
-            targets.append((
-                user_id,
-                str(getattr(component, "name", "") or "").strip(),
+        # 只 @ 当前发言者。原消息中其他 At（包括另一个 Bot）是输入关系，
+        # 不是本轮回复对象，不能被复制到回复里。
+        if cls._is_explicitly_at_bot(event) and sender_id:
+            prefix.append(Comp.At(
+                qq=sender_id,
+                name=str(event.get_sender_name() or "").strip(),
             ))
-
-        # 没有第三方目标但发送者明确 @ 了机器人时，把回复送达发送者本人。
-        if not targets and cls._is_explicitly_at_bot(event) and sender_id:
-            targets.append((sender_id, str(event.get_sender_name() or "").strip()))
-
-        for user_id, name in targets[:3]:
-            prefix.append(Comp.At(qq=user_id, name=name))
-        if targets:
             prefix.append(Comp.Plain(" "))
         return prefix
 

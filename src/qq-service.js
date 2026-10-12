@@ -1949,6 +1949,19 @@ export class QqBotService {
       && this.peerBotUsers.has(payload.userId);
   }
 
+  peerBotAddressesThisBot(payload) {
+    if (!this.isPeerBotMessage(payload)) return false;
+    const botUserId = String(payload?.botUserId ?? '').trim();
+    if (!botUserId) return false;
+    if (payload?.pureBotMention === true) return true;
+    if ((payload?.mentions ?? []).some((participant) => (
+      String(participant?.userId ?? '').trim() === botUserId
+    ))) {
+      return true;
+    }
+    return String(payload?.quotedAuthor?.userId ?? '').trim() === botUserId;
+  }
+
   isDirectHumanEngagementTrigger(payload) {
     if (payload.messageType !== 'group'
       || this.isPeerBotMessage(payload)
@@ -4041,7 +4054,18 @@ export class QqBotService {
       this.stopGroupBotReplies(payload, '自然语言');
       return this.observeMessage(payload, message);
     }
-    if (payload.messageType === 'group' && !this.isPeerBotMessage(payload)) {
+    const peerBotMessage = this.isPeerBotMessage(payload);
+    if (peerBotMessage && !this.peerBotAddressesThisBot(payload)) {
+      // A peer Bot answering a human is context, not an invitation for this
+      // Bot to take the next turn.  Only an explicit @/quote of this Bot may
+      // enter the peer continuation gate; this prevents two Bots from
+      // bouncing on every ordinary answer while preserving direct requests.
+      this.logger.log(
+        `QQ peer Bot 未直接指向本 Bot，保持观察：${payload.groupId}/${payload.userId}`,
+      );
+      return this.observeMessage(payload, message);
+    }
+    if (payload.messageType === 'group' && !peerBotMessage) {
       this.resetPeerBotRepliesForGroup(payload.groupId);
     } else if (this.peerBotReplyLimitReached(payload)) {
       this.logger.warn(
@@ -4050,7 +4074,7 @@ export class QqBotService {
       );
       return this.observeMessage(payload, message);
     } else if (
-      this.isPeerBotMessage(payload)
+      peerBotMessage
       && this.peerBotContinuationDecider
       && this.peerBotReplyCount(payload) > 0
     ) {

@@ -969,7 +969,7 @@ export async function startQqApi() {
     ? 'QQ 群复读检测已启用：两位不同群友重复相同文字时只主动复读一次'
     : 'QQ 群复读检测已关闭');
   console.log(runtime.peerBotContextGateEnabled
-    ? 'QQ peer Bot 续聊阀门已启用：首轮必回，后续按语境判断并保留硬上限'
+    ? 'QQ peer Bot 续聊阀门已启用：仅直接 @/引用本 Bot 才进入，后续按语境判断并保留硬上限'
     : 'QQ peer Bot 续聊阀门未启用：仅使用硬上限');
 
   let shuttingDown = false;
