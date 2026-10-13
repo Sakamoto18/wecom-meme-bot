@@ -85,6 +85,7 @@ test('明确要求看图时，低 OCR 图片进入视觉筛选而不是直接静
   const f = await fixture({ low: true });
   assert.equal(f.decider.isExplicitQuestion({ text: '解析一下这张图' }), true);
   assert.equal(f.decider.isExplicitQuestion({ text: '看看这幅图片' }), true);
+  assert.equal(f.decider.isExplicitQuestion({ text: '这张图的解析是啥' }), true);
   const result = await f.send({ text: '看下这张图，是什么意思' });
   assert.equal(result.messages[0].text, answer);
   assert.equal(f.ocrCalls(), 1);
