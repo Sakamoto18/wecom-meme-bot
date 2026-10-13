@@ -81,6 +81,16 @@ test('低信息、重复字、其他成员 @、peer 与被引用 Bot 表情包�
   assert.equal(f.ocrCalls(), 0);
 });
 
+test('明确要求看图时，低 OCR 图片进入视觉筛选而不是直接静默', async () => {
+  const f = await fixture({ low: true });
+  assert.equal(f.decider.isExplicitQuestion({ text: '解析一下这张图' }), true);
+  assert.equal(f.decider.isExplicitQuestion({ text: '看看这幅图片' }), true);
+  const result = await f.send({ text: '看下这张图，是什么意思' });
+  assert.equal(result.messages[0].text, answer);
+  assert.equal(f.ocrCalls(), 1);
+  assert.equal(f.calls.filter(call => call.options.usageSource === 'active-image-triage').length, 1);
+});
+
 test('主动图视觉失败时静默、不搜索、不续期开窗；关闭主动图不影响文字入口', async () => {
   const f = await fixture({ visionFailed: true });
   assert.equal((await f.send()).messages.length, 0);

@@ -503,6 +503,18 @@ export function hasSearchExplanationLeak(answer) {
   return SEARCH_EXPLANATION_LEAK_PATTERN.test(String(answer ?? '').replace(/\s+/gu, ' ').trim());
 }
 
+function visualWordplayTarget(value) {
+  const candidate = String(value ?? '').replace(/\s+/gu, ' ').trim();
+  if (!candidate) return '';
+  // The vision contract uses an arrow so the reviewer can distinguish a
+  // concrete glyph candidate from a generic “很抽象” description. Keep only
+  // the short target before the explanation in parentheses or punctuation.
+  const match = candidate.match(/(?:→|->|=>)\s*([^，,。；;：:（）()\[\]【】\n]{1,18})/u);
+  const target = String(match?.[1] ?? '').trim();
+  if (!target || !/[\p{L}\p{N}\p{Script=Han}]/u.test(target)) return '';
+  return target;
+}
+
 export function buildNormalReplyPrompt(options = {}) {
   return [
     buildNormalReplyStablePrompt(options),
@@ -578,6 +590,13 @@ export function reviewNormalReply(answer, options = {}) {
     && hasSearchExplanationLeak(normalized)) {
     issues.push('search-explanation-leak');
   }
+  const wordplayTarget = visualWordplayTarget(options.imageVisualWordplay);
+  if (wordplayTarget
+    && !options.recordSummary
+    && !options.attackDuringAnswer
+    && !normalized.includes(wordplayTarget)) {
+    issues.push('missing-visual-wordplay');
+  }
   // Only an explicitly requested, exact demonstration of a confirmed phrase
   // is exempt. Insults outside that quote still go through the normal guard.
   let attackText = normalized;
@@ -632,6 +651,8 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
       ? ['本轮文化短卡已经提供了贴题线索：只挑其中一个最具体的联想揉进答案，保留事实，不写百科解释，不攻击提问者或引用作者；短卡不贴合就放弃，不硬塞。'] : []),
     ...(issues?.includes('search-explanation-leak')
       ? ['删除搜索播报、百科定义和“这个梗指的是”式解释。保留当前问题真正需要的事实，改成直接接话、下判断或自然联想；不要提搜索、资料、检索、来源或重写过程。'] : []),
+    ...(issues?.includes('missing-visual-wordplay')
+      ? [`后台视觉候选给出了“${String(options.imageVisualWordplay ?? '').trim()}”。回到原图核对后，如果字形关系成立，必须把原字和视觉变体说出来（至少落到“${visualWordplayTarget(options.imageVisualWordplay)}”），并点出这层反差如何构成笑点；不要继续只描述人物、物件或画面亮度。候选不成立时按原图纠正，不要硬套。`] : []),
     '保留初稿中的正确事实、必要信息和贴合话题的反讽，直接输出最终答案，不解释复核过程。删掉无关的人身攻击和万能损人收尾，不把针对事情的冷嘲一起磨平。如果未通过项包含 missing-role-voice，把角色口吻融进判断，用本轮具体细节作反讽或荒诞联想；不另加段子，不攻击当前发言者、引用作者或第三方。',
     '已确认口癖仍然有效：保留语义贴合且方向正确的原句；删掉不合适的攻击句时，优先改用已确认的非攻击性口癖，不要把所有口癖一起抹掉。没有合适的才自然作答，不强塞。',
     options.attackDuringAnswer

@@ -343,6 +343,21 @@ test('搜索解释泄漏只拦截后台播报，明确要求出处时不拦截',
   }).issues.includes('search-explanation-leak'), false);
 });
 
+test('视觉双关候选缺失时触发复核，答案落到变体字即可通过', () => {
+  const options = { imageVisualWordplay: '尊→奠（半字遮挡+黑白幻视）' };
+  assert.ok(reviewNormalReply('这图里有人挡住了大字，挺阴间的。', options)
+    .issues.includes('missing-visual-wordplay'));
+  assert.equal(reviewNormalReply('“尊”被遮住半边，再一反色直接看成“奠”，笑点就在这一下。', options).valid, true);
+  const prompt = buildNormalReplyRetryPrompt(
+    '看下这张图是什么意思',
+    '这图挺阴间。',
+    ['missing-visual-wordplay'],
+    options,
+  );
+  assert.match(prompt, /原字和视觉变体/);
+  assert.match(prompt, /奠/);
+});
+
 test('普通回复质量复核要求角色钩子但不把角色钩子等同于骂人', () => {
   assert.ok(reviewNormalReply('这个方案目前可以落地，但要先备份数据。', {
     requireRoleVoice: true,
