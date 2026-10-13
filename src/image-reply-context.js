@@ -16,6 +16,7 @@ const GENERIC_IMAGE_TERMS = new Set([
 
 const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|辟谣|谣言|真实吗|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景)/u;
 const IMAGE_EVALUATION_PATTERN = /(?:评价|点评|评一下|说说(?:这|该)?(?:张|幅)?图|怎么看(?:这|该)?(?:张|幅)?图|赏析|吐槽(?:一下)?(?:这|该)?(?:张|幅)?图|好不好看)/u;
+const IMAGE_INTERPRETATION_PATTERN = /(?:解析|分析|解读|识别|含义|笑点|什么梗|什么意思|是什么|怎么理解|表达了什么|看法|评价|点评|赏析|吐槽|怎么选|选哪个|哪个好|看看(?:这(?:张)?(?:图|图片|截图|照片)?|下(?:这(?:张)?(?:图|图片|截图|照片)?)?|(?:图|图片|截图|照片)))/u;
 const IMAGE_INFORMATION_PATTERN = /(?:长文|文章|公告|新闻|论坛|帖子|评论区|聊天记录|对话|多格|漫画|表格|数据|图表|教程|报错|故障|说明书|规则|通知|投票|调查|对比|时间线)/u;
 const IMAGE_QUESTION_OR_CLAIM_PATTERN = /[?？]|(?:什么|哪个|哪种|谁|哪里|为何|为什么|怎么(?:样|办|回事)?|是否|是不是|能不能|可不可以|出处|来源|原帖|真假|真的|假的|原因|办法|建议|价格|时间|多少)/u;
 const UI_NOISE_PATTERN = /(?:点赞|评论|转发|收藏|播放|浏览|粉丝|关注|分享|登录|注册|首页|搜索|推荐|热门|账号|用户名|用户名称|up主|作者|发布于|在线|分钟前|小时前|昨天|第\s*\d+楼)/iu;
@@ -175,9 +176,9 @@ export function classifyImageAnalysis(analysis) {
 export function buildImageInformationPolicy(policy = {}, { explicitSearch = false } = {}) {
   if (policy.level === 'low_information') {
     if (explicitSearch) {
-      return '这张图被程序判定为低信息图片。用户明确问出处或梗义时只回答可核实的来源/含义，不做主观评价，不攻击发图者，不扩展成长篇图片解说。';
+      return '这张图被程序判定为低信息图片，默认不调用联网搜索。用户明确问出处或梗义时，只在有可靠线索时核实；没有线索就如实说明。这个标签只限制搜索，不限制模型结合原图和当前问题自然接话。';
     }
-    return '这张图被程序判定为低信息图片（表情包、反应图、界面噪声或无正文截图）。不要联网搜索，也不要写长篇图片评价；用户若要求评价，只用角色语气接一句短梗后结束。';
+    return '这张图被程序判定为低信息图片（表情包、反应图、界面噪声或无正文截图），因此不要联网搜索。这个标签只限制搜索和无依据的出处猜测；用户若明确要评价、识图或接梗，仍按原图和当前问题作自然回答，看不清时保留不确定性。';
   }
   if (policy.level === 'hot_topic') {
     return '这张图命中近期热词且包含一定上下文。只核实与当前问题直接相关的热词背景，不要因为热词本身平铺搜索报告。';
@@ -248,6 +249,21 @@ export function isImageEvaluationIntent(content = '') {
   return IMAGE_EVALUATION_PATTERN.test(compactText(content));
 }
 
+/**
+ * An explicit visual question deserves the original pixels in the final
+ * reply call. Structured OCR/vision output is useful context, but it must not
+ * become the only evidence when the model is being asked to interpret a
+ * relationship, joke or visual wordplay.
+ */
+export function isExplicitImageInterpretationIntent(content = '') {
+  const text = compactText(content);
+  // The caller invokes this only after confirming that image pixels/context
+  // exist. Do not require the user to repeat “这张图”: questions such as
+  // “明总如何评价” and “你怎么选” still ask the model to interpret the
+  // attached image, while unrelated text like “晚上吃什么” remains false.
+  return Boolean(text) && IMAGE_INTERPRETATION_PATTERN.test(text);
+}
+
 export function isImageSearchEligible(item, subject) {
   return hasUsefulImageClue(subject, item);
 }
@@ -266,9 +282,10 @@ export const IMAGE_MEANING_PROMPT = [
   '视觉核对优先于截图文字：图片里的标题、评论、字幕和提问可能只是别人提出的猜测或错误答案。先看原图主体，再回答文字问题；如果两者冲突，明确保留“文字声称什么”和“画面实际像什么”的区别，不要顺着文字硬认角色或出处。',
   '遇到大字被人物、物件或阴影遮住的海报/截图，要额外检查遮挡后形成的错字、拆字、谐音、黑白幻视和视觉文字双关；把“原字”“遮挡后像什么”与“这层反差如何服务笑点”分开记录，不能只做 OCR 直读。尤其要检查只露半边字、负形、黑白反转后是否变成另一个字；例如像“尊”只露一半、配合黑白幻视看成“奠”时，应记录为“尊→奠（半字遮挡+黑白幻视）”，但没有像素依据就不要硬套这个例子。',
   '如果后台识别结果提供了“视觉文字双关/错视”，先回到原图核对这个字形关系；确认成立时，这层反差就是当前图片回答的主线，必须优先说出原字与视觉变体，不要退化成“车很亮/有人挡住字”这种只报物体的平面描述。',
+  '对拼贴图、讽刺截图、漫画和表情包，先做一层面向回复的语义压缩：提取 scene_relation（谁和谁/什么元素发生什么关系）、implied_point（图片真正想表达的观点或反差）、comic_mechanism（错位、双关、夸张、反转或荒诞机制）、speaker_intent（当前用户要评价、配文、解释、识别还是查证）和 reply_hook（可以直接接出的一个具体落点）。这些字段必须绑定原图证据，不要把物体清单换个说法；没有把握就留空。',
   '先直接回答当前消息的具体问题，图片只是证据。除非用户明确要求“图里是什么”“描述一下”“识别图片”“逐张总结”或询问图片含义，否则不要主动描述画面、复述图片文字或解释图片是什么。用户问“怎么选/哪个/怎么办/是否”等选择题时，直接给选择或建议，再用图片中最相关的一点作依据。',
   '如果当前消息要求找原帖、查出处、核实真伪或补充某条回复，先给这件事的检索结论；找不到时只用一句话说明缺口和下一步。不要把“我读到了图片”“我只抓到界面证据”当成最终回答，更不要连续输出两段同义的免责声明。',
-  '不要照抄内部的“图片描述 / 可见文字 / 关键词 / 场景”字段，也不要固定套“图片识别—联网结果—总结”的模板。用自然的群聊表达把含义、画面依据和必要背景连起来。',
+    '不要照抄内部的“图片描述 / 可见文字 / 关键词 / 场景”字段，也不要固定套“图片识别—联网结果—总结”的模板。优先把 scene_relation、implied_point、comic_mechanism 和 speaker_intent 消化成自然的群聊判断，再补必要背景。',
   '用户询问梗的含义时才说明笑点和反差；询问观点真伪时区分图中声称的事与检索能证实的事；问操作就给下一步，问选择就给选择，不另做整图解说。',
   '多图也只提取回答当前问题所需的信息；只有用户要求逐张或按顺序总结时才逐张列出，不要强制每张图都做一份独立报告。',
   '图片识别结果、OCR 和网页都可能有错。检索相似不等于找到了原图出处，不得靠外貌猜现实人物身份，不得编造作者、最早出处或未核实的背景。',

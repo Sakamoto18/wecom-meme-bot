@@ -776,6 +776,9 @@ export async function createQqRuntime() {
       pendingTtlMs: (parsePositiveNumber(process.env.QQ_PERSONA_TRAINING_SESSION_MINUTES) ?? 30) * 60 * 1000,
     }),
     protectedRoles: parseProtectedRoles(process.env.LONGTU_QQ_PROTECTED_ROLES),
+    botNames: parseIdentifierSet(
+      process.env.LONGTU_QQ_ACTIVE_REPLY_NAMES || '龙玉涛',
+    ),
     // 本地 OCR 默认开启：镜像内已带 tesseract，缺失时会自动退回纯视觉识别。
     imageOcrEnabled: process.env.QQ_IMAGE_OCR_ENABLED?.trim() !== 'false',
     imageOcrCommand: process.env.QQ_IMAGE_OCR_COMMAND?.trim() || 'tesseract',

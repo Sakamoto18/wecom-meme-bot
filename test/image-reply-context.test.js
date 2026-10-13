@@ -6,6 +6,7 @@ import {
   classifyImageInformation,
   isArtAppraisalIntent,
   isImageEvaluationIntent,
+  isExplicitImageInterpretationIntent,
 } from '../src/image-reply-context.js';
 import { generateConversationReply } from '../src/reply-engine.js';
 import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
@@ -16,6 +17,13 @@ test('只有明确赏析画作时进入单句画面判断模式', () => {
   assert.equal(isArtAppraisalIntent('赏析一下这幅奶蛙画'), true);
   assert.equal(isArtAppraisalIntent('如何评价这张表情包'), false);
   assert.equal(isArtAppraisalIntent('这张视频封面是什么平台'), false);
+});
+
+test('带图的语义提问即使不写“这张图”也保留原始像素给最终模型', () => {
+  assert.equal(isExplicitImageInterpretationIntent('明总如何评价'), true);
+  assert.equal(isExplicitImageInterpretationIntent('你怎么选'), true);
+  assert.equal(isExplicitImageInterpretationIntent('看看这图'), true);
+  assert.equal(isExplicitImageInterpretationIntent('晚上吃什么'), false);
 });
 
 test('画作赏析提示要求一个主体关系和一句话落点', async () => {

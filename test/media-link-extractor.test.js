@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   classifyMediaUrl,
   extractMediaUrls,
+  isBilibiliLiveUrl,
   normalizeMediaUrl,
 } from '../src/media-link-extractor.js';
 
@@ -46,4 +47,12 @@ test('小红书 .cn 短链、旧短链和笔记页统一识别，仿冒域名保
 test('rejects local and non-http urls', () => {
   assert.equal(normalizeMediaUrl('http://127.0.0.1/a'), '');
   assert.equal(normalizeMediaUrl('file:///tmp/a.mp4'), '');
+});
+
+test('B站直播间不识别为视频媒体', () => {
+  const liveUrl = 'https://live.bilibili.com/27277424?live_from=72001&visit_id=test';
+  assert.equal(isBilibiliLiveUrl(liveUrl), true);
+  assert.equal(classifyMediaUrl(liveUrl), 'unknown');
+  assert.deepEqual(extractMediaUrls({ text: `直播间：${liveUrl}` }), []);
+  assert.equal(classifyMediaUrl('https://www.bilibili.com/video/BV1Gh411t7WY'), 'bilibili');
 });

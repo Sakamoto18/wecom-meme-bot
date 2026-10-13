@@ -5,7 +5,17 @@ export function isDenseImageText(lines) {
     .map(line => String(line).replace(/\s+/gu, ' ').trim()).filter(Boolean))];
   const text = unique.join('\n');
   const meaningful = text.match(/[\p{L}\p{N}]/gu) ?? [];
-  return meaningful.length >= 100 && new Set(meaningful).size >= 25;
+  const distinct = new Set(meaningful).size;
+  // OCR often breaks a Chinese paragraph into short lines and loses repeated
+  // characters. Keep the original strict branch, but allow a clearly
+  // structured two-line+ notice or conversation through without demanding a
+  // perfect 100-character OCR result. A repeated “哈哈哈”/watermark still
+  // fails because it has neither distinct content nor structure.
+  const structured = unique.length >= 2
+    && meaningful.length >= 60
+    && distinct >= 18
+    && /[。！？!?；;：:]|\d/gu.test(text);
+  return (meaningful.length >= 100 && distinct >= 25) || structured;
 }
 
 export const PASSIVE_IMAGE_QUESTION = '简短提炼这张图片的关键信息，并对内容作客观评价。保留重要数字、时间、适用条件和不确定性，不评价发图的人。';

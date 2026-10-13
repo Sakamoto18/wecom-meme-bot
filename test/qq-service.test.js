@@ -3331,6 +3331,31 @@ test('外部视频分享在排除群中保持静默且不调用解析器', async
   assert.equal(calls.length, 0);
 });
 
+test('B站直播间分享不进入视频解析器', async () => {
+  let resolveCalls = 0;
+  const { service } = createService({
+    mediaResolver: {
+      enabled: true,
+      async resolve() {
+        resolveCalls += 1;
+        return { url: 'https://cdn.example/live.mp4' };
+      },
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'bilibili-live-ignored',
+    message_type: 'group',
+    group_id: '1109147947',
+    user_id: 'sender-1',
+    text: 'https://live.bilibili.com/27277424?live_from=72001',
+    media_share: true,
+  });
+
+  assert.notEqual(result.mode, 'media');
+  assert.equal(resolveCalls, 0);
+});
+
 for (const messageType of ['group', 'private']) {
   for (const kind of ['gallery', 'video']) {
     test(`实际分享类型回归：${messageType} ${kind} 输出互不混用`, async () => {

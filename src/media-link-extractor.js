@@ -48,9 +48,22 @@ export function normalizeMediaUrl(value) {
   return parsed.toString();
 }
 
+// B 站直播间不是视频稿件。单独识别这个域名，避免它被下面的
+// `*.bilibili.com` 规则误送进视频解析、下载和失败提示链路。
+export function isBilibiliLiveUrl(value) {
+  try {
+    const host = new URL(String(value || '')).hostname.toLowerCase();
+    return host === 'live.bilibili.com' || host.endsWith('.live.bilibili.com');
+  } catch {
+    return false;
+  }
+}
+
 function addUrl(set, value) {
   const normalized = normalizeMediaUrl(value);
-  if (normalized && !/[……]|\.\.\./u.test(normalized)) set.add(normalized);
+  if (normalized && !isBilibiliLiveUrl(normalized) && !/[……]|\.\.\./u.test(normalized)) {
+    set.add(normalized);
+  }
 }
 
 function walkCard(value, urls, depth = 0) {
@@ -100,6 +113,7 @@ export function extractMediaUrls({ text = '', richSegments = [], cards = [] } = 
 }
 
 export function classifyMediaUrl(value) {
+  if (isBilibiliLiveUrl(value)) return 'unknown';
   let host = '';
   try { host = new URL(value).hostname.toLowerCase(); } catch { return 'unknown'; }
   if (['xhslink.com', 'xhslink.cn', 'xiaohongshu.com']

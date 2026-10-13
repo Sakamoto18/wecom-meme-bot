@@ -6,6 +6,7 @@ import {
   getConversationId,
   getAnonymousSpeakerId,
   getMessageTarget,
+  getGroupInteractionContext,
   hasImageContent,
 } from '../src/message-utils.js';
 
@@ -157,4 +158,61 @@ test('识别单图和图文混排中的图片', () => {
     mixed: { msg_item: [{ msgtype: 'text' }, { msgtype: 'image' }] },
   }), true);
   assert.equal(hasImageContent({ msgtype: 'text', text: {} }), false);
+});
+
+test('真实 @机器人会确认收件关系，不能被第三方目标过滤误伤', () => {
+  const message = {
+    msgtype: 'text',
+    chattype: 'group',
+    from: { userid: 'sender', name: '发言者' },
+    bot_user_id: 'bot',
+    bot_names: ['龙玉涛'],
+    mentions: [
+      { user_id: 'bot', name: '龙玉涛' },
+      { user_id: 'target', name: '被点名者' },
+    ],
+    text: { content: '@龙玉涛 你怎么看' },
+  };
+  const interaction = getGroupInteractionContext(message);
+  assert.equal(interaction.addressedBotByName, true);
+  assert.equal(interaction.addressedBotName, '龙玉涛');
+  assert.equal(interaction.hasThirdPartyTarget, true);
+  assert.match(buildModelInput(message, '你怎么看'), /正在称呼机器人“龙玉涛”/);
+  assert.match(buildModelInput(message, '你怎么看'), /被点名者/);
+});
+
+test('临时外号只作为不可信候选，不写进固定机器人别名', () => {
+  const message = {
+    msgtype: 'text',
+    chattype: 'group',
+    from: { userid: 'sender' },
+    bot_user_id: 'bot',
+    bot_names: ['龙玉涛'],
+    text: { content: '再见了龙小弟' },
+  };
+  const interaction = getGroupInteractionContext(message);
+  assert.equal(interaction.addressedBotByName, false);
+  assert.equal(interaction.addressedBotName, '');
+  assert.equal(interaction.botAddressCandidate, '龙小弟');
+  assert.equal(interaction.botAddressCandidateIsUntrusted, true);
+  assert.equal(interaction.botAddressCandidateSpeechAct, 'farewell');
+  const input = buildModelInput(message, '再见了龙小弟');
+  assert.match(input, /可能的称呼“龙小弟”/);
+  assert.match(input, /不要把临时称呼写入固定别名/);
+  assert.doesNotMatch(input, /正在称呼机器人“龙小弟”/);
+});
+
+test('纠正句保留为语用候选，交给上下文判断而不是写死外号', () => {
+  const message = {
+    msgtype: 'text',
+    chattype: 'group',
+    from: { userid: 'sender' },
+    bot_user_id: 'bot',
+    bot_names: ['龙玉涛'],
+    text: { content: '我是说你要跟我们说再见了' },
+  };
+  const interaction = getGroupInteractionContext(message);
+  assert.equal(interaction.isCorrectionOfPreviousReply, false);
+  assert.equal(interaction.correctionCandidate, true);
+  assert.match(buildModelInput(message, message.text.content), /可能在纠正上一轮回复/);
 });
