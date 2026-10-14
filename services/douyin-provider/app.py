@@ -13,23 +13,32 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from profile_guard import acquire_profile
+from xhs_content import is_note_url, normalize_note, parse_public_note
 from work_metadata import PAGE_DATA_SCRIPT, work_id, page_payloads, find_work, normalize_work
 
 logger = logging.getLogger('uvicorn.error')
 context = None
 playwright = None
 profile_guard = None
+xhs_profile_guard = None
 login_page = None
 bilibili_browser = None
 bilibili_context = None
 bilibili_login_page = None
+xhs_context = None
+xhs_login_page = None
 lock = asyncio.Lock()
 context_lock = asyncio.Lock()
 bilibili_context_lock = asyncio.Lock()
+xhs_context_lock = asyncio.Lock()
+xhs_resolve_lock = asyncio.Lock()
 QUEUE_TIMEOUT = 22
 RESOLVE_TIMEOUT = 20
 NAVIGATION_TIMEOUT_MS = 10000
 BILIBILI_NAV_URL = 'https://api.bilibili.com/x/web-interface/nav'
+XHS_NAVIGATION_TIMEOUT_MS = 15000
+XHS_HOSTS = ('www.xiaohongshu.com', 'xiaohongshu.com')
+XHS_REMOVED_MARKERS = ('笔记不存在', '内容不存在', '已删除', '无法查看', '已失效')
 
 
 def is_real_video_url(url):
@@ -72,6 +81,205 @@ def context_closed(*_):
 
 def bilibili_state_path():
     return Path(os.getenv('BILIBILI_AUTH_STATE', '/data/bilibili-auth/state.json')).resolve()
+
+
+def xhs_profile_path():
+    return Path(os.getenv('XHS_PROFILE', '/data/xhs-profile')).resolve()
+
+
+async def get_xhs_context():
+    """Open the persistent Chromium profile used by the XHS resolver.
+
+    This deliberately reuses the Chromium binary from this provider instead
+    of adding a second image.  The profile is separate from Douyin's profile
+    so logging in or out of one source cannot invalidate the other account.
+    """
+    global xhs_context, playwright
+    async with xhs_context_lock:
+        if xhs_context is not None:
+            return xhs_context
+        if playwright is None:
+            playwright = await async_playwright().start()
+        profile = xhs_profile_path()
+        profile.mkdir(parents=True, exist_ok=True)
+        try:
+            xhs_context = await playwright.chromium.launch_persistent_context(
+                str(profile), headless=False,
+                executable_path='/usr/bin/chromium', timeout=10000,
+                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                      '--disk-cache-size=67108864'],
+            )
+            xhs_context.set_default_timeout(5000)
+            xhs_context.on('close', xhs_context_closed)
+            return xhs_context
+        except BaseException:
+            xhs_context = None
+            raise
+
+
+def xhs_context_closed(*_):
+    global xhs_context, xhs_login_page
+    xhs_context = None
+    xhs_login_page = None
+
+
+def xhs_removed_marker(text):
+    body = str(text or '')
+    return next((marker for marker in XHS_REMOVED_MARKERS if marker in body), '')
+
+
+def _looks_like_xhs_note(value):
+    if not isinstance(value, dict):
+        return False
+    kind = str(value.get('type') or value.get('noteType') or '').lower()
+    return kind in {'normal', 'video', 'image', 'gallery'} or any(
+        key in value for key in ('imageList', 'image_list', 'video')
+    )
+
+
+def _find_xhs_note(value, depth=0, seen=None):
+    """Find a note object in the initial state or captured API payload."""
+    if depth > 8 or value is None:
+        return None
+    if seen is None:
+        seen = set()
+    if isinstance(value, dict):
+        marker = id(value)
+        if marker in seen:
+            return None
+        seen.add(marker)
+        if _looks_like_xhs_note(value):
+            try:
+                return normalize_note(value)
+            except (TypeError, ValueError, KeyError):
+                pass
+        for key in ('note', 'note_card', 'noteCard', 'noteDetail', 'note_detail'):
+            candidate = value.get(key)
+            found = _find_xhs_note(candidate, depth + 1, seen)
+            if found:
+                return found
+        for candidate in value.values():
+            found = _find_xhs_note(candidate, depth + 1, seen)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for candidate in value:
+            found = _find_xhs_note(candidate, depth + 1, seen)
+            if found:
+                return found
+    return None
+
+
+async def xhs_login_state():
+    """Return login metadata without ever returning cookies or tokens."""
+    ctx = await get_xhs_context()
+    page = xhs_login_page
+    if page is None or page.is_closed():
+        pages = [item for item in ctx.pages if not item.is_closed()]
+        page = pages[0] if pages else None
+    cookies = await ctx.cookies(['https://www.xiaohongshu.com'])
+    cookie_names = {str(item.get('name') or '') for item in cookies}
+    has_session_cookie = bool(cookie_names & {'web_session', 'a1', 'webId'})
+    body = ''
+    if page is not None:
+        with suppress(Exception):
+            body = (await page.locator('body').inner_text())[:8000]
+    login_words = ('登录', '扫码登录', '登录后')
+    logged_in = has_session_cookie and not any(word in body for word in login_words)
+    return {
+        'logged_in': logged_in,
+        'browser_ready': xhs_context is not None,
+        'profile_exists': xhs_profile_path().is_dir(),
+        'cookie_count': len(cookies),
+    }
+
+
+async def save_xhs_state():
+    """Flush the persistent profile and keep a redacted storage-state backup."""
+    profile = xhs_profile_path()
+    profile.mkdir(parents=True, exist_ok=True)
+    ctx = await get_xhs_context()
+    fd, temporary = tempfile.mkstemp(prefix='.state-', suffix='.json', dir=profile)
+    os.close(fd)
+    state = profile / 'state.json'
+    try:
+        await ctx.storage_state(path=temporary)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, state)
+        os.chmod(state, 0o600)
+    finally:
+        with suppress(FileNotFoundError):
+            os.unlink(temporary)
+    return state
+
+
+async def resolve_xhs_request(url):
+    """Resolve a note in the logged-in browser, preserving author metadata."""
+    ctx = await get_xhs_context()
+    page = None
+    payloads = []
+    response_tasks = set()
+
+    async def capture_response(response):
+        try:
+            parsed = urlsplit(response.url)
+            if parsed.hostname not in XHS_HOSTS or response.status != 200:
+                return
+            content_type = response.headers.get('content-type', '')
+            if 'json' not in content_type.lower():
+                return
+            payload = await response.json()
+            if len(payloads) < 32:
+                payloads.append(payload)
+        except Exception:
+            return
+
+    def capture(response):
+        task = asyncio.create_task(capture_response(response))
+        response_tasks.add(task)
+        task.add_done_callback(response_tasks.discard)
+
+    try:
+        page = await ctx.new_page()
+        page.on('response', capture)
+        response = await page.goto(
+            url, wait_until='domcontentloaded', timeout=XHS_NAVIGATION_TIMEOUT_MS,
+        )
+        await page.wait_for_timeout(1800)
+        for task in list(response_tasks):
+            with suppress(Exception):
+                await task
+        canonical = page.url
+        html_text = await page.content()
+        if is_note_url(canonical):
+            with suppress(Exception):
+                parsed = parse_public_note(html_text, canonical)
+                if parsed:
+                    return parsed
+        with suppress(Exception):
+            state = await page.evaluate('() => window.__INITIAL_STATE__ || null')
+            parsed = _find_xhs_note(state)
+            if parsed:
+                return parsed
+        for payload in payloads:
+            parsed = _find_xhs_note(payload)
+            if parsed:
+                return parsed
+        marker = xhs_removed_marker(await page.locator('body').inner_text())
+        if marker:
+            raise ValueError(f'content_removed: 小红书提示「{marker}」')
+        status = await xhs_login_state()
+        if not status['logged_in']:
+            raise ValueError('小红书登录态无效，请访问 /xhs-login.png 扫码登录')
+        raise ValueError('小红书页面未返回可用笔记数据')
+    finally:
+        if page is not None:
+            page.remove_listener('response', capture)
+            with suppress(Exception):
+                await page.close()
+        for task in response_tasks:
+            task.cancel()
+        await asyncio.gather(*response_tasks, return_exceptions=True)
 
 
 async def get_bilibili_context():
@@ -179,9 +387,10 @@ async def bilibili_cookie_header():
 
 @asynccontextmanager
 async def lifespan(app):
-    global profile_guard
+    global profile_guard, xhs_profile_guard
     # This lock is held for the entire process lifetime, including browser startup.
     profile_guard = acquire_profile(os.getenv('DOUYIN_PROFILE', '/data/profile'))
+    xhs_profile_guard = acquire_profile(xhs_profile_path())
     try:
         await get_context()
         logger.info('Douyin browser ready; persistent login profile preserved')
@@ -193,11 +402,16 @@ async def lifespan(app):
         if bilibili_browser is not None:
             with suppress(Exception):
                 await asyncio.wait_for(bilibili_browser.close(), 5)
+        if xhs_context is not None:
+            with suppress(Exception):
+                await asyncio.wait_for(xhs_context.close(), 5)
         if context is not None:
             with suppress(Exception):
                 await asyncio.wait_for(context.close(), 5)
         if playwright is not None:
             await playwright.stop()
+        if xhs_profile_guard is not None:
+            xhs_profile_guard.close()
         profile_guard.close()
 
 
@@ -211,7 +425,9 @@ class Req(BaseModel):
 @app.get('/healthz')
 async def health():
     ready = context is not None
-    return JSONResponse({'status': 'ok' if ready else 'unavailable', 'browser_ready': ready},
+    return JSONResponse({'status': 'ok' if ready else 'unavailable', 'browser_ready': ready,
+                         'xhs_profile': str(xhs_profile_path()),
+                         'xhs_browser_ready': xhs_context is not None},
                         status_code=200 if ready else 503)
 
 
@@ -266,6 +482,58 @@ async def bilibili_cookie():
     status = await bilibili_cookie_header()
     return JSONResponse(status if status.get('cookie') else {k: v for k, v in status.items() if k != 'cookie'},
                         status_code=200 if status.get('logged_in') and status.get('cookie') else 401)
+
+
+@app.get('/xhs-login.png')
+async def xhs_login_png():
+    global xhs_login_page
+    ctx = await get_xhs_context()
+    if xhs_login_page is None or xhs_login_page.is_closed():
+        xhs_login_page = await ctx.new_page()
+        await xhs_login_page.goto(
+            'https://www.xiaohongshu.com/',
+            wait_until='domcontentloaded', timeout=XHS_NAVIGATION_TIMEOUT_MS,
+        )
+    return Response(await xhs_login_page.screenshot(type='png', full_page=False), media_type='image/png')
+
+
+@app.get('/xhs-login-status')
+async def xhs_login_status():
+    return await xhs_login_state()
+
+
+@app.post('/xhs-save-session')
+async def xhs_save_session():
+    status = await xhs_login_state()
+    if not status['logged_in']:
+        return JSONResponse(status | {'saved': False}, status_code=409)
+    state = await save_xhs_state()
+    return {'logged_in': True, 'saved': True, 'state_file': str(state)}
+
+
+@app.post('/xhs/resolve')
+async def xhs_resolve(req: Req):
+    started = time.monotonic()
+    try:
+        await asyncio.wait_for(xhs_resolve_lock.acquire(), QUEUE_TIMEOUT)
+        try:
+            async with asyncio.timeout(RESOLVE_TIMEOUT):
+                data = await resolve_xhs_request(req.url)
+            logger.info('XHS resolve ok duration_ms=%d kind=%s images=%d author=%s',
+                        (time.monotonic() - started) * 1000,
+                        data.get('media_type', ''), len(data.get('images') or []),
+                        bool(data.get('author')))
+            return {'status': 'success', 'data': data}
+        finally:
+            xhs_resolve_lock.release()
+    except TimeoutError:
+        logger.warning('XHS resolve timeout duration_ms=%d', (time.monotonic() - started) * 1000)
+        return {'status': 'failed', 'msg': '小红书 Provider 超时'}
+    except Exception as error:
+        reason = str(error).strip() or type(error).__name__
+        removed = reason.startswith('content_removed')
+        logger.warning('XHS resolve %s reason=%s', 'removed' if removed else 'failed', reason[:200])
+        return {'status': 'failed', 'removed': removed, 'msg': reason[:300]}
 
 
 # 作品被删或下架时，抖音整页只给一句提示。把这种情况和"我们没抓到"分开，
