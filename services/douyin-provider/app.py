@@ -183,12 +183,14 @@ def _find_xhs_note(value, depth=0, seen=None):
 async def rendered_xhs_author(page):
     """Read the note author's visible profile link as a last metadata fallback."""
     script = """() => {
+      const ignored = new Set(['我', '首页', '发现', '通知', '消息', '登录', '注册']);
       const links = [...document.querySelectorAll('a[href*="/user/profile/"]')];
       for (const link of links) {
         const text = (link.innerText || link.textContent || '').trim();
+        if (!text || ignored.has(text)) continue;
         const image = link.querySelector('img');
         const avatar = image?.currentSrc || image?.src || image?.getAttribute('data-src') || '';
-        if (text || avatar) return {author: text, avatarUrl: avatar};
+        return {author: text, avatarUrl: avatar};
       }
       return {author: '', avatarUrl: ''};
     }"""
