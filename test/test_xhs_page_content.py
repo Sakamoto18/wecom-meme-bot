@@ -62,6 +62,23 @@ class PublicContentTests(unittest.TestCase):
         self.assertEqual(result['author'], '作者乙')
         self.assertEqual(result['avatarUrl'], 'https://cdn.example/avatar.jpg')
 
+    def test_logged_in_account_label_is_not_used_as_note_author(self):
+        result = module.normalize_note({'type': 'video',
+            'user': {'nickname': '我', 'avatar': 'https://cdn.example/account.jpg'},
+            'authorName': '笔记原作者',
+            'video': {'media': {'stream': {'h264': [
+                {'height': 720, 'masterUrl': 'https://cdn.example/video.mp4'}]}}}})
+        self.assertEqual(result['author'], '笔记原作者')
+        self.assertEqual(result['avatarUrl'], '')
+
+    def test_logged_in_account_label_without_source_author_is_empty(self):
+        result = module.normalize_note({'type': 'video',
+            'user': {'nickname': '我', 'avatar': 'https://cdn.example/account.jpg'},
+            'video': {'media': {'stream': {'h264': [
+                {'height': 720, 'masterUrl': 'https://cdn.example/video.mp4'}]}}}})
+        self.assertEqual(result['author'], '')
+        self.assertEqual(result['avatarUrl'], '')
+
     def test_unknown_type_is_not_success(self):
         with self.assertRaises(ValueError):
             module.normalize_note({'type': 'unknown'})

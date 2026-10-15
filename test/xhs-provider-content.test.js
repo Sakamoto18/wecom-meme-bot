@@ -32,3 +32,10 @@ test('实际 /resolve 扁平作者信息透传，不递归误取tag或封面为�
   assert.equal(missing.author, '');
   assert.equal(missing.avatarUrl, '');
 });
+
+test('登录用户导航标签不能作为小红书笔记作者或头像', () => {
+  const result = normalizeXhsProviderData({ media_type: 'video', video_url: 'https://cdn.example/video.mp4',
+    author: '我', avatarUrl: 'https://cdn.example/account.jpg' });
+  assert.equal(result.author, '');
+  assert.equal(result.avatarUrl, '');
+});

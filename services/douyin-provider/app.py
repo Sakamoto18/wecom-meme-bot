@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from profile_guard import acquire_profile
-from xhs_content import is_note_url, normalize_note, parse_public_note
+from xhs_content import clean_author_name, is_note_url, normalize_note, parse_public_note
 from work_metadata import PAGE_DATA_SCRIPT, work_id, page_payloads, find_work, normalize_work
 
 logger = logging.getLogger('uvicorn.error')
@@ -204,8 +204,9 @@ async def rendered_xhs_author(page):
         result = await page.evaluate(script)
         if isinstance(result, dict):
             return {
-                'author': str(result.get('author') or '').strip(),
-                'avatarUrl': str(result.get('avatarUrl') or '').strip(),
+                'author': clean_author_name(result.get('author')),
+                'avatarUrl': str(result.get('avatarUrl') or '').strip()
+                if clean_author_name(result.get('author')) else '',
             }
     return {'author': '', 'avatarUrl': ''}
 
@@ -217,8 +218,9 @@ def merge_xhs_author(data, author_data):
         return data
     return {
         **data,
-        'author': data.get('author') or author_data.get('author') or '',
-        'avatarUrl': data.get('avatarUrl') or author_data.get('avatarUrl') or '',
+        'author': clean_author_name(data.get('author')) or author_data.get('author') or '',
+        'avatarUrl': (data.get('avatarUrl') if clean_author_name(data.get('author'))
+                      else author_data.get('avatarUrl') or '') or '',
     }
 
 

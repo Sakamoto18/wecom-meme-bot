@@ -4,6 +4,20 @@ import { fileURLToPath } from 'node:url';
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { isXhsRemovedCode, looksRemoved, removedError } from './media-removed.js';
 
+const XHS_NON_AUTHOR_LABELS = new Set([
+  '我', '首页', '发现', '通知', '消息', '登录', '注册', '搜索', '推荐', '热门',
+  '我的', '账号', '用户', '个人中心',
+]);
+
+function cleanXhsAuthor(value) {
+  const name = String(value || '').trim();
+  if (!name || XHS_NON_AUTHOR_LABELS.has(name)
+    || name.includes('登录后') || name.includes('登录/注册') || name.includes('个人中心')) {
+    return '';
+  }
+  return name.slice(0, 120);
+}
+
 const DEFAULT_SCRIPT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   'parser/xhs_resolver.py',
@@ -21,12 +35,13 @@ export function normalizeXhsProviderData(data = {}) {
   if (!mediaUrl && !images.length) throw new Error('Spider_XHS Provider 未返回媒体');
   const user = data.user || data.user_info || data.userInfo
     || (typeof data.author === 'object' ? data.author : null) || {};
+  const author = cleanXhsAuthor((typeof data.author === 'string' ? data.author : '')
+    || data.author_name || data.authorName || user.nickname || user.nickName || user.nick_name || '');
   return { mediaUrl, images: mediaUrl ? [] : images, coverUrl: normalizeMediaUrl(data.cover || data.cover_url || data.coverUrl || images[0] || ''), title: String(data.title || ''),
     size: Number(data.size || data.video_size || data.videoSize || 0) || 0,
-    author: String((typeof data.author === 'string' ? data.author : '')
-      || data.author_name || data.authorName || user.nickname || user.nickName || user.nick_name || ''),
-    avatarUrl: normalizeMediaUrl(data.avatarUrl || data.author_avatar
-      || user.avatar || user.avatarUrl || user.avatar_url || ''),
+    author,
+    avatarUrl: author ? normalizeMediaUrl(data.avatarUrl || data.author_avatar
+      || user.avatar || user.avatarUrl || user.avatar_url || '') : '',
     tags: (Array.isArray(data.tags) ? data.tags : (data.tagList || data.tag_list || []))
       .map(tag => typeof tag === 'string' ? tag : tag?.name).filter(Boolean),
     description: String(data.description || data.desc || '').replaceAll('[话题]', '').slice(0, 4000) };

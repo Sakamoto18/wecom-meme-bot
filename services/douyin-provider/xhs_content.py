@@ -5,6 +5,28 @@ import re
 from urllib.parse import urlsplit
 
 
+# These are navigation/account labels rendered by the logged-in XHS page, not
+# the author of the note being resolved.  Keep this filter centralized because
+# the same bad value can arrive through the initial state, captured API JSON,
+# or the DOM fallback.
+XHS_NON_AUTHOR_LABELS = {
+    '我', '首页', '发现', '通知', '消息', '登录', '注册', '搜索', '推荐', '热门',
+    '我的', '账号', '用户', '个人中心',
+}
+
+
+def clean_author_name(value):
+    """Return a note author name, never a logged-in-account navigation label."""
+    if not isinstance(value, str):
+        return ''
+    name = value.strip()
+    if not name or name in XHS_NON_AUTHOR_LABELS:
+        return ''
+    if any(token in name for token in ('登录后', '登录/注册', '个人中心')):
+        return ''
+    return name[:120]
+
+
 def is_note_url(url):
     parsed = urlsplit(url)
     return (parsed.scheme in ('http', 'https')
@@ -46,16 +68,27 @@ def normalize_note(note):
                            and (info.get('url') or info.get('urlDefault') or info.get('url_default'))), None)
         if isinstance(url, str) and url.startswith(('https://', 'http://')) and url not in images:
             images.append(url)
-    raw_user = (note.get('user') or note.get('user_info') or note.get('userInfo')
-                or note.get('author') or note.get('authorInfo') or {})
-    author_text = raw_user.strip() if isinstance(raw_user, str) else ''
-    user = raw_user
-    if isinstance(user, list):
-        user = next((item for item in user if isinstance(item, dict)), {})
-    if not isinstance(user, dict):
-        user = {}
+    raw_users = [note.get(key) for key in
+                 ('user', 'user_info', 'userInfo', 'author', 'authorInfo')]
+    user_objects = []
+    author_texts = []
+    for raw_user in raw_users:
+        if isinstance(raw_user, list):
+            raw_user = next((item for item in raw_user if isinstance(item, dict)), None)
+        if isinstance(raw_user, dict):
+            user_objects.append(raw_user)
+        else:
+            author_text = clean_author_name(raw_user)
+            if author_text:
+                author_texts.append(author_text)
+    user = next((candidate for candidate in user_objects
+                 if any(clean_author_name(candidate.get(key)) for key in
+                        ('nickname', 'nickName', 'nick_name', 'userName', 'username', 'name'))), {})
+    user_author = next((clean_author_name(user.get(key)) for key in
+                        ('nickname', 'nickName', 'nick_name', 'userName', 'username', 'name')
+                        if clean_author_name(user.get(key))), '')
     raw_avatar = (user.get('avatar') or user.get('avatarUrl') or user.get('avatar_url')
-                  or user.get('image') or user.get('imageb') or user.get('images') or '')
+                  or user.get('image') or user.get('imageb') or user.get('images') or '') if user_author else ''
     if isinstance(raw_avatar, list):
         raw_avatar = next((item for item in raw_avatar if isinstance(item, str)), '')
     tags = []
@@ -63,16 +96,22 @@ def normalize_note(note):
         name = tag.get('name') if isinstance(tag, dict) else tag
         if isinstance(name, str) and name.strip() and name.strip() not in tags:
             tags.append(name.strip())
+    author_candidates = (
+        user.get('nickname'), user.get('nickName'), user.get('nick_name'),
+        user.get('userName'), user.get('username'), user.get('name'),
+        note.get('nickname'), note.get('nickName'), note.get('authorName'),
+        note.get('author_name'), *author_texts,
+    )
+    author = next((clean_author_name(item) for item in author_candidates
+                   if clean_author_name(item)), '')
     content = {
         'title': str(note.get('title') or note.get('display_title') or note.get('displayTitle') or ''),
         'description': str(note.get('desc') or note.get('description') or note.get('content') or '')
         .replace('[话题]', '').strip(),
         'cover': images[0] if images else '',
-        'author': str(user.get('nickname') or user.get('nickName') or user.get('nick_name')
-                      or user.get('userName') or user.get('username') or user.get('name')
-                      or note.get('nickname') or note.get('nickName') or note.get('authorName')
-                      or author_text or ''),
-        'avatarUrl': str(raw_avatar),
+        'author': author,
+        # Never pair the logged-in user's avatar with an empty/filtered author.
+        'avatarUrl': str(raw_avatar) if author and user_author else '',
         'tags': tags,
     }
     if kind == 'normal':
