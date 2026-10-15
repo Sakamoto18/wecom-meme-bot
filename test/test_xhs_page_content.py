@@ -54,6 +54,14 @@ class PublicContentTests(unittest.TestCase):
         self.assertEqual(result['description'], '正文 #高达#')
         self.assertEqual(result['images'], [])
 
+    def test_provider_accepts_xhs_author_aliases(self):
+        result = module.normalize_note({'type': 'video', 'authorInfo': {
+            'nick_name': '作者乙', 'imageb': 'https://cdn.example/avatar.jpg'},
+            'videoInfo': {'media': {'stream': {'h264': [
+                {'height': 720, 'master_url_hd': 'https://cdn.example/video.mp4'}]}}}})
+        self.assertEqual(result['author'], '作者乙')
+        self.assertEqual(result['avatarUrl'], 'https://cdn.example/avatar.jpg')
+
     def test_unknown_type_is_not_success(self):
         with self.assertRaises(ValueError):
             module.normalize_note({'type': 'unknown'})

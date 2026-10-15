@@ -46,9 +46,14 @@ def normalize_note(note):
                            and (info.get('url') or info.get('urlDefault') or info.get('url_default'))), None)
         if isinstance(url, str) and url.startswith(('https://', 'http://')) and url not in images:
             images.append(url)
-    user = note.get('user') or note.get('user_info') or note.get('userInfo') or {}
+    user = (note.get('user') or note.get('user_info') or note.get('userInfo')
+            or note.get('author') or note.get('authorInfo') or {})
     if not isinstance(user, dict):
         user = {}
+    raw_avatar = (user.get('avatar') or user.get('avatarUrl') or user.get('avatar_url')
+                  or user.get('image') or user.get('imageb') or user.get('images') or '')
+    if isinstance(raw_avatar, list):
+        raw_avatar = next((item for item in raw_avatar if isinstance(item, str)), '')
     tags = []
     for tag in note.get('tagList', note.get('tag_list', [])) or []:
         name = tag.get('name') if isinstance(tag, dict) else tag
@@ -59,8 +64,10 @@ def normalize_note(note):
         'description': str(note.get('desc') or note.get('description') or note.get('content') or '')
         .replace('[话题]', '').strip(),
         'cover': images[0] if images else '',
-        'author': str(user.get('nickname') or user.get('nickName') or ''),
-        'avatarUrl': str(user.get('avatar') or user.get('avatarUrl') or ''),
+        'author': str(user.get('nickname') or user.get('nickName') or user.get('nick_name')
+                      or user.get('userName') or user.get('username') or user.get('name')
+                      or note.get('nickname') or note.get('nickName') or note.get('authorName') or ''),
+        'avatarUrl': str(raw_avatar),
         'tags': tags,
     }
     if kind == 'normal':

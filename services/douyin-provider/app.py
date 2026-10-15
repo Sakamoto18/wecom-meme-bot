@@ -38,6 +38,7 @@ RESOLVE_TIMEOUT = 20
 NAVIGATION_TIMEOUT_MS = 10000
 BILIBILI_NAV_URL = 'https://api.bilibili.com/x/web-interface/nav'
 XHS_NAVIGATION_TIMEOUT_MS = 15000
+XHS_DATA_WAIT_MS = 8000
 XHS_HOSTS = ('www.xiaohongshu.com', 'xiaohongshu.com')
 XHS_REMOVED_MARKERS = (
     '笔记不存在', '内容不存在', '当前笔记已删除', '该内容已被删除',
@@ -179,6 +180,40 @@ def _find_xhs_note(value, depth=0, seen=None):
     return None
 
 
+async def rendered_xhs_author(page):
+    """Read the note author's visible profile link as a last metadata fallback."""
+    script = """() => {
+      const links = [...document.querySelectorAll('a[href*="/user/profile/"]')];
+      for (const link of links) {
+        const text = (link.innerText || link.textContent || '').trim();
+        const image = link.querySelector('img');
+        const avatar = image?.currentSrc || image?.src || image?.getAttribute('data-src') || '';
+        if (text || avatar) return {author: text, avatarUrl: avatar};
+      }
+      return {author: '', avatarUrl: ''};
+    }"""
+    with suppress(Exception):
+        result = await page.evaluate(script)
+        if isinstance(result, dict):
+            return {
+                'author': str(result.get('author') or '').strip(),
+                'avatarUrl': str(result.get('avatarUrl') or '').strip(),
+            }
+    return {'author': '', 'avatarUrl': ''}
+
+
+def merge_xhs_author(data, author_data):
+    if not isinstance(data, dict):
+        return data
+    if not isinstance(author_data, dict):
+        return data
+    return {
+        **data,
+        'author': data.get('author') or author_data.get('author') or '',
+        'avatarUrl': data.get('avatarUrl') or author_data.get('avatarUrl') or '',
+    }
+
+
 async def xhs_login_state():
     """Return login metadata without ever returning cookies or tokens."""
     ctx = await get_xhs_context()
@@ -255,39 +290,58 @@ async def resolve_xhs_request(url):
         page.on('response', capture)
         try:
             response = await page.goto(
-                url, wait_until='domcontentloaded', timeout=XHS_NAVIGATION_TIMEOUT_MS,
+                url, wait_until='commit', timeout=XHS_NAVIGATION_TIMEOUT_MS,
             )
         except PlaywrightTimeoutError:
             logger.warning('XHS navigation deadline reached; inspecting rendered page')
             response = None
-        await page.wait_for_timeout(2500)
-        for task in list(response_tasks):
-            with suppress(Exception):
-                await task
+        await page.wait_for_timeout(800)
+        deadline = time.monotonic() + XHS_DATA_WAIT_MS / 1000
+        html_text = ''
         canonical = page.url
+        author_data = {'author': '', 'avatarUrl': ''}
+        author_checked_at = 0.0
+        with suppress(Exception):
+            author_data = await rendered_xhs_author(page)
+        while time.monotonic() < deadline:
+            for task in list(response_tasks):
+                with suppress(Exception):
+                    await task
+            canonical = page.url
+            if time.monotonic() - author_checked_at >= 1.0:
+                author_checked_at = time.monotonic()
+                with suppress(Exception):
+                    rendered = await rendered_xhs_author(page)
+                    author_data = {
+                        'author': author_data.get('author') or rendered.get('author') or '',
+                        'avatarUrl': author_data.get('avatarUrl') or rendered.get('avatarUrl') or '',
+                    }
+            # Prefer structured note/API data over OG metadata so a video
+            # cover is never returned as a gallery before its stream arrives.
+            with suppress(Exception):
+                state = await page.evaluate('() => window.__INITIAL_STATE__ || null')
+                parsed = _find_xhs_note(state)
+                if parsed:
+                    return merge_xhs_author(parsed, author_data)
+            with suppress(Exception):
+                for script in await page.locator('script').all_text_contents():
+                    source = script.strip()
+                    if not source or not source.startswith(('{', '[')):
+                        continue
+                    parsed = _find_xhs_note(json.loads(source))
+                    if parsed:
+                        return merge_xhs_author(parsed, author_data)
+            for payload in payloads:
+                parsed = _find_xhs_note(payload)
+                if parsed:
+                    return merge_xhs_author(parsed, author_data)
+            await page.wait_for_timeout(250)
         html_text = await page.content()
         if is_note_url(canonical):
             with suppress(Exception):
                 parsed = parse_public_note(html_text, canonical)
                 if parsed:
-                    return parsed
-        with suppress(Exception):
-            state = await page.evaluate('() => window.__INITIAL_STATE__ || null')
-            parsed = _find_xhs_note(state)
-            if parsed:
-                return parsed
-        with suppress(Exception):
-            for script in await page.locator('script').all_text_contents():
-                source = script.strip()
-                if not source or not source.startswith(('{', '[')):
-                    continue
-                parsed = _find_xhs_note(json.loads(source))
-                if parsed:
-                    return parsed
-        for payload in payloads:
-            parsed = _find_xhs_note(payload)
-            if parsed:
-                return parsed
+                    return merge_xhs_author(parsed, author_data)
         marker = xhs_removed_marker(await page.locator('body').inner_text())
         if marker:
             raise ValueError(f'content_removed: 小红书提示「{marker}」')
