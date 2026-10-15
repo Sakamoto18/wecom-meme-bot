@@ -23,7 +23,7 @@ import {
 import { RepeatDetector } from './repeat-detector.js';
 import { Jimp } from 'jimp';
 import { recognizeImageText } from './image-ocr.js';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -1254,6 +1254,10 @@ export function normalizeQqPayload(payload) {
     crazyThursdayRequest: payload.crazy_thursday_request === true,
     crazyThursdayTest: payload.crazy_thursday_test === true,
     crazyThursdayScheduled: payload.crazy_thursday_scheduled === true,
+    crazyThursdayAdd: payload.crazy_thursday_add === true,
+    crazyThursdayList: payload.crazy_thursday_list === true,
+    crazyThursdayDelete: normalizeString(payload.crazy_thursday_delete, 16),
+    crazyThursdayEntry: normalizeString(payload.crazy_thursday_entry, 2_000),
     crazyThursdayDate: normalizeString(payload.crazy_thursday_date, 32),
     crazyThursdayHolidayContext: normalizeString(
       payload.crazy_thursday_holiday_context,
@@ -1926,6 +1930,16 @@ export class QqBotService {
     this.crazyThursdayFetch = options.crazyThursdayFetch ?? globalThis.fetch;
     this.crazyThursdayStyleCache = { fetchedAt: 0, text: '', entries: [] };
     this.crazyThursdayUsedEntries = new Map();
+    this.crazyThursdayEntriesFilePath = String(
+      options.crazyThursdayEntriesFilePath || path.join(process.cwd(), 'data/crazy-thursday-entries.json'),
+    );
+    this.crazyThursdayCustomEntries = [];
+    this.crazyThursdayCustomEntriesLoaded = false;
+    this.crazyThursdayCustomEntriesLoadPromise = null;
+    // Production keeps the online source and merges local additions into the
+    // same candidate pool. Legacy callers can leave this disabled to retain
+    // the old online-only selection behavior.
+    this.crazyThursdayMergeLocalEntries = options.crazyThursdayMergeLocalEntries === true;
     this.repeatDetector = options.repeatDetector ?? new RepeatDetector({
       enabled: options.repeatEnabled ?? true,
       maxTextCharacters: options.repeatMaxTextCharacters,
@@ -1989,6 +2003,74 @@ export class QqBotService {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  async loadCrazyThursdayCustomEntries() {
+    if (this.crazyThursdayCustomEntriesLoaded) return this.crazyThursdayCustomEntries;
+    if (this.crazyThursdayCustomEntriesLoadPromise) {
+      return this.crazyThursdayCustomEntriesLoadPromise;
+    }
+    this.crazyThursdayCustomEntriesLoadPromise = (async () => {
+      let entries = [];
+      try {
+        const raw = await readFile(this.crazyThursdayEntriesFilePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        const values = Array.isArray(parsed) ? parsed : parsed?.entries;
+        if (Array.isArray(values)) {
+          entries = values
+            .map((value) => decodeCrazyThursdayHtml(value))
+            .filter((value) => isSafeCrazyThursdayEntry(value))
+            .filter((value, index, all) => all.indexOf(value) === index)
+            .slice(-500);
+        }
+      } catch (error) {
+        if (error?.code !== 'ENOENT') {
+          this.logger.warn?.(`疯狂星期四自定义文案读取失败，使用空库：${error.message}`);
+        }
+      }
+      this.crazyThursdayCustomEntries = entries;
+      this.crazyThursdayCustomEntriesLoaded = true;
+      this.crazyThursdayCustomEntriesLoadPromise = null;
+      return entries;
+    })();
+    return this.crazyThursdayCustomEntriesLoadPromise;
+  }
+
+  async saveCrazyThursdayCustomEntries() {
+    await mkdir(path.dirname(this.crazyThursdayEntriesFilePath), { recursive: true });
+    await writeFile(
+      this.crazyThursdayEntriesFilePath,
+      `${JSON.stringify({ version: 1, entries: this.crazyThursdayCustomEntries }, null, 2)}\n`,
+      'utf8',
+    );
+  }
+
+  async addCrazyThursdayEntry(value) {
+    const entry = decodeCrazyThursdayHtml(value);
+    if (!isSafeCrazyThursdayEntry(entry)) {
+      throw new Error('文案未通过校验：至少 18 个字，且需要包含疯狂星期四/肯德基/v我50等语境。');
+    }
+    const entries = await this.loadCrazyThursdayCustomEntries();
+    if (entries.includes(entry)) return { entry, added: false, count: entries.length };
+    entries.push(entry);
+    this.crazyThursdayCustomEntries = entries.slice(-500);
+    await this.saveCrazyThursdayCustomEntries();
+    return { entry, added: true, count: this.crazyThursdayCustomEntries.length };
+  }
+
+  async removeCrazyThursdayEntry(index) {
+    const entries = await this.loadCrazyThursdayCustomEntries();
+    const parsed = Number.parseInt(String(index ?? ''), 10);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > entries.length) {
+      throw new Error(`编号无效，请填写 1-${entries.length || 0}。`);
+    }
+    const [entry] = entries.splice(parsed - 1, 1);
+    await this.saveCrazyThursdayCustomEntries();
+    return { entry, count: entries.length };
+  }
+
+  async crazyThursdayCustomList() {
+    return [...await this.loadCrazyThursdayCustomEntries()];
   }
 
   pickCrazyThursdayEntry(entries, date) {
@@ -4012,15 +4094,66 @@ export class QqBotService {
         messages: [{ type: 'text', text: '只有超级管理员可以测试疯狂星期四文案。' }],
       };
     }
+    if (payload.crazyThursdayAdd || payload.crazyThursdayList || payload.crazyThursdayDelete) {
+      if (payload.messageType !== 'private') {
+        return { mode: 'crazy-thursday-ignored', messages: [] };
+      }
+      try {
+        if (payload.crazyThursdayAdd) {
+          const result = await this.addCrazyThursdayEntry(payload.crazyThursdayEntry);
+          return {
+            mode: 'crazy-thursday-entry-added',
+            messages: [{
+              type: 'text',
+              text: result.added
+                ? `已收集第 ${result.count} 条疯狂星期四文案：\n${result.entry}`
+                : `这条文案已经收集过了（当前共 ${result.count} 条）。`,
+            }],
+          };
+        }
+        if (payload.crazyThursdayDelete) {
+          const result = await this.removeCrazyThursdayEntry(payload.crazyThursdayDelete);
+          return {
+            mode: 'crazy-thursday-entry-deleted',
+            messages: [{ type: 'text', text: `已删除第 ${payload.crazyThursdayDelete} 条：\n${result.entry}` }],
+          };
+        }
+        const entries = await this.crazyThursdayCustomList();
+        return {
+          mode: 'crazy-thursday-entry-list',
+          messages: [{
+            type: 'text',
+            text: entries.length
+              ? `已收集 ${entries.length} 条疯狂星期四文案：\n\n${entries.map((entry, index) => `${index + 1}. ${entry}`).join('\n\n')}`
+              : '目前还没有收集的疯狂星期四文案。发送 /crazy-thursday-add 文案 来添加。',
+          }],
+        };
+      } catch (error) {
+        return { mode: 'crazy-thursday-entry-error', messages: [{ type: 'text', text: error.message }] };
+      }
+    }
     const date = /^\d{4}-\d{2}-\d{2}$/u.test(payload.crazyThursdayDate)
       ? payload.crazyThursdayDate
       : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
     // 这里故意不调用大模型：用户要的是公开文案原文，不是模型二次创作。
     // 在线库按 6 小时缓存，同一天的多次定时推送避免重复选同一条。
+    const customEntries = await this.loadCrazyThursdayCustomEntries();
+    let candidates;
     const onlineEntries = await this.loadCrazyThursdayStyleEntries();
-    // 每次按推送日期筛选，原文缓存不变；线上库全部过期时从本地原文选取。
-    const text = this.pickCrazyThursdayEntry(onlineEntries, date)
-      || this.pickCrazyThursdayEntry(CRAZY_THURSDAY_LOCAL_ENTRIES, date);
+    if (this.crazyThursdayMergeLocalEntries) {
+      // 在线原文、仓库内置原文和管理员收集文案进入同一候选池，统一随机
+      // 抽取；本地文案只是可加入的内容，不替代 GitHub，也不设置优先级。
+      candidates = [...onlineEntries, ...CRAZY_THURSDAY_LOCAL_ENTRIES, ...customEntries];
+    } else {
+      candidates = onlineEntries.length
+        ? onlineEntries
+        : [...customEntries, ...CRAZY_THURSDAY_LOCAL_ENTRIES];
+    }
+    candidates = candidates.filter((entry, index, all) => all.indexOf(entry) === index);
+    let text = this.pickCrazyThursdayEntry(candidates, date);
+    if (!text && !this.crazyThursdayMergeLocalEntries) {
+      text = this.pickCrazyThursdayEntry([...customEntries, ...CRAZY_THURSDAY_LOCAL_ENTRIES], date);
+    }
     if (!text) throw new Error('没有可用的疯狂星期四公开文案');
     return {
       mode: 'crazy-thursday',

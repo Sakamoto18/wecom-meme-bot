@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
 import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
 
 function createService(options = {}) {
@@ -241,4 +244,32 @@ test('online public copy is parsed as complete entries', async () => {
 test('normal payloads preserve crazy Thursday fields only when explicitly set', () => {
   const payload = normalizeQqPayload({ message_type: 'group', group_id: '1', user_id: 'u', text: 'hi' });
   assert.equal(payload.crazyThursdayRequest, false);
+});
+
+test('管理员可以收集、查看和删除本地疯狂星期四文案', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'crazy-thursday-'));
+  const filePath = path.join(directory, 'entries.json');
+  try {
+    const { service } = createService({ crazyThursdayEntriesFilePath: filePath });
+    const entry = '公司通知今天集体学习先进经验，散会后请把疯狂星期四的五十转我。';
+    const added = await service.handleMessage({
+      message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
+      crazy_thursday_add: true, crazy_thursday_entry: entry,
+    });
+    assert.equal(added.mode, 'crazy-thursday-entry-added');
+    assert.match(added.messages[0].text, /已收集第 1 条/u);
+    assert.match(await readFile(filePath, 'utf8'), /先进经验/u);
+    const listed = await service.handleMessage({
+      message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
+      crazy_thursday_list: true,
+    });
+    assert.match(listed.messages[0].text, /1\. 公司通知/u);
+    const removed = await service.handleMessage({
+      message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
+      crazy_thursday_delete: '1',
+    });
+    assert.equal(removed.mode, 'crazy-thursday-entry-deleted');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

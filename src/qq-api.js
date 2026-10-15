@@ -338,6 +338,11 @@ export function createQqApiServer(options) {
 export async function createQqRuntime() {
   const longtuIndexPath = path.join(projectRoot, 'data/longtu-index.json');
   const longtuExclusionsPath = path.join(projectRoot, 'data/longtu-exclusions.json');
+  const crazyThursdayEntriesPath = path.resolve(
+    projectRoot,
+    process.env.QQ_CRAZY_THURSDAY_ENTRIES_FILE?.trim()
+      || 'data/crazy-thursday-entries.json',
+  );
   const bundledLongtuDirectory = path.join(projectRoot, 'memes', 'longtu');
   const longtuTextAliasesPath = path.join(projectRoot, 'config/longtu-text-aliases.json');
   const libraryDatabasePath = path.resolve(
@@ -750,6 +755,8 @@ export async function createQqRuntime() {
     crazyThursdayStyleSourceUrl: process.env.QQ_CRAZY_THURSDAY_STYLE_URL?.trim()
       || 'https://cdn.jsdmirror.com/gh/vikiboss/v50@main/static/v50.json',
     conversationStore,
+    crazyThursdayEntriesFilePath: crazyThursdayEntriesPath,
+    crazyThursdayMergeLocalEntries: true,
     memeStore,
     webSearch: usageTracker.wrapWebSearch(webSearch),
     webSearchEnabled,

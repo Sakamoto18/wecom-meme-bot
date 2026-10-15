@@ -64,7 +64,8 @@ CRAZY_THURSDAY_SLOTS = (
 )
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
-    "/stop", "/usage-report", "/persona", "/crazy-thursday",
+    "/stop", "/usage-report", "/persona", "/crazy-thursday", "/crazy-thursday-add",
+    "/crazy-thursday-list", "/crazy-thursday-del",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
@@ -1270,6 +1271,19 @@ class LongtuQqBridge(Star):
     def _crazy_thursday_command(cls, event: AstrMessageEvent) -> bool:
         raw_text = (cls._raw_text(event) or event.message_str or "").strip()
         return bool(re.fullmatch(r"/crazy-thursday(?:\s+test)?\s*", raw_text, re.IGNORECASE))
+
+    @classmethod
+    def _crazy_thursday_entry_command(cls, event: AstrMessageEvent):
+        raw_text = (cls._raw_text(event) or event.message_str or "").strip()
+        added = re.fullmatch(r"/crazy-thursday-add\s+([\s\S]+?)\s*", raw_text, re.IGNORECASE)
+        if added:
+            return "add", added.group(1).strip()
+        if re.fullmatch(r"/crazy-thursday-list\s*", raw_text, re.IGNORECASE):
+            return "list", ""
+        removed = re.fullmatch(r"/crazy-thursday-del\s+(\d+)\s*", raw_text, re.IGNORECASE)
+        if removed:
+            return "delete", removed.group(1)
+        return None, ""
 
     @staticmethod
     def _usage_report_period(argument: str, now: datetime | None = None):
@@ -2863,6 +2877,42 @@ class LongtuQqBridge(Star):
                 # 消息识别。仅放行图库管理命令与超管 /stop，其余斜杠命令继续
                 # 停止，避免 /w、/help 等内置命令或其他插件被误触发。
                 if not self._is_allowed_bridge_slash_command(event):
+                    return
+                entry_command, entry_value = self._crazy_thursday_entry_command(event)
+                if entry_command:
+                    # 文案收集只允许超管私聊，群里静默忽略，避免把管理命令
+                    # 和长文案刷进群聊；实际权限和内容校验仍由 Node 再做一次。
+                    if not event.is_private_chat():
+                        return
+                    requested_by = str(event.get_sender_id() or "").strip()
+                    entry_payload = {
+                        "message_id": str(event.message_obj.message_id or ""),
+                        "message_type": "private",
+                        "group_id": event.get_group_id(),
+                        "user_id": requested_by,
+                        "sender_name": event.get_sender_name(),
+                        "text": "",
+                        "crazy_thursday_request": True,
+                        "crazy_thursday_add": entry_command == "add",
+                        "crazy_thursday_list": entry_command == "list",
+                        "crazy_thursday_delete": entry_value if entry_command == "delete" else "",
+                        "crazy_thursday_entry": entry_value if entry_command == "add" else "",
+                    }
+                    try:
+                        response = await self._request_backend(entry_payload)
+                        texts = [
+                            str(item.get("text") or "").strip()
+                            for item in response.get("messages", [])
+                            if isinstance(item, dict) and item.get("type") == "text"
+                        ]
+                        if texts:
+                            for generated in texts:
+                                yield event.plain_result(generated)
+                        else:
+                            yield event.plain_result("文案管理没有返回结果，请检查 QQ Bot 服务日志。")
+                    except Exception as error:
+                        logger.error(f"疯狂星期四文案管理失败：{error}")
+                        yield event.plain_result("疯狂星期四文案管理失败，请检查服务日志。")
                     return
                 if self._crazy_thursday_command(event):
                     # /crazy-thursday 是超管私聊调试入口；群聊只保留定时推送，
