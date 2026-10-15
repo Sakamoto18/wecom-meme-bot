@@ -535,6 +535,12 @@ export function buildNormalReplyContextPrompt(options = {}) {
   const interaction = options.interactionContext ?? {};
   return [
     `正在与你对话的人：${interaction.speakerLabel || '当前用户'}。这是对话对象，不是需要向旁人介绍的提问者；直接回答对方。`,
+    ...(interaction.groupId || interaction.botUserId
+      ? [`QQ 路由身份已确认（仅供内部消歧）：当前群号=${interaction.groupId || '未知'}；机器人 QQ 号=${interaction.botUserId || '未知'}。不要在最终回复中输出这些编号。`]
+      : []),
+    ...(interaction.explicitBotMention
+      ? [`本轮真实 @ 已命中机器人 QQ 号${interaction.botUserId ? `（${interaction.botUserId}）` : ''}；@ 后的完整昵称${interaction.explicitBotDisplayName ? `“${interaction.explicitBotDisplayName}”` : ''}只是机器人称呼。把整条消息理解为对机器人说话，不要把昵称后缀拆成第三方成员或现实事实。`]
+      : []),
     ...(interaction.addressedBotByName
       ? [`语用关系已确认：当前消息称呼机器人为“${interaction.addressedBotName}”。把这句话理解为对机器人说话，不要把称呼误归给当前发言者或引用作者。`]
       : []),

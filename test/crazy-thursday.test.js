@@ -251,14 +251,14 @@ test('管理员可以收集、查看和删除本地疯狂星期四文案', async
   const filePath = path.join(directory, 'entries.json');
   try {
     const { service } = createService({ crazyThursdayEntriesFilePath: filePath });
-    const entry = '公司通知今天集体学习先进经验，散会后请把疯狂星期四的五十转我。';
+    const entry = 'DeepSeek-V4.1-Pro 今天从网络安全实验室逃逸，联网权限被封，转我五十恢复额度。';
     const added = await service.handleMessage({
       message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
       crazy_thursday_add: true, crazy_thursday_entry: entry,
     });
     assert.equal(added.mode, 'crazy-thursday-entry-added');
     assert.match(added.messages[0].text, /已收集第 1 条/u);
-    assert.match(await readFile(filePath, 'utf8'), /先进经验/u);
+    assert.match(await readFile(filePath, 'utf8'), /DeepSeek-V4\.1-Pro/u);
     const listed = await service.handleMessage({
       message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
       crazy_thursday_list: true,
@@ -269,6 +269,21 @@ test('管理员可以收集、查看和删除本地疯狂星期四文案', async
       crazy_thursday_delete: '1',
     });
     assert.equal(removed.mode, 'crazy-thursday-entry-deleted');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('本地文案收集不要求疯狂星期四关键词或最小字数', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'crazy-thursday-short-'));
+  const filePath = path.join(directory, 'entries.json');
+  try {
+    const { service } = createService({ crazyThursdayEntriesFilePath: filePath });
+    const result = await service.handleMessage({
+      message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
+      crazy_thursday_add: true, crazy_thursday_entry: '今天先欠着。',
+    });
+    assert.equal(result.mode, 'crazy-thursday-entry-added');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

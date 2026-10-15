@@ -168,6 +168,10 @@ function detectBotAddress(text, botNames, explicitlyMentioned = false, explicitB
 export function getGroupInteractionContext(message, memberAliases = {}) {
   if (message?.chattype !== 'group') {
     return {
+      groupId: '',
+      botUserId: '',
+      explicitBotMention: false,
+      explicitBotDisplayName: '',
       speakerLabel: '',
       targetLabels: [],
       quotedAuthorLabel: '',
@@ -185,6 +189,7 @@ export function getGroupInteractionContext(message, memberAliases = {}) {
   }
   const senderId = String(message?.from?.userid ?? '').trim();
   const botUserId = String(message?.bot_user_id ?? '').trim();
+  const groupId = String(message?.chatid ?? '').trim();
   const speakerLabel = getParticipantLabel(
     senderId,
     message?.from?.name,
@@ -222,6 +227,7 @@ export function getGroupInteractionContext(message, memberAliases = {}) {
     String(participant?.user_id ?? participant?.userid ?? '').trim() === botUserId
   ));
   const explicitBotMention = Boolean(explicitBotParticipant);
+  const explicitBotDisplayName = normalizeDisplayName(explicitBotParticipant?.name);
   const botAddress = detectBotAddress(
     compactMessageText(message),
     normalizeBotNames(message),
@@ -229,6 +235,10 @@ export function getGroupInteractionContext(message, memberAliases = {}) {
     normalizeDisplayName(explicitBotParticipant?.name),
   );
   return {
+    groupId,
+    botUserId,
+    explicitBotMention,
+    explicitBotDisplayName,
     speakerLabel,
     targetLabels,
     quotedAuthorLabel,
@@ -248,6 +258,16 @@ export function buildModelInput(message, content, memberAliases = {}) {
 
   const interaction = getGroupInteractionContext(message, memberAliases);
   const lines = ['当前发言人：' + interaction.speakerLabel];
+  if (interaction.groupId || interaction.botUserId) {
+    lines.push(
+      `QQ 会话身份（仅供路由消歧，不要向用户输出）：当前群号=${interaction.groupId || '未知'}；机器人 QQ 号=${interaction.botUserId || '未知'}。`,
+    );
+  }
+  if (interaction.explicitBotMention) {
+    lines.push(
+      `真实 @ 关系已确认：本条消息 @ 的 QQ ID 与机器人 QQ 号一致；${interaction.explicitBotDisplayName ? `完整显示名“${interaction.explicitBotDisplayName}”` : '该 @ 显示名'}只是机器人当前昵称/用户称呼，不是第三方成员、现实身份或事实标签。`,
+    );
+  }
   if (interaction.targetLabels.length > 0) {
     lines.push('本条消息指向或提到的群成员：' + interaction.targetLabels.join('、'));
   }

@@ -181,6 +181,28 @@ test('真实 @机器人会确认收件关系，不能被第三方目标过滤误
   assert.match(buildModelInput(message, '你怎么看'), /被点名者/);
 });
 
+test('真实 @带后缀昵称时仍以 QQ ID 认定机器人，并把群号交给模型消歧', () => {
+  const message = {
+    msgtype: 'text',
+    chattype: 'group',
+    chatid: '766304475',
+    from: { userid: 'sender', name: '发言者' },
+    bot_user_id: '2170902293',
+    bot_names: ['龙玉涛'],
+    mentions: [{ user_id: '2170902293', name: '龙玉涛bot-deepseek大肥鱼版' }],
+    text: { content: '@龙玉涛bot-deepseek大肥鱼版 还能说话吗' },
+  };
+  const interaction = getGroupInteractionContext(message);
+  assert.equal(interaction.explicitBotMention, true);
+  assert.equal(interaction.botUserId, '2170902293');
+  assert.equal(interaction.groupId, '766304475');
+  assert.equal(interaction.addressedBotName, '龙玉涛bot-deepseek大肥鱼版');
+  const input = buildModelInput(message, '还能说话吗');
+  assert.match(input, /当前群号=766304475；机器人 QQ 号=2170902293/u);
+  assert.match(input, /完整显示名“龙玉涛bot-deepseek大肥鱼版”只是机器人当前昵称/u);
+  assert.match(input, /不是第三方成员、现实身份或事实标签/u);
+});
+
 test('临时外号只作为不可信候选，不写进固定机器人别名', () => {
   const message = {
     msgtype: 'text',

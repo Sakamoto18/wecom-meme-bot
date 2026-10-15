@@ -2019,7 +2019,9 @@ export class QqBotService {
         if (Array.isArray(values)) {
           entries = values
             .map((value) => decodeCrazyThursdayHtml(value))
-            .filter((value) => isSafeCrazyThursdayEntry(value))
+            // 管理员本地池是素材收藏，不套用公开网络文案的主题/日期
+            // 筛选；否则正常的反差铺垫会因为没出现关键词而丢失。
+            .filter((value) => value.length > 0 && value.length <= 2_000)
             .filter((value, index, all) => all.indexOf(value) === index)
             .slice(-500);
         }
@@ -2047,8 +2049,11 @@ export class QqBotService {
 
   async addCrazyThursdayEntry(value) {
     const entry = decodeCrazyThursdayHtml(value);
-    if (!isSafeCrazyThursdayEntry(entry)) {
-      throw new Error('文案未通过校验：至少 18 个字，且需要包含疯狂星期四/肯德基/v我50等语境。');
+    if (!entry) {
+      throw new Error('文案不能为空。');
+    }
+    if (entry.length > 2_000) {
+      throw new Error('单条文案不能超过 2000 字。');
     }
     const entries = await this.loadCrazyThursdayCustomEntries();
     if (entries.includes(entry)) return { entry, added: false, count: entries.length };
@@ -3957,6 +3962,17 @@ export class QqBotService {
 
   async handleMessage(input) {
     const payload = normalizeQqPayload(input);
+    if (payload.botUserId && (payload.messageType === 'private' || payload.mentions.length > 0)) {
+      const selfMentioned = payload.mentions.some(
+        (participant) => participant.userId === payload.botUserId,
+      );
+      this.logger.log?.(
+        `QQ 身份路由：chat=${payload.messageType === 'group' ? payload.groupId : 'private'} `
+        + `sender=${payload.userId} bot=${payload.botUserId} `
+        + `mentions=${payload.mentions.map((participant) => `${participant.userId}:${participant.name || '-'}`).join('|') || '-'} `
+        + `self_mentioned=${selfMentioned ? 'yes' : 'no'}`,
+      );
+    }
     const largeGroup = payload.messageType === 'group'
       && this.isLargeGroup(payload.groupId, payload);
     if (this.usageTracker) {
