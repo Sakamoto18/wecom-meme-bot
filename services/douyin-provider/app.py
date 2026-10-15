@@ -147,7 +147,7 @@ def _looks_like_xhs_note(value):
     )
 
 
-def _find_xhs_note(value, depth=0, seen=None):
+def _find_xhs_note(value, depth=0, seen=None, target_id=''):
     """Find a note object in the initial state or captured API payload."""
     if depth > 8 or value is None:
         return None
@@ -158,23 +158,29 @@ def _find_xhs_note(value, depth=0, seen=None):
         if marker in seen:
             return None
         seen.add(marker)
+        identity = str(value.get('noteId') or value.get('note_id') or value.get('noteID') or '')
+        fallback = None
         if _looks_like_xhs_note(value):
             try:
-                return normalize_note(value)
+                fallback = normalize_note(value)
+                if target_id and identity == target_id:
+                    return fallback
             except (TypeError, ValueError, KeyError):
                 pass
         for key in ('note', 'note_card', 'noteCard', 'noteDetail', 'note_detail'):
             candidate = value.get(key)
-            found = _find_xhs_note(candidate, depth + 1, seen)
+            found = _find_xhs_note(candidate, depth + 1, seen, target_id)
             if found:
                 return found
         for candidate in value.values():
-            found = _find_xhs_note(candidate, depth + 1, seen)
+            found = _find_xhs_note(candidate, depth + 1, seen, target_id)
             if found:
                 return found
+        if fallback:
+            return fallback
     elif isinstance(value, list):
         for candidate in value:
-            found = _find_xhs_note(candidate, depth + 1, seen)
+            found = _find_xhs_note(candidate, depth + 1, seen, target_id)
             if found:
                 return found
     return None
@@ -301,6 +307,7 @@ async def resolve_xhs_request(url):
         deadline = time.monotonic() + XHS_DATA_WAIT_MS / 1000
         html_text = ''
         canonical = page.url
+        target_id = urlsplit(canonical).path.rstrip('/').rsplit('/', 1)[-1]
         author_data = {'author': '', 'avatarUrl': ''}
         author_checked_at = 0.0
         with suppress(Exception):
@@ -310,6 +317,7 @@ async def resolve_xhs_request(url):
                 with suppress(Exception):
                     await task
             canonical = page.url
+            target_id = urlsplit(canonical).path.rstrip('/').rsplit('/', 1)[-1]
             if time.monotonic() - author_checked_at >= 1.0:
                 author_checked_at = time.monotonic()
                 with suppress(Exception):
@@ -322,7 +330,7 @@ async def resolve_xhs_request(url):
             # cover is never returned as a gallery before its stream arrives.
             with suppress(Exception):
                 state = await page.evaluate('() => window.__INITIAL_STATE__ || null')
-                parsed = _find_xhs_note(state)
+                parsed = _find_xhs_note(state, target_id=target_id)
                 if parsed:
                     return merge_xhs_author(parsed, author_data)
             with suppress(Exception):
@@ -330,11 +338,11 @@ async def resolve_xhs_request(url):
                     source = script.strip()
                     if not source or not source.startswith(('{', '[')):
                         continue
-                    parsed = _find_xhs_note(json.loads(source))
+                    parsed = _find_xhs_note(json.loads(source), target_id=target_id)
                     if parsed:
                         return merge_xhs_author(parsed, author_data)
             for payload in payloads:
-                parsed = _find_xhs_note(payload)
+                parsed = _find_xhs_note(payload, target_id=target_id)
                 if parsed:
                     return merge_xhs_author(parsed, author_data)
             await page.wait_for_timeout(250)
