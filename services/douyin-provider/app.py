@@ -1,5 +1,6 @@
 import asyncio
 import html
+import json
 import logging
 import os
 import tempfile
@@ -38,7 +39,10 @@ NAVIGATION_TIMEOUT_MS = 10000
 BILIBILI_NAV_URL = 'https://api.bilibili.com/x/web-interface/nav'
 XHS_NAVIGATION_TIMEOUT_MS = 15000
 XHS_HOSTS = ('www.xiaohongshu.com', 'xiaohongshu.com')
-XHS_REMOVED_MARKERS = ('笔记不存在', '内容不存在', '已删除', '无法查看', '已失效')
+XHS_REMOVED_MARKERS = (
+    '笔记不存在', '内容不存在', '当前笔记已删除', '该内容已被删除',
+    '无法查看该笔记', '页面不见了', '访问的页面不见了',
+)
 
 
 def is_real_video_url(url):
@@ -126,6 +130,11 @@ def xhs_context_closed(*_):
 def xhs_removed_marker(text):
     body = str(text or '')
     return next((marker for marker in XHS_REMOVED_MARKERS if marker in body), '')
+
+
+def is_xhs_host(hostname):
+    host = str(hostname or '').lower().rstrip('.')
+    return host == 'xiaohongshu.com' or host.endswith('.xiaohongshu.com')
 
 
 def _looks_like_xhs_note(value):
@@ -223,13 +232,15 @@ async def resolve_xhs_request(url):
     async def capture_response(response):
         try:
             parsed = urlsplit(response.url)
-            if parsed.hostname not in XHS_HOSTS or response.status != 200:
+            if not is_xhs_host(parsed.hostname):
                 return
             content_type = response.headers.get('content-type', '')
+            if response.status != 200:
+                return
             if 'json' not in content_type.lower():
                 return
             payload = await response.json()
-            if len(payloads) < 32:
+            if len(payloads) < 128:
                 payloads.append(payload)
         except Exception:
             return
@@ -242,10 +253,14 @@ async def resolve_xhs_request(url):
     try:
         page = await ctx.new_page()
         page.on('response', capture)
-        response = await page.goto(
-            url, wait_until='domcontentloaded', timeout=XHS_NAVIGATION_TIMEOUT_MS,
-        )
-        await page.wait_for_timeout(1800)
+        try:
+            response = await page.goto(
+                url, wait_until='domcontentloaded', timeout=XHS_NAVIGATION_TIMEOUT_MS,
+            )
+        except PlaywrightTimeoutError:
+            logger.warning('XHS navigation deadline reached; inspecting rendered page')
+            response = None
+        await page.wait_for_timeout(2500)
         for task in list(response_tasks):
             with suppress(Exception):
                 await task
@@ -261,6 +276,14 @@ async def resolve_xhs_request(url):
             parsed = _find_xhs_note(state)
             if parsed:
                 return parsed
+        with suppress(Exception):
+            for script in await page.locator('script').all_text_contents():
+                source = script.strip()
+                if not source or not source.startswith(('{', '[')):
+                    continue
+                parsed = _find_xhs_note(json.loads(source))
+                if parsed:
+                    return parsed
         for payload in payloads:
             parsed = _find_xhs_note(payload)
             if parsed:
@@ -271,6 +294,13 @@ async def resolve_xhs_request(url):
         status = await xhs_login_state()
         if not status['logged_in']:
             raise ValueError('小红书登录态无效，请访问 /xhs-login.png 扫码登录')
+        safe_url = urlsplit(canonical)
+        logger.warning(
+            'XHS page no data url=%s title=%s final_path=%s payloads=%d body=%s',
+            f'{safe_url.netloc}{safe_url.path}',
+            (await page.title())[:120], safe_url.path, len(payloads),
+            ' '.join((await page.locator('body').inner_text())[:240].split()),
+        )
         raise ValueError('小红书页面未返回可用笔记数据')
     finally:
         if page is not None:

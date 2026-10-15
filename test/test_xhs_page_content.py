@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-spec = importlib.util.spec_from_file_location('page_content', Path(__file__).resolve().parents[1] / 'services/spider-xhs/page_content.py')
+spec = importlib.util.spec_from_file_location('xhs_content', Path(__file__).resolve().parents[1] / 'services/douyin-provider/xhs_content.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
@@ -66,6 +66,15 @@ class PublicContentTests(unittest.TestCase):
         self.assertEqual(result['images'], ['https://cdn.example/1.jpg'])
         self.assertEqual(result['description'], 'undefined #test#')
 
+    def test_public_og_and_jsonld_fallback_returns_gallery(self):
+        html = '''<meta property="og:title" content="公开标题">
+            <meta property="og:description" content="公开正文">
+            <meta property="og:image" content="https://cdn.example/cover.jpg">
+            <script type="application/ld+json">{"@type":"Article","author":{"name":"作者甲"},"image":"https://cdn.example/detail.jpg"}</script>'''
+        result = module.parse_public_note(html, 'https://www.xiaohongshu.com/explore/fallback123')
+        self.assertEqual(result['media_type'], 'gallery')
+        self.assertEqual(result['images'], ['https://cdn.example/cover.jpg', 'https://cdn.example/detail.jpg'])
+        self.assertEqual(result['author'], '作者甲')
 
 if __name__ == '__main__':
     unittest.main()

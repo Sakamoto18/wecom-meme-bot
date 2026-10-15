@@ -923,7 +923,7 @@ export class MediaResolver {
         if (candidate?.provider === 'xiaohongshu'
           && !publicMetadata.mediaUrl
           && !publicMetadata.images?.length) {
-          throw new Error('小红书图文详情不可用：Provider 和公开页面均未返回可用媒体，不能据此判断笔记不存在或账号无权限');
+          throw new Error('小红书图文详情不可用：Provider 和公开页面均未返回可用媒体，无法确认笔记状态或账号权限');
         }
         let downloaded;
         try {
