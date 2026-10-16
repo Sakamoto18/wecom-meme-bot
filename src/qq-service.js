@@ -1737,6 +1737,12 @@ export class QqBotService {
     this.webSearch = options.webSearch;
     this.webSearchEnabled = options.webSearchEnabled ?? true;
     this.cultureCache = options.cultureCache ?? null;
+    this.longtuRetrievalEnabled = options.longtuRetrievalEnabled !== false;
+    this.longtuTiebaSearchEnabled = options.longtuTiebaSearchEnabled !== false;
+    this.longtuRetrievalMaxQueries = Math.max(
+      1,
+      Math.min(2, Number(options.longtuRetrievalMaxQueries ?? 2) || 2),
+    );
     // Some large groups generate a high volume of passive “read the air”
     // replies. Keep their normal replies, but do not let those observations
     // spend search quota; direct @/quote requests remain eligible.
@@ -3028,6 +3034,9 @@ export class QqBotService {
         chatClient: this.chatClient,
         webSearch: this.webSearch,
         cultureCache: this.cultureCache,
+        longtuRetrievalEnabled: this.longtuRetrievalEnabled,
+        longtuTiebaSearchEnabled: this.longtuTiebaSearchEnabled,
+        longtuRetrievalMaxQueries: this.longtuRetrievalMaxQueries,
         webSearchEnabled: this.searchEnabledForMessage(message, {
           activeReply: options.activeReply === true,
           directBotMention: options.directBotMention === true,
@@ -3127,7 +3136,11 @@ export class QqBotService {
           + `，fact=${generated.factSearchAttempted ? 'on' : 'off'}`
           + `，culture=${generated.cultureSearchAttempted ? 'on' : 'off'}`
           + `，culture_cache=${generated.cultureCacheHit ? 'hit' : 'miss'}`
-          + `，culture_card=${generated.cultureCardUsed ? 'yes' : 'no'}`,
+          + `，culture_card=${generated.cultureCardUsed ? 'yes' : 'no'}`
+          + `，culture_domain=${generated.cultureDomain || 'none'}`
+          + `，longtu_lookup=${Number(generated.longtuLookupNeeded || 0).toFixed(2)}`
+          + `，tieba=${generated.longtuSearchAttempted ? 'on' : 'off'}`
+          + `，tieba_results=${generated.longtuSearchResultCount || 0}`,
         );
       }
 

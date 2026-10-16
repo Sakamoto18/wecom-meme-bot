@@ -3,6 +3,11 @@ import path from 'node:path';
 
 const MODES = new Set(['auto', 'on', 'off', 'shadow']);
 const DEFAULT_COOLDOWN_MS = 60 * 60 * 1000;
+const RESPONSE_MODES = new Set(['banter', 'judgment', 'concise_answer', 'explanation', 'serious_support']);
+const CULTURE_DOMAINS = new Set(['longtu', 'general', 'platform', 'none']);
+const PLATFORMS = new Set(['bilibili', 'xiaohongshu', 'douyin', 'weibo', 'tieba', 'general', 'unknown']);
+const TONES = new Set(['dry', 'sarcastic', 'absurd', 'neutral']);
+const TARGETS = new Set(['content', 'bot', 'third_party', 'unknown']);
 
 function clamp(value, fallback = 0) {
   const number = Number(value);
@@ -16,6 +21,28 @@ function trimText(value, max = 2_000) {
 function normalizeMode(value, fallback = 'off') {
   const mode = String(value ?? '').trim().toLowerCase();
   return MODES.has(mode) ? mode : fallback;
+}
+
+function choice(value, allowed, fallback) {
+  const candidate = String(value?.choice ?? value?.value ?? value ?? '').trim().toLowerCase();
+  return allowed.has(candidate) ? candidate : fallback;
+}
+
+function listValue(value, limit = 8, itemLimit = 80) {
+  const candidates = Array.isArray(value)
+    ? value
+    : (Array.isArray(value?.items) ? value.items
+      : (Array.isArray(value?.values) ? value.values : []));
+  return [...new Set(candidates.map((item) => String(item ?? '').trim().slice(0, itemLimit)).filter(Boolean))]
+    .slice(0, limit);
+}
+
+function contextTerms(context, domain) {
+  const text = String([context?.currentMessage, context?.passiveImageText].filter(Boolean).join('\n'))
+    .normalize('NFKC');
+  const terms = text.match(/龙玉涛|龙图|龙图表情|龙图梗|杀妈|你妈|nm|nmb|mlgb|亡灵骑士|女鬼电梯|抽象|双关|谐音/giu) ?? [];
+  if (domain === 'longtu' && terms.length === 0) terms.push('龙图');
+  return [...new Set(terms)].slice(0, 8);
 }
 
 function errorText(error) {
@@ -197,6 +224,57 @@ const QUESTIONS = {
       false: '已有知识或自然联想足够，联网只会增加噪音。',
     },
   },
+  culture_domain: {
+    type: 'choice',
+    instructions: '当前语境最接近哪个文化领域？只有明确存在龙玉涛、龙图或相关古早互联网语境时才选 longtu。',
+    criteria: {
+      longtu: '龙玉涛、龙图、龙图表情或其衍生语境。',
+      general: '普通网络梗、热词、双关或互联网文化。',
+      platform: '主要依赖某个平台的特殊语境。',
+      none: '没有文化检索价值。',
+    },
+  },
+  longtu_lookup_needed: {
+    type: 'noul',
+    instructions: '当前语境是否值得优先检索公开贴吧中的龙玉涛/龙图语境？',
+    criteria: {
+      true: '需要核对具体龙图梗义、古早用法、出处或容易误读的词族。',
+      false: '现有上下文足够，检索只会增加噪音。',
+    },
+  },
+  platform: {
+    type: 'choice',
+    instructions: '如果当前文化线索明显属于某个平台，选平台；否则选 unknown。',
+    criteria: {
+      bilibili: '哔哩哔哩语境。',
+      xiaohongshu: '小红书语境。',
+      douyin: '抖音语境。',
+      weibo: '微博语境。',
+      tieba: '百度贴吧语境。',
+      general: '没有单一平台依赖。',
+      unknown: '线索不足。',
+    },
+  },
+  tone: {
+    type: 'choice',
+    instructions: '当前最自然的互联网表达气质是什么？',
+    criteria: {
+      dry: '干脆冷幽默。',
+      sarcastic: '阴阳或讽刺。',
+      absurd: '无厘头、反差或抽象联想。',
+      neutral: '中性直接。',
+    },
+  },
+  target: {
+    type: 'choice',
+    instructions: '当前回复主要针对什么对象？只判断语境，不授予攻击权限。',
+    criteria: {
+      content: '针对事情、图片、链接或观点。',
+      bot: '针对机器人本身。',
+      third_party: '明确针对其他第三方。',
+      unknown: '对象不明确。',
+    },
+  },
   response_mode: {
     type: 'choice',
     instructions: '本轮回复最适合采用哪种表达模式？',
@@ -214,6 +292,32 @@ function answerNumber(answers, key) {
   const value = answers?.[key];
   if (typeof value === 'number') return clamp(value);
   return clamp(value?.noul ?? value?.probability ?? value?.yes ?? value?.true_probability);
+}
+
+function normalizeCultureAnswers(answers, context = {}) {
+  const domain = choice(answers?.culture_domain, CULTURE_DOMAINS, 'none');
+  const platform = choice(answers?.platform, PLATFORMS, 'unknown');
+  const tone = choice(answers?.tone, TONES, 'neutral');
+  const target = choice(answers?.target, TARGETS, 'unknown');
+  const lookupNeeded = answerNumber(answers, 'culture_lookup_needed');
+  const longtuLookupNeeded = answerNumber(answers, 'longtu_lookup_needed');
+  const retrievalNeeded = Math.max(lookupNeeded, longtuLookupNeeded);
+  const terms = listValue(answers?.query_terms ?? answers?.culture_terms);
+  const longtuTerms = listValue(answers?.longtu_terms);
+  const derivedTerms = contextTerms(context, domain);
+  return {
+    cultureDomain: domain,
+    platform,
+    tone,
+    target,
+    cultureLookupNeeded: lookupNeeded,
+    longtuLookupNeeded,
+    retrievalNeeded,
+    queryTerms: [...new Set([...terms, ...derivedTerms])].slice(0, 8),
+    longtuTerms: [...new Set([...longtuTerms, ...(domain === 'longtu' ? derivedTerms : [])])].slice(0, 8),
+    associationAngles: listValue(answers?.association_angles),
+    confidence: clamp(answers?.culture_domain?.confidence ?? answers?.confidence, 0),
+  };
 }
 
 export class JevAtmosphereGate {
@@ -343,12 +447,12 @@ export class JevAtmosphereGate {
       const probability = Math.min(shouldSpeak, addsValue, 1 - wouldInterrupt);
       const mode = String(answers?.response_mode?.choice ?? answers?.response_mode?.value ?? '').trim();
       const style = {
-        mode: ['banter', 'judgment', 'concise_answer', 'explanation', 'serious_support'].includes(mode)
-          ? mode : 'concise_answer',
+        mode: RESPONSE_MODES.has(mode) ? mode : 'concise_answer',
         memeFit: answerNumber(answers, 'meme_fit'),
         explanationNeeded: answerNumber(answers, 'explanation_needed'),
         cultureLookupNeeded: answerNumber(answers, 'culture_lookup_needed'),
         confidence: clamp(answers?.response_mode?.confidence, 0),
+        ...normalizeCultureAnswers(answers, context),
       };
       const decision = probability >= this.allowThreshold
         ? 'allow' : probability <= this.skipThreshold ? 'skip' : 'fallback';
@@ -366,10 +470,18 @@ export class JevAtmosphereGate {
   }
 
   async evaluateStyle(context = {}) {
+    // Keep one structured request for style, culture and retrieval routing.
+    // The caller can reuse the returned object for both prompt routing and
+    // the longtu/贴吧 lookup; no second Jev call is needed for the same turn.
     const response = await this.request(context, {
       meme_fit: QUESTIONS.meme_fit,
       explanation_needed: QUESTIONS.explanation_needed,
       culture_lookup_needed: QUESTIONS.culture_lookup_needed,
+      culture_domain: QUESTIONS.culture_domain,
+      longtu_lookup_needed: QUESTIONS.longtu_lookup_needed,
+      platform: QUESTIONS.platform,
+      tone: QUESTIONS.tone,
+      target: QUESTIONS.target,
       response_mode: QUESTIONS.response_mode,
     }, 'jev-style');
     if (!response.ok) return { decision: 'fallback', reason: response.reason, style: null };
@@ -379,12 +491,12 @@ export class JevAtmosphereGate {
       decision: 'allow',
       reason: 'jev-style',
       style: {
-        mode: ['banter', 'judgment', 'concise_answer', 'explanation', 'serious_support'].includes(mode)
-          ? mode : 'concise_answer',
+        mode: RESPONSE_MODES.has(mode) ? mode : 'concise_answer',
         memeFit: answerNumber(answers, 'meme_fit'),
         explanationNeeded: answerNumber(answers, 'explanation_needed'),
         cultureLookupNeeded: answerNumber(answers, 'culture_lookup_needed'),
         confidence: clamp(answers?.response_mode?.confidence, 0),
+        ...normalizeCultureAnswers(answers, context),
       },
       latencyMs: response.latencyMs,
     };
@@ -408,6 +520,9 @@ export function buildJevStylePrompt(style) {
   }
   if (Number(style.cultureLookupNeeded) >= 0.8) {
     lines.push('如已有文化检索或缓存素材，只消化成自己的表达；不要播报搜索过程或来源列表。');
+  }
+  if (style.cultureDomain === 'longtu' || Number(style.longtuLookupNeeded) >= 0.7) {
+    lines.push('当前可能涉及龙玉涛/龙图语境：优先把具体词语、画面关系和反差接起来；若后台有贴吧短卡，只把核验后的语境自然融入，不要把贴吧内容当现实人物事实，也不要照抄攻击性话术。');
   }
   return lines.join('\n');
 }

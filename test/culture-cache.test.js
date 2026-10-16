@@ -28,6 +28,25 @@ test('文化缓存只保存短卡并支持精确和 FTS 召回', () => {
   cache.close();
 });
 
+test('文化短卡保存领域和贴吧来源，并按领域召回', () => {
+  const databaseFilePath = tempDatabase('longtu-culture-domain');
+  const cache = new CultureCache({ databaseFilePath });
+  const card = buildCultureCard('龙图', {
+    results: [{
+      title: '龙图语境',
+      description: '公开贴吧中用于表达特定反差和接梗语境。',
+      url: 'https://tieba.baidu.com/p/123',
+    }],
+  }, { domain: 'longtu', lookupSource: 'tieba', confidence: 'high' });
+  assert.equal(cache.put(card), true);
+  const hit = cache.lookup('龙图', { domain: 'longtu' });
+  assert.equal(hit.domain, 'longtu');
+  assert.equal(hit.lookupSource, 'tieba');
+  assert.match(cultureCardPrompt(hit), /公开贴吧语境证据/);
+  assert.equal(cache.lookup('龙图', { domain: 'general' }), null);
+  cache.close();
+});
+
 test('只有 context 的搜索结果也只提炼有限文化描述', () => {
   const card = buildCultureCard('网络热梗', {
     context: '公开摘要：这个梗通过反差和双关流传，网页正文不应原样进入缓存。',

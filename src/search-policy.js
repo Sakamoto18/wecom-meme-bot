@@ -25,6 +25,9 @@ export function classifySearchPolicy(options = {}) {
   const lowInformationImage = options.hasImageContext === true
     && LOW_INFORMATION_IMAGE_PATTERN.test(imagePolicy);
   const explicitImageSearch = options.explicitImageSearch === true;
+  const jevCultureDomain = String(options.cultureDomain ?? '').trim().toLowerCase();
+  const jevCultureLookupNeeded = Number(options.cultureLookupNeeded) || 0;
+  const jevLongtuLookupNeeded = Number(options.longtuLookupNeeded) || 0;
 
   if (attackStyle) {
     return {
@@ -50,7 +53,11 @@ export function classifySearchPolicy(options = {}) {
   const currentFacts = shouldSearchCurrentInformation(content);
   const explicitFacts = EXPLICIT_FACT_PATTERN.test(content);
   const highConfidenceCulture = HIGH_CONFIDENCE_CULTURE_PATTERN.test(content);
-  const cultureEligible = !imageSearch && (longtuTopic || memeTopic || highConfidenceCulture);
+  const jevCultureEligible = !imageSearch
+    && ['longtu', 'general', 'platform'].includes(jevCultureDomain)
+    && jevCultureLookupNeeded >= 0.55;
+  const cultureEligible = !imageSearch
+    && (longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible);
   // Asking for a meme's source/原帖 is both a cultural lookup and a factual
   // verification request. Keep the two rails independent so one does not
   // silently suppress the other.
@@ -66,7 +73,7 @@ export function classifySearchPolicy(options = {}) {
     };
   }
 
-  const confidence = longtuTopic || memeTopic
+  const confidence = longtuTopic || memeTopic || jevLongtuLookupNeeded >= 0.7
     ? 'high'
     : (highConfidenceCulture ? 'high' : (factEligible ? 'medium' : 'none'));
   return {
