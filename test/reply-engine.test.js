@@ -73,6 +73,82 @@ test('事实和文化意图会并行检索，文化结果只注入短卡', async
   assert.equal(calls.length, 2);
 });
 
+test('Jev 龙图路由优先查询贴吧并写入龙图短卡', async () => {
+  const calls = [];
+  const cards = [];
+  const result = await generateConversationReply({
+    content: '这个词怎么接',
+    currentQuestion: '这个词怎么接',
+    modelInput: '这个词怎么接',
+    jevStyle: {
+      mode: 'banter',
+      memeFit: 0.9,
+      cultureDomain: 'longtu',
+      longtuLookupNeeded: 0.9,
+      retrievalNeeded: 0.9,
+      longtuTerms: ['亡灵骑士', '龙图'],
+      queryTerms: ['亡灵骑士', '龙图'],
+    },
+    cultureCache: {
+      lookup() { return null; },
+      put(card) { cards.push(card); return true; },
+    },
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        calls.push({ query, options });
+        return {
+          context: '贴吧语境：通过女鬼电梯的双关转职成亡灵骑士。',
+          resultCount: 1,
+          query,
+          results: [{ title: '龙图语境', description: '女鬼电梯双关', url: 'https://tieba.baidu.com/p/1' }],
+        };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        assert.match(options.additionalSystemPrompt, /文化领域：longtu/);
+        assert.match(options.additionalSystemPrompt, /贴吧语境证据/);
+        return '这句直接转职亡灵骑士了。';
+      },
+    },
+  });
+  assert.equal(result.longtuSearchAttempted, true);
+  assert.equal(result.longtuSearchResultCount, 1);
+  assert.ok(calls.length <= 2);
+  assert.ok(calls.every(({ options }) => options.query.includes('site:tieba.baidu.com')
+    && options.includeDomains.includes('tieba.baidu.com')));
+  assert.equal(cards[0].domain, 'longtu');
+  assert.equal(cards[0].lookupSource, 'tieba');
+});
+
+test('Jev 普通网络梗文化路由不误触发贴吧专项', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '这个热词怎么来的',
+    currentQuestion: '这个热词怎么来的',
+    modelInput: '这个热词怎么来的',
+    jevStyle: {
+      mode: 'explanation',
+      cultureDomain: 'general',
+      cultureLookupNeeded: 0.9,
+      retrievalNeeded: 0.9,
+      queryTerms: ['热词'],
+    },
+    webSearchEnabled: true,
+    webSearch: { async search(query, options) {
+      calls.push({ query, options });
+      return { context: '普通网络语境摘要。', resultCount: 1,
+        results: [{ title: '热词', description: '普通语境', url: 'https://example.com/meme' }] };
+    } },
+    chatClient: { isConfigured: true, async complete() { return '先说结论，别把热词写成论文。'; } },
+  });
+  assert.equal(result.cultureSearchAttempted, true);
+  assert.equal(result.longtuSearchAttempted, false);
+  assert.ok(calls.every(({ options }) => !options.includeDomains));
+});
+
 test('搜索素材只在后台消化，搜索播报初稿会按短答重写', async () => {
   const calls = [];
   const result = await generateConversationReply({

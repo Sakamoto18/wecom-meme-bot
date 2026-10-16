@@ -9,6 +9,7 @@ const MAX_TERMS = 16;
 const MAX_DESCRIPTORS = 8;
 const MAX_DESCRIPTOR_LENGTH = 180;
 const MAX_SOURCE_DOMAINS = 8;
+const CULTURE_DOMAINS = new Set(['longtu', 'general', 'platform', 'none']);
 
 function normalized(value, limit = 500) {
   return String(value ?? '')
@@ -92,6 +93,8 @@ export function buildCultureCard(query, searchResult, options = {}) {
     topicKey: normalizedQuery.toLowerCase(),
     normalizedTopic: normalizedQuery,
     confidence: options.confidence || 'high',
+    domain: CULTURE_DOMAINS.has(options.domain) ? options.domain : 'general',
+    lookupSource: normalized(options.lookupSource || (options.domain === 'longtu' ? 'tieba' : 'web'), 40),
     terms,
     descriptors,
     forbiddenTargets: [
@@ -107,8 +110,9 @@ export function cultureCardPrompt(card, source = 'cache') {
   return [
     '【本轮文化检索短卡】',
     `主题：${normalized(card.normalizedTopic, MAX_TOPIC_LENGTH)}`,
+    `文化领域：${CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general'}`,
     `文化线索：${uniqueStrings(card.descriptors, MAX_DESCRIPTORS, MAX_DESCRIPTOR_LENGTH).join('；')}`,
-    `检索来源状态：${source === 'cache' ? '本地缓存短卡' : '本轮公开检索后提炼'}`,
+    `检索来源状态：${source === 'cache' ? '本地缓存短卡' : '本轮公开检索后提炼'}${card.lookupSource === 'tieba' ? '（公开贴吧语境证据）' : ''}`,
     '只把这些线索融入当前回复，不复述来源、网页正文或检索过程；不贴合就不用，不强塞固定梗。',
     `边界：${uniqueStrings(card.forbiddenTargets, 4, 120).join('；')}`,
   ].join('\n');
@@ -154,6 +158,12 @@ export class CultureCache {
       CREATE INDEX IF NOT EXISTS culture_topics_expiry ON culture_topics(expires_at);
       CREATE INDEX IF NOT EXISTS culture_topics_recent ON culture_topics(last_used_at DESC);
     `);
+    // Keep existing deployments compatible while allowing longtu cards to be
+    // separated from general culture cards. SQLite has no IF NOT EXISTS for
+    // columns, so inspect the small table once at startup.
+    const columns = new Set(this.database.prepare('PRAGMA table_info(culture_topics)').all().map((column) => column.name));
+    if (!columns.has('domain')) this.database.exec("ALTER TABLE culture_topics ADD COLUMN domain TEXT NOT NULL DEFAULT 'general'");
+    if (!columns.has('lookup_source')) this.database.exec("ALTER TABLE culture_topics ADD COLUMN lookup_source TEXT NOT NULL DEFAULT 'web'");
     return this.database;
   }
 
@@ -174,18 +184,29 @@ export class CultureCache {
     }
   }
 
-  lookup(query) {
+  lookup(query, options = {}) {
     const database = this.ensureOpen();
     this.cleanup();
     const key = normalized(query, MAX_TOPIC_LENGTH).toLowerCase();
     if (!key) return null;
-    let row = database.prepare('SELECT * FROM culture_topics WHERE topic_key = ? AND expires_at > ?').get(key, this.now());
+    const requestedDomain = CULTURE_DOMAINS.has(options.domain) ? options.domain : '';
+    let row = database.prepare(
+      requestedDomain
+        ? 'SELECT * FROM culture_topics WHERE topic_key = ? AND domain = ? AND expires_at > ?'
+        : 'SELECT * FROM culture_topics WHERE topic_key = ? AND expires_at > ?',
+    ).get(...(requestedDomain ? [key, requestedDomain, this.now()] : [key, this.now()]));
     if (!row) {
       const terms = termsFromText(key).filter((term) => term.length >= 2);
       if (terms.length > 0) {
         const match = terms.map((term) => `"${term.replaceAll('"', ' ')}"`).join(' OR ');
         const hit = database.prepare(`SELECT topic_key FROM culture_topics_fts WHERE culture_topics_fts MATCH ? LIMIT 1`).get(match);
-        if (hit?.topic_key) row = database.prepare('SELECT * FROM culture_topics WHERE topic_key = ? AND expires_at > ?').get(hit.topic_key, this.now());
+        if (hit?.topic_key) row = database.prepare(
+          requestedDomain
+            ? 'SELECT * FROM culture_topics WHERE topic_key = ? AND domain = ? AND expires_at > ?'
+            : 'SELECT * FROM culture_topics WHERE topic_key = ? AND expires_at > ?',
+        ).get(...(requestedDomain
+          ? [hit.topic_key, requestedDomain, this.now()]
+          : [hit.topic_key, this.now()]));
         if (!row) {
           // The default FTS tokenizer treats a long Han phrase as one token,
           // so a shorter follow-up such as “女鬼电梯” may not MATCH
@@ -196,8 +217,13 @@ export class CultureCache {
             'SELECT topic_key FROM culture_topics_fts WHERE terms LIKE ? OR descriptors LIKE ? LIMIT 1',
           ).get(likeTerms[0], likeTerms[0]);
           if (likeHit?.topic_key) {
-            row = database.prepare('SELECT * FROM culture_topics WHERE topic_key = ? AND expires_at > ?')
-              .get(likeHit.topic_key, this.now());
+            row = database.prepare(
+              requestedDomain
+                ? 'SELECT * FROM culture_topics WHERE topic_key = ? AND domain = ? AND expires_at > ?'
+                : 'SELECT * FROM culture_topics WHERE topic_key = ? AND expires_at > ?',
+            ).get(...(requestedDomain
+              ? [likeHit.topic_key, requestedDomain, this.now()]
+              : [likeHit.topic_key, this.now()]));
           }
         }
       }
@@ -212,6 +238,8 @@ export class CultureCache {
       descriptors: safeJson(row.descriptors_json),
       forbiddenTargets: safeJson(row.forbidden_targets_json),
       sourceDomains: safeJson(row.source_domains_json),
+      domain: CULTURE_DOMAINS.has(row.domain) ? row.domain : 'general',
+      lookupSource: normalized(row.lookup_source || 'web', 40),
     };
   }
 
@@ -227,14 +255,16 @@ export class CultureCache {
       descriptors: uniqueStrings(card.descriptors, MAX_DESCRIPTORS, MAX_DESCRIPTOR_LENGTH),
       forbiddenTargets: uniqueStrings(card.forbiddenTargets, 4, 120),
       sourceDomains: uniqueStrings(card.sourceDomains, MAX_SOURCE_DOMAINS, 120),
+      domain: CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general',
+      lookupSource: normalized(card.lookupSource || 'web', 40),
     };
     if (!values.topicKey || values.descriptors.length === 0) return false;
     database.prepare(`
       INSERT INTO culture_topics(
         topic_key, normalized_topic, confidence, terms_json, descriptors_json,
-        forbidden_targets_json, source_domains_json, created_at, updated_at,
-        expires_at, last_used_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        forbidden_targets_json, source_domains_json, domain, lookup_source,
+        created_at, updated_at, expires_at, last_used_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(topic_key) DO UPDATE SET
         normalized_topic=excluded.normalized_topic,
         confidence=excluded.confidence,
@@ -242,6 +272,8 @@ export class CultureCache {
         descriptors_json=excluded.descriptors_json,
         forbidden_targets_json=excluded.forbidden_targets_json,
         source_domains_json=excluded.source_domains_json,
+        domain=excluded.domain,
+        lookup_source=excluded.lookup_source,
         updated_at=excluded.updated_at,
         expires_at=excluded.expires_at,
         last_used_at=excluded.last_used_at
@@ -249,7 +281,7 @@ export class CultureCache {
       values.topicKey, values.normalizedTopic, values.confidence,
       JSON.stringify(values.terms), JSON.stringify(values.descriptors),
       JSON.stringify(values.forbiddenTargets), JSON.stringify(values.sourceDomains),
-      now, now, now + this.ttlMs, now,
+      values.domain, values.lookupSource, now, now, now + this.ttlMs, now,
     );
     database.prepare('DELETE FROM culture_topics_fts WHERE topic_key = ?').run(values.topicKey);
     database.prepare('INSERT INTO culture_topics_fts(topic_key, terms, descriptors) VALUES (?, ?, ?)').run(

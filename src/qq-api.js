@@ -571,7 +571,10 @@ export async function createQqRuntime() {
       projectRoot,
       process.env.QQ_CULTURE_CACHE_DATABASE_FILE?.trim() || 'data/qq-culture.sqlite',
     ),
-    ttlMs: (parsePositiveNumber(process.env.QQ_CULTURE_CACHE_TTL_DAYS) ?? 30)
+    ttlMs: (parsePositiveNumber(
+      process.env.LONGTU_QQ_LONGTU_RETRIEVAL_CACHE_TTL_DAYS
+        ?? process.env.QQ_CULTURE_CACHE_TTL_DAYS,
+    ) ?? 30)
       * 24 * 60 * 60 * 1000,
     maxEntries: parsePositiveInteger(process.env.QQ_CULTURE_CACHE_MAX_ENTRIES) ?? 2_000,
     logger: console,
@@ -793,6 +796,17 @@ export async function createQqRuntime() {
     webSearch: usageTracker.wrapWebSearch(webSearch),
     webSearchEnabled,
     cultureCache,
+    longtuRetrievalEnabled: parseBoolean(
+      process.env.LONGTU_QQ_LONGTU_RETRIEVAL_ENABLED,
+      true,
+    ),
+    longtuTiebaSearchEnabled: parseBoolean(
+      process.env.LONGTU_QQ_LONGTU_TIEBA_SEARCH_ENABLED,
+      true,
+    ),
+    longtuRetrievalMaxQueries: parsePositiveInteger(
+      process.env.LONGTU_QQ_LONGTU_RETRIEVAL_MAX_QUERIES,
+    ) ?? 2,
     knowledgeContext,
     memberAliases,
     longtuLibrary,

@@ -136,6 +136,11 @@ LONGTU_QQ_JEV_USD_TO_CNY=
 TYPESAFE_API_KEY=
 TYPESAFE_BASE_URL=https://api.typesafe.ai
 TYPESAFE_MODEL=jev-1.13
+# Jev 文化路由：龙图语境未命中本地短卡时，优先检索公开贴吧；不保存帖子全文或个人信息。
+LONGTU_QQ_LONGTU_RETRIEVAL_ENABLED=true
+LONGTU_QQ_LONGTU_TIEBA_SEARCH_ENABLED=true
+LONGTU_QQ_LONGTU_RETRIEVAL_MAX_QUERIES=2
+LONGTU_QQ_LONGTU_RETRIEVAL_CACHE_TTL_DAYS=30
 LONGTU_QQ_REPEAT_ENABLED=true
 LONGTU_QQ_REPEAT_MAX_TEXT_CHARACTERS=500
 LONGTU_QQ_REPEAT_MAX_GROUPS=1000
@@ -278,6 +283,8 @@ QQ_CULTURE_CACHE_DATABASE_FILE=data/qq-culture.sqlite
 QQ_CULTURE_CACHE_TTL_DAYS=30
 QQ_CULTURE_CACHE_MAX_ENTRIES=2000
 ```
+
+当 Jev 判断本轮属于龙玉涛/龙图语境且需要核对时，Bridge 先查本地文化短卡；未命中才按最多两个具体词组查询 `tieba.baidu.com`，把结果提炼为含义、使用场景、联想落点和误用边界后写入跨群缓存。贴吧内容只作为公开文化语境证据，不能用来判断现实人物身份、事实或攻击授权。Jev、贴吧检索或缓存异常均自动回退既有回复链路；日志会记录 `culture_domain`、`longtu_lookup`、`tieba` 和结果数，便于区分“未触发”和“检索失败”。
 
 Bridge 插件默认在北京时间每天 09:00，把上一自然日的群用量排行私聊发送给 `.env.qq` 中的 `LONGTU_QQ_USAGE_REPORT_USERS`。日报收件人和超管权限完全分离：加入收件人列表不会获得图库管理、`/stop` 或手动触发日报的权限。日报包含群名和群号、原始/折算 Token、LLM 输入缓存率、真实搜索与缓存命中率、主要消耗环节和拦截次数；还会显示首次回复数、二次风格复核数、复核放大率，以及节流跳过次数和基于该群最近复核均值估算的 Token/金额节省。发送时间可在 AstrBot 的“龙图 QQ Bridge”插件配置中调整；Node 的 `GET /v1/qq/usage` 接口使用与消息接口相同的 Bearer Token，不对公网开放。
 

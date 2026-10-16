@@ -17,6 +17,11 @@ function answers(overrides = {}) {
     meme_fit: { noul: 0.8 },
     explanation_needed: { noul: 0.1 },
     culture_lookup_needed: { noul: 0.2 },
+    culture_domain: { choice: 'longtu', confidence: 0.9 },
+    longtu_lookup_needed: { noul: 0.8 },
+    platform: { choice: 'tieba' },
+    tone: { choice: 'absurd' },
+    target: { choice: 'content' },
     response_mode: { choice: 'banter', confidence: 0.9 },
     ...overrides,
   };
@@ -43,10 +48,15 @@ test('Jev 解析插话概率和风格路由', async () => {
   const result = await gate.evaluate({ currentMessage: '这个梗还能接吗' });
   assert.equal(result.decision, 'allow');
   assert.equal(result.style.mode, 'banter');
+  assert.equal(result.style.cultureDomain, 'longtu');
+  assert.equal(result.style.platform, 'tieba');
+  assert.equal(result.style.longtuLookupNeeded, 0.8);
+  assert.ok(result.style.longtuTerms.includes('龙图'));
   assert.ok(result.probability >= 0.72);
   assert.ok(calls[0].questions.should_speak);
   const style = await gate.evaluateStyle({ currentMessage: '评价一下这张图' });
   assert.equal(style.style.mode, 'banter');
+  assert.equal(style.style.cultureDomain, 'longtu');
   assert.equal(calls.length, 2);
 });
 

@@ -527,13 +527,14 @@ export class LongtuWebSearch {
       : (options.mode === 'meme'
         ? 'meme'
         : (options.mode === 'general' ? 'general' : 'longtu'));
-    const query = mode === 'current'
+    const queryOverride = String(options.query ?? '').trim();
+    const query = queryOverride || (mode === 'current'
       ? selectCurrentSearchQuery(content, options)
       : (mode === 'meme'
         ? selectMemeSearchQuery(content, options)
         : (mode === 'general'
           ? selectGeneralSearchQuery(content)
-          : selectLongtuSearchQuery(content)));
+          : selectLongtuSearchQuery(content))));
     const relevanceTerms = mode === 'meme'
       ? selectMemeRelevanceTerms(content)
       : (mode === 'general' ? selectGeneralRelevanceTerms(content) : []);

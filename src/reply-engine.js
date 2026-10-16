@@ -146,6 +146,38 @@ function emptySearchResult() {
   };
 }
 
+function normalizedJevCulture(style = {}) {
+  const domain = ['longtu', 'general', 'platform', 'none'].includes(style.cultureDomain)
+    ? style.cultureDomain : 'none';
+  const longtu = domain === 'longtu' || Number(style.longtuLookupNeeded) >= 0.7;
+  const retrievalNeeded = Math.max(
+    Number(style.retrievalNeeded) || 0,
+    Number(style.cultureLookupNeeded) || 0,
+    Number(style.longtuLookupNeeded) || 0,
+  );
+  const terms = [...new Set([
+    ...(Array.isArray(style.longtuTerms) ? style.longtuTerms : []),
+    ...(Array.isArray(style.queryTerms) ? style.queryTerms : []),
+  ].map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, 8);
+  return { domain, longtu, retrievalNeeded, terms };
+}
+
+function combineCultureSearchResults(results = []) {
+  const usable = results.filter(Boolean);
+  const rows = [...new Map(usable.flatMap((result) => result.results ?? [])
+    .filter((row) => row?.url)
+    .map((row) => [row.url, row])).values()];
+  return {
+    ...emptySearchResult(),
+    query: usable.map((result) => result.query).filter(Boolean).join(' | '),
+    context: usable.map((result) => result.context).filter(Boolean).join('\n\n'),
+    resultCount: rows.length || usable.reduce((sum, result) => sum + (result.resultCount || 0), 0),
+    results: rows,
+    endpoint: usable.find((result) => result.endpoint)?.endpoint || '',
+    fromCache: usable.length > 0 && usable.every((result) => result.fromCache),
+  };
+}
+
 function buildMemoryContext(memorySummary) {
   const normalized = String(memorySummary ?? '').trim();
   if (!normalized) return '';
@@ -312,6 +344,9 @@ export async function generateConversationReply(options) {
     recordSummary = false,
     videoBlocks = [],
     cultureCache = null,
+    longtuRetrievalEnabled = true,
+    longtuTiebaSearchEnabled = true,
+    longtuRetrievalMaxQueries = 2,
     imageVisualWordplay = '',
     imageSemanticFrame = '',
   } = options;
@@ -559,7 +594,11 @@ export async function generateConversationReply(options) {
     };
   }
 
-  const useLongtuKnowledge = !attackStyle && shouldSearchLongtuKnowledge(content);
+  const jevCulture = normalizedJevCulture(jevStyle ?? {});
+  const useLongtuKnowledge = !attackStyle && (
+    shouldSearchLongtuKnowledge(content)
+    || (longtuRetrievalEnabled && jevCulture.longtu && jevCulture.retrievalNeeded >= 0.55)
+  );
   const useCurrentInformation = !attackStyle && !useLongtuKnowledge
     && shouldSearchCurrentInformation(content);
   const imageSearch = Array.isArray(imageSearchQueries);
@@ -583,15 +622,24 @@ export async function generateConversationReply(options) {
     hasImageContext,
     imageInformationLevel: imageInformationPolicy?.level,
     explicitImageSearch,
+    cultureDomain: jevCulture.domain,
+    cultureLookupNeeded: jevCulture.retrievalNeeded,
+    longtuLookupNeeded: jevCulture.longtu ? jevCulture.retrievalNeeded : 0,
   });
   const factSearchMode = imageSearch ? 'general' : (useCurrentInformation ? 'current' : 'general');
   const cultureSearchMode = useLongtuKnowledge ? 'longtu' : 'meme';
-  const cultureQuery = String(currentQuestion || content || '').trim().slice(0, 240);
+  const cultureLookupQuery = (jevCulture.terms.join(' ') || String(currentQuestion || content || '').trim()).slice(0, 120);
+  const cultureQuery = [
+    jevCulture.terms.join(' '),
+    String(currentQuestion || content || '').trim(),
+  ].filter(Boolean).join(' ').slice(0, 240);
   let cultureCard = null;
   let cultureCacheHit = false;
-  if (retrievalPolicy.cultureEligible && cultureCache && cultureQuery) {
+  if (retrievalPolicy.cultureEligible && cultureCache && cultureLookupQuery) {
     try {
-      cultureCard = cultureCache.lookup(cultureQuery);
+      cultureCard = cultureCache.lookup(cultureLookupQuery, {
+        domain: useLongtuKnowledge ? 'longtu' : (jevCulture.domain !== 'none' ? jevCulture.domain : undefined),
+      });
       cultureCacheHit = Boolean(cultureCard);
     } catch {
       // 文化缓存是加速层，数据库异常不能阻断正常回复或外部检索。
@@ -652,6 +700,24 @@ export async function generateConversationReply(options) {
   };
 
   const runCultureSearch = async () => {
+    const tieba = useLongtuKnowledge && longtuRetrievalEnabled && longtuTiebaSearchEnabled;
+    if (tieba) {
+      const terms = (jevCulture.terms.length > 0 ? jevCulture.terms : [cultureQuery])
+        .slice(0, Math.max(1, Number(longtuRetrievalMaxQueries) || 2));
+      const outcomes = await Promise.allSettled(terms.map((term) => webSearch.search(term, {
+        mode: 'longtu',
+        query: `site:tieba.baidu.com ${term} 龙图 语境 含义`.slice(0, 180),
+        includeDomains: ['tieba.baidu.com'],
+        usageSource: 'web-search-culture-longtu-tieba',
+      })));
+      const successful = outcomes.filter((outcome) => outcome.status === 'fulfilled')
+        .map((outcome) => outcome.value);
+      const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+      if (failed && successful.length === 0) throw failed.reason;
+      const combined = combineCultureSearchResults(successful);
+      if (failed) combined.context = [combined.context, '部分贴吧语境查询失败，未取回的证据不可视为已确认。'].filter(Boolean).join('\n');
+      return combined;
+    }
     const scope = sourceScopeFromText(cultureQuery);
     const searchOptions = {
       mode: cultureSearchMode,
@@ -681,8 +747,10 @@ export async function generateConversationReply(options) {
   }
 
   if (!cultureCard && (cultureSearchResult.resultCount > 0 || cultureSearchResult.context)) {
-    cultureCard = buildCultureCard(cultureQuery, cultureSearchResult, {
+    cultureCard = buildCultureCard(cultureLookupQuery || cultureQuery, cultureSearchResult, {
       confidence: retrievalPolicy.confidence,
+      domain: useLongtuKnowledge ? 'longtu' : (jevCulture.domain === 'none' ? 'general' : jevCulture.domain),
+      lookupSource: useLongtuKnowledge && longtuRetrievalEnabled && longtuTiebaSearchEnabled ? 'tieba' : 'web',
     });
     if (cultureCard && cultureCache) {
       try {
@@ -778,6 +846,10 @@ export async function generateConversationReply(options) {
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     cultureReviewRequired,
+    cultureDomain: jevCulture.domain,
+    longtuLookupNeeded: jevCulture.longtu ? jevCulture.retrievalNeeded : 0,
+    longtuSearchAttempted: Boolean(cultureSearchAttempted && useLongtuKnowledge && longtuRetrievalEnabled && longtuTiebaSearchEnabled),
+    longtuSearchResultCount: useLongtuKnowledge ? cultureSearchResult.resultCount : 0,
     styleSignals,
     shortChat: compactResponse && !passiveImageComment && !recordSummary,
     attackDuringAnswer: attackStyle && !pureAttack,
@@ -1232,6 +1304,10 @@ export async function generateConversationReply(options) {
     cultureCacheHit,
     cultureCardUsed,
     cultureReviewRequired,
+    cultureDomain: jevCulture.domain,
+    longtuLookupNeeded: jevCulture.longtu ? jevCulture.retrievalNeeded : 0,
+    longtuSearchAttempted: Boolean(cultureSearchAttempted && useLongtuKnowledge && longtuRetrievalEnabled && longtuTiebaSearchEnabled),
+    longtuSearchResultCount: useLongtuKnowledge ? cultureSearchResult.resultCount : 0,
     searchGateReason: retrievalPolicy.reason,
     searchPolicy: retrievalPolicy,
     thinkingEnabled,
