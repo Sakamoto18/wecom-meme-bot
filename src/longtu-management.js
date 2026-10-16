@@ -166,6 +166,21 @@ export function parseLongtuSlashCommand(content) {
   };
 }
 
+export function parseJevCommand(content) {
+  const text = String(content ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
+  const match = text.match(/^\/jev(?:\s+([a-z]+))?$/iu);
+  if (!match) return null;
+  const argument = String(match[1] ?? 'status').toLowerCase();
+  if (['on', 'off', 'auto', 'shadow'].includes(argument)) {
+    return { action: 'jev-set-mode', mode: argument };
+  }
+  if (argument === 'status') return { action: 'jev-status' };
+  return {
+    action: 'jev-invalid',
+    message: '用法：/jev on、/jev off、/jev auto、/jev shadow、/jev status',
+  };
+}
+
 export function parseLongtuManagementCommand(content) {
   const text = String(content ?? '').replace(/\s+/g, ' ').trim();
   if (!text) return null;

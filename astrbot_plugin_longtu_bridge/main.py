@@ -750,6 +750,7 @@ class LongtuQqBridge(Star):
         groups = report.get("groups") or []
         sources = report.get("sources") or []
         pricing = report.get("pricing") or {}
+        jev_pricing = pricing.get("jev") or {}
         catalog = await self._group_catalog()
         group_ids = [str(group.get("groupId") or "") for group in groups]
         missing_name_ids = [group_id for group_id in group_ids if group_id not in catalog]
@@ -769,7 +770,11 @@ class LongtuQqBridge(Star):
         search_cache_rate = (
             search_cache_hits / search_total * 100 if search_total else 0
         )
-        total_cost = float(pricing.get("estimatedCostCny") or 0)
+        total_cost = float(
+            (pricing.get("combined") or {}).get("estimatedCostCny")
+            or pricing.get("estimatedCostCny")
+            or 0
+        )
         lines = [
             f"【龙玉涛 Bot 日报｜{report_date:%Y-%m-%d}{header_suffix}】",
             (
@@ -786,6 +791,23 @@ class LongtuQqBridge(Star):
                 f"（结果缓存 {search_cache_rate:.1f}%）"
             ),
         ]
+        jev_calls = int(jev_pricing.get("jevCalls") or 0)
+        jev_input_tokens = int(jev_pricing.get("jevInputTokens") or 0)
+        jev_cost_usd = float(jev_pricing.get("jevEstimatedCostUsd") or 0)
+        jev_cost_cny = float(jev_pricing.get("jevEstimatedCostCny") or 0)
+        if jev_calls or jev_input_tokens or jev_cost_usd:
+            jev_cost = f"${jev_cost_usd:.6f}"
+            if jev_pricing.get("usdToCny") and jev_cost_cny:
+                jev_cost += f"（约 {self._money(jev_cost_cny)}）"
+            lines.append(
+                f"Jev：{self._number(jev_calls)} 次｜输入 "
+                f"{self._number(jev_input_tokens)} token｜费用 {jev_cost}"
+            )
+            if int(jev_pricing.get("jevUnpricedCalls") or 0) > 0:
+                lines.append(
+                    f"Jev 费用提醒：{self._number(jev_pricing.get('jevUnpricedCalls'))} 次调用"
+                    "缺少可计价输入 Token，已记录但未计费。"
+                )
         private_cost = float(private_usage.get("estimatedCostCny") or 0)
         private_llm_calls = int(private_usage.get("llmCalls") or 0)
         private_total_tokens = int(private_usage.get("totalTokens") or 0)
@@ -794,6 +816,14 @@ class LongtuQqBridge(Star):
                 f"私聊用量：约 {self._money(private_cost)}｜LLM "
                 f"{self._number(private_llm_calls)} 次｜Token "
                 f"{self._number(private_total_tokens)}",
+            )
+        private_jev_calls = int(private_usage.get("jevCalls") or 0)
+        if private_jev_calls:
+            private_jev_cost = float(private_usage.get("jevEstimatedCostUsd") or 0)
+            lines.append(
+                f"私聊 Jev：{self._number(private_jev_calls)} 次｜输入 "
+                f"{self._number(private_usage.get('jevInputTokens'))} token｜"
+                f"费用 ${private_jev_cost:.6f}",
             )
         skipped_reviews = int(totals.get("skippedSecondaryReviews") or 0)
         if skipped_reviews:
@@ -842,6 +872,8 @@ class LongtuQqBridge(Star):
                 display = f"{label}（{group_id}）" if label else group_id
                 tokens = int(group.get("totalTokens") or 0)
                 group_cost = float(group.get("estimatedCostCny") or 0)
+                group_jev_cost = float(group.get("jevEstimatedCostCny") or 0)
+                display_cost = group_cost + group_jev_cost
                 cost_share = (group_cost / total_cost * 100) if total_cost else 0
                 search_calls = int(group.get("searchCalls") or 0)
                 group_input_tokens = int(group.get("inputTokens") or 0)
@@ -850,14 +882,20 @@ class LongtuQqBridge(Star):
                     group_cached_input_tokens / group_input_tokens * 100
                     if group_input_tokens else 0
                 )
+                jev_label = (
+                    f"｜Jev {self._number(group.get('jevCalls'))}次"
+                    if int(group.get("jevCalls") or 0) else ""
+                )
                 lines.append(
-                    f"{index}. {display}｜{self._money(group_cost)} "
+                    f"{index}. {display}｜{self._money(display_cost)} "
                     f"({cost_share:.1f}%)｜消息 {self._number(group.get('requests'))}｜"
                     f"LLM {self._number(group.get('llmCalls'))}｜"
                     f"Token {self._number(tokens)}｜缓存 {group_llm_cache_rate:.1f}%｜"
-                    f"搜索 {self._number(search_calls)}",
+                    f"搜索 {self._number(search_calls)}{jev_label}",
                 )
-            top_cost = float(groups[0].get("estimatedCostCny") or 0)
+            top_cost = float(groups[0].get("estimatedCostCny") or 0) + float(
+                groups[0].get("jevEstimatedCostCny") or 0
+            )
             top_tokens = int(groups[0].get("totalTokens") or 0)
             top_share = (
                 top_cost / total_cost * 100

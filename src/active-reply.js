@@ -173,6 +173,7 @@ function recentTranscript(history, limit) {
 export class ActiveReplyDecider {
   constructor(options) {
     this.chatClient = options.chatClient;
+    this.jevGate = options.jevGate ?? null;
     this.enabled = options.enabled ?? false;
     this.candidateProbability = Math.min(
       1,
@@ -784,6 +785,29 @@ export class ActiveReplyDecider {
     const decisionInput = '现在判断机器人接话的优先级。';
     const optionalValueInput = '现在复核机器人是否应主动发言。';
 
+    // Jev is a soft gate layered in front of the existing local/model rules.
+    // Explicit @/quote paths remain local hard signals so a Jev outage can
+    // never swallow a direct request. Shadow mode records the result but
+    // deliberately leaves the legacy decision untouched.
+    let jevStyle = null;
+    const jevStatus = this.jevGate?.getStatus?.();
+    const jevHardSignal = signals.quotedBot || signals.namedBot;
+    if (this.jevGate && !jevHardSignal && jevStatus && jevStatus.effectiveMode !== 'off') {
+      const jev = await this.jevGate.evaluate({
+        transcript,
+        currentMessage: input.currentContent ?? payload.text,
+        engagement: Boolean(engagement),
+        humanDiscussion,
+        passiveImageText: payload.passiveImageText,
+        signals,
+      });
+      const shadow = jevStatus?.mode === 'shadow';
+      if (!shadow && jev.decision === 'skip') {
+        return { reply: false, reason: 'jev-skip', jevProbability: jev.probability };
+      }
+      if (!shadow && jev.decision === 'allow') jevStyle = jev.style ?? null;
+    }
+
     let decision;
     try {
       const answer = await this.chatClient.complete([], decisionInput, {
@@ -807,17 +831,23 @@ export class ActiveReplyDecider {
         const isOwner = engagement.ownerUserId === String(payload.userId ?? '');
         if (signals.quotedBot || signals.namedBot) {
           this.logger.warn(`QQ 群话题判定失败，直接点名仍回复：${error.message}`);
-          return this.acceptEngagementReply(
+          return {
+            ...this.acceptEngagementReply(
             payload,
             engagement,
             signals,
             now,
             { force: true },
-          );
+            ),
+            ...(jevStyle ? { jevStyle } : {}),
+          };
         }
         if (isOwner && signals.explicitQuestion) {
           this.logger.warn(`QQ 群话题判定失败，原发起者追问按节奏阀门处理：${error.message}`);
-          return this.acceptEngagementReply(payload, engagement, signals, now);
+          return {
+            ...this.acceptEngagementReply(payload, engagement, signals, now),
+            ...(jevStyle ? { jevStyle } : {}),
+          };
         }
         this.logger.warn(`QQ 群话题判定失败，当前消息保持静默：${error.message}`);
         return { reply: false, reason: 'engagement-decision-error' };
@@ -832,13 +862,16 @@ export class ActiveReplyDecider {
 
     if (engagement) {
       if (signals.quotedBot || signals.namedBot || decision === 'must') {
-        return this.acceptEngagementReply(
+        return {
+          ...this.acceptEngagementReply(
           payload,
           engagement,
           signals,
           now,
           { force: true },
-        );
+          ),
+          ...(jevStyle ? { jevStyle } : {}),
+        };
       }
       if (decision === 'followup') {
         if (!isLikelyEngagementFollowup(payload)) {
@@ -847,7 +880,7 @@ export class ActiveReplyDecider {
         if (engagement.replyCount + (engagement.followupCount ?? 0) >= this.engagementMaxReplies) {
           return { reply: false, reason: 'engagement-followup-limit' };
         }
-        return { reply: true, reason: 'engagement-followup-must' };
+        return { reply: true, reason: 'engagement-followup-must', ...(jevStyle ? { jevStyle } : {}) };
       }
       if (decision === 'may' || decision === 'help') {
         // `help` already means an unresolved need with a concrete contribution.
@@ -858,10 +891,13 @@ export class ActiveReplyDecider {
         if (!value.speak) {
           return { reply: false, reason: `engagement-${value.reason}` };
         }
-        return this.acceptEngagementReply(payload, engagement, signals, now, {
-          helpful: decision === 'help',
-          verifiedDiscussion: humanDiscussion && this.semanticValueGateEnabled,
-        });
+        return {
+          ...this.acceptEngagementReply(payload, engagement, signals, now, {
+            helpful: decision === 'help',
+            verifiedDiscussion: humanDiscussion && this.semanticValueGateEnabled,
+          }),
+          ...(jevStyle ? { jevStyle } : {}),
+        };
       }
       return {
         reply: false,
@@ -870,10 +906,10 @@ export class ActiveReplyDecider {
     }
 
     if (signals.quotedBot || signals.namedBot) {
-      return { reply: true, reason: decision === 'must' ? 'ai-must' : 'signal-must' };
+      return { reply: true, reason: decision === 'must' ? 'ai-must' : 'signal-must', ...(jevStyle ? { jevStyle } : {}) };
     }
     if (decision === 'must') {
-      return { reply: true, reason: 'ai-must' };
+      return { reply: true, reason: 'ai-must', ...(jevStyle ? { jevStyle } : {}) };
     }
     if (decision === 'no') {
       return { reply: false, reason: 'ai-no' };
@@ -916,6 +952,10 @@ export class ActiveReplyDecider {
     }
 
     this.recordOptionalReply(groupId, now, hourly);
-    return { reply: true, reason: helpful ? 'ai-help' : verifiedDiscussionCandidate ? 'ai-discussion' : 'ai-may' };
+    return {
+      reply: true,
+      reason: helpful ? 'ai-help' : verifiedDiscussionCandidate ? 'ai-discussion' : 'ai-may',
+      ...(jevStyle ? { jevStyle } : {}),
+    };
   }
 }

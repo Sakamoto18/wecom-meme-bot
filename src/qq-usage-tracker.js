@@ -28,6 +28,9 @@ const LOCALLY_REPAIRABLE_REVIEW_ISSUES = new Set([
 const PRICE_UNIT_TOKENS = 1_000_000;
 const DEEPSEEK_PRICING_SOURCE = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/';
 const DEEPSEEK_PRICING_CHECKED_AT = '2026-09-10';
+const JEV_PRICING_SOURCE = 'https://docs.typesafe.ai/models';
+const JEV_PRICING_CHECKED_AT = '2026-10-15';
+const DEFAULT_JEV_INPUT_PRICE_USD_PER_MILLION = 0.042;
 // Flash 价格按 DeepSeek-V4.1-Flash。旧模型名 deepseek-v4-flash、
 // deepseek-v4-flash-vision-exp 已下线，请求由 V4.1-Flash 承接并按 Flash 价计费，
 // 因此三个 flash 键共用同一份价格。
@@ -210,6 +213,99 @@ function calculateDeepSeekCosts(rows) {
     byGroup: new Map([...byGroup].map(([groupId, summary]) => (
       [groupId, serializeCostSummary(summary)]
     ))),
+  };
+}
+
+function emptyJevCostSummary() {
+  return {
+    jevCalls: 0,
+    jevSucceededCalls: 0,
+    jevFailedCalls: 0,
+    jevInputTokens: 0,
+    jevOutputTokens: 0,
+    jevTotalTokens: 0,
+    jevEstimatedCostUsd: 0,
+    jevEstimatedCostCny: 0,
+    jevPricedCalls: 0,
+    jevUnpricedCalls: 0,
+    jevUnpricedTokens: 0,
+    jevLatencyMs: 0,
+    jevMaxLatencyMs: 0,
+    jevModels: new Set(),
+  };
+}
+
+function serializeJevCostSummary(summary) {
+  const money = (value) => Math.round(Number(value || 0) * 1_000_000_000) / 1_000_000_000;
+  return {
+    jevCalls: summary.jevCalls,
+    jevSucceededCalls: summary.jevSucceededCalls,
+    jevFailedCalls: summary.jevFailedCalls,
+    jevInputTokens: summary.jevInputTokens,
+    jevOutputTokens: summary.jevOutputTokens,
+    jevTotalTokens: summary.jevTotalTokens,
+    jevEstimatedCostUsd: money(summary.jevEstimatedCostUsd),
+    jevEstimatedCostCny: money(summary.jevEstimatedCostCny),
+    jevPricedCalls: summary.jevPricedCalls,
+    jevUnpricedCalls: summary.jevUnpricedCalls,
+    jevUnpricedTokens: summary.jevUnpricedTokens,
+    jevLatencyMs: summary.jevLatencyMs,
+    jevMaxLatencyMs: summary.jevMaxLatencyMs,
+    jevModels: [...summary.jevModels].sort(),
+  };
+}
+
+function calculateJevCosts(rows) {
+  const total = emptyJevCostSummary();
+  const byGroup = new Map();
+  const bySource = new Map();
+  for (const row of rows) {
+    const targets = [total];
+    const groupId = String(row.groupId ?? '').trim();
+    const source = String(row.source ?? '').trim();
+    const group = byGroup.get(groupId) ?? emptyJevCostSummary();
+    byGroup.set(groupId, group);
+    targets.push(group);
+    if (source) {
+      const sourceSummary = bySource.get(source) ?? emptyJevCostSummary();
+      bySource.set(source, sourceSummary);
+      targets.push(sourceSummary);
+    }
+    const inputTokens = usageNumber(row.inputTokens);
+    const outputTokens = usageNumber(row.outputTokens);
+    const totalTokens = usageNumber(row.totalTokens) || inputTokens + outputTokens;
+    const succeeded = Number(row.succeeded) === 1;
+    const inputPrice = Number(row.inputPriceUsdPerMillion);
+    const estimatedCostUsd = Number(row.estimatedCostUsd) || 0;
+    const estimatedCostCny = Number(row.estimatedCostCny) || 0;
+    const latencyMs = usageNumber(row.latencyMs);
+    const hasPrice = Number.isFinite(inputPrice) && inputPrice > 0
+      && inputTokens > 0;
+    for (const target of targets) {
+      target.jevCalls += 1;
+      target.jevSucceededCalls += succeeded ? 1 : 0;
+      target.jevFailedCalls += succeeded ? 0 : 1;
+      target.jevInputTokens += inputTokens;
+      target.jevOutputTokens += outputTokens;
+      target.jevTotalTokens += totalTokens;
+      target.jevEstimatedCostUsd += estimatedCostUsd;
+      target.jevEstimatedCostCny += estimatedCostCny;
+      target.jevLatencyMs += latencyMs;
+      target.jevMaxLatencyMs = Math.max(target.jevMaxLatencyMs, latencyMs);
+      if (hasPrice) {
+        target.jevPricedCalls += 1;
+      } else {
+        target.jevUnpricedCalls += 1;
+        target.jevUnpricedTokens += totalTokens;
+      }
+      const model = String(row.model ?? '').trim();
+      if (model) target.jevModels.add(model);
+    }
+  }
+  return {
+    total: serializeJevCostSummary(total),
+    byGroup: new Map([...byGroup].map(([id, summary]) => [id, serializeJevCostSummary(summary)])),
+    bySource: new Map([...bySource].map(([id, summary]) => [id, serializeJevCostSummary(summary)])),
   };
 }
 
@@ -402,6 +498,14 @@ export class QqUsageTracker {
     this.groupSearchLimits = options.groupSearchLimits instanceof Map
       ? new Map(options.groupSearchLimits)
       : new Map();
+    this.jevInputPriceUsdPerMillion = Number.isFinite(Number(options.jevInputPriceUsdPerMillion))
+      && Number(options.jevInputPriceUsdPerMillion) > 0
+      ? Number(options.jevInputPriceUsdPerMillion)
+      : DEFAULT_JEV_INPUT_PRICE_USD_PER_MILLION;
+    this.jevUsdToCny = Number.isFinite(Number(options.jevUsdToCny))
+      && Number(options.jevUsdToCny) > 0
+      ? Number(options.jevUsdToCny)
+      : 0;
     this.retentionMs = positiveInteger(options.retentionMs, DEFAULT_RETENTION_MS)
       || DEFAULT_RETENTION_MS;
     this.now = options.now ?? Date.now;
@@ -441,7 +545,14 @@ export class QqUsageTracker {
         large_group INTEGER NOT NULL DEFAULT 0,
         limit_reason TEXT NOT NULL DEFAULT '',
         cached_input_tokens INTEGER NOT NULL DEFAULT 0,
-        quota_tokens INTEGER NOT NULL DEFAULT 0
+        quota_tokens INTEGER NOT NULL DEFAULT 0,
+        provider TEXT NOT NULL DEFAULT '',
+        estimated_cost_usd REAL NOT NULL DEFAULT 0,
+        estimated_cost_cny REAL NOT NULL DEFAULT 0,
+        input_price_usd_per_million REAL NOT NULL DEFAULT 0,
+        usd_to_cny REAL NOT NULL DEFAULT 0,
+        latency_ms INTEGER NOT NULL DEFAULT 0,
+        error_status INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS qq_usage_events_group_created
         ON qq_usage_events(group_id, created_at);
@@ -469,6 +580,41 @@ export class QqUsageTracker {
     if (!columns.has('quota_tokens')) {
       this.database.exec(
         'ALTER TABLE qq_usage_events ADD COLUMN quota_tokens INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    if (!columns.has('provider')) {
+      this.database.exec(
+        "ALTER TABLE qq_usage_events ADD COLUMN provider TEXT NOT NULL DEFAULT ''",
+      );
+    }
+    if (!columns.has('estimated_cost_usd')) {
+      this.database.exec(
+        'ALTER TABLE qq_usage_events ADD COLUMN estimated_cost_usd REAL NOT NULL DEFAULT 0',
+      );
+    }
+    if (!columns.has('estimated_cost_cny')) {
+      this.database.exec(
+        'ALTER TABLE qq_usage_events ADD COLUMN estimated_cost_cny REAL NOT NULL DEFAULT 0',
+      );
+    }
+    if (!columns.has('input_price_usd_per_million')) {
+      this.database.exec(
+        'ALTER TABLE qq_usage_events ADD COLUMN input_price_usd_per_million REAL NOT NULL DEFAULT 0',
+      );
+    }
+    if (!columns.has('usd_to_cny')) {
+      this.database.exec(
+        'ALTER TABLE qq_usage_events ADD COLUMN usd_to_cny REAL NOT NULL DEFAULT 0',
+      );
+    }
+    if (!columns.has('latency_ms')) {
+      this.database.exec(
+        'ALTER TABLE qq_usage_events ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    if (!columns.has('error_status')) {
+      this.database.exec(
+        'ALTER TABLE qq_usage_events ADD COLUMN error_status INTEGER NOT NULL DEFAULT 0',
       );
     }
     return this.database;
@@ -929,6 +1075,61 @@ export class QqUsageTracker {
     );
   }
 
+  recordJevUsage({
+    source,
+    model,
+    usage,
+    succeeded = true,
+    latencyMs = 0,
+    error = '',
+    status = 0,
+  } = {}) {
+    const context = this.currentContext();
+    const normalizedUsage = usage?.usage ?? usage ?? {};
+    const inputTokens = usageNumber(
+      normalizedUsage.input_tokens ?? normalizedUsage.prompt_tokens,
+    );
+    const outputTokens = usageNumber(
+      normalizedUsage.output_tokens ?? normalizedUsage.completion_tokens,
+    );
+    const totalTokens = usageNumber(normalizedUsage.total_tokens)
+      || inputTokens + outputTokens;
+    const estimatedCostUsd = inputTokens / PRICE_UNIT_TOKENS
+      * this.jevInputPriceUsdPerMillion;
+    const estimatedCostCny = this.jevUsdToCny > 0
+      ? estimatedCostUsd * this.jevUsdToCny
+      : 0;
+    const normalizedError = String(error ?? '').trim().slice(0, 300);
+    this.ensureOpen().prepare(`
+      INSERT INTO qq_usage_events(
+        created_at, group_id, user_id, message_type, kind, source, model,
+        provider, allowed, succeeded, input_tokens, output_tokens, total_tokens,
+        estimated_cost_usd, estimated_cost_cny, input_price_usd_per_million,
+        usd_to_cny, latency_ms, error_status, large_group, limit_reason
+      ) VALUES (?, ?, ?, ?, 'jev', ?, ?, 'typesafe', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      this.now(),
+      context.groupId,
+      context.userId,
+      context.messageType,
+      String(source || context.source || 'jev-atmosphere'),
+      String(model || '').trim(),
+      succeeded ? 1 : 0,
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      estimatedCostUsd,
+      estimatedCostCny,
+      this.jevInputPriceUsdPerMillion,
+      this.jevUsdToCny,
+      usageNumber(latencyMs),
+      Number.isInteger(Number(status)) ? Number(status) : 0,
+      context.largeGroup ? 1 : 0,
+      normalizedError,
+    );
+    this.prune();
+  }
+
   startSearchCall({ source } = {}) {
     const context = this.currentContext();
     const now = this.now();
@@ -1008,6 +1209,43 @@ export class QqUsageTracker {
     );
   }
 
+  getJevUsage({ startAt, endAt } = {}) {
+    const now = this.now();
+    const start = Number.isFinite(Number(startAt))
+      ? Number(startAt)
+      : startOfShanghaiDay(now);
+    const end = Number.isFinite(Number(endAt)) ? Number(endAt) : now + 1;
+    const rows = this.ensureOpen().prepare(`
+      SELECT
+        group_id AS groupId,
+        source,
+        model,
+        succeeded,
+        input_tokens AS inputTokens,
+        output_tokens AS outputTokens,
+        total_tokens AS totalTokens,
+        estimated_cost_usd AS estimatedCostUsd,
+        estimated_cost_cny AS estimatedCostCny,
+        input_price_usd_per_million AS inputPriceUsdPerMillion,
+        latency_ms AS latencyMs
+      FROM qq_usage_events
+      WHERE kind = 'jev' AND created_at >= ? AND created_at < ?
+    `).all(start, end);
+    return {
+      startAt: start,
+      endAt: end,
+      pricing: {
+        provider: 'typesafe',
+        currency: 'USD',
+        inputPriceUsdPerMillion: this.jevInputPriceUsdPerMillion,
+        usdToCny: this.jevUsdToCny || null,
+        priceSourceUrl: JEV_PRICING_SOURCE,
+        checkedAt: JEV_PRICING_CHECKED_AT,
+      },
+      ...calculateJevCosts(rows).total,
+    };
+  }
+
   getReport({ startAt, endAt, limit = 20 } = {}) {
     const now = this.now();
     const start = Number.isFinite(Number(startAt)) ? Number(startAt) : now - 24 * HOUR_MS;
@@ -1032,6 +1270,24 @@ export class QqUsageTracker {
         AND created_at >= ? AND created_at < ?
     `).all(start, end);
     const costs = calculateDeepSeekCosts(costRows);
+    const jevRows = database.prepare(`
+      SELECT
+        group_id AS groupId,
+        source,
+        model,
+        succeeded,
+        input_tokens AS inputTokens,
+        output_tokens AS outputTokens,
+        total_tokens AS totalTokens,
+        estimated_cost_usd AS estimatedCostUsd,
+        estimated_cost_cny AS estimatedCostCny,
+        input_price_usd_per_million AS inputPriceUsdPerMillion,
+        latency_ms AS latencyMs
+      FROM qq_usage_events
+      WHERE kind = 'jev'
+        AND created_at >= ? AND created_at < ?
+    `).all(start, end);
+    const jevCosts = calculateJevCosts(jevRows);
     const savingCostRows = database.prepare(`
       SELECT
         group_id AS groupId,
@@ -1078,6 +1334,7 @@ export class QqUsageTracker {
     );
     const privateUsage = {
       ...privateCost,
+      ...(jevCosts.byGroup.get('') ?? serializeJevCostSummary(emptyJevCostSummary())),
       estimatedSavedCostCny: savingCosts.byGroup.get('')?.estimatedCostCny ?? 0,
       requests: Number(privateUsageRow.requests || 0),
       blockedLlmCalls: Number(privateUsageRow.blockedLlmCalls || 0),
@@ -1125,9 +1382,7 @@ export class QqUsageTracker {
       FROM qq_usage_events
       WHERE group_id <> '' AND created_at >= ? AND created_at < ?
       GROUP BY group_id
-      ORDER BY totalTokens DESC, llmCalls DESC, searchCalls DESC, group_id ASC
-      LIMIT ?
-    `).all(start, end, rowLimit).map((row) => {
+    `).all(start, end).map((row) => {
       const groupContext = {
         groupId: row.groupId,
         largeGroup: Boolean(row.largeGroup),
@@ -1136,11 +1391,15 @@ export class QqUsageTracker {
       const cost = costs.byGroup.get(row.groupId) ?? serializeCostSummary(
         emptyCostSummary(),
       );
+      const jevCost = jevCosts.byGroup.get(row.groupId)
+        ?? serializeJevCostSummary(emptyJevCostSummary());
       const savingCost = savingCosts.byGroup.get(row.groupId)
         ?? serializeCostSummary(emptyCostSummary());
       return {
         ...groupContext,
         ...cost,
+        ...jevCost,
+        combinedEstimatedCostCny: cost.estimatedCostCny + jevCost.jevEstimatedCostCny,
         estimatedSavedCostCny: savingCost.estimatedCostCny,
         activityTier: activity.tier,
         activityLimitPercent: activity.limitPercent,
@@ -1172,11 +1431,12 @@ export class QqUsageTracker {
         lastAt: Number(row.lastAt || 0),
       };
     }).sort((left, right) => (
-      right.estimatedCostCny - left.estimatedCostCny
+      right.combinedEstimatedCostCny - left.combinedEstimatedCostCny
+      || right.jevEstimatedCostUsd - left.jevEstimatedCostUsd
       || right.totalTokens - left.totalTokens
       || right.llmCalls - left.llmCalls
       || left.groupId.localeCompare(right.groupId)
-    ));
+    )).slice(0, rowLimit);
     const totals = database.prepare(`
       SELECT
         SUM(CASE WHEN kind = 'request' THEN 1 ELSE 0 END) AS requests,
@@ -1214,7 +1474,7 @@ export class QqUsageTracker {
         SUM(CASE WHEN kind = 'search' AND allowed = 1 AND search_cache = 0 THEN 1 ELSE 0 END) AS searchCalls
       FROM qq_usage_events
       WHERE created_at >= ? AND created_at < ?
-        AND kind IN ('llm', 'search')
+        AND kind IN ('llm', 'search', 'jev')
       GROUP BY source
       ORDER BY totalTokens DESC, llmCalls DESC, searchCalls DESC, source ASC
     `).all(start, end).map((row) => ({
@@ -1224,7 +1484,10 @@ export class QqUsageTracker {
       cachedInputTokens: Number(row.cachedInputTokens || 0),
       totalTokens: Number(row.totalTokens || 0),
       searchCalls: Number(row.searchCalls || 0),
+      ...(jevCosts.bySource.get(String(row.source ?? '').trim())
+        ?? serializeJevCostSummary(emptyJevCostSummary())),
     }));
+    const jevTotals = jevCosts.total;
     return {
       startAt: start,
       endAt: end,
@@ -1240,6 +1503,24 @@ export class QqUsageTracker {
         peakTimezone: 'Asia/Shanghai',
         peakPeriods: '工作日 09:00-12:00、14:00-18:00',
         ...costs.total,
+        jev: {
+          provider: 'typesafe',
+          currency: 'USD',
+          inputPriceUsdPerMillion: this.jevInputPriceUsdPerMillion,
+          usdToCny: this.jevUsdToCny || null,
+          priceSourceUrl: JEV_PRICING_SOURCE,
+          checkedAt: JEV_PRICING_CHECKED_AT,
+          ...jevTotals,
+        },
+        combined: {
+          currency: this.jevUsdToCny > 0 ? 'CNY' : 'CNY+USD',
+          deepseekEstimatedCostCny: costs.total.estimatedCostCny,
+          jevEstimatedCostUsd: jevTotals.jevEstimatedCostUsd,
+          jevEstimatedCostCny: jevTotals.jevEstimatedCostCny,
+          estimatedCostCny: this.jevUsdToCny > 0
+            ? costs.total.estimatedCostCny + jevTotals.jevEstimatedCostCny
+            : costs.total.estimatedCostCny,
+        },
       },
       adaptiveLimitsEnabled: this.adaptiveLimitsEnabled,
       activityLookbackDays: this.activityLookbackDays,
@@ -1276,6 +1557,7 @@ export class QqUsageTracker {
         blockedSearchCalls: Number(totals.blockedSearchCalls || 0),
         searchCalls: Number(totals.searchCalls || 0),
         searchCacheHits: Number(totals.searchCacheHits || 0),
+        ...jevTotals,
       },
     };
   }

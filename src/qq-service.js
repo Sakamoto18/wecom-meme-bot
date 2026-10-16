@@ -12,6 +12,7 @@ import {
   matchLongtuContextAlias,
   matchLongtuSceneAliases,
   parseLongtuManagementCommand,
+  parseJevCommand,
 } from './longtu-management.js';
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
 import { QqUsageLimitError, isDeepSeekPeakTime } from './qq-usage-tracker.js';
@@ -1755,6 +1756,7 @@ export class QqBotService {
     this.adminUsers = options.adminUsers ?? new Set();
     this.protectedRoles = options.protectedRoles ?? new Map();
     this.activeReplyDecider = options.activeReplyDecider ?? null;
+    this.jevGate = options.jevGate ?? null;
     // These are the bot's configured display names.  Message-level name
     // candidates are intentionally kept separate in message-utils: a novel
     // group nickname must be resolved from dialogue context, not promoted to
@@ -2918,6 +2920,26 @@ export class QqBotService {
       const imageAnalysisContext = formatImageAnalysisContext(imageAnalysis);
       const imageCount = imageBlocks.filter((block) => block?.type === 'image_url').length;
       const hasImageContext = imageCount > 0 || Boolean(imageAnalysis);
+      let jevStyle = options.jevStyle ?? null;
+      const jevStatus = this.jevGate?.getStatus?.();
+      const styleEligible = !jevStyle
+        && !recordSummary
+        && (message.chattype === 'group' || message.chattype === 'private')
+        && (options.activeReply === true || hasImageContext || String(content ?? '').length <= 800);
+      if (styleEligible && this.jevGate && jevStatus && jevStatus.effectiveMode !== 'off') {
+        const styleResult = await this.jevGate.evaluateStyle({
+          transcript: history.slice(-12)
+            .map((entry) => `${entry.role === 'assistant' ? '机器人' : '群成员'}：${entry.content}`)
+            .join('\n'),
+          currentMessage: content,
+          engagement: options.activeReply === true,
+          humanDiscussion: false,
+          passiveImageText: imageAnalysisContext,
+        });
+        if (jevStatus.mode !== 'shadow' && styleResult.decision === 'allow') {
+          jevStyle = styleResult.style ?? null;
+        }
+      }
       const imageInformationPolicy = classifyImageAnalysis(imageAnalysis);
       const explicitImageSearch = hasExplicitImageSearchIntent(imageSearchQuestion);
       const imageInformationPrompt = hasImageContext
@@ -3015,6 +3037,7 @@ export class QqBotService {
         directBotMention: options.directBotMention === true,
         activeReply: options.activeReply === true,
         activeReplyPriority: options.activeReplyPriority,
+        jevStyle,
         replySequence: options.pureBotMention !== true,
         secondaryReviewDecider: typeof this.usageTracker?.shouldRunSecondaryReview === 'function'
           ? ({ source, issues }) => this.usageTracker.shouldRunSecondaryReview({
@@ -3538,6 +3561,7 @@ export class QqBotService {
         activeReply: true,
         activeReplyPriority,
         directBotMention: this.isDirectHumanMentionTrigger(payload),
+        jevStyle: decision.jevStyle ?? null,
       },
     );
     if (passiveImage?.text && !result.messages?.length) return this.observeMessage(payload, message);
@@ -3559,6 +3583,50 @@ export class QqBotService {
     if (!base64) return null;
     const buffer = Buffer.from(base64, 'base64');
     return buffer.length > 0 ? buffer : null;
+  }
+
+  async handleJevCommand(command, payload) {
+    if (!isLongtuAdministrator(payload.userId, this.adminUsers)) {
+      return { mode: 'jev-denied', messages: [{ type: 'text', text: '你没有切换 Jev 门控的权限。' }] };
+    }
+    if (!this.jevGate) {
+      return { mode: 'jev-unavailable', messages: [{ type: 'text', text: '当前部署没有启用 Jev 门控组件。' }] };
+    }
+    if (command.action === 'jev-invalid') {
+      return { mode: 'jev-invalid', messages: [{ type: 'text', text: command.message }] };
+    }
+    if (command.action === 'jev-status') {
+      const status = this.jevGate.getStatus();
+      const usage = this.usageTracker?.getJevUsage?.();
+      const lastError = status.lastError ? `\n最近错误：${status.lastError}` : '';
+      const usageLines = usage
+        ? [
+          `今日调用：${Number(usage.jevCalls || 0)} 次（成功 ${Number(usage.jevSucceededCalls || 0)} / 失败 ${Number(usage.jevFailedCalls || 0)}）`,
+          `输入 Token：${Number(usage.jevInputTokens || 0).toLocaleString('en-US')}｜输出 Token：${Number(usage.jevOutputTokens || 0).toLocaleString('en-US')}`,
+          `估算费用：$${Number(usage.jevEstimatedCostUsd || 0).toFixed(6)}${usage.jevEstimatedCostCny ? `（约 ¥${Number(usage.jevEstimatedCostCny).toFixed(6)}）` : ''}`,
+        ]
+        : [];
+      return {
+        mode: 'jev-status',
+        messages: [{
+          type: 'text',
+          text: [
+            `Jev 模式：${status.mode}`,
+            `生效状态：${status.effectiveMode}`,
+            `服务配置：${status.configured ? '已配置' : '未配置'}`,
+            `连续失败：${status.failureCount}`,
+            ...usageLines,
+            status.circuitOpenUntil > 0 ? `熔断至：${new Date(status.circuitOpenUntil).toLocaleString('zh-CN')}` : '',
+            lastError,
+          ].filter(Boolean).join('\n'),
+        }],
+      };
+    }
+    const status = await this.jevGate.setMode(command.mode);
+    return {
+      mode: 'jev-mode-updated',
+      messages: [{ type: 'text', text: `Jev 模式已切换为 ${status.mode}（当前生效：${status.effectiveMode}）。` }],
+    };
   }
 
   async handleManagementCommand(command, payload, message) {
@@ -4183,6 +4251,10 @@ export class QqBotService {
     // or LLM handling so it can never produce an authentication/error reply.
     if (String(payload.text ?? '').trim() === '/') {
       return { mode: 'ignored', messages: [] };
+    }
+    const jevCommand = parseJevCommand(payload.text);
+    if (jevCommand) {
+      return this.handleJevCommand(jevCommand, payload);
     }
     if (payload.botGeneratedImageOnly && !parseLongtuManagementCommand(payload.text)) {
       return {

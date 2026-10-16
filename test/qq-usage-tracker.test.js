@@ -110,6 +110,63 @@ test('日报总计包含私聊用量，但群排行只展示群聊聚合', async
   }
 });
 
+test('Jev 用量按输入 Token 独立计费，不进入 DeepSeek 配额和缓存统计', async () => {
+  const fixture = createTracker({ jevUsdToCny: 7.2 });
+  try {
+    fixture.tracker.runWithContext({
+      groupId: 'jev-group',
+      userId: 'jev-user',
+      messageType: 'group',
+      largeGroup: true,
+    }, () => fixture.tracker.recordJevUsage({
+      source: 'jev-style',
+      model: 'jev-1.14.0',
+      usage: { input_tokens: 1_000_000, output_tokens: 50_000 },
+      latencyMs: 321,
+      succeeded: true,
+      status: 200,
+    }));
+    const report = fixture.tracker.getReport();
+    const group = report.groups.find((item) => item.groupId === 'jev-group');
+    assert.equal(report.totals.llmCalls, 0);
+    assert.equal(report.totals.inputTokens, 0);
+    assert.equal(report.totals.cachedInputTokens, 0);
+    assert.equal(report.totals.jevCalls, 1);
+    assert.equal(report.totals.jevInputTokens, 1_000_000);
+    assert.equal(report.totals.jevOutputTokens, 50_000);
+    assert.equal(report.pricing.jev.jevEstimatedCostUsd, 0.042);
+    assert.equal(report.pricing.jev.jevEstimatedCostCny, 0.3024);
+    assert.equal(group.jevMaxLatencyMs, 321);
+    assert.equal(group.combinedEstimatedCostCny, 0.3024);
+    assert.equal(fixture.tracker.getJevUsage().jevCalls, 1);
+  } finally {
+    fixture.close();
+  }
+});
+
+test('Jev 缺少 usage 或失败时保留失败事件并标记未计价', async () => {
+  const fixture = createTracker();
+  try {
+    fixture.tracker.runWithContext({ groupId: 'jev-failure' }, () => (
+      fixture.tracker.recordJevUsage({
+        source: 'jev-atmosphere',
+        model: 'jev-1.13.0',
+        succeeded: false,
+        status: 429,
+        error: 'quota exceeded',
+      })
+    ));
+    const report = fixture.tracker.getReport();
+    assert.equal(report.totals.jevCalls, 1);
+    assert.equal(report.totals.jevFailedCalls, 1);
+    assert.equal(report.totals.jevUnpricedCalls, 1);
+    assert.equal(report.totals.jevInputTokens, 0);
+    assert.equal(report.totals.llmCalls, 0);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('所有群按近期开口人数和消息活跃度动态获得配额', async () => {
   let now = Date.UTC(2026, 7, 25, 4);
   const fixture = createTracker({

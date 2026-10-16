@@ -38,6 +38,7 @@ import {
   FORWARD_SUMMARY_PROMPT,
   isImageEvaluationIntent,
 } from './image-reply-context.js';
+import { buildJevStylePrompt } from './jev-atmosphere-gate.js';
 import { MENTION_INTENT_PROMPT, parseMentionIntent, shouldCheckMentionIntent } from './mention-intent.js';
 import { buildCultureRecallContext } from './cultural-retrieval.js';
 import {
@@ -295,6 +296,7 @@ export async function generateConversationReply(options) {
     directBotMention = false,
     activeReply = false,
     activeReplyPriority = '',
+    jevStyle = null,
     replySequence = false,
     secondaryReviewDecider,
     imageBlocks = [],
@@ -814,6 +816,7 @@ export async function generateConversationReply(options) {
     cultureRecall.prompt,
     culturePrompt,
     buildNormalReplyContextPrompt(normalPromptOptions),
+    buildJevStylePrompt(jevStyle),
     buildProtectedSelfIdentityPrompt(requiredIdentityRole),
     webSearchStatus,
     searchEvidencePrompt,

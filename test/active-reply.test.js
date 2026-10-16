@@ -61,6 +61,39 @@ test('两层中立判定复用真实请求前缀，保留全部上下文且不�
   assert.match(requests[1].messages[1].content, /speak 或 skip/);
 });
 
+test('Jev skip 会静默可选插话，但不拦截明确点名', async () => {
+  const gate = {
+    getStatus: () => ({ effectiveMode: 'on', mode: 'on' }),
+    evaluate: async () => ({ decision: 'skip', probability: 0.1 }),
+  };
+  const decider = new ActiveReplyDecider({
+    chatClient: { isConfigured: true, async complete() { return 'may'; } },
+    jevGate: gate, enabled: true, candidateProbability: 1, random: () => 0,
+  });
+  const skipped = await decider.shouldReply({ payload: groupPayload(), history: [] });
+  assert.equal(skipped.reply, false);
+  assert.equal(skipped.reason, 'jev-skip');
+  const mentioned = await decider.shouldReply({
+    payload: groupPayload({ text: '@龙玉涛 看一下', mentions: [{ userId: 'bot', name: '龙玉涛' }] }),
+    history: [],
+  });
+  assert.equal(mentioned.reply, true);
+});
+
+test('Jev 故障回退旧主动回复判定并透传风格', async () => {
+  const gate = {
+    getStatus: () => ({ effectiveMode: 'on', mode: 'on' }),
+    evaluate: async () => ({ decision: 'fallback', reason: 'jev-error' }),
+  };
+  const decider = new ActiveReplyDecider({
+    chatClient: { isConfigured: true, async complete() { return 'must'; } },
+    jevGate: gate, enabled: true, now: () => 10_000,
+  });
+  const result = await decider.shouldReply({ payload: groupPayload(), history: [] });
+  assert.equal(result.reply, true);
+  assert.equal(result.reason, 'ai-must');
+});
+
 test('主动回复判定使用中立规则和近期群聊，AI 返回 must 时放行', async () => {
   const calls = [];
   const decider = new ActiveReplyDecider({

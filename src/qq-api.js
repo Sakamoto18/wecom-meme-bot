@@ -28,6 +28,7 @@ import { createXhsProvider } from './xhs-provider.js';
 import { createDouyinProvider } from './douyin-provider.js';
 import { createBilibiliSessionProvider } from './bilibili-session-provider.js';
 import { CultureCache } from './culture-cache.js';
+import { JevAtmosphereGate, JevRuntimeState } from './jev-atmosphere-gate.js';
 
 // DeepSeek Vision's inline request limit is 48 MiB. Keep the bridge/API
 // aligned with that limit so multi-image payloads are not rejected locally.
@@ -518,6 +519,12 @@ export async function createQqRuntime() {
     groupSearchLimits: parseIdentifierNumberMap(
       process.env.QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS,
     ),
+    jevInputPriceUsdPerMillion: parsePositiveNumber(
+      process.env.LONGTU_QQ_JEV_INPUT_PRICE_USD_PER_MILLION,
+    ),
+    jevUsdToCny: parsePositiveNumber(
+      process.env.LONGTU_QQ_JEV_USD_TO_CNY,
+    ),
   });
   const mediaUsageTracker = new MediaUsageTracker({
     databaseFilePath: path.resolve(
@@ -610,8 +617,33 @@ export async function createQqRuntime() {
     model: process.env.LLM_MODEL || 'deepseek-chat',
     systemPrompt,
   }));
+  const jevEnabled = parseBoolean(process.env.LONGTU_QQ_JEV_ENABLED, false);
+  const jevRuntime = new JevRuntimeState({
+    filePath: path.resolve(
+      projectRoot,
+      process.env.LONGTU_QQ_JEV_STATE_FILE?.trim() || 'data/qq-jev-runtime.json',
+    ),
+    defaultMode: jevEnabled
+      ? (process.env.LONGTU_QQ_JEV_MODE?.trim() || 'auto')
+      : 'off',
+    cooldownMs: (parsePositiveNumber(process.env.LONGTU_QQ_JEV_CIRCUIT_COOLDOWN_SECONDS) ?? 3600) * 1000,
+    logger: console,
+  });
+  await jevRuntime.load();
+  const jevGate = new JevAtmosphereGate({
+    apiKey: process.env.TYPESAFE_API_KEY,
+    baseUrl: process.env.TYPESAFE_BASE_URL,
+    model: process.env.TYPESAFE_MODEL,
+    timeoutMs: parsePositiveInteger(process.env.LONGTU_QQ_JEV_TIMEOUT_MS) ?? 2_500,
+    allowThreshold: parseProbability(process.env.LONGTU_QQ_JEV_ALLOW_THRESHOLD, 0.72),
+    skipThreshold: parseProbability(process.env.LONGTU_QQ_JEV_SKIP_THRESHOLD, 0.28),
+    runtime: jevRuntime,
+    logger: console,
+    onUsage: (event) => usageTracker.recordJevUsage(event),
+  });
   const activeReplyDecider = new ActiveReplyDecider({
     chatClient,
+    jevGate,
     enabled: parseBoolean(process.env.LONGTU_QQ_ACTIVE_REPLY_ENABLED, true),
     candidateProbability: parseProbability(
       process.env.LONGTU_QQ_ACTIVE_REPLY_PROBABILITY,
@@ -798,6 +830,7 @@ export async function createQqRuntime() {
     passiveImageVisualEnabled: process.env.QQ_PASSIVE_IMAGE_VISUAL_ENABLED?.trim() !== 'false',
     passiveImageCooldownMs: parseNonnegativeInteger(process.env.QQ_PASSIVE_IMAGE_COOLDOWN_SECONDS, 60) * 1000,
     activeReplyDecider,
+    jevGate,
     repeatDetector,
     peerBotContinuationDecider,
     peerBotUsers: parseIdentifierSet(process.env.LONGTU_QQ_PEER_BOT_USERS),
@@ -916,6 +949,7 @@ export async function createQqRuntime() {
     usageReportUsers,
     webSearchEnabled,
     activeReplyEnabled: activeReplyDecider.enabled && chatClient.isConfigured,
+    jevGate,
     repeatEnabled: repeatDetector.enabled,
     peerBotContextGateEnabled: peerBotContinuationDecider.enabled
       && chatClient.isConfigured,
