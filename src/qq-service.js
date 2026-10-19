@@ -1866,6 +1866,13 @@ export class QqBotService {
     this.protectedRoles = options.protectedRoles ?? new Map();
     this.activeReplyDecider = options.activeReplyDecider ?? null;
     this.jevGate = options.jevGate ?? null;
+    this.jevResponseModeMemory = options.jevResponseModeMemory ?? null;
+    this.jevResponseRoutingEnabled = options.jevResponseRoutingEnabled !== false;
+    this.jevCultureDefault = options.jevCultureDefault !== false;
+    this.jevCultureMinScore = Math.max(
+      0,
+      Math.min(1, Number(options.jevCultureMinScore ?? 0.45) || 0.45),
+    );
     this.jevSemanticEnabled = options.jevSemanticEnabled !== false;
     this.jevRawImageMode = ['off', 'high_value', 'all_explicit'].includes(
       String(options.jevRawImageMode ?? 'high_value').trim(),
@@ -3196,6 +3203,7 @@ export class QqBotService {
       const hasCurrentImageContext = imageCount > 0 || Boolean(imageAnalysis);
       let hasImageContext = hasCurrentImageContext;
       let jevStyle = options.jevStyle ?? null;
+      const previousJevMode = this.jevResponseModeMemory?.get(conversationId) ?? null;
       const jevStatus = this.jevGate?.getStatus?.();
       const jevRawImageBlocks = imageBlocks
         .filter((block) => block?.type === 'image_url')
@@ -3216,9 +3224,10 @@ export class QqBotService {
         && (!jevStyle || !String(jevStyle.semanticPoint ?? '').trim());
       const styleEligible = (!jevStyle || jevNeedsSemanticRefresh)
         && this.jevSemanticEnabled
+        && this.jevResponseRoutingEnabled
         && !recordSummary
         && (message.chattype === 'group' || message.chattype === 'private')
-        && (options.activeReply === true || hasImageContext || String(content ?? '').length <= 800);
+        && (options.activeReply === true || hasImageContext || String(content ?? '').length <= MAX_MESSAGE_CHARACTERS);
       if (styleEligible && this.jevGate && jevStatus && jevStatus.effectiveMode !== 'off') {
         const styleResult = await this.jevGate.evaluateStyle({
           transcript: history.slice(-12)
@@ -3230,12 +3239,20 @@ export class QqBotService {
           passiveImageText: imageAnalysisContext,
           imageAnalysis,
           contextImageCandidates: historicalContextImageCandidates,
+          responseModeState: previousJevMode,
           rawImageForJev: jevRawImageForStyle,
           rawImageBlocks: jevRawImageForStyle ? jevRawImageBlocks : [],
         });
         if (jevStatus.mode !== 'shadow' && styleResult.decision === 'allow') {
           jevStyle = styleResult.style ?? null;
         }
+      }
+      if (jevStyle && this.jevResponseRoutingEnabled && this.jevResponseModeMemory) {
+        jevStyle = this.jevResponseModeMemory.resolve(conversationId, jevStyle, {
+          cultureDefault: this.jevCultureDefault,
+          cultureMinScore: this.jevCultureMinScore,
+        }).style;
+        this.jevResponseModeMemory.commit(conversationId, jevStyle);
       }
       let contextImageStyle = jevStyle;
       const initialContextImageEntries = this.contextImageBlocksFor(
@@ -3346,6 +3363,10 @@ export class QqBotService {
         + ` jev_semantic=${jevStyle?.semanticPoint ? 'yes' : 'no'}`
         + ` jev_literal_risk=${Number(jevStyle?.literalOnlyRisk || 0).toFixed(2)}`
         + ` jev_raw_image=${jevRawImageForStyle ? 'yes' : 'no'}`
+        + ` jev_mode=${jevStyle?.mode || 'none'}`
+        + ` jev_mode_confidence=${Number(jevStyle?.modeConfidence || 0).toFixed(2)}`
+        + ` jev_culture_priority=${Number(jevStyle?.culturePriority || 0).toFixed(2)}`
+        + ` jev_serious_request=${Number(jevStyle?.seriousRequest || 0).toFixed(2)}`
         + ` analyzed=${imageAnalysisSucceeded ? 'yes' : 'no'}`
         + ` information=${imageInformationPolicy?.level || 'unknown'}`
         + ` search=${imageSearchQueries?.length ?? 0}`
@@ -3921,6 +3942,7 @@ export class QqBotService {
     }
     const decision = await this.activeReplyDecider.shouldReply({
       payload: decisionPayload,
+      conversationId,
       activityRecorded: true,
       currentContent: passiveImage?.text ? (payload.text || '（群友发来信息图片，未明确提问）') : conversationContent,
       imageAnalysis: passiveImage?.analysis,

@@ -174,6 +174,7 @@ export class ActiveReplyDecider {
   constructor(options) {
     this.chatClient = options.chatClient;
     this.jevGate = options.jevGate ?? null;
+    this.jevResponseModeMemory = options.jevResponseModeMemory ?? null;
     this.enabled = options.enabled ?? false;
     this.candidateProbability = Math.min(
       1,
@@ -808,6 +809,7 @@ export class ActiveReplyDecider {
         passiveImageText: payload.passiveImageText,
         imageAnalysis: input.imageAnalysis,
         contextImageCandidates: input.contextImageCandidates,
+        responseModeState: this.jevResponseModeMemory?.get(input.conversationId) ?? null,
         signals,
       });
       const shadow = jevStatus?.mode === 'shadow';

@@ -7,7 +7,12 @@ import {
   JevAtmosphereGate,
   JevRuntimeState,
   buildJevSemanticPrompt,
+  buildJevStylePrompt,
 } from '../src/jev-atmosphere-gate.js';
+import {
+  JevResponseModeMemory,
+  resolveJevResponseMode,
+} from '../src/jev-response-mode.js';
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, async json() { return body; } };
@@ -143,7 +148,7 @@ test('百炼 Chat 模式只做插话和文化检索路由，不改写角色提�
 
   const decision = await gate.evaluate({ currentMessage: '这个梗需要查一下出处吗' });
   assert.equal(decision.decision, 'allow');
-  assert.equal(decision.style.promptEnabled, false);
+  assert.equal(decision.style.promptEnabled, true);
   assert.equal(decision.style.cultureDomain, 'general');
   assert.deepEqual(decision.style.queryTerms, ['亡灵骑士']);
   assert.equal(calls[0].url, 'https://api.typesafe.ai/v1/chat/completions');
@@ -151,9 +156,64 @@ test('百炼 Chat 模式只做插话和文化检索路由，不改写角色提�
 
   const routed = await gate.evaluateStyle({ currentMessage: '评价这个网络梗' });
   assert.equal(routed.decision, 'allow');
-  assert.equal(routed.style.promptEnabled, false);
+  assert.equal(routed.style.promptEnabled, true);
   assert.equal(routed.style.cultureLookupNeeded, 0.9);
   assert.equal(calls.length, 2);
+});
+
+test('Jev 文化优先模式覆盖非严肃问题，明确正经追问保留正经路由', () => {
+  const culture = resolveJevResponseMode({
+    mode: 'concise_answer',
+    memeFit: 0.82,
+    culturePriority: 0.91,
+    seriousRequest: 0.12,
+  }, null, { cultureDefault: true });
+  assert.equal(culture.mode, 'culture');
+
+  const serious = resolveJevResponseMode({
+    mode: 'explanation',
+    memeFit: 0.8,
+    explanationNeeded: 0.9,
+    seriousRequest: 0.93,
+  }, null, { cultureDefault: true });
+  assert.equal(serious.mode, 'serious');
+});
+
+test('Jev 文化模式在正经追问后维持两轮并自动回落', () => {
+  let now = 1_000;
+  const memory = new JevResponseModeMemory({ now: () => now, ttlTurns: 2 });
+  const first = memory.resolve('group:1', { mode: 'banter', memeFit: 0.9 }, { cultureDefault: true }).style;
+  memory.commit('group:1', first);
+  assert.equal(memory.get('group:1').mode, 'culture');
+
+  const serious = memory.resolve('group:1', {
+    mode: 'explanation',
+    explanationNeeded: 0.95,
+    seriousRequest: 0.95,
+  }, { cultureDefault: true }).style;
+  assert.equal(serious.mode, 'serious');
+  memory.commit('group:1', serious);
+  assert.equal(memory.get('group:1').remainingTurns, 1);
+
+  now += 100;
+  const followup = memory.resolve('group:1', { mode: 'concise_answer', memeFit: 0.1 }, { cultureDefault: true }).style;
+  assert.equal(followup.mode, 'serious');
+  memory.commit('group:1', followup);
+  const restored = memory.resolve('group:1', { mode: 'concise_answer', memeFit: 0.1 }, { cultureDefault: true }).style;
+  assert.equal(restored.mode, 'culture');
+});
+
+test('Chat Jev 的文化路由会把质量模板传给最终回复层', () => {
+  const prompt = buildJevStylePrompt({
+    promptEnabled: true,
+    mode: 'culture',
+    culturePriority: 0.9,
+    concreteAssociation: 0.88,
+    literalReplyRisk: 0.8,
+  });
+  assert.match(prompt, /文化输出质量校准/);
+  assert.match(prompt, /具体关系/);
+  assert.match(prompt, /不要先复述图片/);
 });
 
 test('Jev 结构化输出图片语用候选，并在高价值场景读取原图', async () => {

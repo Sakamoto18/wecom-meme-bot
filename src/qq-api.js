@@ -29,6 +29,7 @@ import { createDouyinProvider } from './douyin-provider.js';
 import { createBilibiliSessionProvider } from './bilibili-session-provider.js';
 import { CultureCache } from './culture-cache.js';
 import { JevAtmosphereGate, JevRuntimeState } from './jev-atmosphere-gate.js';
+import { JevResponseModeMemory } from './jev-response-mode.js';
 
 // DeepSeek Vision's inline request limit is 48 MiB. Keep the bridge/API
 // aligned with that limit so multi-image payloads are not rejected locally.
@@ -636,8 +637,8 @@ export async function createQqRuntime() {
   const jevGate = new JevAtmosphereGate({
     apiKey: process.env.TYPESAFE_API_KEY,
     baseUrl: process.env.TYPESAFE_BASE_URL,
-    model: process.env.TYPESAFE_MODEL,
-    protocol: process.env.LONGTU_QQ_JEV_PROTOCOL || process.env.TYPESAFE_PROTOCOL,
+    model: process.env.LONGTU_QQ_JEV_MODEL?.trim() || 'qwen3.7-plus',
+    protocol: process.env.LONGTU_QQ_JEV_PROTOCOL?.trim() || 'chat',
     chatMaxTokens: parsePositiveInteger(process.env.LONGTU_QQ_JEV_CHAT_MAX_TOKENS) ?? 220,
     timeoutMs: parsePositiveInteger(
       process.env.LONGTU_QQ_JEV_SEMANTIC_TIMEOUT_MS
@@ -649,9 +650,16 @@ export async function createQqRuntime() {
     logger: console,
     onUsage: (event) => usageTracker.recordJevUsage(event),
   });
+  const jevResponseModeMemory = new JevResponseModeMemory({
+    ttlTurns: parsePositiveInteger(process.env.LONGTU_QQ_JEV_MODE_TTL_TURNS) ?? 2,
+    ttlMs: (parsePositiveNumber(process.env.LONGTU_QQ_JEV_MODE_TTL_SECONDS) ?? 900) * 1000,
+    logger: console,
+  });
+  console.log(`QQ Jev 决策模型：${jevGate.model}（统一用于插话、文化和模式路由）`);
   const activeReplyDecider = new ActiveReplyDecider({
     chatClient,
     jevGate,
+    jevResponseModeMemory,
     jevSemanticEnabled: parseBoolean(
       process.env.LONGTU_QQ_JEV_SEMANTIC_ENABLED,
       true,
@@ -861,6 +869,19 @@ export async function createQqRuntime() {
     passiveImageCooldownMs: parseNonnegativeInteger(process.env.QQ_PASSIVE_IMAGE_COOLDOWN_SECONDS, 60) * 1000,
     activeReplyDecider,
     jevGate,
+    jevResponseModeMemory,
+    jevResponseRoutingEnabled: parseBoolean(
+      process.env.LONGTU_QQ_JEV_RESPONSE_ROUTING_ENABLED,
+      true,
+    ),
+    jevCultureDefault: parseBoolean(
+      process.env.LONGTU_QQ_JEV_CULTURE_DEFAULT,
+      true,
+    ),
+    jevCultureMinScore: parseProbability(
+      process.env.LONGTU_QQ_JEV_CULTURE_MIN_SCORE,
+      0.45,
+    ),
     repeatDetector,
     peerBotContinuationDecider,
     peerBotUsers: parseIdentifierSet(process.env.LONGTU_QQ_PEER_BOT_USERS),

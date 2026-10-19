@@ -1,9 +1,13 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { buildCultureQualityPrompt } from './jev-culture-quality.js';
 
 const MODES = new Set(['auto', 'on', 'off', 'shadow']);
 const DEFAULT_COOLDOWN_MS = 60 * 60 * 1000;
-const RESPONSE_MODES = new Set(['banter', 'judgment', 'concise_answer', 'explanation', 'serious_support']);
+const RESPONSE_MODES = new Set([
+  'banter', 'judgment', 'concise_answer', 'explanation', 'serious_support',
+  'culture', 'hybrid', 'serious', 'support',
+]);
 const CULTURE_DOMAINS = new Set(['longtu', 'general', 'platform', 'none']);
 const PLATFORMS = new Set(['bilibili', 'xiaohongshu', 'douyin', 'weibo', 'tieba', 'general', 'unknown']);
 const TONES = new Set(['dry', 'sarcastic', 'absurd', 'neutral']);
@@ -242,6 +246,12 @@ function buildState(context = {}) {
     image_summary: trimText(context.passiveImageText, 1_200),
     image_analysis: imageAnalysis,
     raw_image: context.rawImageForJev === true,
+    response_mode_state: context.responseModeState && typeof context.responseModeState === 'object'
+      ? {
+        mode: String(context.responseModeState.mode ?? '').trim(),
+        remaining_turns: Math.max(0, Number(context.responseModeState.remainingTurns) || 0),
+      }
+      : null,
     context_images: contextImages,
   };
 }
@@ -352,6 +362,26 @@ const QUESTIONS = {
       explanation: '需要解释事实、原理、步骤、限制或方案。',
       serious_support: '涉及现实风险、痛苦、危机或敏感求助，应稳定认真回应。',
     },
+  },
+  culture_priority: {
+    type: 'noul',
+    instructions: '当前内容是否应该优先用中文互联网语境、具体联想或接梗来回答，而不是先做正经说明？',
+    criteria: {
+      true: '非严肃问题中存在明确反差、二创、暗示、荒诞关系或可自然接住的文化落点。',
+      false: '文化化表达会妨碍事实、步骤、核验或现实处境的准确回答。',
+    },
+  },
+  serious_request: {
+    type: 'noul',
+    instructions: '用户是否明确要求认真、具体、核验、方案、步骤，或连续纠正机器人答非所问？',
+  },
+  concrete_association: {
+    type: 'noul',
+    instructions: '是否存在一个具体且贴合当前画面/话题的联想落点，而不是泛泛说抽象、离谱或有意思？',
+  },
+  literal_reply_risk: {
+    type: 'noul',
+    instructions: '最终回复是否容易退化为复述图片或把搜索资料平铺出来，而没有回答真正的语境？',
   },
   image_culture_needed: {
     type: 'noul',
@@ -475,6 +505,8 @@ const CHAT_GATE_SYSTEM_PROMPT = [
   '图片语义必须分开写：visual_facts 是像素事实，text_claims 是图片文字主张，semantic_point 是图片真正表达的观点或反差；不要把图片描述当成语义结论。',
   '如果 state.raw_image 存在，必须优先核对原图；如果视觉摘要和原图冲突，提高 image_complete_read_needed 或降低 semantic_confidence，不要迎合 OCR 猜测。',
   'candidate_associations 只返回最多两个有具体对应关系的联想；没有贴合落点就返回空数组，禁止用“抽象”“离谱”充数。',
+  '除非用户明确要求认真、具体、核验或方案，否则非严肃语境优先判断是否应该文化化接话；serious_request 只在明确追问或连续纠正时提高。',
+  'state.response_mode_state 是上一轮内部路由状态：如果 serious/support 仍有剩余轮次，除非当前消息明确回到文化闲聊，否则继续认真；culture 状态只提供倾向，不得阻止明确正经追问切换。',
   'state.context_images 是最近上下文图片候选。只有当前消息明确承接某张图片、引用其文字/画面，或不读图就无法判断时，才把 context_image_needed 设为较高，并返回对应编号；泛泛发图、旧图片或只凭文字就能回答时必须返回空数组。',
   'context_image_indexes 只能填写 state.context_images 中已有的正整数编号，最多 3 个；不要臆造编号，也不要输出图片本身。',
   'state.image_analysis 是当前图片的低可信视觉/OCR摘要。它不是结论：如果摘要与问题、画面关系或上下文不一致，优先提高 image_complete_read_needed，让最终模型重新看原图；不要只因有水印、账号名或一个热词就触发搜索。',
@@ -490,7 +522,11 @@ const CHAT_GATE_SYSTEM_PROMPT = [
     platform: 'bilibili|xiaohongshu|douyin|weibo|tieba|general|unknown',
     tone: 'dry|sarcastic|absurd|neutral',
     target: 'content|bot|third_party|unknown',
-    response_mode: 'banter|judgment|concise_answer|explanation|serious_support',
+    response_mode: 'culture|hybrid|serious|support|banter|judgment|concise_answer|explanation|serious_support',
+    culture_priority: 'number: 是否优先文化输出和具体接梗',
+    serious_request: 'number: 用户要求正经回答或连续纠正的概率',
+    concrete_association: 'number: 存在具体贴题联想落点的概率',
+    literal_reply_risk: 'number: 最终回答退化成字面复述的风险',
     context_image_needed: 'number: 是否需要读取最近上下文中的某张图片才能准确接话',
     context_image_indexes: '最多 3 个正整数，对应 state.context_images 中需要读取的图片编号；不需要则为空数组',
     context_image_reason: '短句说明为什么需要这些图片；不需要则为空字符串',
@@ -600,6 +636,14 @@ function normalizeCultureAnswers(answers, context = {}) {
       answers,
       'semantic_confidence',
     ) || answerNumber(pragmatic, 'semantic_confidence'),
+    culturePriority: answerNumber(answers, 'culture_priority')
+      || answerNumber(culture, 'culture_priority'),
+    seriousRequest: answerNumber(answers, 'serious_request')
+      || answerNumber(culture, 'serious_request'),
+    concreteAssociation: answerNumber(answers, 'concrete_association')
+      || answerNumber(pragmatic, 'concrete_association'),
+    literalReplyRisk: answerNumber(answers, 'literal_reply_risk')
+      || answerNumber(guidance, 'literal_reply_risk'),
     confidence: clamp(answers?.culture_domain?.confidence ?? answers?.confidence, 0),
   };
 }
@@ -608,7 +652,7 @@ export class JevAtmosphereGate {
   constructor(options = {}) {
     this.apiKey = String(options.apiKey ?? '').trim();
     this.baseUrl = String(options.baseUrl ?? 'https://api.typesafe.ai').trim().replace(/\/+$/, '');
-    this.model = String(options.model ?? 'jev-1.13').trim();
+    this.model = String(options.model ?? 'qwen3.7-plus').trim();
     this.protocol = normalizeProtocol(options.protocol, 'systemone');
     this.chatMaxTokens = Math.max(80, Number(options.chatMaxTokens ?? 220));
     this.timeoutMs = Math.max(500, Number(options.timeoutMs ?? 2_500));
@@ -783,7 +827,7 @@ export class JevAtmosphereGate {
         ...normalizeCultureAnswers(answers, context),
         // Chat-model Jev is a router only. Its culture fields may drive search,
         // but never rewrite the existing DeepSeek persona prompt.
-        promptEnabled: this.protocol !== 'chat',
+        promptEnabled: true,
       };
       const decision = probability >= this.allowThreshold
         ? 'allow' : probability <= this.skipThreshold ? 'skip' : 'fallback';
@@ -832,6 +876,10 @@ export class JevAtmosphereGate {
       candidate_associations: QUESTIONS.candidate_associations,
       semantic_avoid_literal: QUESTIONS.semantic_avoid_literal,
       semantic_confidence: QUESTIONS.semantic_confidence,
+      culture_priority: QUESTIONS.culture_priority,
+      serious_request: QUESTIONS.serious_request,
+      concrete_association: QUESTIONS.concrete_association,
+      literal_reply_risk: QUESTIONS.literal_reply_risk,
     }, 'jev-style');
     if (!response.ok) return { decision: 'fallback', reason: response.reason, style: null };
     const answers = response.answers;
@@ -846,7 +894,7 @@ export class JevAtmosphereGate {
         cultureLookupNeeded: answerNumber(answers, 'culture_lookup_needed'),
         confidence: clamp(answers?.response_mode?.confidence, 0),
         ...normalizeCultureAnswers(answers, context),
-        promptEnabled: this.protocol !== 'chat',
+        promptEnabled: true,
       },
       latencyMs: response.latencyMs,
     };
@@ -861,16 +909,21 @@ export function buildJevStylePrompt(style) {
   // routing notes below are evidence-handling instructions, not style control.
   if (style.promptEnabled !== false) {
     lines.push('【本轮表达路由：仅供内部参考，不要向用户解释】');
-    if (mode === 'banter' && Number(style.memeFit) >= 0.65) {
+    if (mode === 'culture' || (mode === 'banter' && Number(style.memeFit) >= 0.45)) {
+      lines.push('当前文化优先：先抓住具体关系、反差或暗示，直接给一个贴题联想；不要先复述图片或把回复写成说明文。没有可靠落点时收短，不要硬编。');
+    } else if (mode === 'banter' && Number(style.memeFit) >= 0.65) {
       lines.push('当前适合自然接梗或抽象联想：先对事情下判断，再尝试一个具体画面、双关、转职或反差搭档。没有贴合落点就省略，不要硬塞。');
-    } else if (mode === 'judgment') {
-      lines.push('当前优先直接评价事情本身；可以带一层贴题语气，但不要退化成百科解释。');
-    } else if (mode === 'explanation' || Number(style.explanationNeeded) >= 0.65) {
+    } else if (mode === 'hybrid' || mode === 'judgment') {
+      lines.push('当前先用一句具体语气接住事情，再补必要结论；不要把整段回复写成百科解释。');
+    } else if (mode === 'serious' || mode === 'explanation' || Number(style.explanationNeeded) >= 0.65) {
       lines.push('当前需要先把事实、条件或操作说准确；角色语气融进判断，不为了玩梗漏掉关键内容。');
-    } else if (mode === 'serious_support') {
+    } else if (mode === 'support' || mode === 'serious_support') {
       lines.push('当前优先稳定、准确地回应现实处境；不要强行攻击、玩梗或把痛苦改写成段子。');
     } else {
       lines.push('当前直接接话即可；有具体贴合的联想再用，没有就简短回答。');
+    }
+    if (mode === 'culture' || mode === 'hybrid' || mode === 'banter') {
+      lines.push(buildCultureQualityPrompt(style));
     }
     if (Number(style.cultureLookupNeeded) >= 0.8) {
       lines.push('如已有文化检索或缓存素材，只消化成自己的表达；不要播报搜索过程或来源列表。');
