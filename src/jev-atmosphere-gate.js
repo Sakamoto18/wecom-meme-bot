@@ -192,6 +192,25 @@ function buildState(context = {}) {
       has_raw_image: item?.hasRawImage === true,
     }))
     : [];
+  const imageAnalysis = context.imageAnalysis && typeof context.imageAnalysis === 'object'
+    ? {
+      description: String(context.imageAnalysis.description ?? '').slice(0, 900),
+      visible_text: Array.isArray(context.imageAnalysis.visibleText)
+        ? context.imageAnalysis.visibleText.map((item) => String(item ?? '').slice(0, 100)).slice(0, 20)
+        : [],
+      keywords: Array.isArray(context.imageAnalysis.keywords)
+        ? context.imageAnalysis.keywords.map((item) => String(item ?? '').slice(0, 80)).slice(0, 20)
+        : [],
+      scene_relation: String(context.imageAnalysis.sceneRelation ?? '').slice(0, 500),
+      implied_point: String(context.imageAnalysis.impliedPoint ?? '').slice(0, 500),
+      comic_mechanism: String(context.imageAnalysis.comicMechanism ?? '').slice(0, 400),
+      visual_wordplay: String(context.imageAnalysis.visualWordplay ?? '').slice(0, 400),
+      confidence: String(context.imageAnalysis.confidence ?? '').slice(0, 20),
+      search_queries: Array.isArray(context.imageAnalysis.searchQueries)
+        ? context.imageAnalysis.searchQueries.map((item) => String(item ?? '').slice(0, 140)).slice(0, 3)
+        : [],
+    }
+    : null;
   return {
     transcript: trimText(context.transcript, 4_000),
     current_message: trimText(context.currentMessage, 1_200),
@@ -202,6 +221,7 @@ function buildState(context = {}) {
     },
     signals: context.signals ?? {},
     image_summary: trimText(context.passiveImageText, 1_200),
+    image_analysis: imageAnalysis,
     context_images: contextImages,
   };
 }
@@ -313,6 +333,30 @@ const QUESTIONS = {
       serious_support: '涉及现实风险、痛苦、危机或敏感求助，应稳定认真回应。',
     },
   },
+  image_culture_needed: {
+    type: 'noul',
+    instructions: '当前图片是否需要结合中文互联网文化、热梗、双关、平台语境或出处才能理解其表达，而不是只描述画面？',
+    criteria: {
+      true: '图片存在视觉双关、错视、网络梗、平台话术、隐晦反差或单靠字面/画面会误读。',
+      false: '图片含义可以依据当前画面和文字直接回答，联网文化只会增加噪音。',
+    },
+  },
+  image_fact_check_needed: {
+    type: 'noul',
+    instructions: '当前图片是否存在需要联网核实的公开事实、人物/作品出处、时间、数据或原帖信息？',
+    criteria: {
+      true: '图片提出明确事实主张、出处线索或可验证的公开事件，且模型不能只凭图可靠确认。',
+      false: '没有明确公开事实，或当前问题只是评价/接梗，不应为了图片水印和泛泛关键词搜索。',
+    },
+  },
+  image_complete_read_needed: {
+    type: 'noul',
+    instructions: 'DeepSeek 是否需要重新读取当前图片原图/全部切片，避免只依赖 OCR 或摘要？',
+    criteria: {
+      true: '图片有遮挡字、拆字、细小文字、多格关系、复杂构图、评论上下文或当前摘要明显不足。',
+      false: '已有视觉资料足够，重新传原图不会增加判断价值。',
+    },
+  },
 };
 
 function answerNumber(answers, key) {
@@ -348,6 +392,7 @@ const CHAT_GATE_SYSTEM_PROMPT = [
   '数值字段必须是 0 到 1 的数字；枚举字段必须使用给定值；query_terms 和 longtu_terms 必须是短词数组。',
   'state.context_images 是最近上下文图片候选。只有当前消息明确承接某张图片、引用其文字/画面，或不读图就无法判断时，才把 context_image_needed 设为较高，并返回对应编号；泛泛发图、旧图片或只凭文字就能回答时必须返回空数组。',
   'context_image_indexes 只能填写 state.context_images 中已有的正整数编号，最多 3 个；不要臆造编号，也不要输出图片本身。',
+  'state.image_analysis 是当前图片的低可信视觉/OCR摘要。它不是结论：如果摘要与问题、画面关系或上下文不一致，优先提高 image_complete_read_needed，让最终模型重新看原图；不要只因有水印、账号名或一个热词就触发搜索。',
   JSON.stringify({
     should_speak: 'number: 机器人现在自然插话的概率',
     adds_value: 'number: 能补充当前对话尚未出现的有效内容的概率',
@@ -364,6 +409,10 @@ const CHAT_GATE_SYSTEM_PROMPT = [
     context_image_needed: 'number: 是否需要读取最近上下文中的某张图片才能准确接话',
     context_image_indexes: '最多 3 个正整数，对应 state.context_images 中需要读取的图片编号；不需要则为空数组',
     context_image_reason: '短句说明为什么需要这些图片；不需要则为空字符串',
+    image_culture_needed: 'number: 当前图片是否需要中文互联网文化/梗语境才能正确理解',
+    image_fact_check_needed: 'number: 当前图片是否需要联网核实公开事实、出处或原帖',
+    image_complete_read_needed: 'number: 是否需要 DeepSeek 重新读取原图/全部切片，而不是只依赖 OCR 摘要',
+    image_query_terms: '最多 4 个从图片可见内容中提取的具体文化/事实核验短词',
     query_terms: '最多 8 个用于文化检索的短词',
     longtu_terms: '最多 8 个用于贴吧检索的短词',
   }),
@@ -386,6 +435,7 @@ function normalizeCultureAnswers(answers, context = {}) {
   );
   const contextImageIndexes = indexList(answers?.context_image_indexes)
     .filter((index) => availableImageIndexes.has(index));
+  const imageQueryTerms = listValue(answers?.image_query_terms, 4, 140);
   return {
     cultureDomain: domain,
     platform,
@@ -400,6 +450,10 @@ function normalizeCultureAnswers(answers, context = {}) {
     contextImageNeeded: answerNumber(answers, 'context_image_needed'),
     contextImageIndexes,
     contextImageReason: String(answers?.context_image_reason ?? '').trim().slice(0, 240),
+    imageCultureNeeded: answerNumber(answers, 'image_culture_needed'),
+    imageFactCheckNeeded: answerNumber(answers, 'image_fact_check_needed'),
+    imageCompleteReadingNeeded: answerNumber(answers, 'image_complete_read_needed'),
+    imageQueryTerms,
     confidence: clamp(answers?.culture_domain?.confidence ?? answers?.confidence, 0),
   };
 }
@@ -604,6 +658,10 @@ export class JevAtmosphereGate {
       context_image_needed: QUESTIONS.context_image_needed,
       context_image_indexes: QUESTIONS.context_image_indexes,
       context_image_reason: QUESTIONS.context_image_reason,
+      image_culture_needed: QUESTIONS.image_culture_needed,
+      image_fact_check_needed: QUESTIONS.image_fact_check_needed,
+      image_complete_read_needed: QUESTIONS.image_complete_read_needed,
+      image_query_terms: QUESTIONS.image_query_terms,
     }, 'jev-style');
     if (!response.ok) return { decision: 'fallback', reason: response.reason, style: null };
     const answers = response.answers;
@@ -626,25 +684,39 @@ export class JevAtmosphereGate {
 }
 
 export function buildJevStylePrompt(style) {
-  if (!style || style.promptEnabled === false) return '';
+  if (!style) return '';
   const mode = String(style.mode ?? '').trim();
-  const lines = ['【本轮表达路由：仅供内部参考，不要向用户解释】'];
-  if (mode === 'banter' && Number(style.memeFit) >= 0.65) {
-    lines.push('当前适合自然接梗或抽象联想：先对事情下判断，再尝试一个具体画面、双关、转职或反差搭档。没有贴合落点就省略，不要硬塞。');
-  } else if (mode === 'judgment') {
-    lines.push('当前优先直接评价事情本身；可以带一层贴题语气，但不要退化成百科解释。');
-  } else if (mode === 'explanation' || Number(style.explanationNeeded) >= 0.65) {
-    lines.push('当前需要先把事实、条件或操作说准确；角色语气融进判断，不为了玩梗漏掉关键内容。');
-  } else if (mode === 'serious_support') {
-    lines.push('当前优先稳定、准确地回应现实处境；不要强行攻击、玩梗或把痛苦改写成段子。');
-  } else {
-    lines.push('当前直接接话即可；有具体贴合的联想再用，没有就简短回答。');
+  const lines = [];
+  // Chat Jev is still forbidden from rewriting the persona. The image
+  // routing notes below are evidence-handling instructions, not style control.
+  if (style.promptEnabled !== false) {
+    lines.push('【本轮表达路由：仅供内部参考，不要向用户解释】');
+    if (mode === 'banter' && Number(style.memeFit) >= 0.65) {
+      lines.push('当前适合自然接梗或抽象联想：先对事情下判断，再尝试一个具体画面、双关、转职或反差搭档。没有贴合落点就省略，不要硬塞。');
+    } else if (mode === 'judgment') {
+      lines.push('当前优先直接评价事情本身；可以带一层贴题语气，但不要退化成百科解释。');
+    } else if (mode === 'explanation' || Number(style.explanationNeeded) >= 0.65) {
+      lines.push('当前需要先把事实、条件或操作说准确；角色语气融进判断，不为了玩梗漏掉关键内容。');
+    } else if (mode === 'serious_support') {
+      lines.push('当前优先稳定、准确地回应现实处境；不要强行攻击、玩梗或把痛苦改写成段子。');
+    } else {
+      lines.push('当前直接接话即可；有具体贴合的联想再用，没有就简短回答。');
+    }
+    if (Number(style.cultureLookupNeeded) >= 0.8) {
+      lines.push('如已有文化检索或缓存素材，只消化成自己的表达；不要播报搜索过程或来源列表。');
+    }
+    if (style.cultureDomain === 'longtu' || Number(style.longtuLookupNeeded) >= 0.7) {
+      lines.push('当前可能涉及龙玉涛/龙图语境：优先把具体词语、画面关系和反差接起来；若后台有贴吧短卡，只把核验后的语境自然融入，不要把贴吧内容当现实人物事实，也不要照抄攻击性话术。');
+    }
   }
-  if (Number(style.cultureLookupNeeded) >= 0.8) {
-    lines.push('如已有文化检索或缓存素材，只消化成自己的表达；不要播报搜索过程或来源列表。');
+  if (Number(style.imageCompleteReadingNeeded) >= 0.7) {
+    lines.push('【图片完整核对】不要只依赖 OCR 或摘要；重新读取当前图片原图/全部切片，核对遮挡字、细小文字、主体关系和整张图的反差后再回答。');
   }
-  if (style.cultureDomain === 'longtu' || Number(style.longtuLookupNeeded) >= 0.7) {
-    lines.push('当前可能涉及龙玉涛/龙图语境：优先把具体词语、画面关系和反差接起来；若后台有贴吧短卡，只把核验后的语境自然融入，不要把贴吧内容当现实人物事实，也不要照抄攻击性话术。');
+  if (Number(style.imageCultureNeeded) >= 0.65) {
+    lines.push('【图片互联网语境】如果图中存在双关、错视、热梗或平台话术，先把画面关系和字面主张分开，再把核验后的文化含义自然接入回答；没有贴合证据不要硬套梗。');
+  }
+  if (Number(style.imageFactCheckNeeded) >= 0.65) {
+    lines.push('【图片事实核验】图片中的人物、出处、时间、数据和原帖只当待核实线索；优先使用后台核验结果，匹配不足就保留不确定性，不要把截图主张当事实。');
   }
   return lines.join('\n');
 }

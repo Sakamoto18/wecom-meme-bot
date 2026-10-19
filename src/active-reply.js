@@ -806,6 +806,7 @@ export class ActiveReplyDecider {
         engagement: Boolean(engagement),
         humanDiscussion,
         passiveImageText: payload.passiveImageText,
+        imageAnalysis: input.imageAnalysis,
         contextImageCandidates: input.contextImageCandidates,
         signals,
       });

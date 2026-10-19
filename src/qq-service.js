@@ -84,6 +84,11 @@ function isBareImageInspectionRequest(value = '') {
   return /^(?:请|麻烦)?(?:看看|看下|看一下)(?:这(?:张)?|该(?:张)?|这张)?(?:图|图片|截图|照片|封面|画面)[。！？!?，,]*$/u.test(text);
 }
 
+function isHistoricalImageReference(value = '') {
+  const text = String(value ?? '').normalize('NFKC').replace(/\s+/gu, '').trim();
+  return /(?:刚才|刚刚|上面|上一张|前一张|前面|那张|这个图|这张图|图片里|图里面|图中|截图里|什么意思|啥意思|什么梗|怎么看|怎么回事)/u.test(text);
+}
+
 const CRAZY_THURSDAY_UNSAFE_PATTERN = /(?:跳楼|跳下去|自杀|自残|不想活|裸奔|脱光|开房|强奸|奸尸|未成年|儿童色情|密码|apikey|api\s*key|诈骗|骗取|押金|缅甸北部|转账\s*\d{3,}|借我\s*\d{3,})/iu;
 // 在线文案库不可用时仍然直发原文，不再调用模型自创兜底。
 const CRAZY_THURSDAY_LOCAL_ENTRIES = [
@@ -3141,17 +3146,39 @@ export class QqBotService {
           engagement: options.activeReply === true,
           humanDiscussion: false,
           passiveImageText: imageAnalysisContext,
+          imageAnalysis,
           contextImageCandidates: historicalContextImageCandidates,
         });
         if (jevStatus.mode !== 'shadow' && styleResult.decision === 'allow') {
           jevStyle = styleResult.style ?? null;
         }
       }
-      const historicalContextImageEntries = this.contextImageBlocksFor(
+      let contextImageStyle = jevStyle;
+      const initialContextImageEntries = this.contextImageBlocksFor(
         conversationId,
         jevStyle,
         historicalContextImageCandidates,
       );
+      if (historicalContextImageCandidates.length > 0
+        && initialContextImageEntries.length === 0
+        && imageCount === 0
+        && options.directBotMention === true
+        && isHistoricalImageReference(imageSearchQuestion)) {
+        contextImageStyle = {
+          ...(jevStyle ?? {}),
+          contextImageNeeded: 1,
+          contextImageIndexes: [historicalContextImageCandidates.length],
+          contextImageReason: '当前消息明确承接最近一张图片，补回原图供 DeepSeek 核对',
+        };
+        this.logger.log?.('QQ 历史图片引用兜底：当前消息明确指向最近图片，补回最新候选');
+      }
+      const historicalContextImageEntries = contextImageStyle === jevStyle
+        ? initialContextImageEntries
+        : this.contextImageBlocksFor(
+          conversationId,
+          contextImageStyle,
+          historicalContextImageCandidates,
+        );
       const historicalContextImageBlocks = historicalContextImageEntries.flatMap((entry) => [
         { type: 'text', text: `上下文历史图片 ${entry.candidateIndex}（${entry.label}）` },
         entry.block,
@@ -3163,8 +3190,32 @@ export class QqBotService {
       const imageInformationPrompt = hasCurrentImageContext
         ? buildImageInformationPolicy(imageInformationPolicy, { explicitSearch: explicitImageSearch })
         : '';
-      const imageSearchPlan = recordSummary ? [] : hasCurrentImageContext
+      let imageSearchPlan = recordSummary ? [] : hasCurrentImageContext
         ? buildImageSearchPlan(imageAnalysis, imageSearchQuestion) : undefined;
+      // Jev 的图片专用路由只负责补充“文化/事实核验是否值得做”的信号，
+      // 不会绕过低信息图片的搜索资格门，也不会把泛泛热词直接送到 Exa。
+      if (Array.isArray(imageSearchPlan)
+        && imageInformationPolicy?.level !== 'low_information'
+        && !isImageEvaluationIntent(imageSearchQuestion)
+        && !/(?:不要|不用|不必|无需|禁止|别).{0,6}(?:联网|上网|搜索|检索)/u.test(imageSearchQuestion)
+        && jevStyle
+        && Math.max(
+          Number(jevStyle.imageCultureNeeded) || 0,
+          Number(jevStyle.imageFactCheckNeeded) || 0,
+        ) >= 0.65) {
+        const existingQueries = new Set(imageSearchPlan.map((item) => item.query));
+        const jevImagePlans = (jevStyle.imageQueryTerms ?? [])
+          .map((term) => String(term ?? '').replace(/\s+/gu, ' ').trim().slice(0, 140))
+          .filter((term) => term && !existingQueries.has(term))
+          .map((term) => ({
+            query: `${term} ${Number(jevStyle.imageCultureNeeded) >= Number(jevStyle.imageFactCheckNeeded)
+              ? '网络语境 含义'
+              : '事实核实 来源'}`.trim(),
+            includeDomains: [],
+            candidates: [],
+          }));
+        imageSearchPlan = [...imageSearchPlan, ...jevImagePlans].slice(0, 3);
+      }
       const imageSearchQueries = imageSearchPlan?.map(plan => plan.query);
       const imageAnalysisSucceeded = Boolean(
         imageAnalysis?.items?.some((item) => !item.failed),
@@ -3176,10 +3227,12 @@ export class QqBotService {
       // triage and forward summaries keep the cheaper structured-only path.
       const preserveRawImageForInterpretation = imageAnalysisSucceeded
         && !recordSummary
-        && !options.passiveImageComment
+        && (!options.passiveImageComment
+          || Number(jevStyle?.imageCompleteReadingNeeded) >= 0.7)
         && (
           options.directBotMention
           || options.pureBotMention
+          || Number(jevStyle?.imageCompleteReadingNeeded) >= 0.7
           || (
             isExplicitImageInterpretationIntent(imageSearchQuestion)
             && !isBareImageInspectionRequest(imageSearchQuestion)
@@ -3195,6 +3248,9 @@ export class QqBotService {
         `QQ 图片链路：images=${imageCount}`
         + ` context_candidates=${historicalContextImageCandidates.length}`
         + ` context_selected=${historicalContextImageEntries.length}`
+        + ` jev_image_culture=${Number(jevStyle?.imageCultureNeeded || 0).toFixed(2)}`
+        + ` jev_image_fact=${Number(jevStyle?.imageFactCheckNeeded || 0).toFixed(2)}`
+        + ` jev_image_complete=${Number(jevStyle?.imageCompleteReadingNeeded || 0).toFixed(2)}`
         + ` analyzed=${imageAnalysisSucceeded ? 'yes' : 'no'}`
         + ` information=${imageInformationPolicy?.level || 'unknown'}`
         + ` search=${imageSearchQueries?.length ?? 0}`
@@ -3772,6 +3828,7 @@ export class QqBotService {
       payload: decisionPayload,
       activityRecorded: true,
       currentContent: passiveImage?.text ? (payload.text || '（群友发来信息图片，未明确提问）') : conversationContent,
+      imageAnalysis: passiveImage?.analysis,
       contextImageCandidates: historicalContextImageCandidates,
       history: this.historyForGroup(
         payload.groupId,

@@ -154,6 +154,8 @@ function normalizedJevCulture(style = {}) {
     Number(style.retrievalNeeded) || 0,
     Number(style.cultureLookupNeeded) || 0,
     Number(style.longtuLookupNeeded) || 0,
+    Number(style.imageCultureNeeded) || 0,
+    Number(style.imageFactCheckNeeded) || 0,
   );
   // A general chat model may return a high lookup probability while leaving
   // the enum at `none`. Preserve the model's uncertainty, but route a strong
@@ -166,7 +168,18 @@ function normalizedJevCulture(style = {}) {
     ...(Array.isArray(style.longtuTerms) ? style.longtuTerms : []),
     ...(Array.isArray(style.queryTerms) ? style.queryTerms : []),
   ].map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, 8);
-  return { domain, longtu, retrievalNeeded, terms };
+  return {
+    domain,
+    longtu,
+    retrievalNeeded,
+    terms: [...new Set([
+      ...terms,
+      ...(Array.isArray(style.imageQueryTerms) ? style.imageQueryTerms : []),
+    ])].slice(0, 8),
+    imageCultureNeeded: Number(style.imageCultureNeeded) || 0,
+    imageFactCheckNeeded: Number(style.imageFactCheckNeeded) || 0,
+    imageCompleteReadingNeeded: Number(style.imageCompleteReadingNeeded) || 0,
+  };
 }
 
 function combineCultureSearchResults(results = []) {

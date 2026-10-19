@@ -26,6 +26,10 @@ function answers(overrides = {}) {
     context_image_needed: { noul: 0 },
     context_image_indexes: [],
     context_image_reason: '',
+    image_culture_needed: { noul: 0 },
+    image_fact_check_needed: { noul: 0 },
+    image_complete_read_needed: { noul: 0 },
+    image_query_terms: [],
     ...overrides,
   };
 }
@@ -76,6 +80,10 @@ test('Jev 只从有编号的历史图片候选中选择必要图片', async () =
         context_image_needed: 0.92,
         context_image_indexes: [2, 99, 2],
         context_image_reason: '当前消息承接第二张截图',
+        image_culture_needed: 0.88,
+        image_fact_check_needed: 0.76,
+        image_complete_read_needed: 0.93,
+        image_query_terms: ['亡灵骑士'],
       })) } }] });
     },
   });
@@ -88,6 +96,10 @@ test('Jev 只从有编号的历史图片候选中选择必要图片', async () =
   });
   assert.equal(result.style.contextImageNeeded, 0.92);
   assert.deepEqual(result.style.contextImageIndexes, [2]);
+  assert.equal(result.style.imageCultureNeeded, 0.88);
+  assert.equal(result.style.imageFactCheckNeeded, 0.76);
+  assert.equal(result.style.imageCompleteReadingNeeded, 0.93);
+  assert.deepEqual(result.style.imageQueryTerms, ['亡灵骑士']);
   assert.deepEqual(request.messages[1].content.includes('context_images'), true);
   assert.deepEqual(JSON.parse(request.messages[1].content.split('\n')[1]).state.context_images.length, 2);
 });
