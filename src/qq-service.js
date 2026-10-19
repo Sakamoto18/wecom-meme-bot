@@ -39,6 +39,7 @@ import {
   buildImageSearchPlan,
   classifyImageAnalysis,
   hasExplicitImageSearchIntent,
+  isImageEvaluationIntent,
   isExplicitImageInterpretationIntent,
   isArtAppraisalIntent,
 } from './image-reply-context.js';
