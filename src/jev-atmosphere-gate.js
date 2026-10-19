@@ -658,7 +658,10 @@ export class JevAtmosphereGate {
     this.baseUrl = String(options.baseUrl ?? 'https://api.typesafe.ai').trim().replace(/\/+$/, '');
     this.model = String(options.model ?? 'qwen3.7-plus').trim();
     this.protocol = normalizeProtocol(options.protocol, 'systemone');
-    this.chatMaxTokens = Math.max(80, Number(options.chatMaxTokens ?? 220));
+    // The router returns image semantics, search terms and mode fields in one
+    // JSON object. 220 tokens truncates that object under qwen3.7-plus, which
+    // looks like an HTTP success but parses as no answer and trips the circuit.
+    this.chatMaxTokens = Math.max(160, Number(options.chatMaxTokens ?? 700));
     this.timeoutMs = Math.max(500, Number(options.timeoutMs ?? 2_500));
     this.allowThreshold = clamp(options.allowThreshold, 0.72);
     this.skipThreshold = clamp(options.skipThreshold, 0.28);
