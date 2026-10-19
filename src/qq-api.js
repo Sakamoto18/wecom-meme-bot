@@ -639,7 +639,10 @@ export async function createQqRuntime() {
     model: process.env.TYPESAFE_MODEL,
     protocol: process.env.LONGTU_QQ_JEV_PROTOCOL || process.env.TYPESAFE_PROTOCOL,
     chatMaxTokens: parsePositiveInteger(process.env.LONGTU_QQ_JEV_CHAT_MAX_TOKENS) ?? 220,
-    timeoutMs: parsePositiveInteger(process.env.LONGTU_QQ_JEV_TIMEOUT_MS) ?? 2_500,
+    timeoutMs: parsePositiveInteger(
+      process.env.LONGTU_QQ_JEV_SEMANTIC_TIMEOUT_MS
+        ?? process.env.LONGTU_QQ_JEV_TIMEOUT_MS,
+    ) ?? 2_500,
     allowThreshold: parseProbability(process.env.LONGTU_QQ_JEV_ALLOW_THRESHOLD, 0.72),
     skipThreshold: parseProbability(process.env.LONGTU_QQ_JEV_SKIP_THRESHOLD, 0.28),
     runtime: jevRuntime,
@@ -649,6 +652,17 @@ export async function createQqRuntime() {
   const activeReplyDecider = new ActiveReplyDecider({
     chatClient,
     jevGate,
+    jevSemanticEnabled: parseBoolean(
+      process.env.LONGTU_QQ_JEV_SEMANTIC_ENABLED,
+      true,
+    ),
+    jevRawImageMode: process.env.LONGTU_QQ_JEV_RAW_IMAGE_MODE?.trim() || 'high_value',
+    jevRawImageMaxImages: parsePositiveInteger(
+      process.env.LONGTU_QQ_JEV_RAW_IMAGE_MAX_IMAGES,
+    ) ?? 1,
+    jevRawImageMaxBytes: parsePositiveInteger(
+      process.env.LONGTU_QQ_JEV_RAW_IMAGE_MAX_BYTES,
+    ) ?? (8 * 1024 * 1024),
     enabled: parseBoolean(process.env.LONGTU_QQ_ACTIVE_REPLY_ENABLED, true),
     candidateProbability: parseProbability(
       process.env.LONGTU_QQ_ACTIVE_REPLY_PROBABILITY,

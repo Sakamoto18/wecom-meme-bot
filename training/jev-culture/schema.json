@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["id", "input", "target"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-zA-Z0-9._-]+$" },
+    "input": {
+      "type": "object",
+      "required": ["question"],
+      "properties": {
+        "image_hash": { "type": "string", "maxLength": 128 },
+        "question": { "type": "string", "maxLength": 800 },
+        "vision_summary": { "type": "string", "maxLength": 2400 },
+        "platform_hint": { "type": "string", "maxLength": 80 }
+      },
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "required": ["literal", "pragmatic", "culture", "reply_guidance"],
+      "properties": {
+        "literal": {
+          "type": "object",
+          "required": ["visual_facts", "visible_text", "text_claims"],
+          "properties": {
+            "visual_facts": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 180 } },
+            "visible_text": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 180 } },
+            "text_claims": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 180 } }
+          },
+          "additionalProperties": false
+        },
+        "pragmatic": {
+          "type": "object",
+          "required": ["scene_relation", "actual_point", "comic_mechanism", "stance"],
+          "properties": {
+            "scene_relation": { "type": "string", "maxLength": 500 },
+            "actual_point": { "type": "string", "maxLength": 500 },
+            "comic_mechanism": { "type": "string", "maxLength": 240 },
+            "stance": { "type": "string", "enum": ["ironic", "sarcastic", "self_deprecating", "absurd", "serious", "neutral", "unknown"] },
+            "literal_only_risk": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "culture": {
+          "type": "object",
+          "required": ["unknown_concept", "culture_domain", "retrieval_needed", "query_terms"],
+          "properties": {
+            "unknown_concept": { "type": "boolean" },
+            "culture_domain": { "type": "string", "enum": ["longtu", "general", "platform", "none"] },
+            "retrieval_needed": { "type": "number", "minimum": 0, "maximum": 1 },
+            "query_terms": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 140 } },
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "reply_guidance": {
+          "type": "object",
+          "required": ["candidate_associations", "avoid_literal_repetition"],
+          "properties": {
+            "candidate_associations": {
+              "type": "array",
+              "maxItems": 2,
+              "items": {
+                "type": "object",
+                "required": ["idea", "why_fit", "risk"],
+                "properties": {
+                  "idea": { "type": "string", "maxLength": 180 },
+                  "why_fit": { "type": "string", "maxLength": 180 },
+                  "risk": { "type": "string", "maxLength": 140 }
+                },
+                "additionalProperties": false
+              }
+            },
+            "avoid_literal_repetition": { "type": "array", "maxItems": 4, "items": { "type": "string", "maxLength": 160 } }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

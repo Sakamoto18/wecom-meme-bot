@@ -9,6 +9,7 @@ const PLATFORMS = new Set(['bilibili', 'xiaohongshu', 'douyin', 'weibo', 'tieba'
 const TONES = new Set(['dry', 'sarcastic', 'absurd', 'neutral']);
 const TARGETS = new Set(['content', 'bot', 'third_party', 'unknown']);
 const PROTOCOLS = new Set(['systemone', 'chat']);
+const STANCES = new Set(['ironic', 'sarcastic', 'self_deprecating', 'absurd', 'serious', 'neutral', 'unknown']);
 
 function clamp(value, fallback = 0) {
   const number = Number(value);
@@ -51,6 +52,24 @@ function indexList(value, limit = 3) {
     .map((item) => Number(item))
     .filter((item) => Number.isInteger(item) && item > 0))]
     .slice(0, limit);
+}
+
+function textValue(value, max = 500) {
+  return String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, max);
+}
+
+function associationList(value, limit = 2) {
+  const candidates = Array.isArray(value)
+    ? value
+    : (Array.isArray(value?.items) ? value.items : []);
+  return candidates.map((item) => {
+    if (typeof item === 'string') return { idea: textValue(item, 180), whyFit: '', risk: '' };
+    return {
+      idea: textValue(item?.idea ?? item?.association ?? item?.text, 180),
+      whyFit: textValue(item?.why_fit ?? item?.whyFit ?? item?.basis, 180),
+      risk: textValue(item?.risk ?? item?.caveat, 140),
+    };
+  }).filter((item) => item.idea).slice(0, limit);
 }
 
 function contextTerms(context, domain) {
@@ -222,6 +241,7 @@ function buildState(context = {}) {
     signals: context.signals ?? {},
     image_summary: trimText(context.passiveImageText, 1_200),
     image_analysis: imageAnalysis,
+    raw_image: context.rawImageForJev === true,
     context_images: contextImages,
   };
 }
@@ -357,6 +377,59 @@ const QUESTIONS = {
       false: '已有视觉资料足够，重新传原图不会增加判断价值。',
     },
   },
+  visual_facts: {
+    type: 'noul',
+    instructions: '图片中最多六条可以由像素确认的事实，不写推测和文化解释。',
+  },
+  text_claims: {
+    type: 'noul',
+    instructions: '图片文字提出的主张，最多六条；它们不自动等于事实。',
+  },
+  semantic_relation: {
+    type: 'noul',
+    instructions: '一句话说明图片主体或事件之间正在发生什么关系。',
+  },
+  semantic_point: {
+    type: 'noul',
+    instructions: '一句话说明图片真正表达的观点、反差或笑点，不要复述画面。',
+  },
+  comic_mechanism: {
+    type: 'noul',
+    instructions: '指出错视、拆字、谐音、错位、反转、夸张、荒诞或讽刺等机制；没有证据就留空。',
+  },
+  stance: {
+    type: 'choice',
+    instructions: '图片表达的语气或立场。',
+    criteria: {
+      ironic: '反讽或表里不一。',
+      sarcastic: '阴阳、嘲讽或挖苦。',
+      self_deprecating: '自嘲。',
+      absurd: '无厘头或荒诞。',
+      serious: '认真陈述或求助。',
+      neutral: '中性。',
+      unknown: '无法判断。',
+    },
+  },
+  literal_only_risk: {
+    type: 'noul',
+    instructions: '最终模型只描述图片字面、没有回答语义问题的风险。',
+  },
+  unknown_concept: {
+    type: 'noul',
+    instructions: '是否存在不应凭模型记忆确定的热词、梗义或平台语境。',
+  },
+  candidate_associations: {
+    type: 'noul',
+    instructions: '最多两个自然联想对象，每项包含 idea、why_fit、risk；没有贴合落点则为空。',
+  },
+  semantic_avoid_literal: {
+    type: 'noul',
+    instructions: '最终回答不应重复的表面描述，最多四条。',
+  },
+  semantic_confidence: {
+    type: 'noul',
+    instructions: '图片语用结论的整体置信度。',
+  },
 };
 
 function answerNumber(answers, key) {
@@ -364,6 +437,15 @@ function answerNumber(answers, key) {
   if (typeof value === 'boolean') return value ? 1 : 0;
   if (typeof value === 'number') return clamp(value);
   return clamp(value?.noul ?? value?.probability ?? value?.yes ?? value?.true_probability);
+}
+
+function booleanValue(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value >= 0.5;
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (['true', 'yes', '1'].includes(normalized)) return true;
+  if (['false', 'no', '0'].includes(normalized)) return false;
+  return fallback;
 }
 
 function parseChatAnswers(content) {
@@ -390,6 +472,9 @@ const CHAT_GATE_SYSTEM_PROMPT = [
   '请结合当前消息和最近上下文，判断是否值得机器人接话，以及是否需要联网核实中文互联网语境、热梗、平台出处或龙图语境。',
   '只输出一个合法 JSON 对象，不要 Markdown、解释、前后缀或换行外的文字。',
   '数值字段必须是 0 到 1 的数字；枚举字段必须使用给定值；query_terms 和 longtu_terms 必须是短词数组。',
+  '图片语义必须分开写：visual_facts 是像素事实，text_claims 是图片文字主张，semantic_point 是图片真正表达的观点或反差；不要把图片描述当成语义结论。',
+  '如果 state.raw_image 存在，必须优先核对原图；如果视觉摘要和原图冲突，提高 image_complete_read_needed 或降低 semantic_confidence，不要迎合 OCR 猜测。',
+  'candidate_associations 只返回最多两个有具体对应关系的联想；没有贴合落点就返回空数组，禁止用“抽象”“离谱”充数。',
   'state.context_images 是最近上下文图片候选。只有当前消息明确承接某张图片、引用其文字/画面，或不读图就无法判断时，才把 context_image_needed 设为较高，并返回对应编号；泛泛发图、旧图片或只凭文字就能回答时必须返回空数组。',
   'context_image_indexes 只能填写 state.context_images 中已有的正整数编号，最多 3 个；不要臆造编号，也不要输出图片本身。',
   'state.image_analysis 是当前图片的低可信视觉/OCR摘要。它不是结论：如果摘要与问题、画面关系或上下文不一致，优先提高 image_complete_read_needed，让最终模型重新看原图；不要只因有水印、账号名或一个热词就触发搜索。',
@@ -413,6 +498,17 @@ const CHAT_GATE_SYSTEM_PROMPT = [
     image_fact_check_needed: 'number: 当前图片是否需要联网核实公开事实、出处或原帖',
     image_complete_read_needed: 'number: 是否需要 DeepSeek 重新读取原图/全部切片，而不是只依赖 OCR 摘要',
     image_query_terms: '最多 4 个从图片可见内容中提取的具体文化/事实核验短词',
+    visual_facts: '最多 6 条只由图片像素确认的事实',
+    text_claims: '最多 6 条图片文字提出的主张，不等于事实',
+    semantic_relation: '一句话说明主体/事件之间正在发生什么关系',
+    semantic_point: '一句话说明图片真正表达的观点、反差或笑点，不要复述画面',
+    comic_mechanism: '错视|拆字|谐音|错位|反转|夸张|荒诞|讽刺|其他；可附一句说明',
+    stance: 'ironic|sarcastic|self_deprecating|absurd|serious|neutral|unknown',
+    literal_only_risk: 'number: 最终模型只复述图片字面而不回答语义的风险',
+    unknown_concept: 'boolean: 是否存在模型不应凭记忆确定的热词/梗/平台语境',
+    candidate_associations: '最多 2 个对象，字段为 idea、why_fit、risk；没有可靠联想则为空数组',
+    semantic_avoid_literal: '最多 4 条最终回答不要重复的表面描述',
+    semantic_confidence: 'number: 图片语用结论的整体置信度',
     query_terms: '最多 8 个用于文化检索的短词',
     longtu_terms: '最多 8 个用于贴吧检索的短词',
   }),
@@ -436,6 +532,37 @@ function normalizeCultureAnswers(answers, context = {}) {
   const contextImageIndexes = indexList(answers?.context_image_indexes)
     .filter((index) => availableImageIndexes.has(index));
   const imageQueryTerms = listValue(answers?.image_query_terms, 4, 140);
+  const pragmatic = answers?.pragmatic && typeof answers.pragmatic === 'object'
+    ? answers.pragmatic : {};
+  const culture = answers?.culture && typeof answers.culture === 'object'
+    ? answers.culture : {};
+  const guidance = answers?.reply_guidance && typeof answers.reply_guidance === 'object'
+    ? answers.reply_guidance : {};
+  const semanticPoint = textValue(
+    answers?.semantic_point ?? pragmatic.actual_point ?? pragmatic.semantic_point,
+    500,
+  );
+  const semanticRelation = textValue(
+    answers?.semantic_relation ?? pragmatic.scene_relation ?? pragmatic.relation,
+    400,
+  );
+  const semanticMechanism = textValue(
+    answers?.comic_mechanism ?? pragmatic.comic_mechanism,
+    240,
+  );
+  const stanceValue = choice(
+    answers?.stance ?? pragmatic.stance,
+    STANCES,
+    'unknown',
+  );
+  const associations = associationList(
+    answers?.candidate_associations ?? guidance.candidate_associations,
+  );
+  const semanticAvoidLiteral = listValue(
+    answers?.semantic_avoid_literal ?? guidance.avoid_literal_repetition,
+    4,
+    160,
+  );
   return {
     cultureDomain: domain,
     platform,
@@ -454,6 +581,25 @@ function normalizeCultureAnswers(answers, context = {}) {
     imageFactCheckNeeded: answerNumber(answers, 'image_fact_check_needed'),
     imageCompleteReadingNeeded: answerNumber(answers, 'image_complete_read_needed'),
     imageQueryTerms,
+    visualFacts: listValue(answers?.visual_facts ?? pragmatic.visual_facts, 6, 180),
+    textClaims: listValue(answers?.text_claims ?? pragmatic.text_claims, 6, 180),
+    semanticRelation,
+    semanticPoint,
+    semanticMechanism,
+    stance: stanceValue,
+    literalOnlyRisk: answerNumber(
+      answers,
+      'literal_only_risk',
+    ) || answerNumber(pragmatic, 'literal_only_risk'),
+    unknownConcept: booleanValue(
+      answers?.unknown_concept ?? culture.unknown_concept,
+    ),
+    associationCandidates: associations,
+    semanticAvoidLiteral,
+    semanticConfidence: answerNumber(
+      answers,
+      'semantic_confidence',
+    ) || answerNumber(pragmatic, 'semantic_confidence'),
     confidence: clamp(answers?.culture_domain?.confidence ?? answers?.confidence, 0),
   };
 }
@@ -515,10 +661,23 @@ export class JevAtmosphereGate {
                 { role: 'system', content: CHAT_GATE_SYSTEM_PROMPT },
                 {
                   role: 'user',
-                  content: [
-                    '请只返回 JSON 判断结果。',
-                    JSON.stringify({ state: buildState(context), requested_fields: questions }),
-                  ].join('\n'),
+                  content: context.rawImageForJev && Array.isArray(context.rawImageBlocks)
+                    ? [
+                      {
+                        type: 'text',
+                        text: [
+                          '请只返回 JSON 判断结果。',
+                          JSON.stringify({ state: buildState(context), requested_fields: questions }),
+                        ].join('\n'),
+                      },
+                      ...context.rawImageBlocks
+                        .filter((block) => block?.type === 'image_url')
+                        .slice(0, 2),
+                    ]
+                    : [
+                      '请只返回 JSON 判断结果。',
+                      JSON.stringify({ state: buildState(context), requested_fields: questions }),
+                    ].join('\n'),
                 },
               ],
               temperature: 0,
@@ -662,6 +821,17 @@ export class JevAtmosphereGate {
       image_fact_check_needed: QUESTIONS.image_fact_check_needed,
       image_complete_read_needed: QUESTIONS.image_complete_read_needed,
       image_query_terms: QUESTIONS.image_query_terms,
+      visual_facts: QUESTIONS.visual_facts,
+      text_claims: QUESTIONS.text_claims,
+      semantic_relation: QUESTIONS.semantic_relation,
+      semantic_point: QUESTIONS.semantic_point,
+      comic_mechanism: QUESTIONS.comic_mechanism,
+      stance: QUESTIONS.stance,
+      literal_only_risk: QUESTIONS.literal_only_risk,
+      unknown_concept: QUESTIONS.unknown_concept,
+      candidate_associations: QUESTIONS.candidate_associations,
+      semantic_avoid_literal: QUESTIONS.semantic_avoid_literal,
+      semantic_confidence: QUESTIONS.semantic_confidence,
     }, 'jev-style');
     if (!response.ok) return { decision: 'fallback', reason: response.reason, style: null };
     const answers = response.answers;
@@ -718,5 +888,33 @@ export function buildJevStylePrompt(style) {
   if (Number(style.imageFactCheckNeeded) >= 0.65) {
     lines.push('【图片事实核验】图片中的人物、出处、时间、数据和原帖只当待核实线索；优先使用后台核验结果，匹配不足就保留不确定性，不要把截图主张当事实。');
   }
+  return lines.join('\n');
+}
+
+export function buildJevSemanticPrompt(style) {
+  if (!style || typeof style !== 'object') return '';
+  const point = textValue(style.semanticPoint, 500);
+  const relation = textValue(style.semanticRelation, 400);
+  const mechanism = textValue(style.semanticMechanism, 240);
+  const associations = associationList(style.associationCandidates);
+  const avoid = listValue(style.semanticAvoidLiteral, 4, 160);
+  const hasSemantic = point || relation || mechanism || associations.length > 0 || avoid.length > 0;
+  if (!hasSemantic) return '';
+  const lines = [
+    '【Jev 图片语用候选；只作内部证据，不是最终答案】',
+    relation ? `主体关系：${relation}` : '',
+    point ? `图片表达重点：${point}` : '',
+    mechanism ? `可能的表达机制：${mechanism}` : '',
+    associations.length > 0
+      ? `可考虑的自然联想：${associations.map((item) => `${item.idea}${item.whyFit ? `（${item.whyFit}）` : ''}`).join('；')}`
+      : '',
+    avoid.length > 0 ? `不要只重复这些表面内容：${avoid.join('；')}` : '',
+    Number(style.literalOnlyRisk) >= 0.55
+      ? '本轮容易退化成图片描述；若用户问的是含义、评价或梗义，必须先回答关系、观点或反差。'
+      : '',
+    Number(style.semanticConfidence) > 0 && Number(style.semanticConfidence) < 0.55
+      ? '语义候选置信度有限，必须回到原图核对；不成立就舍弃。'
+      : '',
+  ].filter(Boolean);
   return lines.join('\n');
 }

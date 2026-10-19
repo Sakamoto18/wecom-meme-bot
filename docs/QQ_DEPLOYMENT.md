@@ -140,6 +140,13 @@ TYPESAFE_MODEL=jev-1.13
 # 最终角色回复仍使用现有 DeepSeek 链路。systemone 为默认决策模型协议。
 LONGTU_QQ_JEV_PROTOCOL=systemone
 LONGTU_QQ_JEV_CHAT_MAX_TOKENS=220
+# 图片语用分析：Jev 输出字面/语用分解、文化候选和自然联想，最终回复仍由 DeepSeek 生成。
+LONGTU_QQ_JEV_SEMANTIC_ENABLED=true
+# off / high_value / all_explicit；默认只对低置信、双关、密集信息或明确梗义问题发送原图。
+LONGTU_QQ_JEV_RAW_IMAGE_MODE=high_value
+LONGTU_QQ_JEV_RAW_IMAGE_MAX_IMAGES=1
+LONGTU_QQ_JEV_RAW_IMAGE_MAX_BYTES=8388608
+LONGTU_QQ_JEV_SEMANTIC_TIMEOUT_MS=3500
 # Jev 文化路由：龙图语境未命中本地短卡时，优先检索公开贴吧；不保存帖子全文或个人信息。
 LONGTU_QQ_LONGTU_RETRIEVAL_ENABLED=true
 LONGTU_QQ_LONGTU_TIEBA_SEARCH_ENABLED=true
@@ -175,7 +182,7 @@ LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES=2
 LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 ```
 
-Jev 需要 `TYPESAFE_API_KEY` 才会实际请求上游；`LONGTU_QQ_JEV_ENABLED=false` 或模式 `off` 时完全沿用原有链路。默认 `LONGTU_QQ_JEV_PROTOCOL=systemone` 使用决策模型协议；切换为 `chat` 时使用百炼 OpenAI 兼容 Chat Completions，`TYPESAFE_MODEL` 可填写 `qwen3.8-flash`、`qwen3.7-plus` 等通用模型。chat 模式只输出插话概率、文化领域、联网/贴吧检索需要度和检索词，文化字段可用于搜索路由，但不会改写 DeepSeek 的角色提示。管理员可直接发送 `/jev on`、`/jev off`、`/jev auto`、`/jev shadow` 或 `/jev status`，无需重启；`shadow` 只记录判定、不改变回复。Jev 超时、鉴权失败、429 或额度耗尽会自动熔断并回退原有 DeepSeek 判定与角色回复，运行状态保存到 `LONGTU_QQ_JEV_STATE_FILE`。这些命令只允许 `LONGTU_QQ_ADMIN_USERS` 中的超级管理员，命令本身不会进入模型上下文。
+Jev 需要 `TYPESAFE_API_KEY` 才会实际请求上游；`LONGTU_QQ_JEV_ENABLED=false` 或模式 `off` 时完全沿用原有链路。默认 `LONGTU_QQ_JEV_PROTOCOL=systemone` 使用决策模型协议；切换为 `chat` 时使用百炼 OpenAI 兼容 Chat Completions，`TYPESAFE_MODEL` 可填写 `qwen3.8-flash`、`qwen3.7-plus` 等通用模型。chat 模式除了插话概率、文化领域、联网/贴吧检索需要度和检索词，还会在高价值图片场景输出“像素事实、文字主张、主体关系、语用观点、梗机制和最多两个联想候选”；这些是后台证据卡，不会改写 DeepSeek 的角色提示。`LONGTU_QQ_JEV_RAW_IMAGE_MODE=high_value` 时，仅在视觉摘要低置信、存在视觉双关/密集文字、或用户明确询问梗义/出处等情况下给 Jev 发送最多一张原图；低信息图、Bot 自己的分享卡和普通图片不会二次发送。Jev 会根据候选平台用 Exa 做公开域名限定检索，平台不确定时再做全网交叉检索。管理员可直接发送 `/jev on`、`/jev off`、`/jev auto`、`/jev shadow` 或 `/jev status`，无需重启；`shadow` 只记录判定、不改变回复。Jev 超时、鉴权失败、429、额度耗尽或多模态不支持时会自动熔断并回退原有 DeepSeek 判定与角色回复，运行状态保存到 `LONGTU_QQ_JEV_STATE_FILE`。这些命令只允许 `LONGTU_QQ_ADMIN_USERS` 中的超级管理员，命令本身不会进入模型上下文。
 
 复读检测不调用大模型：同一群连续由至少两位不同群友发送相同文字时，机器人会在第二位群友发言后主动原样复读一次。机器人自己的这次复读不会结束轮次；第三条及后续相同消息只旁观，不再触发复读或主动回复判定。连续同文不因时间间隔重新计数，换内容后才开启新轮次；机器人其他类型的回复会中断原轮次。图片、合并转发、引用、斜杠命令和 @ 他人的消息不参与检测。可将 `LONGTU_QQ_REPEAT_ENABLED` 设为 `false` 关闭。
 
@@ -346,6 +353,10 @@ QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称�
 群聊历史中的图片不再只留下文字占位符：每个会话会在进程内短暂保留最近少量图片及其已有视觉摘要，Jev 先根据当前问题从带编号的候选中判断是否确实需要读取，DeepSeek 最多收到 3 张被选中的关联图片。候选图片默认保存 15 分钟、每个会话最多 8 张且有总字节上限，不写入会话记忆文件；Jev 超时、返回非法编号或关闭时沿用原文字上下文，不阻断回复，也不会把全部群聊图片批量送入模型。
 
 当前图片还会经过 Jev 的图片专用路由：分别判断是否需要互联网文化/梗语境、是否需要核实出处/人物/时间/数据，以及是否应重新读取原图和全部切片。文化路由只补充有证据的检索词，事实核验不等于把截图主张当事实；完整重读信号会让 DeepSeek 保留原图，避免只靠 OCR 摘要回答。低信息图片、纯“评价一下”和明确要求不联网的消息仍不会因为 Jev 信号强行搜索。
+
+启用语义分析后，Jev 还会把图片分成“像素事实”和“语用结论”：前者记录可见主体与文字，后者判断主体关系、真正表达的观点、拆字/错视/反讽等机制，以及最多两个有具体对应关系的自然联想。最终 DeepSeek 同时读取原图和这张短语义卡；如果候选与原图冲突，必须舍弃。用户问“什么意思、什么梗、怎么看”时，回复优先落到关系、反差和观点，不再把 OCR 或画面描述当成主答案。Jev 仍不生成用户可见回复，角色人格和攻击边界继续由原有 DeepSeek 链路控制。
+
+独立文化分析器的脱敏训练集格式见 [`training/jev-culture/README.md`](../training/jev-culture/README.md)，可用 `npm run validate:jev-culture -- <dataset.jsonl>` 校验。训练只作用于图片语用 JSON，不把角色人格或群聊个人信息写入模型；分析器未部署或请求失败时仍回退到现有 Jev。
 
 图片进入搜索前会先经过严格的信息密度资格门：长文、论坛/评论区、多格漫画、密集聊天记录、公告、数据图表、教程和报错截图属于高密度候选；纯表情/反应图、自拍、风景、单句情绪图，以及只有平台水印、账号名、点赞数、评论数、播放量或时间角标的截图属于低信息图。低信息图始终 0 次搜索，也不会触发主动图片短评；即使用户问“出处/原图/这是什么梗”，也只依据本地可见内容说明线索不足。用户只说“评价一下”时不搜索，保留一句短梗式接话后结束。评价、点评、赏析和“怎么看这张图”不会触发图片联网。包含近期热词的图片只有在 OCR/视觉识别同时发现正文上下文时才进入搜索，热词词表维护在 `config/image-hot-topics.json`，也可用 `QQ_IMAGE_HOT_TOPICS` 覆盖。高密度图片和带具体公开线索的图片普通问题最多 1 条有效线索，明确询问来源、出处、核实或梗含义时最多 2 条。每个群图片检索真实上游请求默认每分钟最多 4 次，可用 `QQ_USAGE_IMAGE_SEARCH_CALLS_PER_MINUTE` 调整，0 表示关闭分钟限流。没有可靠线索、用户要求不联网或搜索不可用时如实说明，不编造出处。引用 Bot 自己的回复会保留引用文字；只有明确标记为 QQ 龙图表情（`image.sub_type=1`）的装饰图会跳过视觉识别，普通分享卡、视频总结图等机器人生成图片会正常读取并解释。机器人自己发出的普通图片会按消息回执短时缓存，QQ 回捞只返回占位符时仍可恢复；当确认引用的是 Bot 自己生成的视频封面/分享卡时，不再做图片评价或联网搜索，直接说明该图是抓取结果卡片。它们不会进入用户图片的旁观缓存。用户新发的图片、引用真人图片和图库管理操作仍正常。
 

@@ -1,4 +1,9 @@
-import { searchWithSourceScope, sourceScopeFromText } from './search-scope.js';
+import {
+  buildSourceScope,
+  normalizeSourceCandidates,
+  searchWithSourceScope,
+  sourceScopeFromText,
+} from './search-scope.js';
 import { PASSIVE_IMAGE_COMMENT_PROMPT } from './passive-image.js';
 import {
   buildAttackPrompt,
@@ -38,7 +43,7 @@ import {
   FORWARD_SUMMARY_PROMPT,
   isImageEvaluationIntent,
 } from './image-reply-context.js';
-import { buildJevStylePrompt } from './jev-atmosphere-gate.js';
+import { buildJevSemanticPrompt, buildJevStylePrompt } from './jev-atmosphere-gate.js';
 import { MENTION_INTENT_PROMPT, parseMentionIntent, shouldCheckMentionIntent } from './mention-intent.js';
 import { buildCultureRecallContext } from './cultural-retrieval.js';
 import {
@@ -170,6 +175,9 @@ function normalizedJevCulture(style = {}) {
   ].map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, 8);
   return {
     domain,
+    platform: ['bilibili', 'xiaohongshu', 'douyin', 'weibo', 'tieba'].includes(String(style.platform ?? ''))
+      ? String(style.platform)
+      : 'unknown',
     longtu,
     retrievalNeeded,
     terms: [...new Set([
@@ -653,6 +661,15 @@ export async function generateConversationReply(options) {
     jevCulture.terms.join(' '),
     String(currentQuestion || content || '').trim(),
   ].filter(Boolean).join(' ').slice(0, 240);
+  const jevPlatformScope = buildSourceScope(normalizeSourceCandidates(
+    jevCulture.platform && !['unknown', 'general'].includes(jevCulture.platform)
+      ? [{
+        platform: jevCulture.platform,
+        confidence: 'medium',
+        evidence: 'Jev 根据当前语境识别出的平台候选，仅用于公开检索交叉验证',
+      }]
+      : [],
+  ));
   let cultureCard = null;
   let cultureCacheHit = false;
   if (retrievalPolicy.cultureEligible && cultureCache && cultureLookupQuery) {
@@ -738,7 +755,8 @@ export async function generateConversationReply(options) {
       if (failed) combined.context = [combined.context, '部分贴吧语境查询失败，未取回的证据不可视为已确认。'].filter(Boolean).join('\n');
       return combined;
     }
-    const scope = sourceScopeFromText(cultureQuery);
+    const textScope = sourceScopeFromText(cultureQuery);
+    const scope = textScope.includeDomains.length > 0 ? textScope : jevPlatformScope;
     const searchOptions = {
       mode: cultureSearchMode,
       usageSource: `web-search-culture-${cultureSearchMode}`,
@@ -908,6 +926,7 @@ export async function generateConversationReply(options) {
     cultureRecall.prompt,
     culturePrompt,
     buildNormalReplyContextPrompt(normalPromptOptions),
+    buildJevSemanticPrompt(jevStyle),
     buildJevStylePrompt(jevStyle),
     buildProtectedSelfIdentityPrompt(requiredIdentityRole),
     webSearchStatus,

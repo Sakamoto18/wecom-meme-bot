@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { JevAtmosphereGate, JevRuntimeState } from '../src/jev-atmosphere-gate.js';
+import {
+  JevAtmosphereGate,
+  JevRuntimeState,
+  buildJevSemanticPrompt,
+} from '../src/jev-atmosphere-gate.js';
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, async json() { return body; } };
@@ -150,6 +154,49 @@ test('百炼 Chat 模式只做插话和文化检索路由，不改写角色提�
   assert.equal(routed.style.promptEnabled, false);
   assert.equal(routed.style.cultureLookupNeeded, 0.9);
   assert.equal(calls.length, 2);
+});
+
+test('Jev 结构化输出图片语用候选，并在高价值场景读取原图', async () => {
+  const runtime = new JevRuntimeState({ defaultMode: 'on' });
+  let request;
+  const gate = new JevAtmosphereGate({
+    apiKey: 'test',
+    protocol: 'chat',
+    runtime,
+    fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return response({
+        choices: [{ message: { content: JSON.stringify(answers({
+          semantic_relation: '遮挡字形把正经词变成了悼词，画面借此制造反差',
+          semantic_point: '表面在说尊重，视觉上却已经把气氛送走了',
+          comic_mechanism: '拆字+黑白幻视',
+          stance: 'absurd',
+          literal_only_risk: 0.91,
+          unknown_concept: true,
+          semantic_confidence: 0.84,
+          candidate_associations: [{
+            idea: '把这场景接成葬礼现场的错位播报',
+            why_fit: '正经字面和视觉变体形成反差',
+            risk: '原图字形不清时不要硬套',
+          }],
+          semantic_avoid_literal: ['只说画面是黑白的', '逐字复述标题'],
+        })) } }],
+      });
+    },
+  });
+  const style = await gate.evaluateStyle({
+    currentMessage: '这图到底什么梗',
+    rawImageForJev: true,
+    rawImageBlocks: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }],
+  });
+  assert.equal(request.messages[1].content[1].type, 'image_url');
+  assert.equal(style.style.semanticPoint.includes('气氛'), true);
+  assert.equal(style.style.semanticRelation.includes('遮挡字形'), true);
+  assert.equal(style.style.associationCandidates.length, 1);
+  assert.equal(style.style.literalOnlyRisk, 0.91);
+  assert.match(buildJevSemanticPrompt(style.style), /图片表达重点/);
+  assert.match(buildJevSemanticPrompt(style.style), /葬礼现场/);
+  assert.match(buildJevSemanticPrompt(style.style), /不要只重复/);
 });
 
 test('Jev 回调包含真实模型、Token、来源和延迟', async () => {

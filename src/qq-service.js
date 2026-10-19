@@ -90,6 +90,56 @@ function isHistoricalImageReference(value = '') {
   return /(?:刚才|刚刚|上面|上一张|前一张|前面|那张|这个图|这张图|图片里|图里面|图中|截图里|什么意思|啥意思|什么梗|怎么看|怎么回事)/u.test(text);
 }
 
+function imageAnalysisItems(analysis) {
+  if (!analysis || typeof analysis !== 'object') return [];
+  return Array.isArray(analysis.items) ? analysis.items : [analysis];
+}
+
+function imageBlockByteLength(block) {
+  const value = String(block?.image_url?.url ?? '');
+  const match = value.match(/^data:[^;,]+;base64,([\s\S]+)$/iu);
+  if (!match) return 0;
+  return Math.floor((match[1].length * 3) / 4);
+}
+
+export function shouldSendJevRawImage({
+  enabled = true,
+  mode = 'high_value',
+  imageBlocks = [],
+  imageAnalysis = null,
+  imageInformationPolicy = null,
+  question = '',
+}) {
+  if (!enabled || mode === 'off') return false;
+  const imageCount = imageBlocks.filter((block) => block?.type === 'image_url').length;
+  if (imageCount === 0) return false;
+  const text = String(question ?? '').normalize('NFKC');
+  const normalizedQuestion = text.replace(/^(?:哈哈|哈|嗯|额|呃)[\s，,、]*/u, '');
+  if (/(?:视频封面|分享卡|视频卡片|机器人生成|bot生成|抓取结果卡片)/iu.test(text)) return false;
+  const items = imageAnalysisItems(imageAnalysis);
+  const analysisMissing = items.length === 0 || items.every((item) => item?.failed === true);
+  const lowConfidence = items.some((item) => /^(?:low|medium)$/iu.test(
+    String(item?.visualConfidence || item?.confidence || '').trim(),
+  ));
+  const hasWordplay = items.some((item) => String(item?.visualWordplay ?? '').trim());
+  const highDensity = ['high_density', 'hot_topic', 'informative_clue'].includes(
+    String(imageInformationPolicy?.level ?? '').trim(),
+  );
+  const explicitSemanticQuestion = isExplicitImageInterpretationIntent(text)
+    && !isBareImageInspectionRequest(text);
+  const genericEvaluation = /^(?:请|麻烦)?(?:评价|点评|赏析|看看|看下|看一下)(?:一下)?(?:这(?:张)?|该(?:张)?|这张)?(?:图|图片|截图|照片|画面)?[。！？!?，,\s]*$/u.test(normalizedQuestion);
+  const culturalQuestion = /(?:什么梗|啥意思|什么意思|为什么(?:好笑|这样)|出处|原帖|原作|解读|反差|双关|谐音|幻视|拆字|隐喻|赏析|评价|怎么看)/u.test(text);
+  if (imageInformationPolicy?.level === 'low_information' && genericEvaluation) return false;
+  if (mode === 'all_explicit') return explicitSemanticQuestion || culturalQuestion;
+  return Boolean(
+    hasWordplay
+    || lowConfidence
+    || (explicitSemanticQuestion && analysisMissing)
+    || (explicitSemanticQuestion && (highDensity || culturalQuestion))
+    || (culturalQuestion && highDensity),
+  );
+}
+
 const CRAZY_THURSDAY_UNSAFE_PATTERN = /(?:跳楼|跳下去|自杀|自残|不想活|裸奔|脱光|开房|强奸|奸尸|未成年|儿童色情|密码|apikey|api\s*key|诈骗|骗取|押金|缅甸北部|转账\s*\d{3,}|借我\s*\d{3,})/iu;
 // 在线文案库不可用时仍然直发原文，不再调用模型自创兜底。
 const CRAZY_THURSDAY_LOCAL_ENTRIES = [
@@ -1816,6 +1866,18 @@ export class QqBotService {
     this.protectedRoles = options.protectedRoles ?? new Map();
     this.activeReplyDecider = options.activeReplyDecider ?? null;
     this.jevGate = options.jevGate ?? null;
+    this.jevSemanticEnabled = options.jevSemanticEnabled !== false;
+    this.jevRawImageMode = ['off', 'high_value', 'all_explicit'].includes(
+      String(options.jevRawImageMode ?? 'high_value').trim(),
+    ) ? String(options.jevRawImageMode ?? 'high_value').trim() : 'high_value';
+    this.jevRawImageMaxImages = Math.max(
+      1,
+      Math.min(2, Number(options.jevRawImageMaxImages ?? 1) || 1),
+    );
+    this.jevRawImageMaxBytes = Math.max(
+      256 * 1024,
+      Math.min(16 * 1024 * 1024, Number(options.jevRawImageMaxBytes ?? 8 * 1024 * 1024) || 8 * 1024 * 1024),
+    );
     // These are the bot's configured display names.  Message-level name
     // candidates are intentionally kept separate in message-utils: a novel
     // group nickname must be resolved from dialogue context, not promoted to
@@ -3128,13 +3190,32 @@ export class QqBotService {
         this.logger.log('QQ 信息图片主动短评跳过：视觉识别未成功');
         return { mode: 'observe', messages: [] };
       }
+      const imageInformationPolicy = classifyImageAnalysis(imageAnalysis);
       const imageAnalysisContext = formatImageAnalysisContext(imageAnalysis);
       const imageCount = imageBlocks.filter((block) => block?.type === 'image_url').length;
       const hasCurrentImageContext = imageCount > 0 || Boolean(imageAnalysis);
       let hasImageContext = hasCurrentImageContext;
       let jevStyle = options.jevStyle ?? null;
       const jevStatus = this.jevGate?.getStatus?.();
-      const styleEligible = !jevStyle
+      const jevRawImageBlocks = imageBlocks
+        .filter((block) => block?.type === 'image_url')
+        .filter((block) => imageBlockByteLength(block) <= this.jevRawImageMaxBytes)
+        .slice(0, this.jevRawImageMaxImages);
+      const jevRawImageForStyle = this.jevSemanticEnabled
+        && jevStatus
+        && jevStatus.effectiveMode !== 'off'
+        && shouldSendJevRawImage({
+          enabled: this.jevSemanticEnabled,
+          mode: this.jevRawImageMode,
+          imageBlocks,
+          imageAnalysis,
+          imageInformationPolicy,
+          question: imageSearchQuestion,
+        }) && jevRawImageBlocks.length > 0;
+      const jevNeedsSemanticRefresh = jevRawImageForStyle
+        && (!jevStyle || !String(jevStyle.semanticPoint ?? '').trim());
+      const styleEligible = (!jevStyle || jevNeedsSemanticRefresh)
+        && this.jevSemanticEnabled
         && !recordSummary
         && (message.chattype === 'group' || message.chattype === 'private')
         && (options.activeReply === true || hasImageContext || String(content ?? '').length <= 800);
@@ -3149,6 +3230,8 @@ export class QqBotService {
           passiveImageText: imageAnalysisContext,
           imageAnalysis,
           contextImageCandidates: historicalContextImageCandidates,
+          rawImageForJev: jevRawImageForStyle,
+          rawImageBlocks: jevRawImageForStyle ? jevRawImageBlocks : [],
         });
         if (jevStatus.mode !== 'shadow' && styleResult.decision === 'allow') {
           jevStyle = styleResult.style ?? null;
@@ -3186,7 +3269,6 @@ export class QqBotService {
       ]);
       if (historicalContextImageBlocks.length > 0) hasImageContext = true;
       this.rememberContextImages(conversationId, imageBlocks, imageAnalysis, message);
-      const imageInformationPolicy = classifyImageAnalysis(imageAnalysis);
       const explicitImageSearch = hasExplicitImageSearchIntent(imageSearchQuestion);
       const imageInformationPrompt = hasCurrentImageContext
         ? buildImageInformationPolicy(imageInformationPolicy, { explicitSearch: explicitImageSearch })
@@ -3205,6 +3287,15 @@ export class QqBotService {
           Number(jevStyle.imageFactCheckNeeded) || 0,
         ) >= 0.65) {
         const existingQueries = new Set(imageSearchPlan.map((item) => item.query));
+        const jevSourceCandidates = normalizeSourceCandidates(
+          jevStyle.platform && !['unknown', 'general'].includes(String(jevStyle.platform))
+            ? [{
+              platform: jevStyle.platform,
+              confidence: 'medium',
+              evidence: 'Jev 识别出的平台候选，仅用于公开来源交叉核验',
+            }]
+            : [],
+        );
         const jevImagePlans = (jevStyle.imageQueryTerms ?? [])
           .map((term) => String(term ?? '').replace(/\s+/gu, ' ').trim().slice(0, 140))
           .filter((term) => term && !existingQueries.has(term))
@@ -3212,8 +3303,8 @@ export class QqBotService {
             query: `${term} ${Number(jevStyle.imageCultureNeeded) >= Number(jevStyle.imageFactCheckNeeded)
               ? '网络语境 含义'
               : '事实核实 来源'}`.trim(),
-            includeDomains: [],
-            candidates: [],
+            includeDomains: jevSourceCandidates.flatMap((item) => item.domains),
+            candidates: jevSourceCandidates,
           }));
         imageSearchPlan = [...imageSearchPlan, ...jevImagePlans].slice(0, 3);
       }
@@ -3252,6 +3343,9 @@ export class QqBotService {
         + ` jev_image_culture=${Number(jevStyle?.imageCultureNeeded || 0).toFixed(2)}`
         + ` jev_image_fact=${Number(jevStyle?.imageFactCheckNeeded || 0).toFixed(2)}`
         + ` jev_image_complete=${Number(jevStyle?.imageCompleteReadingNeeded || 0).toFixed(2)}`
+        + ` jev_semantic=${jevStyle?.semanticPoint ? 'yes' : 'no'}`
+        + ` jev_literal_risk=${Number(jevStyle?.literalOnlyRisk || 0).toFixed(2)}`
+        + ` jev_raw_image=${jevRawImageForStyle ? 'yes' : 'no'}`
         + ` analyzed=${imageAnalysisSucceeded ? 'yes' : 'no'}`
         + ` information=${imageInformationPolicy?.level || 'unknown'}`
         + ` search=${imageSearchQueries?.length ?? 0}`

@@ -15,6 +15,7 @@ import {
   QqBotService,
   buildQqCompatibleMessage,
   normalizeQqPayload,
+  shouldSendJevRawImage,
   splitReplyText,
 } from '../src/qq-service.js';
 import { ActiveReplyDecider } from '../src/active-reply.js';
@@ -105,6 +106,28 @@ function createService(options = {}) {
   });
   return { service, calls };
 }
+
+test('Jev 原图只对高价值图片语义问题启用，低信息图不增加二次视觉调用', () => {
+  const block = { type: 'image_url', image_url: { url: 'data:image/png;base64,' + 'A'.repeat(400) } };
+  assert.equal(shouldSendJevRawImage({
+    imageBlocks: [block],
+    question: '哈哈评价一下',
+    imageInformationPolicy: { level: 'low_information' },
+    imageAnalysis: { items: [{ confidence: 'high', visualWordplay: '' }] },
+  }), false);
+  assert.equal(shouldSendJevRawImage({
+    imageBlocks: [block],
+    question: '这图到底什么梗',
+    imageInformationPolicy: { level: 'high_density' },
+    imageAnalysis: { items: [{ confidence: 'high', visualWordplay: '' }] },
+  }), true);
+  assert.equal(shouldSendJevRawImage({
+    imageBlocks: [block],
+    question: '这图什么意思',
+    imageInformationPolicy: { level: 'low_information' },
+    imageAnalysis: null,
+  }), true);
+});
 
 test('普通长答拆成连续完整消息，保留每句条件并不超过四条', () => {
   const parts = splitReplyText('先检查服务是否启动，再确认端口。\n\n如果仍然失败，检查容器网络和监听地址；最后看日志里的具体错误。');
