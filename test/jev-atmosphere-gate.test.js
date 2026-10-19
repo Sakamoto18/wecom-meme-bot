@@ -319,6 +319,24 @@ test('Jev 额度错误自动熔断并持久化状态', async () => {
   }
 });
 
+test('Jev 瞬时上游错误不会三次就熔断整小时', async () => {
+  const runtime = new JevRuntimeState({
+    defaultMode: 'on',
+    failureThreshold: 6,
+    cooldownMs: 300_000,
+  });
+  const gate = new JevAtmosphereGate({
+    apiKey: 'test',
+    runtime,
+    fetchImpl: async () => response({ error: { message: 'upstream timeout' } }, 500),
+  });
+  await gate.evaluate({ currentMessage: 'test' });
+  await gate.evaluate({ currentMessage: 'test' });
+  await gate.evaluate({ currentMessage: 'test' });
+  assert.equal(runtime.status().circuitOpen, false);
+  assert.equal(runtime.status().failureCount, 3);
+});
+
 test('Jev HTTP 失败也记录失败用量事件所需元数据', async () => {
   const runtime = new JevRuntimeState({ defaultMode: 'on' });
   const events = [];

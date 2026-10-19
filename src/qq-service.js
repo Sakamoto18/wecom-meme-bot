@@ -87,7 +87,7 @@ function isBareImageInspectionRequest(value = '') {
 
 function isHistoricalImageReference(value = '') {
   const text = String(value ?? '').normalize('NFKC').replace(/\s+/gu, '').trim();
-  return /(?:刚才|刚刚|上面|上一张|前一张|前面|那张|这个图|这张图|图片里|图里面|图中|截图里|什么意思|啥意思|什么梗|怎么看|怎么回事)/u.test(text);
+  return /(?:刚才|刚刚|上面|上一张|前一张|前面|那张|这个图|这张图|图片里|图里面|图中|截图里|九宫格|什么意思|啥意思|什么梗|怎么看|怎么回事|图里.{0,8}(?:是谁|什么|哪个|哪些|内容)|图片.{0,8}(?:是谁|什么|哪个|哪些|内容)|截图.{0,8}(?:是谁|什么|哪个|哪些|内容))/u.test(text);
 }
 
 function imageAnalysisItems(analysis) {
@@ -1582,6 +1582,7 @@ const MEMBER_MEMORY_STOP_TERMS = new Set([
   '什么', '为什么', '一下', '帮我', '请问', '评价', '看看', '需要', '可以', '不是',
   '以及', '还有', '已经', '只是', '然后', '如果', '一个', '没有', '不要', '不能',
   '之前', '以前', '历史', '上次', '上回', '曾经', '说过', '提过', '聊过', '记得',
+  '说话', '信息', '核实', '搜索', '检索', '联网', '图片', '截图', '画面', '来源',
 ]);
 
 function memberMemoryCueTerms(value) {
@@ -1615,6 +1616,8 @@ function memberMemoryMatchesTurn(entry, message, content) {
   const cues = memberMemoryCueTerms(currentTurnText);
   if (cues.length === 0) return false;
   const memoryText = [entry?.name, entry?.memory].filter(Boolean).join(' ').toLowerCase();
+  // Generic routing/search words are excluded above; retain specific cues such
+  // as “原神” so an explicit topic can still use the member's relevant memory.
   return cues.some((term) => memoryText.includes(term));
 }
 

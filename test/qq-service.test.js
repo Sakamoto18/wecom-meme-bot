@@ -1695,6 +1695,46 @@ test('普通当前话题不注入无关成员旧画像，避免把旧地点食�
   assert.doesNotMatch(calls[0].modelInput, /龙华寺|素面|相关群成员的独立持久画像/);
 });
 
+test('图片核实和搜索措辞不会误命中成员画像', async () => {
+  const calls = [];
+  const conversationStore = {
+    recordGroupMember() {},
+    getGroupMemberAliases: () => ({}),
+    getGroupMemberMemories: () => [{
+      userId: 'u-search',
+      speakerId: 'search-user',
+      name: '古希腊掌管驴管的神',
+      memory: '反对用 AI 全网搜索普通公司内部员工信息，认为需要核实来源。',
+    }],
+    getGroupMemberHistory: () => [],
+    runExclusive: (_conversationId, task) => task(),
+    get: () => [],
+    getSummary: () => '',
+    appendExchange() {},
+    scheduleSummary: () => Promise.resolve(false),
+  };
+  const { service } = createService({
+    conversationStore,
+    chatClient: {
+      isConfigured: true,
+      async complete(history, modelInput, options) {
+        calls.push({ history, modelInput, options });
+        return '先看原图和来源，再判断真假。';
+      },
+    },
+  });
+  await service.handleMessage({
+    message_id: 'member-memory-search-1',
+    message_type: 'group',
+    group_id: 'g-memory-search',
+    user_id: 'u-search',
+    sender_name: '古希腊掌管驴管的神',
+    text: '帮我核实一下，这个信息是不是真的，走搜索，别瞎回',
+  });
+  assert.equal(calls.length, 1);
+  assert.doesNotMatch(calls[0].modelInput, /相关群成员的独立持久画像/);
+});
+
 test('无关成员回复隔离其他人的受保护头衔并记录机器人当轮回复对象', async () => {
   const calls = [];
   const exchanges = [];

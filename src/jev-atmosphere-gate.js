@@ -98,6 +98,10 @@ export class JevRuntimeState {
     this.lastErrorAt = 0;
     this.failureCount = 0;
     this.cooldownMs = Math.max(10_000, Number(options.cooldownMs ?? DEFAULT_COOLDOWN_MS));
+    // Transient upstream latency must not silence culture routing for an hour.
+    // Quota/auth failures still open the circuit immediately; ordinary errors
+    // need several consecutive failures before falling back globally.
+    this.failureThreshold = Math.max(3, Number(options.failureThreshold ?? 6));
     this.now = options.now ?? Date.now;
     this.logger = options.logger ?? console;
   }
@@ -168,7 +172,7 @@ export class JevRuntimeState {
     this.failureCount += 1;
     this.lastError = errorText(error);
     this.lastErrorAt = this.now();
-    if (quota || this.failureCount >= 3) {
+    if (quota || this.failureCount >= this.failureThreshold) {
       this.circuitOpenUntil = this.now() + this.cooldownMs;
     }
     await this.persist().catch((persistError) => {

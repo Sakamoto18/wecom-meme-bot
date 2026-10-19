@@ -631,6 +631,9 @@ export async function createQqRuntime() {
       ? (process.env.LONGTU_QQ_JEV_MODE?.trim() || 'auto')
       : 'off',
     cooldownMs: (parsePositiveNumber(process.env.LONGTU_QQ_JEV_CIRCUIT_COOLDOWN_SECONDS) ?? 3600) * 1000,
+    failureThreshold: parsePositiveInteger(
+      process.env.LONGTU_QQ_JEV_CIRCUIT_FAILURE_THRESHOLD,
+    ) ?? 6,
     logger: console,
   });
   await jevRuntime.load();
