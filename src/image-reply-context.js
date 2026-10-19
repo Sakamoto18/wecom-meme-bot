@@ -16,7 +16,11 @@ const GENERIC_IMAGE_TERMS = new Set([
 
 const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|辟谣|谣言|真实吗|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景|(?:图|图片|截图|九宫格).{0,8}(?:谁|人物|身份|名字))/u;
 const IMAGE_EVALUATION_PATTERN = /(?:评价|点评|评一下|说说(?:这|该)?(?:张|幅)?图|怎么看(?:这|该)?(?:张|幅)?图|赏析|吐槽(?:一下)?(?:这|该)?(?:张|幅)?图|好不好看)/u;
-const IMAGE_INTERPRETATION_PATTERN = /(?:解析|分析|解读|识别|含义|笑点|什么梗|什么意思|是什么|怎么理解|表达了什么|看法|评价|点评|赏析|吐槽|怎么选|选哪个|哪个好|看看(?:这(?:张)?(?:图|图片|截图|照片)?|下(?:这(?:张)?(?:图|图片|截图|照片)?)?|(?:图|图片|截图|照片)))/u;
+// “调侃/地狱笑话/接梗”不是字面上的识图请求，但它明确要求模型理解
+// 图片背后的关系、反差和互联网语境。若不把它视为图片语义问题，Jev
+// 超时或视觉摘要不完整时，最终模型会退化成只复述 OCR。
+const IMAGE_INTERPRETATION_PATTERN = /(?:解析|分析|解读|识别|含义|笑点|什么梗|什么意思|是什么|怎么理解|表达了什么|看法|评价|点评|赏析|吐槽|调侃|接梗|联想|玩梗|地狱笑话|反差|暗示|讽刺|阴阳|锐评|怎么选|选哪个|哪个好|看看(?:这(?:张)?(?:图|图片|截图|照片)?|下(?:这(?:张)?(?:图|图片|截图|照片)?)?|(?:图|图片|截图|照片)))/u;
+const IMAGE_CULTURE_REQUEST_PATTERN = /(?:调侃|接梗|联想|玩梗|地狱笑话|网络梗|热梗|反差|暗示|讽刺|阴阳|锐评|电竞|选手|冠军皮肤|二创)/iu;
 const IMAGE_INFORMATION_PATTERN = /(?:长文|文章|公告|新闻|论坛|帖子|评论区|聊天记录|对话|多格|漫画|表格|数据|图表|教程|报错|故障|说明书|规则|通知|投票|调查|对比|时间线)/u;
 const IMAGE_QUESTION_OR_CLAIM_PATTERN = /[?？]|(?:什么|哪个|哪种|谁|哪里|为何|为什么|怎么(?:样|办|回事)?|是否|是不是|能不能|可不可以|出处|来源|原帖|真假|真的|假的|原因|办法|建议|价格|时间|多少)/u;
 const UI_NOISE_PATTERN = /(?:点赞|评论|转发|收藏|播放|浏览|粉丝|关注|分享|登录|注册|首页|搜索|推荐|热门|账号|用户名|用户名称|up主|作者|发布于|在线|分钟前|小时前|昨天|第\s*\d+楼)/iu;
@@ -319,6 +323,7 @@ export function buildImageSearchPlan(analysis, content = '') {
   if (isImageEvaluationIntent(content)) return [];
   const items = analysis?.items?.length ? analysis.items : (analysis ? [analysis] : []);
   const explicitIntent = hasExplicitImageSearchIntent(content);
+  const cultureIntent = IMAGE_CULTURE_REQUEST_PATTERN.test(compactText(content));
   const maxQueries = explicitIntent
     ? IMAGE_SEARCH_EXPLICIT_MAX_QUERIES
     : IMAGE_SEARCH_DEFAULT_MAX_QUERIES;
@@ -336,12 +341,22 @@ export function buildImageSearchPlan(analysis, content = '') {
     // source requests still get a concise local answer instead of a noisy
     // generic lookup; dense evidence can still be searched when requested.
     if (itemPolicy.level === 'low_information') continue;
-    if (!itemPolicy.searchEligible && !explicitIntent) continue;
+    // A culture request can make an informative screenshot worth one focused
+    // lookup even when it is shorter than the general “search eligible”
+    // threshold. It still cannot open the gate for low-information memes.
+    if (!itemPolicy.searchEligible
+      && !(cultureIntent && itemPolicy.level === 'informative_clue')
+      && !explicitIntent) continue;
     // An explicit empty array means vision found no suitable public search
     // clue (for example a private chat screenshot); don't send its OCR online.
     const explicitClue = explicitVisibleTextClue(item);
-    const proposed = Array.isArray(item.searchQueries) && item.searchQueries.length > 0
-      ? item.searchQueries
+    const proposed = cultureIntent
+      // 对“调侃/接梗/地狱笑话”优先使用截图中最长且最具体的可见正文。
+      // 视觉模型生成的 search_queries 可能漏掉实体关系，精确 OCR 线索
+      // 更容易命中 369、Bin、替父从军等公开背景；仍受同一信息密度门控。
+      ? [explicitVisibleTextClue(item), ...(Array.isArray(item.searchQueries) ? item.searchQueries : [])]
+      : Array.isArray(item.searchQueries) && item.searchQueries.length > 0
+        ? item.searchQueries
       : (explicitIntent
         // One focused source lookup is enough. Sending both OCR and keyword
         // variants here made a single “找原帖” question pay for duplicate

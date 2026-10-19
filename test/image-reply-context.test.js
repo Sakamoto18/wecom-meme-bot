@@ -23,6 +23,7 @@ test('带图的语义提问即使不写“这张图”也保留原始像素给�
   assert.equal(isExplicitImageInterpretationIntent('明总如何评价'), true);
   assert.equal(isExplicitImageInterpretationIntent('你怎么选'), true);
   assert.equal(isExplicitImageInterpretationIntent('看看这图'), true);
+  assert.equal(isExplicitImageInterpretationIntent('调侃一下这张电竞截图的地狱笑话'), true);
   assert.equal(isExplicitImageInterpretationIntent('晚上吃什么'), false);
 });
 
@@ -54,6 +55,19 @@ test('图片检索限定具体线索，去重并限制查询预算，不把整�
     { searchQueries: ['fourth topic'] },
   ] }, '这几个是什么梗');
   assert.deepEqual(queries, ['xkcd Standards 来源 含义', 'This is fine KC Green 来源 含义']);
+});
+
+test('调侃电竞截图时优先用可见正文构造精确背景查询', () => {
+  const queries = buildImageSearchQueries({ items: [{
+    visibleText: ['9哥的今年冠军皮肤', '替父从军 花木兰 未解锁', '嫉妒你的才华'],
+    description: '电竞评论截图，包含冠军皮肤和评论关系',
+    scene: '评论区截图',
+    keywords: ['电竞', '冠军皮肤'],
+    searchQueries: [],
+  }] }, '调侃LOL选手369的电竞地狱笑话');
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /9哥的今年冠军皮肤/);
+  assert.match(queries[0], /替父从军/);
 });
 
 test('视觉明确没有公开线索、识别失败或用户不允许联网时，不发空泛查询', () => {

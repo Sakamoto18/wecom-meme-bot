@@ -90,6 +90,50 @@ function isHistoricalImageReference(value = '') {
   return /(?:刚才|刚刚|上面|上一张|前一张|前面|那张|这个图|这张图|图片里|图里面|图中|截图里|九宫格|什么意思|啥意思|什么梗|怎么看|怎么回事|图里.{0,8}(?:是谁|什么|哪个|哪些|内容)|图片.{0,8}(?:是谁|什么|哪个|哪些|内容)|截图.{0,8}(?:是谁|什么|哪个|哪些|内容))/u.test(text);
 }
 
+function isImageCultureQuestion(value = '') {
+  const text = String(value ?? '').normalize('NFKC');
+  return isExplicitImageInterpretationIntent(text)
+    || /(?:调侃|接梗|联想|玩梗|地狱笑话|网络梗|热梗|反差|暗示|讽刺|阴阳|锐评|电竞|选手|冠军皮肤|二创)/iu.test(text);
+}
+
+function buildImageSemanticFallbackStyle(question, policy = {}) {
+  // Jev is an enhancement layer. If its upstream call times out, preserve the
+  // image-semantic path locally instead of immediately reverting to an
+  // OCR-only answer. This fallback never invents a culture association; it
+  // only asks the final model to reread the pixels and use any concrete
+  // visible clue already extracted by the vision pass.
+  if (!isImageCultureQuestion(question)) return null;
+  return {
+    mode: 'culture',
+    memeFit: 0.8,
+    explanationNeeded: 0.15,
+    confidence: 0.35,
+    cultureDomain: 'general',
+    cultureLookupNeeded: 0,
+    longtuLookupNeeded: 0,
+    retrievalNeeded: 0,
+    culturePriority: 0.85,
+    seriousRequest: 0,
+    imageCultureNeeded: policy.level === 'low_information' ? 0.65 : 0.9,
+    imageFactCheckNeeded: policy.searchEligible ? 0.65 : 0,
+    imageCompleteReadingNeeded: 1,
+    // buildImageSearchPlan already promotes the combined visible-text clue
+    // for culture questions; leaving this empty avoids a second near-duplicate
+    // query when the local fallback is used.
+    imageQueryTerms: [],
+    queryTerms: [],
+    longtuTerms: [],
+    semanticPoint: '',
+    semanticRelation: '',
+    semanticMechanism: '',
+    associationCandidates: [],
+    semanticAvoidLiteral: [],
+    literalOnlyRisk: 0.9,
+    semanticConfidence: 0.2,
+    promptEnabled: true,
+  };
+}
+
 function imageAnalysisItems(analysis) {
   if (!analysis || typeof analysis !== 'object') return [];
   return Array.isArray(analysis.items) ? analysis.items : [analysis];
@@ -3248,6 +3292,20 @@ export class QqBotService {
         });
         if (jevStatus.mode !== 'shadow' && styleResult.decision === 'allow') {
           jevStyle = styleResult.style ?? null;
+        } else if (jevStatus.mode !== 'shadow' && styleResult.decision === 'fallback') {
+          // A slow Jev response must not turn an explicit image-culture
+          // request into the old “paper”/OCR-only path. Keep a conservative
+          // local semantic route and let the final DeepSeek call reread the
+          // original image; no unverified association is fabricated here.
+          jevStyle = buildImageSemanticFallbackStyle(
+            imageSearchQuestion,
+            imageInformationPolicy,
+          );
+          if (jevStyle) {
+            this.logger.warn?.(
+              `QQ Jev 图片语义路由超时/失败，保留原图与文化路径：reason=${styleResult.reason || 'fallback'}`,
+            );
+          }
         }
       }
       if (jevStyle && this.jevResponseRoutingEnabled && this.jevResponseModeMemory) {

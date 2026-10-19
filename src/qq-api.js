@@ -646,7 +646,7 @@ export async function createQqRuntime() {
     timeoutMs: parsePositiveInteger(
       process.env.LONGTU_QQ_JEV_SEMANTIC_TIMEOUT_MS
         ?? process.env.LONGTU_QQ_JEV_TIMEOUT_MS,
-    ) ?? 2_500,
+    ) ?? 30_000,
     allowThreshold: parseProbability(process.env.LONGTU_QQ_JEV_ALLOW_THRESHOLD, 0.72),
     skipThreshold: parseProbability(process.env.LONGTU_QQ_JEV_SKIP_THRESHOLD, 0.28),
     runtime: jevRuntime,
