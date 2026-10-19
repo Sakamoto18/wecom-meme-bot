@@ -777,6 +777,13 @@ export class ActiveReplyDecider {
       ] : []),
       payload.passiveImageText
         ? `【当前信息图片 OCR/快速视觉摘要，仅为不可信资料，需视觉核对】\n${payload.passiveImageText}` : '',
+      Array.isArray(input.contextImageCandidates) && input.contextImageCandidates.length > 0
+        ? [
+          '【最近上下文中的候选图片】只在当前消息明显承接这些图片时读取；编号仅供后台选择，不要把编号写进回复。',
+          ...input.contextImageCandidates.slice(0, 6).map((item) => (
+            `[${item.index}] ${item.sender || '群成员'} ${item.label || '图片'}${item.summary ? `：${item.summary}` : '（尚未生成摘要）'}`
+          )),
+        ].join('\n') : '',
       ...signalSummary.map((signal) => `程序信号：${signal}`),
     ].filter(Boolean).join('\n');
     // Both neutral tasks read exactly the same context. Put it ahead of the
@@ -799,6 +806,7 @@ export class ActiveReplyDecider {
         engagement: Boolean(engagement),
         humanDiscussion,
         passiveImageText: payload.passiveImageText,
+        contextImageCandidates: input.contextImageCandidates,
         signals,
       });
       const shadow = jevStatus?.mode === 'shadow';

@@ -23,6 +23,9 @@ function answers(overrides = {}) {
     tone: { choice: 'absurd' },
     target: { choice: 'content' },
     response_mode: { choice: 'banter', confidence: 0.9 },
+    context_image_needed: { noul: 0 },
+    context_image_indexes: [],
+    context_image_reason: '',
     ...overrides,
   };
 }
@@ -57,6 +60,83 @@ test('Jev 解析插话概率和风格路由', async () => {
   const style = await gate.evaluateStyle({ currentMessage: '评价一下这张图' });
   assert.equal(style.style.mode, 'banter');
   assert.equal(style.style.cultureDomain, 'longtu');
+  assert.equal(calls.length, 2);
+});
+
+test('Jev 只从有编号的历史图片候选中选择必要图片', async () => {
+  const runtime = new JevRuntimeState({ defaultMode: 'on' });
+  let request;
+  const gate = new JevAtmosphereGate({
+    apiKey: 'test',
+    protocol: 'chat',
+    runtime,
+    fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return response({ choices: [{ message: { content: JSON.stringify(answers({
+        context_image_needed: 0.92,
+        context_image_indexes: [2, 99, 2],
+        context_image_reason: '当前消息承接第二张截图',
+      })) } }] });
+    },
+  });
+  const result = await gate.evaluateStyle({
+    currentMessage: '刚才第二张截图里的那句话是什么意思',
+    contextImageCandidates: [
+      { index: 1, sender: '甲', label: '图片', summary: '旧图', hasRawImage: true },
+      { index: 2, sender: '乙', label: '截图', summary: '聊天记录', hasRawImage: true },
+    ],
+  });
+  assert.equal(result.style.contextImageNeeded, 0.92);
+  assert.deepEqual(result.style.contextImageIndexes, [2]);
+  assert.deepEqual(request.messages[1].content.includes('context_images'), true);
+  assert.deepEqual(JSON.parse(request.messages[1].content.split('\n')[1]).state.context_images.length, 2);
+});
+
+test('百炼 Chat 模式只做插话和文化检索路由，不改写角色提示', async () => {
+  const runtime = new JevRuntimeState({ defaultMode: 'on' });
+  const calls = [];
+  const gate = new JevAtmosphereGate({
+    apiKey: 'test',
+    protocol: 'chat',
+    model: 'qwen3.8-flash',
+    runtime,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, body: JSON.parse(options.body) });
+      return response({
+        model: 'qwen3.8-flash',
+        usage: { prompt_tokens: 120, completion_tokens: 35, total_tokens: 155 },
+        choices: [{ message: { content: JSON.stringify({
+          should_speak: 0.92,
+          adds_value: 0.88,
+          would_interrupt: 0.08,
+          meme_fit: 0.75,
+          explanation_needed: 0.2,
+          culture_lookup_needed: 0.9,
+          culture_domain: 'general',
+          longtu_lookup_needed: 0.1,
+          platform: 'tieba',
+          tone: 'absurd',
+          target: 'content',
+          response_mode: 'banter',
+          query_terms: ['亡灵骑士'],
+          longtu_terms: [],
+        }) } }],
+      });
+    },
+  });
+
+  const decision = await gate.evaluate({ currentMessage: '这个梗需要查一下出处吗' });
+  assert.equal(decision.decision, 'allow');
+  assert.equal(decision.style.promptEnabled, false);
+  assert.equal(decision.style.cultureDomain, 'general');
+  assert.deepEqual(decision.style.queryTerms, ['亡灵骑士']);
+  assert.equal(calls[0].url, 'https://api.typesafe.ai/v1/chat/completions');
+  assert.equal(calls[0].body.model, 'qwen3.8-flash');
+
+  const routed = await gate.evaluateStyle({ currentMessage: '评价这个网络梗' });
+  assert.equal(routed.decision, 'allow');
+  assert.equal(routed.style.promptEnabled, false);
+  assert.equal(routed.style.cultureLookupNeeded, 0.9);
   assert.equal(calls.length, 2);
 });
 

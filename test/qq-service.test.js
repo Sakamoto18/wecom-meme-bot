@@ -99,6 +99,8 @@ function createService(options = {}) {
     peakLargeGroupObservationHistoryCharacters: options.peakLargeGroupObservationHistoryCharacters,
     largeGroupBackgroundSummariesEnabled: options.largeGroupBackgroundSummariesEnabled,
     now: options.now,
+    contextImageTtlMs: options.contextImageTtlMs,
+    contextImageMaxItems: options.contextImageMaxItems,
     logger: { log() {}, warn() {}, info() {} },
   });
   return { service, calls };
@@ -797,6 +799,31 @@ test('本地 OCR 结果作为待校对资料进入视觉模型提示词', async 
   assert.match(promptText, /以图片为准/);
   assert.match(promptText, /visual_wordplay/);
   assert.equal(analysis.items[0].visualWordplay, '预算→预言');
+});
+
+test('历史图片只保留短期候选，并按 Jev 选择结果送入视觉请求', async () => {
+  let now = 1_000_000;
+  const { service } = createService({
+    now: () => now,
+    contextImageTtlMs: 10_000,
+    contextImageMaxItems: 2,
+  });
+  const png = (await createPng()).toString('base64');
+  const prepared = await prepareImageBlocks({ imageBase64s: [png] });
+  service.rememberContextImages('group-1', prepared.blocks, {
+    items: [{ index: 1, description: '聊天截图', visibleText: ['关键内容'] }],
+  }, { from: { name: '群友甲' } });
+  const candidates = service.contextImageCandidates('group-1');
+  assert.equal(candidates.length, 1);
+  assert.match(candidates[0].summary, /聊天截图/);
+  const selected = service.contextImageBlocksFor('group-1', {
+    contextImageNeeded: 1,
+    contextImageIndexes: [1],
+  }, candidates);
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].block.type, 'image_url');
+  now += 61_000;
+  assert.deepEqual(service.contextImageCandidates('group-1'), []);
 });
 
 test('画作赏析使用主体关系取证，不复用通用图片缓存', async () => {

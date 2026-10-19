@@ -147,14 +147,21 @@ function emptySearchResult() {
 }
 
 function normalizedJevCulture(style = {}) {
-  const domain = ['longtu', 'general', 'platform', 'none'].includes(style.cultureDomain)
+  const requestedDomain = ['longtu', 'general', 'platform', 'none'].includes(style.cultureDomain)
     ? style.cultureDomain : 'none';
-  const longtu = domain === 'longtu' || Number(style.longtuLookupNeeded) >= 0.7;
+  const longtu = requestedDomain === 'longtu' || Number(style.longtuLookupNeeded) >= 0.7;
   const retrievalNeeded = Math.max(
     Number(style.retrievalNeeded) || 0,
     Number(style.cultureLookupNeeded) || 0,
     Number(style.longtuLookupNeeded) || 0,
   );
+  // A general chat model may return a high lookup probability while leaving
+  // the enum at `none`. Preserve the model's uncertainty, but route a strong
+  // request to the general culture search (or the Longtu/Tieba path) instead
+  // of silently discarding the signal.
+  const domain = requestedDomain !== 'none'
+    ? requestedDomain
+    : (longtu ? 'longtu' : retrievalNeeded >= 0.55 ? 'general' : 'none');
   const terms = [...new Set([
     ...(Array.isArray(style.longtuTerms) ? style.longtuTerms : []),
     ...(Array.isArray(style.queryTerms) ? style.queryTerms : []),

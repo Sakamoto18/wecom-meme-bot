@@ -637,6 +637,8 @@ export async function createQqRuntime() {
     apiKey: process.env.TYPESAFE_API_KEY,
     baseUrl: process.env.TYPESAFE_BASE_URL,
     model: process.env.TYPESAFE_MODEL,
+    protocol: process.env.LONGTU_QQ_JEV_PROTOCOL || process.env.TYPESAFE_PROTOCOL,
+    chatMaxTokens: parsePositiveInteger(process.env.LONGTU_QQ_JEV_CHAT_MAX_TOKENS) ?? 220,
     timeoutMs: parsePositiveInteger(process.env.LONGTU_QQ_JEV_TIMEOUT_MS) ?? 2_500,
     allowThreshold: parseProbability(process.env.LONGTU_QQ_JEV_ALLOW_THRESHOLD, 0.72),
     skipThreshold: parseProbability(process.env.LONGTU_QQ_JEV_SKIP_THRESHOLD, 0.28),

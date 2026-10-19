@@ -64,7 +64,7 @@ CRAZY_THURSDAY_SLOTS = (
 )
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
-    "/stop", "/usage-report", "/persona", "/crazy-thursday", "/crazy-thursday-add",
+    "/stop", "/usage-report", "/persona", "/jev", "/crazy-thursday", "/crazy-thursday-add",
     "/crazy-thursday-list", "/crazy-thursday-del",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"

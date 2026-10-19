@@ -8,6 +8,7 @@ const CULTURE_DOMAINS = new Set(['longtu', 'general', 'platform', 'none']);
 const PLATFORMS = new Set(['bilibili', 'xiaohongshu', 'douyin', 'weibo', 'tieba', 'general', 'unknown']);
 const TONES = new Set(['dry', 'sarcastic', 'absurd', 'neutral']);
 const TARGETS = new Set(['content', 'bot', 'third_party', 'unknown']);
+const PROTOCOLS = new Set(['systemone', 'chat']);
 
 function clamp(value, fallback = 0) {
   const number = Number(value);
@@ -23,6 +24,11 @@ function normalizeMode(value, fallback = 'off') {
   return MODES.has(mode) ? mode : fallback;
 }
 
+function normalizeProtocol(value, fallback = 'systemone') {
+  const protocol = String(value ?? '').trim().toLowerCase();
+  return PROTOCOLS.has(protocol) ? protocol : fallback;
+}
+
 function choice(value, allowed, fallback) {
   const candidate = String(value?.choice ?? value?.value ?? value ?? '').trim().toLowerCase();
   return allowed.has(candidate) ? candidate : fallback;
@@ -34,6 +40,16 @@ function listValue(value, limit = 8, itemLimit = 80) {
     : (Array.isArray(value?.items) ? value.items
       : (Array.isArray(value?.values) ? value.values : []));
   return [...new Set(candidates.map((item) => String(item ?? '').trim().slice(0, itemLimit)).filter(Boolean))]
+    .slice(0, limit);
+}
+
+function indexList(value, limit = 3) {
+  const candidates = Array.isArray(value)
+    ? value
+    : (Array.isArray(value?.items) ? value.items : []);
+  return [...new Set(candidates
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item > 0))]
     .slice(0, limit);
 }
 
@@ -166,6 +182,16 @@ function isQuotaError(error, status) {
 }
 
 function buildState(context = {}) {
+  const contextImages = Array.isArray(context.contextImageCandidates)
+    ? context.contextImageCandidates.slice(0, 6).map((item, index) => ({
+      index: Number.isInteger(item?.index) && item.index > 0 ? item.index : index + 1,
+      age_seconds: Math.max(0, Number(item?.ageSeconds) || 0),
+      sender: String(item?.sender ?? '').slice(0, 40),
+      label: String(item?.label ?? '').slice(0, 80),
+      summary: String(item?.summary ?? '').slice(0, 500),
+      has_raw_image: item?.hasRawImage === true,
+    }))
+    : [];
   return {
     transcript: trimText(context.transcript, 4_000),
     current_message: trimText(context.currentMessage, 1_200),
@@ -176,6 +202,7 @@ function buildState(context = {}) {
     },
     signals: context.signals ?? {},
     image_summary: trimText(context.passiveImageText, 1_200),
+    context_images: contextImages,
   };
 }
 
@@ -290,9 +317,57 @@ const QUESTIONS = {
 
 function answerNumber(answers, key) {
   const value = answers?.[key];
+  if (typeof value === 'boolean') return value ? 1 : 0;
   if (typeof value === 'number') return clamp(value);
   return clamp(value?.noul ?? value?.probability ?? value?.yes ?? value?.true_probability);
 }
+
+function parseChatAnswers(content) {
+  const text = String(content ?? '').trim();
+  if (!text) return null;
+  const candidates = [text];
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/iu);
+  if (fenced?.[1]) candidates.unshift(fenced[1].trim());
+  const object = text.match(/\{[\s\S]*\}/u);
+  if (object?.[0]) candidates.push(object[0]);
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      // The model occasionally wraps JSON in one sentence; try the next form.
+    }
+  }
+  return null;
+}
+
+const CHAT_GATE_SYSTEM_PROMPT = [
+  '你是 QQ 群聊机器人的后台路由判断器，不负责写回复。',
+  '请结合当前消息和最近上下文，判断是否值得机器人接话，以及是否需要联网核实中文互联网语境、热梗、平台出处或龙图语境。',
+  '只输出一个合法 JSON 对象，不要 Markdown、解释、前后缀或换行外的文字。',
+  '数值字段必须是 0 到 1 的数字；枚举字段必须使用给定值；query_terms 和 longtu_terms 必须是短词数组。',
+  'state.context_images 是最近上下文图片候选。只有当前消息明确承接某张图片、引用其文字/画面，或不读图就无法判断时，才把 context_image_needed 设为较高，并返回对应编号；泛泛发图、旧图片或只凭文字就能回答时必须返回空数组。',
+  'context_image_indexes 只能填写 state.context_images 中已有的正整数编号，最多 3 个；不要臆造编号，也不要输出图片本身。',
+  JSON.stringify({
+    should_speak: 'number: 机器人现在自然插话的概率',
+    adds_value: 'number: 能补充当前对话尚未出现的有效内容的概率',
+    would_interrupt: 'number: 发言会打断群友或抢话的概率',
+    meme_fit: 'number: 存在贴合当前语境的具体网络梗/反差联想的概率',
+    explanation_needed: 'number: 必须解释事实、原理或步骤的概率',
+    culture_lookup_needed: 'number: 需要联网核实互联网文化语境的概率',
+    culture_domain: 'longtu|general|platform|none',
+    longtu_lookup_needed: 'number: 值得检索贴吧中的龙玉涛/龙图语境的概率',
+    platform: 'bilibili|xiaohongshu|douyin|weibo|tieba|general|unknown',
+    tone: 'dry|sarcastic|absurd|neutral',
+    target: 'content|bot|third_party|unknown',
+    response_mode: 'banter|judgment|concise_answer|explanation|serious_support',
+    context_image_needed: 'number: 是否需要读取最近上下文中的某张图片才能准确接话',
+    context_image_indexes: '最多 3 个正整数，对应 state.context_images 中需要读取的图片编号；不需要则为空数组',
+    context_image_reason: '短句说明为什么需要这些图片；不需要则为空字符串',
+    query_terms: '最多 8 个用于文化检索的短词',
+    longtu_terms: '最多 8 个用于贴吧检索的短词',
+  }),
+].join('\n');
 
 function normalizeCultureAnswers(answers, context = {}) {
   const domain = choice(answers?.culture_domain, CULTURE_DOMAINS, 'none');
@@ -305,6 +380,12 @@ function normalizeCultureAnswers(answers, context = {}) {
   const terms = listValue(answers?.query_terms ?? answers?.culture_terms);
   const longtuTerms = listValue(answers?.longtu_terms);
   const derivedTerms = contextTerms(context, domain);
+  const availableImageIndexes = new Set(
+    (context.contextImageCandidates ?? [])
+      .map((item, index) => Number.isInteger(item?.index) && item.index > 0 ? item.index : index + 1),
+  );
+  const contextImageIndexes = indexList(answers?.context_image_indexes)
+    .filter((index) => availableImageIndexes.has(index));
   return {
     cultureDomain: domain,
     platform,
@@ -316,6 +397,9 @@ function normalizeCultureAnswers(answers, context = {}) {
     queryTerms: [...new Set([...terms, ...derivedTerms])].slice(0, 8),
     longtuTerms: [...new Set([...longtuTerms, ...(domain === 'longtu' ? derivedTerms : [])])].slice(0, 8),
     associationAngles: listValue(answers?.association_angles),
+    contextImageNeeded: answerNumber(answers, 'context_image_needed'),
+    contextImageIndexes,
+    contextImageReason: String(answers?.context_image_reason ?? '').trim().slice(0, 240),
     confidence: clamp(answers?.culture_domain?.confidence ?? answers?.confidence, 0),
   };
 }
@@ -325,6 +409,8 @@ export class JevAtmosphereGate {
     this.apiKey = String(options.apiKey ?? '').trim();
     this.baseUrl = String(options.baseUrl ?? 'https://api.typesafe.ai').trim().replace(/\/+$/, '');
     this.model = String(options.model ?? 'jev-1.13').trim();
+    this.protocol = normalizeProtocol(options.protocol, 'systemone');
+    this.chatMaxTokens = Math.max(80, Number(options.chatMaxTokens ?? 220));
     this.timeoutMs = Math.max(500, Number(options.timeoutMs ?? 2_500));
     this.allowThreshold = clamp(options.allowThreshold, 0.72);
     this.skipThreshold = clamp(options.skipThreshold, 0.28);
@@ -342,6 +428,7 @@ export class JevAtmosphereGate {
     return {
       configured: this.isConfigured,
       model: this.model,
+      protocol: this.protocol,
       ...this.runtime.status(),
     };
   }
@@ -358,22 +445,50 @@ export class JevAtmosphereGate {
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const startedAt = Date.now();
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}/v1/systemone`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
+      const isChat = this.protocol === 'chat';
+      const response = await this.fetchImpl(
+        `${this.baseUrl}/v1/${isChat ? 'chat/completions' : 'systemone'}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(isChat
+            ? {
+              model: this.model,
+              messages: [
+                { role: 'system', content: CHAT_GATE_SYSTEM_PROMPT },
+                {
+                  role: 'user',
+                  content: [
+                    '请只返回 JSON 判断结果。',
+                    JSON.stringify({ state: buildState(context), requested_fields: questions }),
+                  ].join('\n'),
+                },
+              ],
+              temperature: 0,
+              max_tokens: this.chatMaxTokens,
+              // Jev is a high-frequency router, not the final answer model.
+              // Disable Qwen's long reasoning chain so a gate does not add
+              // several seconds of latency or consume answer-model budget.
+              enable_thinking: false,
+              response_format: { type: 'json_object' },
+            }
+            : {
+              state: buildState(context),
+              model: this.model,
+              questions,
+            }),
+          signal: controller.signal,
         },
-        body: JSON.stringify({
-          state: buildState(context),
-          model: this.model,
-          questions,
-        }),
-        signal: controller.signal,
-      });
+      );
       let body = null;
       try { body = await response.json(); } catch { body = null; }
-      if (!response.ok || !body?.answers) {
+      const answers = isChat
+        ? parseChatAnswers(body?.choices?.[0]?.message?.content)
+        : body?.answers;
+      if (!response.ok || !answers) {
         const message = body?.error?.message || `HTTP ${response.status}`;
         const error = new Error(`Jev 请求失败：${message}`);
         error.status = response.status;
@@ -409,7 +524,7 @@ export class JevAtmosphereGate {
       } catch (usageError) {
         this.logger.warn?.(`记录 Jev 用量失败：${errorText(usageError)}`);
       }
-      return { ok: true, answers: body.answers, latencyMs };
+      return { ok: true, answers, latencyMs };
     } catch (error) {
       const quota = isQuotaError(error);
       const latencyMs = Date.now() - startedAt;
@@ -453,6 +568,9 @@ export class JevAtmosphereGate {
         cultureLookupNeeded: answerNumber(answers, 'culture_lookup_needed'),
         confidence: clamp(answers?.response_mode?.confidence, 0),
         ...normalizeCultureAnswers(answers, context),
+        // Chat-model Jev is a router only. Its culture fields may drive search,
+        // but never rewrite the existing DeepSeek persona prompt.
+        promptEnabled: this.protocol !== 'chat',
       };
       const decision = probability >= this.allowThreshold
         ? 'allow' : probability <= this.skipThreshold ? 'skip' : 'fallback';
@@ -483,6 +601,9 @@ export class JevAtmosphereGate {
       tone: QUESTIONS.tone,
       target: QUESTIONS.target,
       response_mode: QUESTIONS.response_mode,
+      context_image_needed: QUESTIONS.context_image_needed,
+      context_image_indexes: QUESTIONS.context_image_indexes,
+      context_image_reason: QUESTIONS.context_image_reason,
     }, 'jev-style');
     if (!response.ok) return { decision: 'fallback', reason: response.reason, style: null };
     const answers = response.answers;
@@ -497,6 +618,7 @@ export class JevAtmosphereGate {
         cultureLookupNeeded: answerNumber(answers, 'culture_lookup_needed'),
         confidence: clamp(answers?.response_mode?.confidence, 0),
         ...normalizeCultureAnswers(answers, context),
+        promptEnabled: this.protocol !== 'chat',
       },
       latencyMs: response.latencyMs,
     };
@@ -504,7 +626,7 @@ export class JevAtmosphereGate {
 }
 
 export function buildJevStylePrompt(style) {
-  if (!style) return '';
+  if (!style || style.promptEnabled === false) return '';
   const mode = String(style.mode ?? '').trim();
   const lines = ['【本轮表达路由：仅供内部参考，不要向用户解释】'];
   if (mode === 'banter' && Number(style.memeFit) >= 0.65) {
