@@ -84,6 +84,12 @@ function contextTerms(context, domain) {
   return [...new Set(terms)].slice(0, 8);
 }
 
+function explicitCultureQuestion(value = '') {
+  return /(?:调侃|接梗|联想|玩梗|地狱笑话|网络梗|热梗|反差|暗示|讽刺|阴阳|锐评|抽象|双关|谐音|电竞梗)/iu.test(
+    String(value ?? '').normalize('NFKC'),
+  );
+}
+
 function errorText(error) {
   return String(error?.message ?? error ?? '').slice(0, 300);
 }
@@ -514,6 +520,7 @@ const CHAT_GATE_SYSTEM_PROMPT = [
   'state.context_images 是最近上下文图片候选。只有当前消息明确承接某张图片、引用其文字/画面，或不读图就无法判断时，才把 context_image_needed 设为较高，并返回对应编号；泛泛发图、旧图片或只凭文字就能回答时必须返回空数组。',
   'context_image_indexes 只能填写 state.context_images 中已有的正整数编号，最多 3 个；不要臆造编号，也不要输出图片本身。',
   'state.image_analysis 是当前图片的低可信视觉/OCR摘要。它不是结论：如果摘要与问题、画面关系或上下文不一致，优先提高 image_complete_read_needed，让最终模型重新看原图；不要只因有水印、账号名或一个热词就触发搜索。',
+  '电竞截图、评论区和地狱笑话可能借用“父亲、死亡、夺冠、皮肤”等敏感词制造暗示；除非有独立公开证据，不得把玩笑里的家庭变故或人物经历当成事实。应把它标为图片文字主张/梗的设定，并优先核实“选手+独特台词/皮肤名”的文化背景。',
   JSON.stringify({
     should_speak: 'number: 机器人现在自然插话的概率',
     adds_value: 'number: 能补充当前对话尚未出现的有效内容的概率',
@@ -843,6 +850,11 @@ export class JevAtmosphereGate {
         // but never rewrite the existing DeepSeek persona prompt.
         promptEnabled: true,
       };
+      if (explicitCultureQuestion(context.currentMessage)
+        && Number(style.seriousRequest) < 0.6
+        && (Number(style.memeFit) >= 0.45 || Number(style.imageCultureNeeded) >= 0.65)) {
+        style.mode = 'culture';
+      }
       const decision = probability >= this.allowThreshold
         ? 'allow' : probability <= this.skipThreshold ? 'skip' : 'fallback';
       return {
@@ -898,18 +910,24 @@ export class JevAtmosphereGate {
     if (!response.ok) return { decision: 'fallback', reason: response.reason, style: null };
     const answers = response.answers;
     const mode = String(answers?.response_mode?.choice ?? answers?.response_mode?.value ?? '').trim();
+    const style = {
+      mode: RESPONSE_MODES.has(mode) ? mode : 'concise_answer',
+      memeFit: answerNumber(answers, 'meme_fit'),
+      explanationNeeded: answerNumber(answers, 'explanation_needed'),
+      cultureLookupNeeded: answerNumber(answers, 'culture_lookup_needed'),
+      confidence: clamp(answers?.response_mode?.confidence, 0),
+      ...normalizeCultureAnswers(answers, context),
+      promptEnabled: true,
+    };
+    if (explicitCultureQuestion(context.currentMessage)
+      && Number(style.seriousRequest) < 0.6
+      && (Number(style.memeFit) >= 0.45 || Number(style.imageCultureNeeded) >= 0.65)) {
+      style.mode = 'culture';
+    }
     return {
       decision: 'allow',
       reason: 'jev-style',
-      style: {
-        mode: RESPONSE_MODES.has(mode) ? mode : 'concise_answer',
-        memeFit: answerNumber(answers, 'meme_fit'),
-        explanationNeeded: answerNumber(answers, 'explanation_needed'),
-        cultureLookupNeeded: answerNumber(answers, 'culture_lookup_needed'),
-        confidence: clamp(answers?.response_mode?.confidence, 0),
-        ...normalizeCultureAnswers(answers, context),
-        promptEnabled: true,
-      },
+      style,
       latencyMs: response.latencyMs,
     };
   }
