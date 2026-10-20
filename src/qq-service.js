@@ -1784,8 +1784,54 @@ function buildStoredAssistantReply(message, interactionContext, answer) {
   return [
     '【机器人群聊回复记录】',
     `本轮回复对象：${interactionContext.speakerLabel}`,
+    `本轮回复对象QQ号（仅供历史消歧）：${String(message?.from?.userid ?? '').trim()}`,
     `机器人回复：${answer}`,
   ].join('\n');
+}
+
+function historyEntrySpeakerLabel(entry) {
+  const content = String(entry?.content ?? '');
+  return String(
+    content.match(/(?:^|\n)当前发言人：([^\n]+)/u)?.[1]
+      || content.match(/(?:^|\n)本轮回复对象：([^\n]+)/u)?.[1]
+      || '',
+  ).trim();
+}
+
+function historyEntrySpeakerUserId(entry) {
+  return String(
+    String(entry?.content ?? '').match(/(?:^|\n)本轮回复对象QQ号（仅供历史消歧）：([^\n]+)/u)?.[1] || '',
+  ).trim();
+}
+
+function scopeReplyHistory(history, interactionContext, options = {}) {
+  const entries = Array.isArray(history) ? history : [];
+  if (!options.enabled || entries.length === 0) return entries;
+  const speakerLabel = String(interactionContext?.speakerLabel ?? '').trim();
+  const speakerUserId = String(options.speakerUserId ?? '').trim();
+  const speakerName = speakerLabel.replace(/\s*（成员-[^)]+）\s*$/u, '').trim();
+  if (!speakerLabel && !speakerName) return entries.slice(-4);
+  const matches = (entry) => {
+    if (speakerUserId && historyEntrySpeakerUserId(entry) === speakerUserId) return true;
+    const label = historyEntrySpeakerLabel(entry);
+    if (!label) return false;
+    return label === speakerLabel
+      || (speakerName && label.replace(/\s*（成员-[^)]+）\s*$/u, '').trim() === speakerName);
+  };
+  const indexes = entries
+    .map((entry, index) => matches(entry) ? index : -1)
+    .filter((index) => index >= 0);
+  if (indexes.length === 0) {
+    // Legacy rows may predate speaker markers. Keep only the immediate
+    // exchange instead of feeding an unrelated member's old thread to vision.
+    return entries.slice(-2);
+  }
+  const keep = new Set();
+  indexes.slice(-6).forEach((index) => {
+    keep.add(index);
+    if (index > 0 && entries[index - 1]?.role === 'assistant') keep.add(index - 1);
+  });
+  return entries.filter((_entry, index) => keep.has(index));
 }
 
 function buildMemberIdentityConstraint(protectedRoles, userId) {
@@ -3190,7 +3236,7 @@ export class QqBotService {
     const personaContext = this.personaManager?.contextFor?.(message) ?? '';
 
     return this.conversationStore.runExclusive(conversationId, async () => {
-      const history = sanitizeConversationHistory(
+      let history = sanitizeConversationHistory(
         this.historyForGroup(
           message.chattype === 'group' ? message.chatid : '',
           this.conversationStore.get(conversationId),
@@ -3200,6 +3246,15 @@ export class QqBotService {
         ),
         forbiddenHistoryRoleTerms,
       );
+      history = scopeReplyHistory(history, interactionContext, {
+        // Images and direct @/active turns are the cases where an unrelated
+        // member's old answer most often becomes a false visual premise.
+        enabled: message.chattype === 'group'
+          && (Array.isArray(options.imageBlocks) && options.imageBlocks.length > 0
+            || options.directBotMention === true
+            || options.activeReply === true),
+        speakerUserId,
+      });
       // 只取进入本轮前已经存在的历史图片；当前消息的图片仍由现有链路处理，
       // 不让 Jev 把它误当成“上一轮上下文图片”。
       const historicalContextImageCandidates = Array.isArray(options.contextImageCandidates)

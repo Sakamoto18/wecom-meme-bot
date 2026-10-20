@@ -2,6 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateConversationReply } from '../src/reply-engine.js';
 
+test('带图默认只输出判断或接梗，不复述图片文字', async () => {
+  let prompt = '';
+  await generateConversationReply({
+    content: '这怎么评价',
+    currentQuestion: '这怎么评价',
+    modelInput: '当前消息：这怎么评价',
+    hasImageContext: true,
+    imageBlocks: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }],
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '这榜单把群掌管说成了赛季总监，官威先拉满。';
+      },
+    },
+  });
+  assert.match(prompt, /图片默认只提供证据/);
+  assert.match(prompt, /最终答案禁止任何图片复述/);
+});
+
 test('普通评价不输出检索媒体尾注，明确追问出处时保留', async () => {
   const draft='请三天（3天年假）连休13天（新京报）。';
   for(const [currentQuestion,expected] of [['如何评价请三休十三',draft],['来源呢',draft]]) {

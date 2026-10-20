@@ -101,7 +101,7 @@ function removeInternalReplyMetadata(value) {
 
 function removeLeadingModelMention(value) {
   return String(value ?? '')
-    .replace(/^\s*@[^\s\n，。！？!?：:]{1,60}\s*/u, '')
+    .replace(/^[\s\u200b-\u200d\ufeff]*@[^\s\n，。！？!?：:]{1,60}\s*/u, '')
     .trim();
 }
 
