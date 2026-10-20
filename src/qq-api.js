@@ -642,7 +642,7 @@ export async function createQqRuntime() {
     baseUrl: process.env.TYPESAFE_BASE_URL,
     model: process.env.LONGTU_QQ_JEV_MODEL?.trim() || 'qwen3.7-plus',
     protocol: process.env.LONGTU_QQ_JEV_PROTOCOL?.trim() || 'chat',
-    chatMaxTokens: parsePositiveInteger(process.env.LONGTU_QQ_JEV_CHAT_MAX_TOKENS) ?? 220,
+    chatMaxTokens: parsePositiveInteger(process.env.LONGTU_QQ_JEV_CHAT_MAX_TOKENS) ?? 1_800,
     timeoutMs: parsePositiveInteger(
       process.env.LONGTU_QQ_JEV_SEMANTIC_TIMEOUT_MS
         ?? process.env.LONGTU_QQ_JEV_TIMEOUT_MS,

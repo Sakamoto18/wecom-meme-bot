@@ -659,9 +659,12 @@ export class JevAtmosphereGate {
     this.model = String(options.model ?? 'qwen3.7-plus').trim();
     this.protocol = normalizeProtocol(options.protocol, 'systemone');
     // The router returns image semantics, search terms and mode fields in one
-    // JSON object. 220 tokens truncates that object under qwen3.7-plus, which
-    // looks like an HTTP success but parses as no answer and trips the circuit.
-    this.chatMaxTokens = Math.max(160, Number(options.chatMaxTokens ?? 700));
+    // The router returns image semantics, search terms and mode fields in one
+    // JSON object. A 700-token cap truncates qwen3.7-plus halfway through the
+    // object (HTTP 200 + finish_reason=length), which looks like a provider
+    // failure and silently disables the culture route. Output is free on the
+    // configured Jev plan, so leave enough room for the schema to close.
+    this.chatMaxTokens = Math.max(400, Number(options.chatMaxTokens ?? 1_800));
     // qwen3.7-plus may spend several seconds producing the structured image
     // route. A short timeout silently removes semantic routing and makes the
     // final model fall back to OCR-only answers. The deployment can override
