@@ -981,6 +981,10 @@ export function buildJevStylePrompt(style) {
   if (Number(style.imageCultureNeeded) >= 0.65) {
     lines.push('【图片互联网语境】如果图中存在双关、错视、热梗、黑话、二创或平台话术，先把画面关系和字面主张分开，再把核验后的网络梗义自然接入回答；没有贴合证据不要硬套梗，也不要转成现实文化科普。');
   }
+  if (Number(style.imageCultureNeeded) >= 0.55
+    || (Number(style.culturePriority) >= 0.75 && ['culture', 'hybrid', 'banter', 'judgment'].includes(mode))) {
+    lines.push('【图片接梗硬约束】本轮图片已经有互联网语境价值。第一句直接给针对事情的判断、反差或群友式联想；禁止复述截图标题、榜单、评论和用户问题，禁止用“热搜说/图里写着/截图显示”起手。需要事实时第二句只补改变结论的一点。');
+  }
   if (Number(style.imageFactCheckNeeded) >= 0.65) {
     lines.push('【图片事实核验】图片中的人物、出处、时间、数据和原帖只当待核实线索；优先使用后台核验结果，匹配不足就保留不确定性，不要把截图主张当事实。');
   }
