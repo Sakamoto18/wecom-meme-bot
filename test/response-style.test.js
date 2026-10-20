@@ -319,6 +319,16 @@ test('抽象联想能力写进统一基座和本轮上下文，但不把固定�
   ), /自然接一个具体/);
 });
 
+test('图片文化模式压住正经复述并要求具体并置反差', () => {
+  const stable = buildNormalReplyStablePrompt({ imageCultureMode: true });
+  const group = buildGroupChatOutputPrompt({ imageCultureMode: true });
+  assert.match(stable, /不要做正经逻辑拆解/);
+  assert.match(stable, /两个具体元素及其关系/);
+  assert.match(stable, /不能只说“地狱、功德、抽象、离谱”/);
+  assert.match(group, /两个并置对象\/属性/);
+  assert.match(group, /单独出现不算回答/);
+});
+
 test('统一群聊输出契约要求先接话并隐藏搜索播报', () => {
   const prompt = buildGroupChatOutputPrompt({});
   assert.match(prompt, /先像熟悉的群友开口/);

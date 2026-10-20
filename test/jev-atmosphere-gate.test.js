@@ -218,6 +218,19 @@ test('Chat Jev 的文化路由会把质量模板传给最终回复层', () => {
   assert.match(prompt, /不要先复述图片/);
 });
 
+test('图片文化路由要求落到并置关系，不接受地狱/功德空标签', () => {
+  const prompt = buildJevStylePrompt({
+    promptEnabled: true,
+    mode: 'culture',
+    imageCultureNeeded: 0.9,
+    seriousRequest: 0.1,
+  });
+  assert.match(prompt, /不做正经逻辑拆解/);
+  assert.match(prompt, /两个项目\/群体并排/);
+  assert.match(prompt, /不能只回一个情绪标签/);
+  assert.match(prompt, /具体并置关系/);
+});
+
 test('Jev 结构化输出图片语用候选，并在高价值场景读取原图', async () => {
   const runtime = new JevRuntimeState({ defaultMode: 'on' });
   let request;

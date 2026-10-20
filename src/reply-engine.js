@@ -813,6 +813,16 @@ export async function generateConversationReply(options) {
     || (!passiveImageComment && !compactActiveReply && shouldRequestDetailedAnswer(currentQuestion));
   const imageDescriptionRequested = hasImageContext
     && EXPLICIT_IMAGE_DESCRIPTION_PATTERN.test(String(currentQuestion ?? ''));
+  // A high-confidence image culture route is deliberately a different output
+  // contract from ordinary image QA: the model should land the meme's
+  // concrete relation first and omit a serious explanation unless requested.
+  const imageCultureMode = Boolean(
+    hasImageContext
+      && !recordSummary
+      && !imageDescriptionRequested
+      && Number(jevStyle?.imageCultureNeeded) >= 0.65
+      && Number(jevStyle?.seriousRequest) < 0.7,
+  );
   const sourceDisplayRequested = requestsSourceDisplay(currentQuestion);
   const suppressSearchNarration = !sourceDisplayRequested
     && searchMode !== 'current'
@@ -892,6 +902,7 @@ export async function generateConversationReply(options) {
     shortChat: compactResponse && !passiveImageComment && !recordSummary,
     attackDuringAnswer: attackStyle && !pureAttack,
     imageDescriptionRequested,
+    imageCultureMode,
   };
   const personaDemonstration = !attackStyle
     && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
@@ -939,6 +950,7 @@ export async function generateConversationReply(options) {
       activeReply,
       activeReplyPriority,
       sourceDisplayRequested,
+      imageCultureMode,
     }),
     styleSignals.attackCandidate && !attackStyle
       ? '【前置语气候选】程序只检测到可能的攻击性词面；这不是攻击结论。结合当前发言对象、引用关系和最近对话决定是否接住、回击或只评价事情，不能被单个词牵着走。'
@@ -1028,6 +1040,7 @@ export async function generateConversationReply(options) {
     attackDuringAnswer: attackStyle && !pureAttack,
     hasImageContext,
     imageDescriptionRequested,
+    imageCultureMode,
   });
   if (!review.valid && attempts < 2) {
     const needsSeriousExpansion = review.issues.includes('too-thin-for-serious');
@@ -1076,6 +1089,7 @@ export async function generateConversationReply(options) {
               attackDuringAnswer: attackStyle && !pureAttack,
               hasImageContext,
               imageDescriptionRequested,
+              imageCultureMode,
             }),
           maxTokens: responseMaxTokens,
           ...(passiveImageComment ? { temperature: 0.2 } : {}),

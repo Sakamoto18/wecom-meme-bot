@@ -521,6 +521,7 @@ const CHAT_GATE_SYSTEM_PROMPT = [
   '只输出一个合法 JSON 对象，不要 Markdown、解释、前后缀或换行外的文字。',
   '数值字段必须是 0 到 1 的数字；枚举字段必须使用给定值；query_terms 和 longtu_terms 必须是短词数组。',
   '图片语义必须分开写：visual_facts 是像素事实，text_claims 是图片文字主张，semantic_point 是图片真正表达的观点或反差；不要把图片描述当成语义结论。',
+  '遇到“甲类全是X、乙类全是Y”或两句平行对照，必须先抽取两边的具体项目/群体和属性对应，判断并置后产生的黑色幽默、刻板印象借位或反差；semantic_relation、semantic_point、comic_mechanism、candidate_associations 都要落到这组具体关系，不能只返回“地狱/抽象/离谱/功德”。涉及种族、性别等敏感属性时只解释梗的结构与暗示，不把现实群体当攻击对象。',
   '如果 state.raw_image 存在，必须优先核对原图；如果视觉摘要和原图冲突，提高 image_complete_read_needed 或降低 semantic_confidence，不要迎合 OCR 猜测。',
   'candidate_associations 只返回最多两个有具体对应关系的联想；没有贴合落点就返回空数组，禁止用“抽象”“离谱”充数。',
   '除非用户明确要求认真、具体、核验或方案，否则非严肃语境优先判断是否应该采用中文互联网表达；serious_request 只在明确追问或连续纠正时提高。互联网表达只决定输出，不等于现实文化讲解或联网搜索。',
@@ -980,6 +981,7 @@ export function buildJevStylePrompt(style) {
   }
   if (Number(style.imageCultureNeeded) >= 0.65) {
     lines.push('【图片互联网语境】如果图中存在双关、错视、热梗、黑话、二创或平台话术，先把画面关系和字面主张分开，再把核验后的网络梗义自然接入回答；没有贴合证据不要硬套梗，也不要转成现实文化科普。');
+    lines.push('【图片文化输出优先】本轮默认是互联网接梗，不做正经逻辑拆解或道德说教。第一句必须落到图片里的具体并置关系、反差对象或暗示机制；不能只回一个情绪标签，也不能只说“地狱、功德、抽象、离谱、幸存者偏差”等泛标签。可以点出这是把两个项目/群体并排后借刻板印象制造黑色幽默，但不要继续扩写成针对现实群体的侮辱。除非用户明确追问事实真伪、原因或背景，否则不要补正经解释。');
   }
   if (Number(style.imageCultureNeeded) >= 0.55
     || (Number(style.culturePriority) >= 0.75 && ['culture', 'hybrid', 'banter', 'judgment'].includes(mode))) {
@@ -1011,6 +1013,9 @@ export function buildJevSemanticPrompt(style) {
     avoid.length > 0 ? `不要只重复这些表面内容：${avoid.join('；')}` : '',
     Number(style.literalOnlyRisk) >= 0.55
       ? '本轮容易退化成图片描述；若用户问的是含义、评价或梗义，必须先回答关系、观点或反差。'
+      : '',
+    Number(style.imageCultureNeeded) >= 0.65
+      ? '图片文化模式的具体落点：回复至少要使用语义候选中的一个具体关系（例如“项目A↔项目B、属性X↔属性Y”或同等明确的并置关系），不能只回一个情绪标签。'
       : '',
     Number(style.semanticConfidence) > 0 && Number(style.semanticConfidence) < 0.55
       ? '语义候选置信度有限，必须回到原图核对；不成立就舍弃。'

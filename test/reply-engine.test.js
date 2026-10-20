@@ -169,6 +169,34 @@ test('Jev 普通网络梗文化路由不误触发贴吧专项', async () => {
   assert.ok(calls.every(({ options }) => !options.includeDomains));
 });
 
+test('图片文化路由不退回正经解释，并要求落到两边并置关系', async () => {
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '这图怎么接梗',
+    currentQuestion: '这图怎么接梗',
+    modelInput: '图片文字：甲项目全是X，乙项目全是Y',
+    hasImageContext: true,
+    imageBlocks: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }],
+    jevStyle: {
+      mode: 'culture',
+      imageCultureNeeded: 0.9,
+      seriousRequest: 0.1,
+      culturePriority: 0.95,
+    },
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '甲项目和乙项目这排队方式，已经把刻板印象做成分组赛了。';
+      },
+    },
+  });
+  assert.equal(result.answer, '甲项目和乙项目这排队方式，已经把刻板印象做成分组赛了。');
+  assert.match(prompt, /图片文化输出优先/);
+  assert.match(prompt, /两个并置对象\/属性/);
+});
+
 test('搜索素材只在后台消化，搜索播报初稿会按短答重写', async () => {
   const calls = [];
   const result = await generateConversationReply({
