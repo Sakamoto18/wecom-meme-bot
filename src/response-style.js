@@ -42,6 +42,8 @@ const CUSTOMER_SERVICE_PATTERN = /(?:您好|您这|您想|请问您|很高兴为
 const IMAGE_DESCRIPTION_FIRST_PATTERN = /^(?:这(?:张|幅)?图(?:片)?(?:里|中)?(?:有|是|显示|写着|讲的是)|图(?:片)?中(?:有|是|显示|写着)|画面(?:里|中)(?:有|是|显示|写着)|左边(?:是|有)|右边(?:是|有)|上面(?:是|有)|下面(?:是|有)|图片显示|这是一张|这是一个(?:截图|画面))/u;
 export const EXPLICIT_IMAGE_DESCRIPTION_PATTERN = /(?:图里(?:有|是什么)|图片(?:里|中)?是什么|描述(?:一下)?(?:这|该)?(?:张|幅)?图|识别(?:一下)?(?:这|该)?(?:张|幅)?图|逐张(?:说|介绍|总结)|图片内容|画面内容)/u;
 const IMAGE_SEMANTIC_ACTION_PATTERN = /(?:我选|我会|建议|应该|重点|笑点|反差|像|说明|表达|意味着|因为|所以|但是|不过|直接|先|别|不如|可以|不能|值得|问题在|结论)/u;
+const IMAGE_CULTURE_CONCRETE_SIGNAL_PATTERN = /(?:射击|田径|游泳|篮球|足球|项目|赛场|队伍|两队|两边|合影|白人|黑人|肤色|刻板印象|幸存者偏差|并置|对照|反差|分组|开幕式|冠军|皮肤|选手|比赛|组织|制度|职业|群体)/u;
+const IMAGE_CULTURE_GENERIC_LABEL_PATTERN = /(?:地狱|功德|抽象|离谱|绷不住|缺德|阴间|笑死|荒谬|典|有节目|太狠了)/u;
 // 这是“像群友说话”的轻量钩子，不等于攻击性词汇。它可以落在事实、
 // 方案或结果上，让普通答案保留龙图语感，同时避开当前发言者和引用作者。
 const ROLE_VOICE_PATTERN = /(?:不是[，,]?哥们|说白了|这就|别把|老老实实|锅在|有点(?:离谱|抽象|拉胯|尴尬)|抽象|离谱|拉胯|摆烂|折腾|绷不住|汗流浃背|白等|别光|别急|省得|硬是|破(?:方案|事|局|系统|配置)|真够|就这|多嘴|不绕|不装|差一截|一摊活|扛不住|直接看|别拿|免得|吃亏)/i;
@@ -615,6 +617,16 @@ export function hasSearchExplanationLeak(answer) {
   return SEARCH_EXPLANATION_LEAK_PATTERN.test(String(answer ?? '').replace(/\s+/gu, ' ').trim());
 }
 
+function isGenericImageCultureReply(answer, options = {}) {
+  if (!options.imageCultureMode || options.recordSummary) return false;
+  const normalized = String(answer ?? '').replace(/\s+/gu, ' ').trim();
+  if (!normalized || !IMAGE_CULTURE_GENERIC_LABEL_PATTERN.test(normalized)) return false;
+  // A short reaction containing only mood labels is exactly the regression we
+  // are guarding against. A reply that also names the concrete pair/contrast
+  // is allowed to keep those labels as seasoning.
+  return !IMAGE_CULTURE_CONCRETE_SIGNAL_PATTERN.test(normalized);
+}
+
 function visualWordplayTarget(value) {
   const candidate = String(value ?? '').replace(/\s+/gu, ' ').trim();
   if (!candidate) return '';
@@ -709,6 +721,9 @@ export function reviewNormalReply(answer, options = {}) {
     && hasSearchExplanationLeak(normalized)) {
     issues.push('search-explanation-leak');
   }
+  if (isGenericImageCultureReply(normalized, options)) {
+    issues.push('image-culture-generic');
+  }
   const wordplayTarget = visualWordplayTarget(options.imageVisualWordplay);
   if (wordplayTarget
     && !options.recordSummary
@@ -766,6 +781,8 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
       ? ['把第三人称转述提问的开头删掉，直接跟当前对话者说答案。不要换成“你问的是”再复述一次，也不要照搬昵称开场；只补本轮追问需要的细节。'] : []),
     ...(issues?.includes('image-description-first')
       ? ['图片回答不能从物体清单或“这是一张图/图中有……”起手。回到当前问题和图片的主体关系、反差机制、隐含观点与接话落点，先给判断或接梗；只有用户明确要求描述画面时才列可见对象。'] : []),
+    ...(issues?.includes('image-culture-generic')
+      ? ['这轮图片文化回复退化成了“地狱/功德/抽象/离谱”等空标签。重写为一条具体接梗：点出图片中并排的两个项目/群体及其属性对应，再说这组并置如何制造黑色幽默；不要做正经逻辑分析，不要复述图片全文，也不要攻击现实群体。'] : []),
     ...(issues?.includes('missing-abstract-association')
       ? ['本轮确实适合用一层抽象联想：在事实结论之后自然接一个具体、贴合当前内容的画面或身份，优先使用双关、转职、画面升级或反差搭档，最多一个短分句。不要照抄示例、硬塞固定角色名，也不要只写“抽象/离谱”；如果没有贴合的联想，保留准确结论即可。'] : []),
     ...(options.cultureReviewRequired && issues?.includes('missing-abstract-association')

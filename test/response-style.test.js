@@ -327,6 +327,14 @@ test('图片文化模式压住正经复述并要求具体并置反差', () => {
   assert.match(stable, /不能只说“地狱、功德、抽象、离谱”/);
   assert.match(group, /两个并置对象\/属性/);
   assert.match(group, /单独出现不算回答/);
+  assert.ok(reviewNormalReply('你自己把地狱答案说完了，功德当场扬光。', {
+    imageCultureMode: true,
+    hasImageContext: true,
+  }).issues.includes('image-culture-generic'));
+  assert.equal(reviewNormalReply('射击队和田径队被并排摆成肤色分组赛了。', {
+    imageCultureMode: true,
+    hasImageContext: true,
+  }).issues.includes('image-culture-generic'), false);
 });
 
 test('统一群聊输出契约要求先接话并隐藏搜索播报', () => {
