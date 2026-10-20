@@ -18,6 +18,22 @@ test('网络梗进入文化轨，明确来源同时进入事实轨', () => {
   assert.equal(both.cultureEligible, true);
 });
 
+test('互联网风格请求只改变输出口吻，不自动触发联网', () => {
+  for (const content of ['这图接梗一下，来点抽象联想', '给个反差回复', '用互联网语气说']) {
+    const styleOnly = classifySearchPolicy({ content });
+    assert.equal(styleOnly.cultureEligible, false, content);
+    assert.equal(styleOnly.factEligible, false, content);
+  }
+});
+
+test('明确询问梗义或出处仍进入文化检索', () => {
+  for (const content of ['这个网络梗是什么意思', '这个梗的来源是什么', '帮我查一下这句黑话怎么火的']) {
+    const lookup = classifySearchPolicy({ content });
+    assert.equal(lookup.cultureEligible, true, content);
+    assert.equal(isHighConfidenceCulturePolicy(lookup), true, content);
+  }
+});
+
 test('低信息图片默认关闭两条搜索轨', () => {
   const policy = classifySearchPolicy({
     content: '评价这张图',

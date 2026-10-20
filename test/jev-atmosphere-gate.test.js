@@ -211,7 +211,9 @@ test('Chat Jev 的文化路由会把质量模板传给最终回复层', () => {
     concreteAssociation: 0.88,
     literalReplyRisk: 0.8,
   });
-  assert.match(prompt, /文化输出质量校准/);
+  assert.match(prompt, /互联网输出质量校准/);
+  assert.match(prompt, /互联网语境优先/);
+  assert.match(prompt, /不要求联网/);
   assert.match(prompt, /具体关系/);
   assert.match(prompt, /不要先复述图片/);
 });

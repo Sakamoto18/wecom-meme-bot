@@ -869,7 +869,7 @@ export async function generateConversationReply(options) {
   const culturePrompt = cultureCard
     ? cultureCardPrompt(cultureCard, cultureCacheHit ? 'cache' : 'fresh-search')
     : (cultureSearchAttempted
-      ? '【本轮文化检索状态】本轮文化检索没有可用外部摘要，也没有形成可用短卡。不得编造来源、梗的出处或文化事实，只按当前已知内容自然回答。'
+      ? '【本轮互联网梗检索状态】本轮互联网梗检索没有可用外部摘要，也没有形成可用短卡。不得编造来源、梗的出处或现实事实，只按当前已知语境自然接话。'
       : '');
   const normalPromptOptions = {
     thinkingEnabled,

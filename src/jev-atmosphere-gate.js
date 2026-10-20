@@ -305,15 +305,15 @@ const QUESTIONS = {
   },
   culture_lookup_needed: {
     type: 'noul',
-    instructions: '当前内容是否需要核实近期热词、平台语境或具体文化出处？',
+    instructions: '当前内容是否需要核实中文互联网语境、热梗、黑话、二创、平台话术或具体梗的来源？这里的“文化”只指互联网文化，不是现实文化、百科知识或泛泛背景介绍。',
     criteria: {
-      true: '存在明确且可能过时的文化线索、专有名词或需要出处核实的内容。',
-      false: '已有知识或自然联想足够，联网只会增加噪音。',
+      true: '只有在梗义不明确、近期变化、用户问来源/出处/原帖，或需要核对专有名词时才为真。',
+      false: '只是希望回复更像中文互联网、接梗或做抽象联想；风格需要不等于要联网。',
     },
   },
   culture_domain: {
     type: 'choice',
-    instructions: '当前语境最接近哪个文化领域？只有明确存在龙玉涛、龙图或相关古早互联网语境时才选 longtu。',
+    instructions: '当前语境最接近哪个互联网语境？只有明确存在龙玉涛、龙图或相关古早互联网语境时才选 longtu；不要把现实文化、历史典故本身当作检索目标。',
     criteria: {
       longtu: '龙玉涛、龙图、龙图表情或其衍生语境。',
       general: '普通网络梗、热词、双关或互联网文化。',
@@ -375,10 +375,18 @@ const QUESTIONS = {
   },
   culture_priority: {
     type: 'noul',
-    instructions: '当前内容是否应该优先用中文互联网语境、具体联想或接梗来回答，而不是先做正经说明？',
+    instructions: '当前内容是否应该优先用中文互联网的接梗、黑话、二创、阴阳、抽象联想或反差来回答，而不是先做正经说明？这里的文化输出指互联网表达，不等于现实文化讲解。',
     criteria: {
       true: '非严肃问题中存在明确反差、二创、暗示、荒诞关系或可自然接住的文化落点。',
       false: '文化化表达会妨碍事实、步骤、核验或现实处境的准确回答。',
+    },
+  },
+  internet_culture_priority: {
+    type: 'noul',
+    instructions: '当前回复是否应该优先采用中文互联网表达（接梗、黑话、二创、抽象联想、阴阳、地狱笑话、平台话术和反差），而不是百科式解释？这只决定输出风格，不代表需要联网。',
+    criteria: {
+      true: '当前有自然的互联网语境落点，能让回复像群友一样接住话题。',
+      false: '当前需要准确事实、步骤、现实求助或没有贴合的互联网落点。',
     },
   },
   serious_request: {
@@ -395,7 +403,7 @@ const QUESTIONS = {
   },
   image_culture_needed: {
     type: 'noul',
-    instructions: '当前图片是否需要结合中文互联网文化、热梗、双关、平台语境或出处才能理解其表达，而不是只描述画面？',
+    instructions: '当前图片是否需要结合中文互联网文化、热梗、黑话、二创、双关、平台语境或出处才能理解其表达，而不是只描述画面？不要把现实文化背景或百科解释当成默认任务。',
     criteria: {
       true: '图片存在视觉双关、错视、网络梗、平台话术、隐晦反差或单靠字面/画面会误读。',
       false: '图片含义可以依据当前画面和文字直接回答，联网文化只会增加噪音。',
@@ -509,18 +517,18 @@ function parseChatAnswers(content) {
 
 const CHAT_GATE_SYSTEM_PROMPT = [
   '你是 QQ 群聊机器人的后台路由判断器，不负责写回复。',
-  '请结合当前消息和最近上下文，判断是否值得机器人接话，以及是否需要联网核实中文互联网语境、热梗、平台出处或龙图语境。',
+  '请结合当前消息和最近上下文，判断是否值得机器人接话，以及是否需要联网核实中文互联网语境、热梗、黑话、二创、平台出处或龙图语境。这里的“文化层”专指中文互联网表达，不是现实文化背景或百科讲解。',
   '只输出一个合法 JSON 对象，不要 Markdown、解释、前后缀或换行外的文字。',
   '数值字段必须是 0 到 1 的数字；枚举字段必须使用给定值；query_terms 和 longtu_terms 必须是短词数组。',
   '图片语义必须分开写：visual_facts 是像素事实，text_claims 是图片文字主张，semantic_point 是图片真正表达的观点或反差；不要把图片描述当成语义结论。',
   '如果 state.raw_image 存在，必须优先核对原图；如果视觉摘要和原图冲突，提高 image_complete_read_needed 或降低 semantic_confidence，不要迎合 OCR 猜测。',
   'candidate_associations 只返回最多两个有具体对应关系的联想；没有贴合落点就返回空数组，禁止用“抽象”“离谱”充数。',
-  '除非用户明确要求认真、具体、核验或方案，否则非严肃语境优先判断是否应该文化化接话；serious_request 只在明确追问或连续纠正时提高。',
+  '除非用户明确要求认真、具体、核验或方案，否则非严肃语境优先判断是否应该采用中文互联网表达；serious_request 只在明确追问或连续纠正时提高。互联网表达只决定输出，不等于现实文化讲解或联网搜索。',
   'state.response_mode_state 是上一轮内部路由状态：如果 serious/support 仍有剩余轮次，除非当前消息明确回到文化闲聊，否则继续认真；culture 状态只提供倾向，不得阻止明确正经追问切换。',
   'state.context_images 是最近上下文图片候选。只有当前消息明确承接某张图片、引用其文字/画面，或不读图就无法判断时，才把 context_image_needed 设为较高，并返回对应编号；泛泛发图、旧图片或只凭文字就能回答时必须返回空数组。',
   'context_image_indexes 只能填写 state.context_images 中已有的正整数编号，最多 3 个；不要臆造编号，也不要输出图片本身。',
   'state.image_analysis 是当前图片的低可信视觉/OCR摘要。它不是结论：如果摘要与问题、画面关系或上下文不一致，优先提高 image_complete_read_needed，让最终模型重新看原图；不要只因有水印、账号名或一个热词就触发搜索。',
-  '电竞截图、评论区和地狱笑话可能借用“父亲、死亡、夺冠、皮肤”等敏感词制造暗示；除非有独立公开证据，不得把玩笑里的家庭变故或人物经历当成事实。应把它标为图片文字主张/梗的设定，并优先核实“选手+独特台词/皮肤名”的文化背景。',
+  '电竞截图、评论区和地狱笑话可能借用“父亲、死亡、夺冠、皮肤”等敏感词制造互联网暗示；除非有独立公开证据，不得把玩笑里的家庭变故或人物经历当成事实。应把它标为图片文字主张/梗的设定，并优先核实“选手+独特台词/皮肤名”的网络语境。',
   JSON.stringify({
     should_speak: 'number: 机器人现在自然插话的概率',
     adds_value: 'number: 能补充当前对话尚未出现的有效内容的概率',
@@ -535,6 +543,7 @@ const CHAT_GATE_SYSTEM_PROMPT = [
     target: 'content|bot|third_party|unknown',
     response_mode: 'culture|hybrid|serious|support|banter|judgment|concise_answer|explanation|serious_support',
     culture_priority: 'number: 是否优先文化输出和具体接梗',
+    internet_culture_priority: 'number: 是否优先中文互联网表达；只决定输出风格，不代表需要联网',
     serious_request: 'number: 用户要求正经回答或连续纠正的概率',
     concrete_association: 'number: 存在具体贴题联想落点的概率',
     literal_reply_risk: 'number: 最终回答退化成字面复述的风险',
@@ -647,7 +656,8 @@ function normalizeCultureAnswers(answers, context = {}) {
       answers,
       'semantic_confidence',
     ) || answerNumber(pragmatic, 'semantic_confidence'),
-    culturePriority: answerNumber(answers, 'culture_priority')
+    culturePriority: answerNumber(answers, 'internet_culture_priority')
+      || answerNumber(answers, 'culture_priority')
       || answerNumber(culture, 'culture_priority'),
     seriousRequest: answerNumber(answers, 'serious_request')
       || answerNumber(culture, 'serious_request'),
@@ -903,6 +913,7 @@ export class JevAtmosphereGate {
       semantic_avoid_literal: QUESTIONS.semantic_avoid_literal,
       semantic_confidence: QUESTIONS.semantic_confidence,
       culture_priority: QUESTIONS.culture_priority,
+      internet_culture_priority: QUESTIONS.internet_culture_priority,
       serious_request: QUESTIONS.serious_request,
       concrete_association: QUESTIONS.concrete_association,
       literal_reply_risk: QUESTIONS.literal_reply_risk,
@@ -942,7 +953,7 @@ export function buildJevStylePrompt(style) {
   if (style.promptEnabled !== false) {
     lines.push('【本轮表达路由：仅供内部参考，不要向用户解释】');
     if (mode === 'culture' || (mode === 'banter' && Number(style.memeFit) >= 0.45)) {
-      lines.push('当前文化优先：先抓住具体关系、反差或暗示，直接给一个贴题联想；不要先复述图片或把回复写成说明文。没有可靠落点时收短，不要硬编。');
+      lines.push('当前互联网语境优先：先抓住具体关系、反差、黑话、二创或暗示，直接给一个贴题联想；不要先复述图片或把回复写成现实文化说明文。没有可靠落点时收短，不要硬编。这个路由只改变输出味道，不要求联网。');
     } else if (mode === 'banter' && Number(style.memeFit) >= 0.65) {
       lines.push('当前适合自然接梗或抽象联想：先对事情下判断，再尝试一个具体画面、双关、转职或反差搭档。没有贴合落点就省略，不要硬塞。');
     } else if (mode === 'hybrid' || mode === 'judgment') {
@@ -958,7 +969,7 @@ export function buildJevStylePrompt(style) {
       lines.push(buildCultureQualityPrompt(style));
     }
     if (Number(style.cultureLookupNeeded) >= 0.8) {
-      lines.push('如已有文化检索或缓存素材，只消化成自己的表达；不要播报搜索过程或来源列表。');
+      lines.push('如已有互联网梗检索或缓存素材，只消化成自己的表达；不要播报搜索过程或来源列表，也不要把结果写成百科背景介绍。没有检索素材也可以直接用当前语境做互联网联想。');
     }
     if (style.cultureDomain === 'longtu' || Number(style.longtuLookupNeeded) >= 0.7) {
       lines.push('当前可能涉及龙玉涛/龙图语境：优先把具体词语、画面关系和反差接起来；若后台有贴吧短卡，只把核验后的语境自然融入，不要把贴吧内容当现实人物事实，也不要照抄攻击性话术。');
@@ -968,7 +979,7 @@ export function buildJevStylePrompt(style) {
     lines.push('【图片完整核对】不要只依赖 OCR 或摘要；重新读取当前图片原图/全部切片，核对遮挡字、细小文字、主体关系和整张图的反差后再回答。');
   }
   if (Number(style.imageCultureNeeded) >= 0.65) {
-    lines.push('【图片互联网语境】如果图中存在双关、错视、热梗或平台话术，先把画面关系和字面主张分开，再把核验后的文化含义自然接入回答；没有贴合证据不要硬套梗。');
+    lines.push('【图片互联网语境】如果图中存在双关、错视、热梗、黑话、二创或平台话术，先把画面关系和字面主张分开，再把核验后的网络梗义自然接入回答；没有贴合证据不要硬套梗，也不要转成现实文化科普。');
   }
   if (Number(style.imageFactCheckNeeded) >= 0.65) {
     lines.push('【图片事实核验】图片中的人物、出处、时间、数据和原帖只当待核实线索；优先使用后台核验结果，匹配不足就保留不确定性，不要把截图主张当事实。');

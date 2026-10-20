@@ -4,8 +4,14 @@ import {
   shouldSearchMemeKnowledge,
 } from './response-style.js';
 
-const EXPLICIT_FACT_PATTERN = /(?:发生了什么|怎么回事|是否属实|真的吗|核实|事实|证据|原帖|原文|官方|公开信息|数据|统计|哪年|何时|时间线|是谁|哪位|价格|版本|政策|新闻|报道|资料|来源|出处|联网|上网|查一下|搜索一下|查询一下)/u;
-const HIGH_CONFIDENCE_CULTURE_PATTERN = /(?:网络梗|热梗|梗的?(?:意思|含义|来源|出处|由来)|网络用语|流行语|黑话|接梗|抽象联想|双关|谐音|反差(?:点|语境)?|转职|文化语境|亡灵骑士|女鬼电梯|龙图|龙玉涛)/iu;
+// Do not match the substring “联网” inside ordinary style words such as
+// “互联网语气”.  A search request is handled by the explicit web-search
+// pattern; this rail is only for a concrete factual claim.
+const EXPLICIT_FACT_PATTERN = /(?:发生了什么|怎么回事|是否属实|真的吗|核实|事实|证据|原帖|原文|官方|公开信息|数据|统计|哪年|何时|时间线|是谁|哪位|价格|版本|政策|新闻|报道|资料|来源|出处|上网|查一下|搜索一下|查询一下)/u;
+// Style requests such as “接梗一下”“来点抽象” only choose the reply
+// voice.  They must not spend web-search quota.  This pattern is reserved for
+// an explicit request to identify, explain, or verify a meme/online term.
+const HIGH_CONFIDENCE_CULTURE_PATTERN = /(?:梗.{0,10}(?:意思|含义|来源|出处|由来|怎么火)|(?:什么|啥|这个|这|该)(?:网络)?梗|(?:查|搜|搜索|查询|科普|解释|讲讲|说说).{0,28}(?:梗|黑话|网络用语)|(?:网络用语|网络流行语|流行语|黑话).{0,10}(?:意思|含义|来源|出处|由来))/iu;
 const LOW_INFORMATION_IMAGE_PATTERN = /^(?:low_information|low|none)$/i;
 
 function textOf(value) {

@@ -108,12 +108,13 @@ export function buildCultureCard(query, searchResult, options = {}) {
 export function cultureCardPrompt(card, source = 'cache') {
   if (!card) return '';
   return [
-    '【本轮文化检索短卡】',
+    '【本轮互联网梗检索短卡】（本轮文化检索短卡：仅指中文互联网语境）',
     `主题：${normalized(card.normalizedTopic, MAX_TOPIC_LENGTH)}`,
+    `互联网语境：${CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general'}`,
     `文化领域：${CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general'}`,
-    `文化线索：${uniqueStrings(card.descriptors, MAX_DESCRIPTORS, MAX_DESCRIPTOR_LENGTH).join('；')}`,
+    `接梗线索：${uniqueStrings(card.descriptors, MAX_DESCRIPTORS, MAX_DESCRIPTOR_LENGTH).join('；')}`,
     `检索来源状态：${source === 'cache' ? '本地缓存短卡' : '本轮公开检索后提炼'}${card.lookupSource === 'tieba' ? '（公开贴吧语境证据）' : ''}`,
-    '只把这些线索融入当前回复，不复述来源、网页正文或检索过程；不贴合就不用，不强塞固定梗。',
+    '只把这些线索融入当前回复，不复述来源、网页正文或检索过程；没有短卡也可以按当前语境自然接梗，不贴合就不用，不强塞固定梗。',
     `边界：${uniqueStrings(card.forbiddenTargets, 4, 120).join('；')}`,
   ].join('\n');
 }
