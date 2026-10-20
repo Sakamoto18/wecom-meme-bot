@@ -837,7 +837,7 @@ export async function prepareImageBlocks(payload, logger = console) {
   };
 }
 
-function parseImageAnalysis(value) {
+export function parseImageAnalysis(value) {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
   const candidates = [raw];
@@ -852,6 +852,15 @@ function parseImageAnalysis(value) {
       const list = (field) => (Array.isArray(parsed[field])
         ? parsed[field].map((item) => String(item ?? '').trim()).filter(Boolean)
         : (parsed[field] ? [String(parsed[field]).trim()] : []));
+      const parseDialogueRoles = (value) => (Array.isArray(value) ? value : [])
+        .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+        .map((entry) => ({
+          speaker: String(entry.speaker ?? entry.name ?? entry.说话人 ?? '').trim().slice(0, 80),
+          utterance: String(entry.utterance ?? entry.text ?? entry.content ?? entry.发言 ?? '').trim().slice(0, 300),
+          role: String(entry.role ?? entry.relation ?? entry.角色 ?? '').trim().slice(0, 80),
+        }))
+        .filter((entry) => entry.speaker && entry.utterance)
+        .slice(0, 16);
       const parseItem = (item, fallbackIndex) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
         const description = String(item.description ?? item.描述 ?? '').trim();
@@ -890,6 +899,7 @@ function parseImageAnalysis(value) {
         const replyHook = String(
           item.reply_hook ?? item.replyHook ?? item.接话落点 ?? '',
         ).trim();
+        const dialogue = parseDialogueRoles(item.dialogue_roles ?? item.dialogueRoles ?? item.对话角色);
         const confidence = String(item.confidence ?? item.置信度 ?? '').trim();
         const indexValue = Number(item.index ?? item.image_index ?? item.序号 ?? fallbackIndex);
         const index = Number.isFinite(indexValue) && indexValue > 0
@@ -898,7 +908,8 @@ function parseImageAnalysis(value) {
         if (!description && visibleText.length === 0 && keywords.length === 0 && !scene
           && !visualSubject && !visualWordplay && textClaims.length === 0
           && !subject && !composition && !palette && !relationship && !interpretation
-          && !sceneRelation && !impliedPoint && !comicMechanism && !speakerIntent && !replyHook) {
+          && !sceneRelation && !impliedPoint && !comicMechanism && !speakerIntent && !replyHook
+          && dialogue.length === 0) {
           return null;
         }
         return {
@@ -921,6 +932,7 @@ function parseImageAnalysis(value) {
           comicMechanism: comicMechanism.slice(0, 280),
           speakerIntent: speakerIntent.slice(0, 220),
           replyHook: replyHook.slice(0, 260),
+          dialogueRoles: dialogue,
           confidence: confidence.slice(0, 20),
           sourceCandidates: normalizeSourceCandidates(item.source_candidates),
           searchQueries: Array.isArray(item.search_queries)
@@ -950,6 +962,7 @@ function parseImageAnalysis(value) {
         const comicMechanism = items.map((item) => item.comicMechanism).filter(Boolean).join('；');
         const speakerIntent = items.map((item) => item.speakerIntent).filter(Boolean).join('；');
         const replyHook = items.map((item) => item.replyHook).filter(Boolean).join('；');
+        const dialogueRoles = items.flatMap((item) => item.dialogueRoles ?? []);
         const description = summary || items
           .map((item) => `第${item.index}张：${item.description}`)
           .join('\n');
@@ -967,6 +980,7 @@ function parseImageAnalysis(value) {
           comicMechanism: comicMechanism.slice(0, 500),
           speakerIntent: speakerIntent.slice(0, 400),
           replyHook: replyHook.slice(0, 500),
+          dialogueRoles,
           items,
           summary: summary.slice(0, IMAGE_ANALYSIS_MAX_CHARACTERS),
           raw: raw.slice(0, IMAGE_ANALYSIS_MAX_CHARACTERS),
@@ -1006,11 +1020,13 @@ function parseImageAnalysis(value) {
         const replyHook = String(
           parsed.reply_hook ?? parsed.replyHook ?? parsed.接话落点 ?? '',
         ).trim();
+      const parsedDialogueRoles = parseDialogueRoles(parsed.dialogue_roles ?? parsed.dialogueRoles ?? parsed.对话角色);
       const confidence = String(parsed.confidence ?? parsed.置信度 ?? '').trim();
       if (!description && visibleText.length === 0 && keywords.length === 0 && !scene
         && !visualSubject && !visualWordplay && textClaims.length === 0
         && !subject && !composition && !palette && !relationship && !interpretation
-        && !sceneRelation && !impliedPoint && !comicMechanism && !speakerIntent && !replyHook) continue;
+        && !sceneRelation && !impliedPoint && !comicMechanism && !speakerIntent && !replyHook
+        && parsedDialogueRoles.length === 0) continue;
       return {
         description: description.slice(0, IMAGE_ANALYSIS_MAX_CHARACTERS),
         visualSubject: visualSubject.slice(0, 240),
@@ -1030,6 +1046,7 @@ function parseImageAnalysis(value) {
         comicMechanism: comicMechanism.slice(0, 280),
         speakerIntent: speakerIntent.slice(0, 220),
         replyHook: replyHook.slice(0, 260),
+        dialogueRoles: parsedDialogueRoles,
         confidence: confidence.slice(0, 20),
         sourceCandidates: normalizeSourceCandidates(parsed.source_candidates),
         searchQueries: Array.isArray(parsed.search_queries)
@@ -1100,7 +1117,7 @@ function parsePassiveImageTriage(value) {
   return null;
 }
 
-function formatImageAnalysisContext(analysis) {
+export function formatImageAnalysisContext(analysis) {
   if (!analysis) return '';
   const orderedItems = Array.isArray(analysis.items) ? analysis.items : [];
   const semanticFields = (item = {}) => ({
@@ -1120,6 +1137,8 @@ function formatImageAnalysisContext(analysis) {
     semanticFields(item).comicMechanism ? `笑点/反差机制（优先用于回答）：${semanticFields(item).comicMechanism}` : '',
     semanticFields(item).speakerIntent ? `当前用户可能的动作（待结合原话确认）：${semanticFields(item).speakerIntent}` : '',
     semanticFields(item).replyHook ? `可接话落点（候选，不是固定答案）：${semanticFields(item).replyHook}` : '',
+    item.dialogueRoles?.length > 0
+      ? `图片内部对话角色（仅限图片内，不是当前 QQ 身份）：${item.dialogueRoles.map((entry) => `${entry.speaker}：${entry.utterance}${entry.role ? `（${entry.role}）` : ''}`).join('；')}` : '',
     item.sourceLabel ? `图片来源：${item.sourceLabel}` : '',
     item.description ? `图片描述：${item.description}` : '',
     item.visualSubject ? `独立视觉主体（优先核对）：${item.visualSubject}` : '',
@@ -1162,6 +1181,8 @@ function formatImageAnalysisContext(analysis) {
       ? `当前用户可能的动作（待结合原话确认）：${semanticFields(analysis).speakerIntent}` : '',
     !orderedItems.length && semanticFields(analysis).replyHook
       ? `可接话落点（候选，不是固定答案）：${semanticFields(analysis).replyHook}` : '',
+    !orderedItems.length && analysis.dialogueRoles?.length > 0
+      ? `图片内部对话角色（仅限图片内，不是当前 QQ 身份）：${analysis.dialogueRoles.map((entry) => `${entry.speaker}：${entry.utterance}${entry.role ? `（${entry.role}）` : ''}`).join('；')}` : '',
     !orderedItems.length && analysis.textClaims?.length > 0
       ? `图片文字主张（不等于事实）：${analysis.textClaims.join('、')}` : '',
     !orderedItems.length && analysis.visibleText?.length > 0
@@ -3014,7 +3035,7 @@ export class QqBotService {
         '请以图片为准校正可见文字；如果大字被人物、物件或阴影遮挡，检查遮挡后形成的错字、拆字、谐音、黑白幻视或视觉文字双关；在 visual_wordplay 中记录“原字→遮挡后像什么→笑点关系”，没有可靠字形依据就留空。',
         '如果大字被人物、物件或阴影遮挡，检查遮挡后形成的错字、拆字、谐音、黑白幻视或视觉文字双关；在 visual_wordplay 中记录“原字→遮挡后像什么→笑点关系”，没有可靠字形依据就留空。',
         '对“甲类全是X、乙类全是Y”这类并置句，不能只做 OCR 或复述事实：识别甲/乙两个项目（或群体）、X/Y 两个属性、它们被并排放置后制造的反差，以及这是不是借刻板印象做黑色幽默。把具体关系写进 scene_relation，把暗示的缺德落点写进 implied_point，把机制写成“并置反差/刻板印象借位/地狱幽默”等具体说法，reply_hook 给出一句能直接接上的群聊落点；涉及种族、性别等敏感属性时只分析笑点结构，不把现实群体当攻击对象。',
-        '请尽量识别这张图片中的可见文字（OCR），并判断实际画面主体、场景、人物情绪和主题，供另一个对话模型参考。对梗图、拼贴、讽刺截图和漫画，必须进一步提取：scene_relation（谁/什么和谁/什么发生了什么关系）、implied_point（整张图的观点或反差）、comic_mechanism（错位/双关/夸张/反转/荒诞等）、speaker_intent（当前用户可能要评价、配文、解释、识别还是查证）和 reply_hook（可直接接出的一个具体落点）。不要把这几个字段写成对象清单，必须表达图片在“做什么”。',
+      '请尽量识别这张图片中的可见文字（OCR），并判断实际画面主体、场景、人物情绪和主题，供另一个对话模型参考。对梗图、拼贴、讽刺截图和漫画，必须进一步提取：scene_relation（谁/什么和谁/什么发生了什么关系）、implied_point（整张图的观点或反差）、comic_mechanism（错位/双关/夸张/反转/荒诞等）、speaker_intent（当前用户可能要评价、配文、解释、识别还是查证）和 reply_hook（可直接接出的一个具体落点）。如果是聊天截图、段子对话或评论区，额外提取 dialogue_roles：每个对象只记录图片内部的说话标签、原句和角色关系；绝不能把“老师/我/评论者/作者”等图片内角色当成当前 QQ 发言人、引用作者或机器人。不要把这几个字段写成对象清单，必须表达图片在“做什么”。',
         question ? `用户本轮问题（用于选择相关线索）：${String(question).slice(0, 400)}` : '',
         options.artAppraisal ? ART_APPRAISAL_VISION_PROMPT : '',
         options.artAppraisal && options.contextHint
@@ -3048,7 +3069,7 @@ export class QqBotService {
         '严格只输出 JSON，不要 Markdown 代码块或额外解释，格式如下：',
         options.artAppraisal
           ? '{"description":"一句带画面证据的主体关系判断","subject":"具体主体及置信度","composition":"空间/构图关系","palette":"色彩或笔触","relationship":"主体动作或视线关系","interpretation":"一个有证据的隐喻","confidence":"high|medium|low","visible_text":["图片中可见文字"],"keywords":["主题关键词"],"scene":"场景或情绪","search_queries":[],"source_candidates":[]}'
-          : '{"description":"内容与表达关系，区分可见事实、图片文字主张和推测","scene_relation":"主体/事件之间正在发生的关系","implied_point":"整张图真正表达的观点或反差","comic_mechanism":"错位/双关/夸张/反转/荒诞机制","speaker_intent":"评价/配文/解释/识别/查证/其他","reply_hook":"一个可直接接话的具体落点","visual_subject":"只根据像素独立判断的主体，不要照抄图片文字里的名称","visual_confidence":"high|medium|low","visual_wordplay":"原字、遮挡后像什么以及由此产生的视觉文字双关；不确定则留空","text_claims":["图片文字提出或声称的内容，不等于事实"],"visible_text":["图片中可见文字"],"keywords":["主题关键词"],"scene":"场景或情绪","search_queries":["独特原句与公开主体等检索线索"],"source_candidates":[{"platform":"候选平台名","confidence":"medium","evidence":"实际可见的平台界面特征，没有依据时此数组留空"}]}',
+          : '{"description":"内容与表达关系，区分可见事实、图片文字主张和推测","scene_relation":"主体/事件之间正在发生的关系","implied_point":"整张图真正表达的观点或反差","comic_mechanism":"错位/双关/夸张/反转/荒诞机制","speaker_intent":"评价/配文/解释/识别/查证/其他","reply_hook":"一个可直接接话的具体落点","dialogue_roles":[{"speaker":"图片内标签，如老师/我/评论者","utterance":"该对象在图中的原句","role":"图片内角色关系"}],"visual_subject":"只根据像素独立判断的主体，不要照抄图片文字里的名称","visual_confidence":"high|medium|low","visual_wordplay":"原字、遮挡后像什么以及由此产生的视觉文字双关；不确定则留空","text_claims":["图片文字提出或声称的内容，不等于事实"],"visible_text":["图片中可见文字"],"keywords":["主题关键词"],"scene":"场景或情绪","search_queries":["独特原句与公开主体等检索线索"],"source_candidates":[{"platform":"候选平台名","confidence":"medium","evidence":"实际可见的平台界面特征，没有依据时此数组留空"}]}',
         '看不清的文字不要猜测；没有文字时 visible_text 输出空数组。',
       ].join('\n');
       try {
@@ -3516,7 +3537,12 @@ export class QqBotService {
           )),
         ].join('\n')
         : '';
-      let modelInput = [historicalContextImageText, imageAnalysisContext, baseModelInput]
+      const imageRoleBoundary = imageAnalysisContext ? [
+        '【图片角色边界】',
+        '图片内部的老师、我、学生、评论者、作者等只属于图片叙事，不是当前 QQ 发言人、引用作者、被 @ 成员或机器人。',
+        '当前回复对象只按本轮 QQ 发言人、引用作者、@关系和对话上下文判断；不得把图片内角色自动映射成现实群成员或攻击目标。',
+      ].join('\n') : '';
+      let modelInput = [historicalContextImageText, imageRoleBoundary, imageAnalysisContext, baseModelInput]
         .filter(Boolean)
         .join('\n\n');
       const generateReply = (input, blocks) => generateConversationReply({
