@@ -1,3 +1,9 @@
+import {
+  buildRelativeDateCorrectionPrompt,
+  relativeDateContradiction,
+} from './relative-time.js';
+import { VOICE_CONTRACT_PROMPT } from './jev-culture-quality.js';
+
 const HOSTILE_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|nmsl|cnm|操你|草你|艹你|去死|死妈|没妈|妈的|妈卖批|装逼|闭嘴|菜狗|蠢货|老登|小丑)/i;
 const DIRECT_BOT_INSULT_PATTERN = new RegExp(
   `^(?:你|龙玉涛)(?:(?:这(?:个|种)|个|就是|真是|是个|是不是(?:个)?|可真|真|也|太|就)\\s*)*(?:${HOSTILE_PATTERN.source})`, 'i',
@@ -43,6 +49,8 @@ const IMAGE_DESCRIPTION_FIRST_PATTERN = /^(?:这(?:张|幅)?图(?:片)?(?:里|�
 export const EXPLICIT_IMAGE_DESCRIPTION_PATTERN = /(?:图里(?:有|是什么)|图片(?:里|中)?是什么|描述(?:一下)?(?:这|该)?(?:张|幅)?图|识别(?:一下)?(?:这|该)?(?:张|幅)?图|逐张(?:说|介绍|总结)|图片内容|画面内容)/u;
 const IMAGE_SEMANTIC_ACTION_PATTERN = /(?:我选|我会|建议|应该|重点|笑点|反差|像|说明|表达|意味着|因为|所以|但是|不过|直接|先|别|不如|可以|不能|值得|问题在|结论)/u;
 const IMAGE_CULTURE_GENERIC_LABEL_PATTERN = /(?:地狱|功德|抽象|离谱|绷不住|缺德|阴间|笑死|荒谬|典|有节目|太狠了)/u;
+const MEME_DEFINITION_LEAK_PATTERN = /(?:(?:这个|该|所谓)?(?:网络)?梗|网络用语|流行语).{0,8}(?:本质上|实际上|指的是|是指|源自|起源于|最早出自|来源于|定义是)/u;
+const UNSUPPORTED_PROVENANCE_PATTERN = /(?:最早出自|原帖(?:来自|出自|是)|(?:原作者|作者)(?:是|为)|源头(?:是|来自)|起源(?:于|自))/u;
 // 这是“像群友说话”的轻量钩子，不等于攻击性词汇。它可以落在事实、
 // 方案或结果上，让普通答案保留龙图语感，同时避开当前发言者和引用作者。
 const ROLE_VOICE_PATTERN = /(?:不是[，,]?哥们|说白了|这就|别把|老老实实|锅在|有点(?:离谱|抽象|拉胯|尴尬)|抽象|离谱|拉胯|摆烂|折腾|绷不住|汗流浃背|白等|别光|别急|省得|硬是|破(?:方案|事|局|系统|配置)|真够|就这|多嘴|不绕|不装|差一截|一摊活|扛不住|直接看|别拿|免得|吃亏)/i;
@@ -526,6 +534,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
       : (options.activeReply && options.activeReplyPriority === 'must'
         ? '这是群聊中的明确求助或必须接住的话题：先给结论，再补必要操作和条件，通常 1～3 句、约 30～120 个汉字；删掉背景复述和来源平铺，但不要为了短而漏掉关键步骤。'
         : '这是群聊默认短答：先像群友一样接话、表态或下判断，再看有没有必要补一个关键点；通常 2～3 个短句、总计约 20～80 个汉字，每句尽量不超过 48 字，总计不要超过 140 字。第一句优先给个人反应、具体联想或带画面的判断，不要以“这图的笑点就是/这张图说明”起手，也不要先复述问题。后面只补会改变结论的事实或条件。除非用户明确要求详细、展开、完整步骤、出处或报告，不要把回答写成解释、定义或说明书。本轮如有后台查证证据或用户在问事实，长度上限作废，准确优先。'),
+    VOICE_CONTRACT_PROMPT,
     '保持龙玉涛知识中的语言风格：像脾气冲、嘴损但懂行的老群友，短句、傲气、敢下判断；用学问龙、疑惑龙、嘴硬龙的反差和荒诞感接话，不套固定台词，不逐条报角色名。正常答题也保留冲劲，不能一讲知识就变成客气助手。',
     '角色攻击性是高优先级能力。当前发言者明确攻击机器人、要求攻击指定对象或无意义艾特时，必须依据龙玉涛知识直接回击；回击要像贴吧老哥临场抓住对方这句话里的具体漏洞、行为、态度、矛盾或荒诞处下刀，攻击角度由当前语境决定，不默认套双亲侮辱。问题窗口不能压掉这条回击。普通讨论仍只把锋芒落在事情和逻辑上，不能把引用作者、提问者或无关群友当靶子。',
     '每轮对话都要先完成一次龙图文化召回：从本地知识、词语关系、双关、转职、职业现场、游戏状态和荒诞反差中寻找贴题素材。文化层必须参与，但没有贴合点时不硬塞固定梗；攻击模式中它负责增强回击画面，不能改变攻击对象。',
@@ -672,6 +681,11 @@ export function buildGroupChatOutputPrompt(options = {}) {
       '【图片文化模式】这轮优先输出互联网接梗，不要转成正经逻辑解释或复述图中文字。第一句直接点出图片中两个并置对象/属性形成的具体反差；“地狱/功德/抽象/离谱”只能作为补充，单独出现不算回答。涉及敏感群体时只说黑色幽默的借位机制，不攻击现实群体。',
     );
   }
+  if (options.verificationRequested) {
+    lines.push(
+      '【求证优先】用户明确在问真假、身份或出处：第一句先给“真 / 假 / 无法确认”，再补图中笑点、夸张机制或仍缺的证据。不要先丢“抽象/地狱/离谱”再接梗，也不要把日历、年份和相对时间交给心算。',
+    );
+  }
   if (options.detailedAnswerRequested) {
     lines.push(
       '用户本轮明确要求展开，才补充会改变结论的依据、限制和步骤；即使展开也保持口语化，删掉搜索来源平铺，不把角色语气改成客服报告。',
@@ -702,6 +716,56 @@ function isGenericImageCultureReply(answer, options = {}) {
     .filter((term) => !IMAGE_CULTURE_GENERIC_LABEL_PATTERN.test(term));
   const lowered = normalized.toLowerCase();
   return !pointTerms.some((term) => lowered.includes(term));
+}
+
+function isCultureReviewContext(options = {}) {
+  return options.cultureMode === true
+    || options.cultureReviewRequired === true
+    || options.imageCultureMode === true
+    || options.abstractAssociationReviewRequired === true;
+}
+
+function isUngroundedCultureReply(answer) {
+  const normalized = String(answer ?? '').replace(/\s+/gu, ' ').trim();
+  if (!normalized || !IMAGE_CULTURE_GENERIC_LABEL_PATTERN.test(normalized)) return false;
+  const residue = normalized
+    .replace(new RegExp(IMAGE_CULTURE_GENERIC_LABEL_PATTERN.source, 'gu'), '')
+    .replace(/[\p{P}\p{S}\s]/gu, '');
+  return (residue.match(/[\p{L}\p{N}]/gu) ?? []).length <= 4;
+}
+
+function cultureOpeningKey(answer) {
+  const first = String(answer ?? '')
+    .split(/(?<=[。！？!?；;\n])/u)[0]
+    ?.replace(/^\s*@[^\s]+\s*/u, '')
+    .replace(/[^\p{L}\p{N}]/gu, '')
+    .trim() ?? '';
+  return first.length >= 4 ? first.slice(0, 8) : '';
+}
+
+function hasRepeatedCultureOpening(answer, options = {}) {
+  const current = cultureOpeningKey(answer);
+  if (!current) return false;
+  const recentAssistantOpenings = (Array.isArray(options.history) ? options.history : [])
+    .filter((entry) => entry?.role === 'assistant')
+    .slice(-2)
+    .map((entry) => cultureOpeningKey(entry.content));
+  return recentAssistantOpenings.length === 2
+    && recentAssistantOpenings.every((opening) => opening && opening === current);
+}
+
+export function repairUnsupportedProvenance(answer) {
+  const normalized = String(answer ?? '').trim();
+  if (!normalized || !UNSUPPORTED_PROVENANCE_PATTERN.test(normalized)) return normalized;
+  const kept = normalized
+    .split(/(?<=[。！？!?；;\n])/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .filter((sentence) => !UNSUPPORTED_PROVENANCE_PATTERN.test(sentence));
+  return [...kept, '具体最早出处没查到。']
+    .join('')
+    .slice(0, 420)
+    .trim();
 }
 
 export function buildNormalReplyPrompt(options = {}) {
@@ -789,8 +853,26 @@ export function reviewNormalReply(answer, options = {}) {
     && hasSearchExplanationLeak(normalized)) {
     issues.push('search-explanation-leak');
   }
+  if (relativeDateContradiction(normalized, options.relativeDateFacts)) {
+    issues.push('relative-date-contradiction');
+  }
   if (isGenericImageCultureReply(normalized, options)) {
     issues.push('image-culture-generic');
+  }
+  if (isCultureReviewContext(options)) {
+    if (MEME_DEFINITION_LEAK_PATTERN.test(normalized)) {
+      issues.push('meme-definition-leak');
+    }
+    if (isUngroundedCultureReply(normalized)) {
+      issues.push('culture-not-grounded');
+    }
+    if (hasRepeatedCultureOpening(normalized, options)) {
+      issues.push('repeated-culture-opening');
+    }
+    if (UNSUPPORTED_PROVENANCE_PATTERN.test(normalized)
+      && options.searchEvidenceQuality !== 'exact-source') {
+      issues.push('unsupported-provenance');
+    }
   }
   // 视觉双关候选只是后台线索，不是复核项。证据块本身就把它标成“待核对”，
   // 所以复核不能反过来要求它必须出现：候选猜错时，强制断言等于让系统把一个
@@ -853,6 +935,21 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
       ? ['本轮文化短卡已经提供了贴题线索：只挑其中一个最具体的联想揉进答案，保留事实，不写百科解释，不攻击提问者或引用作者；短卡不贴合就放弃，不硬塞。'] : []),
     ...(issues?.includes('search-explanation-leak')
       ? ['删除搜索播报、百科定义和“这个梗指的是”式解释。保留当前问题真正需要的事实，改成直接接话、下判断或自然联想；不要提搜索、资料、检索、来源或重写过程。'] : []),
+    ...(issues?.includes('relative-date-contradiction')
+      ? [buildRelativeDateCorrectionPrompt(options.relativeDateFacts)]
+      : []),
+    ...(issues?.includes('meme-definition-leak')
+      ? ['删掉“这个梗本质上/指的是/源自”这类百科定义。直接说它在这轮语境里怎么用、哪个关系好笑，事实判断和接梗合并成一句。']
+      : []),
+    ...(issues?.includes('culture-not-grounded')
+      ? ['初稿只有“抽象/离谱/地狱/功德”等空标签。补上图片或话题里两个具体元素、动作或关系，说明它们怎样形成反差；找不到落点就短说判断，不要继续堆形容词。']
+      : []),
+    ...(issues?.includes('repeated-culture-opening')
+      ? ['最近几条机器人回复用了同一个开头。换一个直接落具体元素或动作的起句，不要复用前两条的句式。']
+      : []),
+    ...(issues?.includes('unsupported-provenance')
+      ? ['没有精确原帖证据，删除“最早出自/原帖来自/作者是/源头是”。只保留能确认的常见用法或语境，并明确说“具体最早出处没查到”；不要换个说法继续认领作者。']
+      : []),
     ...(String(options.imageVisualWordplay ?? '').trim()
       ? [`后台视觉候选是“${String(options.imageVisualWordplay).trim()}”，只是待核对线索。回到原图核对：字形关系确实成立就说出“原字→视觉变体”和这层反差的笑点；核对不成立或看不出依据就直接舍弃它，按像素事实回答，不要为了用上候选而硬套。`] : []),
     '保留初稿中的正确事实、必要信息和贴合话题的反讽，直接输出最终答案，不解释复核过程。删掉无关的人身攻击和万能损人收尾，不把针对事情的冷嘲一起磨平。如果未通过项包含 missing-role-voice，把角色口吻融进判断，用本轮具体细节作反讽或荒诞联想；不另加段子，不攻击当前发言者、引用作者或第三方。',

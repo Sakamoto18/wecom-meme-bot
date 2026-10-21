@@ -26,6 +26,7 @@ import {
   removeLiteralLatinMa,
   reviewAttackReply,
   reviewNormalReply,
+  repairUnsupportedProvenance,
   selectAttackScene,
   shouldSearchLongtuKnowledge,
   shouldSearchCurrentInformation,
@@ -60,6 +61,12 @@ import {
   sourceDisplayPrompt,
   suppressUnrequestedSourceNotes,
 } from './source-display.js';
+import {
+  buildRelativeDatePrompt,
+  extractRelativeDateFacts,
+  repairRelativeDateAnswer,
+} from './relative-time.js';
+import { buildStyleAnchorPrompt, selectStyleAnchors } from './style-anchors.js';
 
 const PURE_MENTION_FALLBACK = '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。';
 const WEB_SEARCH_TOOL = {
@@ -447,7 +454,11 @@ export async function generateConversationReply(options) {
     imageSemanticFrame = '',
   } = options;
 
+  const turnNow = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
   const userContent = buildMultimodalUserContent(modelInput, imageBlocks, videoBlocks);
+  const relativeDateText = [content, currentQuestion, modelInput]
+    .filter(Boolean).join('\n');
+  const relativeDateFacts = extractRelativeDateFacts(turnNow, relativeDateText);
   // 图片只在首轮生成时上传一次；重写、质量复核和思考降级使用已经注入的
   // OCR/场景摘要，避免重复消耗视觉 Token 和请求体体积。
   const revisionUserContent = modelInput;
@@ -948,6 +959,7 @@ export async function generateConversationReply(options) {
     || (!passiveImageComment && !compactActiveReply && shouldRequestDetailedAnswer(currentQuestion));
   const imageDescriptionRequested = hasImageContext
     && EXPLICIT_IMAGE_DESCRIPTION_PATTERN.test(String(currentQuestion ?? ''));
+  const verificationRequested = retrievalPolicy.verificationRequested === true;
   // A high-confidence image culture route is deliberately a different output
   // contract from ordinary image QA: the model should land the meme's
   // concrete relation first and omit a serious explanation unless requested.
@@ -955,6 +967,7 @@ export async function generateConversationReply(options) {
     hasImageContext
       && !recordSummary
       && !imageDescriptionRequested
+      && !verificationRequested
       && Number(jevStyle?.imageCultureNeeded) >= 0.65
       && Number(jevStyle?.seriousRequest) < 0.7,
   );
@@ -1051,9 +1064,11 @@ export async function generateConversationReply(options) {
   const personaDemonstration = !attackStyle
     && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
   const dialogueReviewContext = {
-    interactionContext, currentQuestion, recordSummary,
+    interactionContext, currentQuestion, recordSummary, history,
     imageSemanticPoint: String(jevStyle?.semanticPoint ?? ''),
     quotedPersonaPhrases: personaDemonstration ? personaPhrasesFromContext(personaContext) : [],
+    relativeDateFacts,
+    searchEvidenceQuality: searchResult?.evidenceQuality ?? 'none',
   };
   // Put the invariant persona and knowledge before the live mode/history suffix.
   // DeepSeek can reuse this prefix across ordinary replies, active replies and
@@ -1083,7 +1098,11 @@ export async function generateConversationReply(options) {
     // 必须排在最前，且只能待在这一层：additionalSystemPrompt 每轮都变，所以
     // 分钟级的时间抖动不会额外损失 prompt 缓存；放进 systemPrompt 或
     // cachePrefixSystemPrompt 会让稳定前缀每分钟整体失效一次。
-    buildCurrentTimePrompt(),
+    buildCurrentTimePrompt(turnNow),
+    buildRelativeDatePrompt(turnNow, relativeDateText),
+    !attackStyle && !recordSummary
+      ? buildStyleAnchorPrompt(selectStyleAnchors(history, { currentContent: content }))
+      : '',
     imageSafetyPrompt,
     visualWordplayPrompt,
     imageSearch && queries.length === 0
@@ -1108,6 +1127,7 @@ export async function generateConversationReply(options) {
       activeReplyPriority,
       sourceDisplayRequested,
       imageCultureMode,
+      verificationRequested,
     }),
     styleSignals.attackCandidate && !attackStyle
       ? '【前置语气候选】程序只检测到可能的攻击性词面；这不是攻击结论。结合当前发言对象、引用关系和最近对话决定是否接住、回击或只评价事情，不能被单个词牵着走。'
@@ -1122,6 +1142,7 @@ export async function generateConversationReply(options) {
   let protectedIdentityFallback = false;
   let protectedRoleRewritten = false;
   let protectedRoleSanitized = false;
+  let relativeDateCorrectionApplied = false;
   let attempts = 1 + mentionIntentAttempts;
   // 质量复核重写的额度必须独立计数。此前它共用 attempts，而 attempts 已经把
   // 艾特意图判定的调用次数算进去，于是凡是走过意图判定的轮次（被 @ 的提问是
@@ -1265,6 +1286,9 @@ export async function generateConversationReply(options) {
               hasImageContext,
               imageDescriptionRequested,
               imageCultureMode,
+              relativeDateFacts,
+              history,
+              searchEvidenceQuality: searchResult?.evidenceQuality ?? 'none',
             }),
           maxTokens: responseMaxTokens,
           ...(passiveImageComment ? { temperature: 0.2 } : {}),
@@ -1413,6 +1437,15 @@ export async function generateConversationReply(options) {
   answer = removeInternalReplyMetadata(
     attackStyle ? removeLiteralLatinMa(answer) : answer,
   ) || buildNormalReplyFallback();
+  const repairedRelativeAnswer = repairRelativeDateAnswer(answer, relativeDateFacts, turnNow);
+  if (repairedRelativeAnswer !== answer) {
+    answer = repairedRelativeAnswer;
+    relativeDateCorrectionApplied = true;
+  }
+  if ((cultureReviewRequired || imageCultureMode || abstractAssociationReviewRequired)
+    && searchResult?.evidenceQuality !== 'exact-source') {
+    answer = repairUnsupportedProvenance(answer);
+  }
   if (!attackStyle && !requiredIdentityRole) {
     // QQ already shows the reply target. A model-added leading @mention is
     // usually a copied prompt fragment and makes a short group reply feel
@@ -1561,6 +1594,8 @@ export async function generateConversationReply(options) {
     protectedIdentityFallback,
     protectedRoleRewritten,
     protectedRoleSanitized,
+    relativeDateFacts,
+    relativeDateCorrectionApplied,
     usedModel: true,
   };
 }

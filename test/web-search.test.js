@@ -388,3 +388,56 @@ test('current 模式发送普通查询并注入带来源的时效摘要', async 
   assert.match(result.context, /只是搜索引擎返回的标题和摘要/);
   assert.match(result.context, /来源域名：example\.com/);
 });
+
+test('meme 首轮过滤为空时只回退一次核心词，并标注证据等级', async () => {
+  const queries = [];
+  const search = new LongtuWebSearch({
+    provider: 'exa',
+    exaApiKey: 'exa-test-key',
+    maxResults: 6,
+    fallbackEndpoint: null,
+    fetchImpl: async (_url, options) => {
+      const query = JSON.parse(options.body).query;
+      queries.push(query);
+      const results = query.startsWith('曼波和赛马娘')
+        ? [{ title: '无关电影新闻', url: 'https://example.com/movie', text: '与查询无关。' }]
+        : [
+          { title: '曼波是什么梗', url: 'https://example.com/manbo', text: '曼波来自赛马娘二创。' },
+          { title: '曼波梗用法整理', url: 'https://example.com/manbo-2', text: '常配合魔性配音使用。' },
+        ];
+      return new Response(JSON.stringify({ results }), { status: 200 });
+    },
+  });
+
+  const result = await search.search('曼波和赛马娘是什么梗', { mode: 'meme' });
+  assert.deepEqual(queries, [
+    '曼波和赛马娘 网络梗 来源 含义',
+    '曼波 网络梗 来源 含义',
+  ]);
+  assert.equal(result.resultCount, 2);
+  assert.equal(result.rawResultCount, 3);
+  assert.equal(result.retainedResultCount, 2);
+  assert.equal(result.fallbackUsed, true);
+  assert.equal(result.evidenceQuality, 'related-only');
+  assert.match(result.context, /不等于已经核实原帖、最早出处或作者归属/);
+  assert.match(result.context, /具体最早出处没查到/);
+});
+
+test('meme 模式最多保留三条高相关结果', async () => {
+  const search = new LongtuWebSearch({
+    provider: 'exa',
+    exaApiKey: 'exa-test-key',
+    maxResults: 6,
+    fallbackEndpoint: null,
+    fetchImpl: async () => new Response(JSON.stringify({
+      results: Array.from({ length: 6 }, (_, index) => ({
+        title: `曼波梗第${index + 1}条`,
+        url: `https://example.com/manbo-${index + 1}`,
+        text: '曼波梗的公开用法说明。',
+      })),
+    }), { status: 200 }),
+  });
+  const result = await search.search('曼波是什么意思', { mode: 'meme' });
+  assert.equal(result.resultCount, 3);
+  assert.equal(result.results.length, 3);
+});

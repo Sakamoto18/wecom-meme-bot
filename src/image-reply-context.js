@@ -12,14 +12,15 @@ const GENERIC_IMAGE_TERMS = new Set([
   '自拍', '风景', '猫', '猫猫', '猫咪', '狗', '狗狗', '哈哈', '哈哈哈',
   '笑死', '笑死了', '绷不住', '好好笑', '无语', '离谱', '破防', '草',
   '啊', '呃', '额', '问号', '什么梗', '看看这图', '这是什么',
+  'logo', '标志', '品牌', '图标', '图片logo',
 ]);
 
-const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|辟谣|谣言|真实吗|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景|(?:图|图片|截图|九宫格).{0,8}(?:谁|人物|身份|名字))/u;
+const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|真的假的|辟谣|谣言|真实吗|是否属实|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志|几个月后|三个月后|跨年|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景|(?:图|图片|截图|九宫格).{0,8}(?:谁|人物|身份|名字))/iu;
 const IMAGE_EVALUATION_PATTERN = /(?:评价|点评|评一下|说说(?:这|该)?(?:张|幅)?图|怎么看(?:这|该)?(?:张|幅)?图|赏析|吐槽(?:一下)?(?:这|该)?(?:张|幅)?图|好不好看)/u;
 // “调侃/地狱笑话/接梗”不是字面上的识图请求，但它明确要求模型理解
 // 图片背后的关系、反差和互联网语境。若不把它视为图片语义问题，Jev
 // 超时或视觉摘要不完整时，最终模型会退化成只复述 OCR。
-const IMAGE_INTERPRETATION_PATTERN = /(?:解析|分析|解读|识别|含义|笑点|什么梗|什么意思|是什么|怎么理解|表达了什么|看法|评价|点评|赏析|吐槽|调侃|接梗|联想|玩梗|地狱笑话|反差|暗示|讽刺|阴阳|锐评|怎么选|选哪个|哪个好|看看(?:这(?:张)?(?:图|图片|截图|照片)?|下(?:这(?:张)?(?:图|图片|截图|照片)?)?|(?:图|图片|截图|照片)))/u;
+const IMAGE_INTERPRETATION_PATTERN = /(?:解析|分析|解读|识别|含义|笑点|什么梗|什么意思|是什么|怎么回事|真的假的|真假|是否属实|核实|验证|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志|出处|来源|原帖|怎么理解|表达了什么|看法|评价|点评|赏析|吐槽|调侃|接梗|联想|玩梗|地狱笑话|反差|暗示|讽刺|阴阳|锐评|怎么选|选哪个|哪个好|看看(?:这(?:张)?(?:图|图片|截图|照片)?|下(?:这(?:张)?(?:图|图片|截图|照片)?)?|(?:图|图片|截图|照片)))/iu;
 const IMAGE_CULTURE_REQUEST_PATTERN = /(?:调侃|接梗|联想|玩梗|地狱笑话|网络梗|热梗|反差|暗示|讽刺|阴阳|锐评|电竞|选手|冠军皮肤|二创)/iu;
 const IMAGE_INFORMATION_PATTERN = /(?:长文|文章|公告|新闻|论坛|帖子|评论区|聊天记录|对话|多格|漫画|表格|数据|图表|教程|报错|故障|说明书|规则|通知|投票|调查|对比|时间线)/u;
 const IMAGE_QUESTION_OR_CLAIM_PATTERN = /[?？]|(?:什么|哪个|哪种|谁|哪里|为何|为什么|怎么(?:样|办|回事)?|是否|是不是|能不能|可不可以|出处|来源|原帖|真假|真的|假的|原因|办法|建议|价格|时间|多少)/u;
@@ -180,7 +181,7 @@ export function classifyImageAnalysis(analysis) {
 export function buildImageInformationPolicy(policy = {}, { explicitSearch = false } = {}) {
   if (policy.level === 'low_information') {
     if (explicitSearch) {
-      return '这张图被程序判定为低信息图片，默认不调用联网搜索。用户明确问出处或梗义时，只在有可靠线索时核实；没有线索就如实说明。这个标签只限制搜索，不限制模型结合原图和当前问题自然接话。';
+      return '这张图被程序判定为低信息图片，但用户明确询问了出处、身份、真伪或梗义。只有视觉结果中提供了具体的公开线索时才允许核实；没有具体线索就直接说不知道，不要拿当前问题本身当检索词。这个标签不限制模型结合原图和当前问题自然接话。';
     }
     return '这张图被程序判定为低信息图片（表情包、反应图、界面噪声或无正文截图），因此不要联网搜索。这个标签只限制搜索和无依据的出处猜测；用户若明确要评价、识图或接梗，仍按原图和当前问题作自然回答，看不清时保留不确定性。';
   }
@@ -233,10 +234,29 @@ function hasUsefulImageClue(subject, item = {}) {
   return false;
 }
 
-function explicitVisibleTextClue(item = {}) {
+function hasExplicitConcreteImageClue(subject, item = {}) {
+  const clue = compactText(subject);
+  if (!clue || isGenericImageClue(clue)) return false;
+  // A low-information image may only open Exa when OCR actually found a
+  // concrete term, or vision supplied a high-confidence source clue. The
+  // query proposed by the model is not evidence by itself: otherwise a guess
+  // such as “This is fine KC Green” turns a reaction image into paid search.
+  const visibleText = normalizedTextList(item.visibleText)
+    .filter((line) => !isGenericImageClue(line));
+  const visible = visibleText.join(' ');
+  const sourceCandidates = Array.isArray(item.sourceCandidates)
+    ? item.sourceCandidates.filter((candidate) => String(candidate?.confidence ?? '').toLowerCase() === 'high')
+    : [];
+  const highConfidenceSource = sourceCandidates.some((candidate) => (
+    meaningfulCharacters(candidate?.evidence) >= 4
+  ));
+  return meaningfulCharacters(visible) >= 2 || highConfidenceSource;
+}
+
+function explicitVisibleTextClue(item = {}, minimumCharacters = 8) {
   const lines = normalizedTextList(item.visibleText)
     .map((line) => line.replace(/https?:\/\/\S+/giu, ' ').replace(/\s+/gu, ' ').trim())
-    .filter((line) => meaningfulCharacters(line) >= 8)
+    .filter((line) => meaningfulCharacters(line) >= minimumCharacters)
     .filter((line) => !UI_NOISE_PATTERN.test(line) || meaningfulCharacters(line) >= 18)
     .sort((left, right) => meaningfulCharacters(right) - meaningfulCharacters(left));
   if (lines.length === 0) return '';
@@ -289,6 +309,9 @@ export const IMAGE_MEANING_PROMPT = [
   '对拼贴图、讽刺截图、漫画和表情包，先做一层面向回复的语义压缩：提取 scene_relation（谁和谁/什么元素发生什么关系）、implied_point（图片真正想表达的观点或反差）、comic_mechanism（错位、双关、夸张、反转或荒诞机制）、speaker_intent（当前用户要评价、配文、解释、识别还是查证）和 reply_hook（可以直接接出的一个具体落点）。这些字段必须绑定原图证据，不要把物体清单换个说法；没有把握就留空。',
   '先直接回答当前消息的具体问题，图片只是证据。除非用户明确要求“图里是什么”“描述一下”“识别图片”“逐张总结”或询问图片含义，否则最终答案禁止任何图片复述：不要以“图中/图片里/截图显示/热搜写着/这是一张”起手，不要逐字重排标题、榜单、评论或提问。图片里的文字只作为后台证据，必须先压成自己的判断、接梗、选择或结论；需要补事实时最多在后面补一句。用户问“怎么选/哪个/怎么办/是否”等选择题时，直接给选择或建议，再用图片中最相关的一点作依据。',
   '如果当前消息要求找原帖、查出处、核实真伪或补充某条回复，先给这件事的检索结论；找不到时只用一句话说明缺口和下一步。不要把“我读到了图片”“我只抓到界面证据”当成最终回答，更不要连续输出两段同义的免责声明。',
+  '遇到“真的假的”“谁家的”“什么品牌”“是否属实”这类求证问题，第一句先给真 / 假 / 无法确认，再补图中的笑点或夸张机制。日历、相对年份和可程序计算的数字不要靠心算；程序给出事实时以程序为准，不能因为整张图是梗就把正确的算术一起判错。',
+  '如果视觉结果提供了 candidate_readings，先比较每个候选的 evidence 和 confidence，只选最有画面依据的一个。候选是后台材料，不要把三个候选逐条列给用户；证据不足时选更保守的读法或直接说看不出。',
+  '没有精确来源证据时，不要断言“最早出自”“原帖来自”“作者是某人”。只知道常见用法就说只知道用法，具体出处没查到就说没查到。',
     '不要照抄内部的“图片描述 / 可见文字 / 关键词 / 场景”字段，也不要固定套“图片识别—联网结果—总结”的模板。优先把 scene_relation、implied_point、comic_mechanism 和 speaker_intent 消化成自然的群聊判断，再补必要背景。',
   '用户询问梗的含义时才说明笑点和反差；询问观点真伪时区分图中声称的事与检索能证实的事；问操作就给下一步，问选择就给选择，不另做整图解说。',
   '多图也只提取回答当前问题所需的信息；只有用户要求逐张或按顺序总结时才逐张列出，不要强制每张图都做一份独立报告。',
@@ -320,27 +343,27 @@ export function buildImageSearchPlan(analysis, content = '') {
   // Image evaluation is a local conversation task. Do not turn a request
   // such as “评价这张图” into a paid web lookup, even when the vision model
   // happens to invent a plausible title or watermark clue.
-  if (isImageEvaluationIntent(content)) return [];
   const items = analysis?.items?.length ? analysis.items : (analysis ? [analysis] : []);
   const explicitIntent = hasExplicitImageSearchIntent(content);
+  const verificationIntent = /(?:真的假的|真假|是否属实|核实|验证|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志|几个月后|三个月后|跨年)/iu.test(content);
+  if (isImageEvaluationIntent(content) && !explicitIntent && !verificationIntent) return [];
   const cultureIntent = IMAGE_CULTURE_REQUEST_PATTERN.test(compactText(content));
   const maxQueries = explicitIntent
     ? IMAGE_SEARCH_EXPLICIT_MAX_QUERIES
     : IMAGE_SEARCH_DEFAULT_MAX_QUERIES;
-  const intent = /真假|核实|辟谣|谣言|真实吗/u.test(content)
+  const intent = /真假|真的假的|核实|验证|辟谣|谣言|真实吗|是否属实|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志/u.test(content)
     ? '事实核查'
     : (/出处|来源|什么梗/u.test(content) ? '来源 含义' : '含义 背景');
   const queries = [];
   const seen = new Set();
   for (const item of items) {
     const itemPolicy = classifyImageInformation(item);
-    // Low-information images are searchable only for an explicit source/meme
-    // lookup. Ordinary “评价一下” requests must not create API spend.
-    // Low-density images (reaction memes, covers, watermarks, account chrome
-    // and short emotional screenshots) are never search eligible. Explicit
-    // source requests still get a concise local answer instead of a noisy
-    // generic lookup; dense evidence can still be searched when requested.
-    if (itemPolicy.level === 'low_information') continue;
+    // Low-information images stay local unless the user explicitly asks for a
+    // source, identity, meme or verification. Even then, only a concrete clue
+    // from vision/OCR may be sent upstream; the generic question is not a clue.
+    const explicitLowInformationSearch = itemPolicy.level === 'low_information'
+      && (explicitIntent || verificationIntent);
+    if (itemPolicy.level === 'low_information' && !explicitLowInformationSearch) continue;
     // A culture request can make an informative screenshot worth one focused
     // lookup even when it is shorter than the general “search eligible”
     // threshold. It still cannot open the gate for low-information memes.
@@ -349,7 +372,13 @@ export function buildImageSearchPlan(analysis, content = '') {
       && !explicitIntent) continue;
     // An explicit empty array means vision found no suitable public search
     // clue (for example a private chat screenshot); don't send its OCR online.
-    const explicitClue = explicitVisibleTextClue(item);
+    const explicitClue = explicitVisibleTextClue(
+      item,
+      explicitLowInformationSearch ? 2 : 8,
+    );
+    const highConfidenceSource = (Array.isArray(item.sourceCandidates) ? item.sourceCandidates : [])
+      .find((candidate) => String(candidate?.confidence ?? '').toLowerCase() === 'high')
+      ?.platform ?? '';
     const proposed = cultureIntent
       // 对“调侃/接梗/地狱笑话”优先使用截图中最长且最具体的可见正文。
       // 视觉模型生成的 search_queries 可能漏掉实体关系，精确 OCR 线索
@@ -361,7 +390,8 @@ export function buildImageSearchPlan(analysis, content = '') {
         // One focused source lookup is enough. Sending both OCR and keyword
         // variants here made a single “找原帖” question pay for duplicate
         // searches before the answer was generated.
-        ? [explicitClue || (item.keywords?.length ? item.keywords.slice(0, 5).join(' ') : '')]
+        ? [explicitClue || highConfidenceSource
+          || (item.keywords?.length ? item.keywords.slice(0, 5).join(' ') : '')]
         : (item.keywords?.length ? [item.keywords.slice(0, 5).join(' ')] : []));
     for (const value of proposed) {
       const subject = String(value ?? '').replace(/[\u0000-\u001f\u007f]/gu, ' ')
@@ -371,7 +401,9 @@ export function buildImageSearchPlan(analysis, content = '') {
       // reaction/meme image. Do not spend an upstream call just because vision
       // guessed a template name; explicit “出处/什么梗” can still opt in.
       if (!explicitIntent && meaningfulCharacters(item.visibleText?.join(' ')) === 0) continue;
-      if (!isImageSearchEligible(item, subject)) continue;
+      if (explicitLowInformationSearch
+        ? !hasExplicitConcreteImageClue(subject, item)
+        : !isImageSearchEligible(item, subject)) continue;
       const fingerprint = subject.normalize('NFKC').toLowerCase();
       const scope = buildSourceScope(item.sourceCandidates);
       const key = `${scope.includeDomains.join(',')}:${fingerprint}`;

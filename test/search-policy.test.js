@@ -72,3 +72,32 @@ test('攻击轮只保留事实轨，文化轨仍关闭', () => {
   assert.equal(policy.cultureEligible, false);
   assert.equal(policy.reason, 'attack-turn-fact-only');
 });
+
+test('低信息图只有明确求证或来源问题才打开事实轨', () => {
+  const logo = classifySearchPolicy({
+    content: '这是谁家的logo',
+    hasImageContext: true,
+    imageSearch: true,
+    imageInformationLevel: 'low_information',
+  });
+  assert.equal(logo.factEligible, true);
+  assert.equal(logo.reason, 'explicit-low-information-image');
+  assert.equal(logo.verificationRequested, true);
+
+  const real = classifySearchPolicy({
+    content: '真的假的',
+    hasImageContext: true,
+    imageSearch: true,
+    imageInformationLevel: 'low_information',
+  });
+  assert.equal(real.factEligible, true);
+  assert.equal(real.verificationRequested, true);
+
+  const evaluate = classifySearchPolicy({
+    content: '评价一下',
+    hasImageContext: true,
+    imageInformationLevel: 'low_information',
+  });
+  assert.equal(evaluate.factEligible, false);
+  assert.equal(evaluate.reason, 'low-information-image');
+});

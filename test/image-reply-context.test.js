@@ -259,3 +259,56 @@ test('引用 Bot 自己生成的视频封面时直接说明不评价，不进入
     text: '这是我抓取视频生成的封面卡片，只用于传递视频信息，不评价这张图。',
   }]);
 });
+
+test('低信息 logo 图只有可见品牌线索或高置信来源时才检索', () => {
+  const textClue = buildImageSearchQueries({ items: [{
+    visibleText: ['B站'],
+    keywords: ['logo'],
+    searchQueries: ['B站 logo'],
+  }] }, '这是谁家的logo');
+  assert.deepEqual(textClue, ['B站 logo 事实核查']);
+
+  const noClue = buildImageSearchQueries({ items: [{
+    visibleText: [],
+    keywords: ['logo'],
+    searchQueries: ['B站 logo'],
+  }] }, '这是谁家的logo');
+  assert.deepEqual(noClue, []);
+
+  const sourceClue = buildImageSearchQueries({ items: [{
+    visibleText: [],
+    keywords: ['logo'],
+    searchQueries: [],
+    sourceCandidates: [{
+      platform: 'bilibili',
+      confidence: 'high',
+      evidence: '画面可见粉色播放器图标和哔哩哔哩字样',
+    }],
+  }] }, '这是谁家的logo');
+  assert.deepEqual(sourceClue, ['bilibili']);
+});
+
+test('低信息图在真的假的问题下进入事实核验，而不是纯玩梗', async () => {
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '真的假的',
+    currentQuestion: '真的假的',
+    modelInput: '图片可见文字：三个月后人类将进入2027年',
+    hasImageContext: true,
+    imageInformationLevel: 'low_information',
+    jevStyle: { imageCultureNeeded: 0.9, seriousRequest: 0 },
+    imageSearchQueries: ['三个月后 2027 事实核查'],
+    webSearch: { async search() {
+      return { context: '日历事实摘要', resultCount: 1, results: [], evidenceQuality: 'related-only' };
+    } },
+    chatClient: { isConfigured: true, async complete(_history, _input, options) {
+      prompt = options.additionalSystemPrompt;
+      return '按日历算，三个月后确实进入 2027 年；图是在拿时间夸张。';
+    } },
+  });
+  assert.equal(result.answer, '按日历算，三个月后确实进入 2027 年；图是在拿时间夸张。');
+  assert.match(prompt, /程序计算的相对时间/);
+  assert.match(prompt, /2027-01-21/);
+  assert.match(prompt, /求证优先/);
+  assert.doesNotMatch(prompt, /图片互联网梗输出模式/);
+});

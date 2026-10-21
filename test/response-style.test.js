@@ -22,6 +22,7 @@ import {
   removeInternalParticipantIds,
   reviewAttackReply,
   reviewNormalReply,
+  repairUnsupportedProvenance,
   hasSearchExplanationLeak,
   selectAttackScene,
   shouldSearchLongtuKnowledge,
@@ -700,4 +701,47 @@ test('有检索证据时放宽长度复核，避免把事实答案压缩重写',
   });
   assert.equal(withEvidence.issues.includes('too-long-for-chat'), false);
   assert.equal(withEvidence.issues.includes('long-sentence-for-chat'), false);
+});
+
+test('文化模式拦截百科定义、空标签、重复开头和无依据出处', () => {
+  assert.ok(reviewNormalReply('这个梗本质上是阶级错位。', {
+    cultureMode: true,
+  }).issues.includes('meme-definition-leak'));
+  assert.ok(reviewNormalReply('太抽象了，地狱笑话。', {
+    imageCultureMode: true,
+  }).issues.includes('culture-not-grounded'));
+  assert.equal(reviewNormalReply('把两队肤色并置成刻板印象，确实够损。', {
+    imageCultureMode: true,
+  }).issues.includes('culture-not-grounded'), false);
+
+  const repeated = reviewNormalReply('这事确实抽象。第二轮补一句。', {
+    cultureMode: true,
+    history: [
+      { role: 'assistant', content: '这事确实抽象。第一轮。' },
+      { role: 'assistant', content: '这事确实抽象。上一轮。' },
+    ],
+  });
+  assert.ok(repeated.issues.includes('repeated-culture-opening'));
+
+  const provenance = reviewNormalReply('最早出自 2024 年某个 B 站视频。', {
+    cultureMode: true,
+    searchEvidenceQuality: 'related-only',
+  });
+  assert.ok(provenance.issues.includes('unsupported-provenance'));
+  assert.equal(repairUnsupportedProvenance(
+    '最早出自 2024 年某个 B 站视频。这个梗常用来表示反差。',
+  ), '这个梗常用来表示反差。具体最早出处没查到。');
+});
+
+test('语感契约进入普通回复基座和文化复核提示', () => {
+  assert.match(buildNormalReplyStablePrompt({}), /求證题|求证题/);
+  assert.match(buildNormalReplyStablePrompt({}), /第一句先给真 \/ 假 \/ 无法确认/);
+  assert.match(buildNormalReplyRetryPrompt('q', 'd', ['culture-not-grounded'], {
+    imageCultureMode: true,
+  }), /具体元素、动作或关系/);
+  assert.match(buildNormalReplyRetryPrompt('q', 'd', ['unsupported-provenance'], {
+    cultureMode: true,
+    searchEvidenceQuality: 'related-only',
+  }), /具体最早出处没查到/);
+  assert.match(buildGroupChatOutputPrompt({ verificationRequested: true }), /第一句先给“真 \/ 假 \/ 无法确认”/);
 });

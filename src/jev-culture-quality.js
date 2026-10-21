@@ -1,3 +1,14 @@
+// Compact output contract shared by normal replies and the culture review
+// path. Keep it short: repeating every existing length rule here makes the
+// model optimize for prompt prose instead of the actual conversational move.
+export const VOICE_CONTRACT_PROMPT = [
+  '【统一语感契约】',
+  '求证题：第一句先给真 / 假 / 无法确认，再用 1～2 句说明依据，约 20～90 字。',
+  '纯接梗：第一句落到具体元素、动作或关系，1～2 句，约 15～70 字。',
+  '解释题：2～3 句，约 40～140 字。',
+  '禁止客服腔、百科定义式开头和“抽象/离谱/有意思”这类空标签堆砌；一句话能接住就停。',
+].join('\n');
+
 // Derived from anonymized short-reply observations in group 239375116.
 // This is a quality rubric, not a copy of any member's identity, catchphrase,
 // private history or exact reply text.
@@ -12,7 +23,7 @@ export const CULTURE_REPLY_QUALITY_PROMPT = [
 ].join('\n');
 
 export function buildCultureQualityPrompt(style = {}) {
-  const lines = [CULTURE_REPLY_QUALITY_PROMPT];
+  const lines = [VOICE_CONTRACT_PROMPT, CULTURE_REPLY_QUALITY_PROMPT];
   if (Number(style.concreteAssociation) >= 0.6 || Number(style.culturePriority) >= 0.6) {
     lines.push('本轮已有文化落点：优先直接使用具体关系或反差，不要退回说明图片。');
   }

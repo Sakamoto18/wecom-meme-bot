@@ -181,15 +181,21 @@ export function shouldSendJevRawImage({
     && !isBareImageInspectionRequest(text);
   const genericEvaluation = /^(?:请|麻烦)?(?:评价|点评|赏析|看看|看下|看一下)(?:一下)?(?:这(?:张)?|该(?:张)?|这张)?(?:图|图片|截图|照片|画面)?[。！？!?，,\s]*$/u.test(normalizedQuestion);
   const culturalQuestion = /(?:什么梗|啥意思|什么意思|为什么(?:好笑|这样)|出处|原帖|原作|解读|反差|双关|谐音|幻视|拆字|隐喻|赏析|评价|怎么看)/u.test(text);
+  const explicitVerificationQuestion = /(?:真的假的|真假|是否属实|核实|验证|辟谣|谣言|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志)/iu.test(text);
   if (imageInformationPolicy?.level === 'low_information' && genericEvaluation) return false;
   if (mode === 'all_explicit') return explicitSemanticQuestion || culturalQuestion;
   return Boolean(
     hasWordplay
     || lowConfidence
+    || (imageInformationPolicy?.level === 'low_information' && explicitVerificationQuestion)
     || (explicitSemanticQuestion && analysisMissing)
     || (explicitSemanticQuestion && (highDensity || culturalQuestion))
     || (culturalQuestion && highDensity),
   );
+}
+
+function isImageSourceLookupIntent(content = '') {
+  return /(?:找|查|搜|搜到|定位|核实).{0,12}(?:原帖|原图|出处|来源|作者)/iu.test(String(content ?? ''));
 }
 
 const CRAZY_THURSDAY_UNSAFE_PATTERN = /(?:跳楼|跳下去|自杀|自残|不想活|裸奔|脱光|开房|强奸|奸尸|未成年|儿童色情|密码|apikey|api\s*key|诈骗|骗取|押金|缅甸北部|转账\s*\d{3,}|借我\s*\d{3,})/iu;
@@ -869,6 +875,28 @@ export function parseImageAnalysis(value) {
         }))
         .filter((entry) => entry.speaker && entry.utterance)
         .slice(0, 16);
+      const parseCandidateReadings = (value) => (Array.isArray(value) ? value : [])
+        .map((entry) => {
+          if (typeof entry === 'string') {
+            return { reading: entry.trim(), evidence: '', mechanism: '', confidence: '' };
+          }
+          if (!entry || typeof entry !== 'object') return null;
+          return {
+            reading: String(entry.reading ?? entry.interpretation ?? entry.解读 ?? '').trim(),
+            evidence: String(entry.evidence ?? entry.依据 ?? '').trim(),
+            mechanism: String(entry.mechanism ?? entry.机制 ?? '').trim(),
+            confidence: String(entry.confidence ?? entry.置信度 ?? '').trim().toLowerCase(),
+          };
+        })
+        .filter((entry) => entry?.reading)
+        .map((entry) => ({
+          reading: entry.reading.slice(0, 300),
+          evidence: entry.evidence.slice(0, 300),
+          mechanism: entry.mechanism.slice(0, 200),
+          confidence: ['high', 'medium', 'low'].includes(entry.confidence)
+            ? entry.confidence : '',
+        }))
+        .slice(0, 3);
       const parseItem = (item, fallbackIndex) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
         const description = String(item.description ?? item.描述 ?? '').trim();
@@ -908,6 +936,9 @@ export function parseImageAnalysis(value) {
           item.reply_hook ?? item.replyHook ?? item.接话落点 ?? '',
         ).trim();
         const dialogue = parseDialogueRoles(item.dialogue_roles ?? item.dialogueRoles ?? item.对话角色);
+        const candidateReadings = parseCandidateReadings(
+          item.candidate_readings ?? item.candidateReadings ?? item.候选解读,
+        );
         const confidence = String(item.confidence ?? item.置信度 ?? '').trim();
         const indexValue = Number(item.index ?? item.image_index ?? item.序号 ?? fallbackIndex);
         const index = Number.isFinite(indexValue) && indexValue > 0
@@ -917,7 +948,7 @@ export function parseImageAnalysis(value) {
           && !visualSubject && !visualWordplay && textClaims.length === 0
           && !subject && !composition && !palette && !relationship && !interpretation
           && !sceneRelation && !impliedPoint && !comicMechanism && !speakerIntent && !replyHook
-          && dialogue.length === 0) {
+          && dialogue.length === 0 && candidateReadings.length === 0) {
           return null;
         }
         return {
@@ -941,6 +972,7 @@ export function parseImageAnalysis(value) {
           speakerIntent: speakerIntent.slice(0, 220),
           replyHook: replyHook.slice(0, 260),
           dialogueRoles: dialogue,
+          candidateReadings,
           confidence: confidence.slice(0, 20),
           sourceCandidates: normalizeSourceCandidates(item.source_candidates),
           searchQueries: Array.isArray(item.search_queries)
@@ -971,6 +1003,7 @@ export function parseImageAnalysis(value) {
         const speakerIntent = items.map((item) => item.speakerIntent).filter(Boolean).join('；');
         const replyHook = items.map((item) => item.replyHook).filter(Boolean).join('；');
         const dialogueRoles = items.flatMap((item) => item.dialogueRoles ?? []);
+        const candidateReadings = items.flatMap((item) => item.candidateReadings ?? []).slice(0, 3);
         const description = summary || items
           .map((item) => `第${item.index}张：${item.description}`)
           .join('\n');
@@ -989,6 +1022,7 @@ export function parseImageAnalysis(value) {
           speakerIntent: speakerIntent.slice(0, 400),
           replyHook: replyHook.slice(0, 500),
           dialogueRoles,
+          candidateReadings,
           items,
           summary: summary.slice(0, IMAGE_ANALYSIS_MAX_CHARACTERS),
           raw: raw.slice(0, IMAGE_ANALYSIS_MAX_CHARACTERS),
@@ -1029,12 +1063,15 @@ export function parseImageAnalysis(value) {
           parsed.reply_hook ?? parsed.replyHook ?? parsed.接话落点 ?? '',
         ).trim();
       const parsedDialogueRoles = parseDialogueRoles(parsed.dialogue_roles ?? parsed.dialogueRoles ?? parsed.对话角色);
+      const parsedCandidateReadings = parseCandidateReadings(
+        parsed.candidate_readings ?? parsed.candidateReadings ?? parsed.候选解读,
+      );
       const confidence = String(parsed.confidence ?? parsed.置信度 ?? '').trim();
       if (!description && visibleText.length === 0 && keywords.length === 0 && !scene
         && !visualSubject && !visualWordplay && textClaims.length === 0
         && !subject && !composition && !palette && !relationship && !interpretation
         && !sceneRelation && !impliedPoint && !comicMechanism && !speakerIntent && !replyHook
-        && parsedDialogueRoles.length === 0) continue;
+        && parsedDialogueRoles.length === 0 && parsedCandidateReadings.length === 0) continue;
       return {
         description: description.slice(0, IMAGE_ANALYSIS_MAX_CHARACTERS),
         visualSubject: visualSubject.slice(0, 240),
@@ -1055,6 +1092,7 @@ export function parseImageAnalysis(value) {
         speakerIntent: speakerIntent.slice(0, 220),
         replyHook: replyHook.slice(0, 260),
         dialogueRoles: parsedDialogueRoles,
+        candidateReadings: parsedCandidateReadings,
         confidence: confidence.slice(0, 20),
         sourceCandidates: normalizeSourceCandidates(parsed.source_candidates),
         searchQueries: Array.isArray(parsed.search_queries)
@@ -1113,6 +1151,7 @@ function parsePassiveImageTriage(value) {
         scene: analysis.scene,
         sourceCandidates: analysis.sourceCandidates,
         searchQueries: analysis.searchQueries,
+        candidateReadings: analysis.candidateReadings,
       }];
       return {
         candidate: decision === 'yes' || decision === 'true',
@@ -1157,6 +1196,9 @@ export function formatImageAnalysisContext(analysis) {
       semantics.speakerIntent ? `当前用户可能的动作（待结合原话确认）：${semantics.speakerIntent}` : '',
       semantics.replyHook ? `可接话落点（候选，不是固定答案）：${semantics.replyHook}` : '',
       item.visualWordplay ? `视觉文字双关/错视（待核对）：${item.visualWordplay}` : '',
+      item.candidateReadings?.length > 0
+        ? `候选解读（按 evidence/confidence 选一个最可信的，不要逐条输出）：${item.candidateReadings.map((reading) => `${reading.reading}${reading.evidence ? `（依据：${reading.evidence}` : ''}${reading.mechanism ? `；机制：${reading.mechanism}` : ''}${reading.confidence ? `；置信度：${reading.confidence}` : ''}${reading.evidence || reading.mechanism || reading.confidence ? '）' : ''}`).join('；')}`
+        : '',
     ].filter(Boolean);
     return [
       `第${item.index}张图片：`,
@@ -1202,6 +1244,9 @@ export function formatImageAnalysisContext(analysis) {
       semanticFields(analysis).speakerIntent ? `当前用户可能的动作（待结合原话确认）：${semanticFields(analysis).speakerIntent}` : '',
       semanticFields(analysis).replyHook ? `可接话落点（候选，不是固定答案）：${semanticFields(analysis).replyHook}` : '',
       analysis.visualWordplay ? `视觉文字双关/错视（待核对）：${analysis.visualWordplay}` : '',
+      analysis.candidateReadings?.length > 0
+        ? `候选解读（按 evidence/confidence 选一个最可信的，不要逐条输出）：${analysis.candidateReadings.map((reading) => `${reading.reading}${reading.evidence ? `（依据：${reading.evidence}` : ''}${reading.mechanism ? `；机制：${reading.mechanism}` : ''}${reading.confidence ? `；置信度：${reading.confidence}` : ''}${reading.evidence || reading.mechanism || reading.confidence ? '）' : ''}`).join('；')}`
+        : '',
     ].filter(Boolean).join('\n') : '',
     !orderedItems.length && analysis.dialogueRoles?.length > 0
       ? `图片内部对话角色（仅限图片内，不是当前 QQ 身份）：${analysis.dialogueRoles.map((entry) => `${entry.speaker}：${entry.utterance}${entry.role ? `（${entry.role}）` : ''}`).join('；')}` : '',
@@ -3053,6 +3098,7 @@ export class QqBotService {
         '请以图片为准校正可见文字；如果大字被人物、物件或阴影遮挡，检查遮挡后形成的错字、拆字、谐音、黑白幻视或视觉文字双关；在 visual_wordplay 中记录“原字→遮挡后像什么→笑点关系”，没有可靠字形依据就留空。',
         '如果大字被人物、物件或阴影遮挡，检查遮挡后形成的错字、拆字、谐音、黑白幻视或视觉文字双关；在 visual_wordplay 中记录“原字→遮挡后像什么→笑点关系”，没有可靠字形依据就留空。',
         '对“甲类全是X、乙类全是Y”这类并置句，不能只做 OCR 或复述事实：识别甲/乙两个项目（或群体）、X/Y 两个属性、它们被并排放置后制造的反差，以及这是不是借刻板印象做黑色幽默。把具体关系写进 scene_relation，把暗示的缺德落点写进 implied_point，把机制写成“并置反差/刻板印象借位/地狱幽默”等具体说法，reply_hook 给出一句能直接接上的群聊落点；涉及种族、性别等敏感属性时只分析笑点结构，不把现实群体当攻击对象。',
+        '如果梗图存在两种以上合理解读，额外给出最多 3 条 candidate_readings；每条写 reading（一种读法）、evidence（画面上支持它的具体证据）、mechanism（笑点/反差机制）和 confidence（high/medium/low）。没有第二种有证据的读法就留空数组，不要为了凑候选硬编。',
       '请尽量识别这张图片中的可见文字（OCR），并判断实际画面主体、场景、人物情绪和主题，供另一个对话模型参考。对梗图、拼贴、讽刺截图和漫画，必须进一步提取：scene_relation（谁/什么和谁/什么发生了什么关系）、implied_point（整张图的观点或反差）、comic_mechanism（错位/双关/夸张/反转/荒诞等）、speaker_intent（当前用户可能要评价、配文、解释、识别还是查证）和 reply_hook（可直接接出的一个具体落点）。如果是聊天截图、段子对话或评论区，额外提取 dialogue_roles：每个对象只记录图片内部的说话标签、原句和角色关系；绝不能把“老师/我/评论者/作者”等图片内角色当成当前 QQ 发言人、引用作者或机器人。不要把这几个字段写成对象清单，必须表达图片在“做什么”。',
         question ? `用户本轮问题（用于选择相关线索）：${String(question).slice(0, 400)}` : '',
         options.artAppraisal ? ART_APPRAISAL_VISION_PROMPT : '',
@@ -3087,12 +3133,12 @@ export class QqBotService {
         '严格只输出 JSON，不要 Markdown 代码块或额外解释，格式如下：',
         options.artAppraisal
           ? '{"description":"一句带画面证据的主体关系判断","subject":"具体主体及置信度","composition":"空间/构图关系","palette":"色彩或笔触","relationship":"主体动作或视线关系","interpretation":"一个有证据的隐喻","confidence":"high|medium|low","visible_text":["图片中可见文字"],"keywords":["主题关键词"],"scene":"场景或情绪","search_queries":[],"source_candidates":[]}'
-          : '{"description":"内容与表达关系，区分可见事实、图片文字主张和推测","scene_relation":"主体/事件之间正在发生的关系","implied_point":"整张图真正表达的观点或反差","comic_mechanism":"错位/双关/夸张/反转/荒诞机制","speaker_intent":"评价/配文/解释/识别/查证/其他","reply_hook":"一个可直接接话的具体落点","dialogue_roles":[{"speaker":"图片内标签，如老师/我/评论者","utterance":"该对象在图中的原句","role":"图片内角色关系"}],"visual_subject":"只根据像素独立判断的主体，不要照抄图片文字里的名称","visual_confidence":"high|medium|low","visual_wordplay":"原字、遮挡后像什么以及由此产生的视觉文字双关；不确定则留空","text_claims":["图片文字提出或声称的内容，不等于事实"],"visible_text":["图片中可见文字"],"keywords":["主题关键词"],"scene":"场景或情绪","search_queries":["独特原句与公开主体等检索线索"],"source_candidates":[{"platform":"候选平台名","confidence":"medium","evidence":"实际可见的平台界面特征，没有依据时此数组留空"}]}',
+          : '{"description":"内容与表达关系，区分可见事实、图片文字主张和推测","scene_relation":"主体/事件之间正在发生的关系","implied_point":"整张图真正表达的观点或反差","comic_mechanism":"错位/双关/夸张/反转/荒诞机制","speaker_intent":"评价/配文/解释/识别/查证/其他","reply_hook":"一个可直接接话的具体落点","candidate_readings":[{"reading":"一种有画面依据的读法","evidence":"支持该读法的可见元素","mechanism":"对应的笑点或反差机制","confidence":"high|medium|low"}],"dialogue_roles":[{"speaker":"图片内标签，如老师/我/评论者","utterance":"该对象在图中的原句","role":"图片内角色关系"}],"visual_subject":"只根据像素独立判断的主体，不要照抄图片文字里的名称","visual_confidence":"high|medium|low","visual_wordplay":"原字、遮挡后像什么以及由此产生的视觉文字双关；不确定则留空","text_claims":["图片文字提出或声称的内容，不等于事实"],"visible_text":["图片中可见文字"],"keywords":["主题关键词"],"scene":"场景或情绪","search_queries":["独特原句与公开主体等检索线索"],"source_candidates":[{"platform":"候选平台名","confidence":"medium","evidence":"实际可见的平台界面特征，没有依据时此数组留空"}]}',
         '看不清的文字不要猜测；没有文字时 visible_text 输出空数组。',
       ].join('\n');
       try {
         const requestOptions = {
-          maxTokens: recordContext ? 1600 : 1100,
+          maxTokens: recordContext ? 1900 : 1500,
           usageSource: 'image-understanding',
           timeoutMs: 60_000,
           temperature: 0.1,
@@ -3137,6 +3183,7 @@ export class QqBotService {
             comicMechanism: String(item.comicMechanism ?? item.comic_mechanism ?? '').trim(),
             speakerIntent: String(item.speakerIntent ?? item.speaker_intent ?? '').trim(),
             replyHook: String(item.replyHook ?? item.reply_hook ?? '').trim(),
+            candidateReadings: Array.isArray(item.candidateReadings) ? item.candidateReadings : [],
             confidence: String(item.confidence ?? item.置信度 ?? '').trim(),
             searchQueries: item.searchQueries,
             sourceCandidates: item.sourceCandidates,
@@ -3187,6 +3234,7 @@ export class QqBotService {
       comicMechanism: analyses.map((item) => item.comicMechanism).filter(Boolean).join('；').slice(0, 500),
       speakerIntent: analyses.map((item) => item.speakerIntent).filter(Boolean).join('；').slice(0, 400),
       replyHook: analyses.map((item) => item.replyHook).filter(Boolean).join('；').slice(0, 500),
+      candidateReadings: analyses.flatMap((item) => item.candidateReadings ?? []).slice(0, 3),
       items: analyses,
       summary: '',
     };
@@ -3520,6 +3568,7 @@ export class QqBotService {
           || (
             isExplicitImageInterpretationIntent(imageSearchQuestion)
             && !isBareImageInspectionRequest(imageSearchQuestion)
+            && !isImageSourceLookupIntent(imageSearchQuestion)
           )
         );
       const replyImageBlocks = imageAnalysisSucceeded && !preserveRawImageForInterpretation
@@ -3590,11 +3639,17 @@ export class QqBotService {
             ? `当前用户可能的动作：${imageAnalysis.speakerIntent || imageAnalysis.items?.map((item) => item.speakerIntent).filter(Boolean).join('；')}` : '',
           imageAnalysis?.replyHook || imageAnalysis?.items?.map((item) => item.replyHook || item.impliedPoint || item.interpretation).filter(Boolean).join('；')
             ? `可接话落点：${imageAnalysis.replyHook || imageAnalysis.items?.map((item) => item.replyHook || item.impliedPoint || item.interpretation).filter(Boolean).join('；')}` : '',
+          ...(imageAnalysis?.candidateReadings ?? []).map((reading, index) => (
+            `候选解读${index + 1}：${reading.reading}${reading.evidence ? `（依据：${reading.evidence}` : ''}${reading.mechanism ? `；机制：${reading.mechanism}` : ''}${reading.confidence ? `；置信度：${reading.confidence}` : ''}${reading.evidence || reading.mechanism || reading.confidence ? '）' : ''}`
+          )),
           ...(imageAnalysis?.items ?? []).flatMap((item) => [
             item.sceneRelation || item.relationship ? `第${item.index}张关系：${item.sceneRelation || item.relationship}` : '',
             item.impliedPoint || item.interpretation ? `第${item.index}张表达：${item.impliedPoint || item.interpretation}` : '',
             item.comicMechanism ? `第${item.index}张机制：${item.comicMechanism}` : '',
             item.replyHook || item.impliedPoint || item.interpretation ? `第${item.index}张落点：${item.replyHook || item.impliedPoint || item.interpretation}` : '',
+            ...(item.candidateReadings ?? []).map((reading, index) => (
+              `第${item.index}张候选解读${index + 1}：${reading.reading}${reading.evidence ? `（依据：${reading.evidence}` : ''}${reading.confidence ? `；置信度：${reading.confidence}` : ''}${reading.evidence || reading.confidence ? '）' : ''}`
+            )),
           ]),
         ].filter(Boolean).join('；').slice(0, 2_400),
         artAppraisal,

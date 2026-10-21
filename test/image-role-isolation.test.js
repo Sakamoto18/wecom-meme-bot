@@ -40,3 +40,22 @@ test('图片证据按像素事实、文字主张和低置信推断分层', () =>
   assert.match(context, /只有冠军会被记住/);
   assert.match(context, /不得直接当成已确认事实/);
 });
+
+test('候选解读最多保留三条并作为后台证据注入', () => {
+  const analysis = parseImageAnalysis(JSON.stringify({
+    description: '两个人并排站着',
+    candidate_readings: [
+      { reading: '身份错位', evidence: '西装和拖鞋并置', mechanism: '反差', confidence: 'high' },
+      { reading: '职业切换', evidence: '手边有工具箱', mechanism: '借代', confidence: 'medium' },
+      { reading: '时间错位', evidence: '背景有日历', mechanism: '双关', confidence: 'low' },
+      { reading: '不应保留', evidence: '无关', mechanism: '凑数', confidence: 'low' },
+    ],
+  }));
+  assert.equal(analysis.candidateReadings.length, 3);
+  assert.equal(analysis.candidateReadings[0].confidence, 'high');
+  const context = formatImageAnalysisContext(analysis);
+  assert.match(context, /候选解读/);
+  assert.match(context, /身份错位/);
+  assert.match(context, /不要逐条输出/);
+  assert.doesNotMatch(context, /不应保留/);
+});

@@ -129,6 +129,29 @@ test('Jev 原图只对高价值图片语义问题启用，低信息图不增加�
   }), true);
 });
 
+test('低信息图只有明确求证或 logo 核验时才为 Jev 补原图', () => {
+  const block = { type: 'image_url', image_url: { url: 'data:image/png;base64,' + 'A'.repeat(400) } };
+  const lowInformation = { level: 'low_information' };
+  assert.equal(shouldSendJevRawImage({
+    imageBlocks: [block],
+    question: '这是谁家的logo',
+    imageInformationPolicy: lowInformation,
+    imageAnalysis: { items: [{ confidence: 'high', visualWordplay: '' }] },
+  }), true);
+  assert.equal(shouldSendJevRawImage({
+    imageBlocks: [block],
+    question: '真的假的',
+    imageInformationPolicy: lowInformation,
+    imageAnalysis: { items: [{ confidence: 'high', visualWordplay: '' }] },
+  }), true);
+  assert.equal(shouldSendJevRawImage({
+    imageBlocks: [block],
+    question: '评价一下',
+    imageInformationPolicy: lowInformation,
+    imageAnalysis: { items: [{ confidence: 'high', visualWordplay: '' }] },
+  }), false);
+});
+
 test('普通长答拆成连续完整消息，保留每句条件并不超过四条', () => {
   const parts = splitReplyText('先检查服务是否启动，再确认端口。\n\n如果仍然失败，检查容器网络和监听地址；最后看日志里的具体错误。');
   assert.deepEqual(parts, [

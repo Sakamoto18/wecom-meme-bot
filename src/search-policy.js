@@ -8,6 +8,10 @@ import {
 // “互联网语气”.  A search request is handled by the explicit web-search
 // pattern; this rail is only for a concrete factual claim.
 const EXPLICIT_FACT_PATTERN = /(?:发生了什么|怎么回事|是否属实|真的吗|核实|事实|证据|原帖|原文|官方|公开信息|数据|统计|哪年|何时|时间线|是谁|哪位|价格|版本|政策|新闻|报道|资料|来源|出处|上网|查一下|搜索一下|查询一下)/u;
+// A verification request is stronger than a generic culture lookup. It must
+// survive the low-information-image gate so “谁家的 logo”“真的假的” can
+// reach fact retrieval even when OCR found little text.
+const EXPLICIT_VERIFICATION_PATTERN = /(?:真的假的|真假|是否属实|属实吗|真的吗|假的吧|假的吗|是不是真的|核实|验证|辟谣|谣言|谁家的|哪家的?|哪个品牌|什么品牌|logo|标志|几个月后|三个月后|跨年)/iu;
 // Style requests such as “接梗一下”“来点抽象” only choose the reply
 // voice.  They must not spend web-search quota.  This pattern is reserved for
 // an explicit request to identify, explain, or verify a meme/online term.
@@ -30,7 +34,8 @@ export function classifySearchPolicy(options = {}) {
   const imagePolicy = textOf(options.imageInformationLevel);
   const lowInformationImage = options.hasImageContext === true
     && LOW_INFORMATION_IMAGE_PATTERN.test(imagePolicy);
-  const explicitImageSearch = options.explicitImageSearch === true;
+  const explicitImageSearch = options.explicitImageSearch === true
+    || EXPLICIT_VERIFICATION_PATTERN.test(content);
   const jevCultureLookupNeeded = Number(options.cultureLookupNeeded) || 0;
   const jevLongtuLookupNeeded = Number(options.longtuLookupNeeded) || 0;
   const jevFactLookupNeeded = Number(options.factLookupNeeded) || 0;
@@ -40,6 +45,8 @@ export function classifySearchPolicy(options = {}) {
   const memeTopic = shouldSearchMemeKnowledge(content);
   const currentFacts = shouldSearchCurrentInformation(content);
   const explicitFacts = EXPLICIT_FACT_PATTERN.test(content);
+  const verificationRequested = EXPLICIT_VERIFICATION_PATTERN.test(content)
+    || options.verificationRequested === true;
   const highConfidenceCulture = HIGH_CONFIDENCE_CULTURE_PATTERN.test(content);
   const jevCultureEligible = !imageSearch && jevCultureLookupNeeded >= 0.4;
   const cultureEligible = !imageSearch
@@ -51,6 +58,7 @@ export function classifySearchPolicy(options = {}) {
   const factEligible = !imageSearch && (
     currentFacts
     || explicitFacts
+    || verificationRequested
     || jevFactLookupNeeded >= 0.45
     || jevTimeSensitive >= 0.5
     || options.unknownConcept === true
@@ -65,7 +73,7 @@ export function classifySearchPolicy(options = {}) {
       reason: 'attack-turn-fact-only',
     };
   }
-  if (lowInformationImage && !explicitImageSearch) {
+  if (lowInformationImage && !explicitImageSearch && !verificationRequested) {
     return {
       factEligible: false,
       cultureEligible: false,
@@ -77,11 +85,17 @@ export function classifySearchPolicy(options = {}) {
 
   if (imageSearch) {
     return {
-      factEligible: !lowInformationImage,
+      factEligible: !lowInformationImage || explicitImageSearch || verificationRequested,
       cultureEligible: false,
       confidence: 'medium',
       lowInformationImage,
-      reason: lowInformationImage ? 'low-information-image' : 'explicit-image-clues',
+      explicitImageSearch,
+      verificationRequested,
+      reason: lowInformationImage
+        ? (explicitImageSearch || verificationRequested
+          ? 'explicit-low-information-image'
+          : 'low-information-image')
+        : 'explicit-image-clues',
     };
   }
 
@@ -96,7 +110,13 @@ export function classifySearchPolicy(options = {}) {
     reason: factEligible && cultureEligible
       ? 'fact-and-culture'
       : (factEligible ? 'fact-intent' : (cultureEligible ? 'culture-intent' : 'no-search-intent')),
+    explicitImageSearch,
+    verificationRequested,
   };
+}
+
+export function isExplicitVerificationRequest(content = '') {
+  return EXPLICIT_VERIFICATION_PATTERN.test(String(content ?? ''));
 }
 
 export function isHighConfidenceCulturePolicy(policy = {}) {
