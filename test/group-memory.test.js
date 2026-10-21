@@ -200,6 +200,26 @@ test('群级语感画像使用全部历史、清洗敏感内容并支持参考 B
           : `这版本更新后有点卡，我先回滚了 https://example.com/${index}`,
       });
     }
+    for (let index = 0; index < 4; index += 1) {
+      clock.advance(1_000);
+      clock.memory.recordEvent({
+        groupId: 'g1',
+        userId: 'u1',
+        senderName: '群友1',
+        messageId: `noise-image-${index}`,
+        createdAt: clock.now,
+        text: '（发送了一张图片）',
+      });
+      clock.advance(1_000);
+      clock.memory.recordEvent({
+        groupId: 'g1',
+        userId: 'u2',
+        senderName: '群友2',
+        messageId: `noise-mention-${index}`,
+        createdAt: clock.now,
+        text: '@某人(123456789) 如何评价',
+      });
+    }
     clock.advance(1_000);
     clock.memory.recordEvent({
       groupId: 'g1',
@@ -212,11 +232,12 @@ test('群级语感画像使用全部历史、清洗敏感内容并支持参考 B
 
     assert.equal(await clock.memory.refreshStyleProfile('g1'), true);
     const profile = clock.memory.loadStyleProfile('g1');
-    assert.equal(profile.sourceCount, 220);
+    assert.equal(profile.sourceCount, 228);
     assert.equal(profile.version, 3);
     assert.ok(profile.semanticCard.catchphrases.includes('确实，笑死'));
     assert.ok(profile.styleRules.some((rule) => rule.includes('中位长度')));
     assert.ok(profile.repeatedPhrases.includes('确实，笑死'));
+    assert.ok(!profile.repeatedPhrases.includes('（发送了一张图片）'));
     assert.ok(profile.referenceCount, 'reference bot event should be counted');
     const styleCalls = calls.filter((call) => call.options.usageSource === 'group-style-card');
     assert.equal(styleCalls.length, 1);
@@ -227,9 +248,14 @@ test('群级语感画像使用全部历史、清洗敏感内容并支持参考 B
       query: '缓存回滚怎么处理',
     });
     assert.match(prompt, /本群真实语感参考/);
+    assert.match(prompt, /先学他们怎么接话/);
+    assert.match(prompt, /接梗机制/);
     assert.match(prompt, /确实，笑死/);
     assert.match(prompt, /参考Bot/);
     assert.doesNotMatch(prompt, /https?:\/\//);
+    assert.doesNotMatch(prompt, /发送了一张图片|如何评价|@某人/);
+    assert.ok(prompt.indexOf('接梗机制') >= 0);
+    assert.ok(prompt.indexOf('接梗机制') < prompt.indexOf('真实发言节奏参考'));
 
     const other = createMemory(directory, { styleGroups: ['g2'] });
     assert.equal(other.memory.buildStylePrompt({ groupId: 'g2', query: '版本' }), '');

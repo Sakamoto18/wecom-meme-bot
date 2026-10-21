@@ -7,7 +7,7 @@ export function requestsSourceDisplay(question) {
 export function sourceDisplayPrompt(question) {
   return requestsSourceDisplay(question)
     ? '本轮用户明确询问来源或原文：只列必要且真实存在的出处/链接，证据不足照实说，不编造。'
-    : '本轮没有要求展示来源：联网证据只用于后台核实，最终直接说结论，禁止自动添加媒体名括号尾注、来源标签、参考文献列表或引用链接。日期、数字、适用条件和不确定性必须保留；正文讨论的机构/人物不是引用尾注，不应删掉。';
+    : '本轮没有要求展示来源：后台资料只用于自己消化，不是让你汇报核实过程。直接按群聊口吻接话，禁止自动添加媒体名括号尾注、来源标签、参考文献列表或引用链接，也别说“已核实/资料显示”。日期、数字、适用条件和不确定性必须保留；正文讨论的机构/人物不是引用尾注，不应删掉。';
 }
 
 // Suppress citation decorations, never ordinary parenthetical facts. A bare

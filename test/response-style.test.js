@@ -142,6 +142,9 @@ test('最新信息、实时数据和明确联网请求会触发普通联网检�
   assert.equal(shouldSearchCurrentInformation('解释一下 TCP 三次握手'), false);
   assert.equal(shouldSearchCurrentInformation('我现在很难受'), false);
   assert.equal(shouldSearchCurrentInformation('认真回答，别骂了'), false);
+  assert.equal(shouldSearchCurrentInformation('今天好困'), false);
+  assert.equal(shouldSearchCurrentInformation('刚刚吃完饭'), false);
+  assert.equal(shouldSearchCurrentInformation('今年真难'), false);
 });
 
 test('普通网络梗和短词释义会触发梗检索，直接辱骂仍走对线', () => {
@@ -281,6 +284,16 @@ test('普通回复保留龙玉涛语感但不强制攻击任何参与者', () =>
   assert.match(prompt, /信息和锋芒融在同一句/);
 });
 
+test('普通闲聊默认先做活人，不把每轮都写成核实记录', () => {
+  const prompt = buildNormalReplyStablePrompt({});
+  assert.match(prompt, /【先做人】/);
+  assert.match(prompt, /接情绪、接梗、表态、吐槽或反问/);
+  assert.match(prompt, /不要把“核实、确认、依据、信息时点”当默认开场/);
+  assert.doesNotMatch(prompt, /先准确回答用户真正的问题/);
+  assert.match(buildGroupChatOutputPrompt({}), /先接玩笑、情绪或具体话头/);
+  assert.match(buildGroupChatOutputPrompt({}), /不是来交报告的，是来聊天的/);
+});
+
 test('普通正经回答也明确要求带事情本身的贫嘴口吻', () => {
   const prompt = buildNormalReplyStablePrompt({});
   assert.match(prompt, /角色口吻是硬要求/);
@@ -343,7 +356,7 @@ test('图片文化模式压住正经复述并要求具体并置反差', () => {
 test('统一群聊输出契约要求先接话并隐藏搜索播报', () => {
   const prompt = buildGroupChatOutputPrompt({});
   assert.match(prompt, /先像熟悉的群友开口/);
-  assert.match(prompt, /后台互联网素材只能被消化/);
+  assert.match(prompt, /后台资料只能被消化/);
   assert.match(prompt, /禁止输出“根据搜索结果”/);
   assert.match(prompt, /保持当前角色人格和现有短回复长度/);
   assert.match(buildGroupChatOutputPrompt({ sourceDisplayRequested: true }), /只列必要且真实存在的来源/);
@@ -753,8 +766,8 @@ test('文化模式拦截百科定义、空标签、重复开头和无依据出�
 });
 
 test('语感契约进入普通回复基座和文化复核提示', () => {
-  assert.match(buildNormalReplyStablePrompt({}), /求證题|求证题/);
-  assert.match(buildNormalReplyStablePrompt({}), /第一句先给真 \/ 假 \/ 无法确认/);
+  assert.match(buildNormalReplyStablePrompt({}), /默认是在群里聊天，不是做核实/);
+  assert.match(buildNormalReplyStablePrompt({}), /只有用户明确求证时才先给真 \/ 假 \/ 无法确认/);
   assert.match(buildNormalReplyRetryPrompt('q', 'd', ['culture-not-grounded'], {
     imageCultureMode: true,
   }), /具体元素、动作或关系/);

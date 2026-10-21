@@ -39,10 +39,24 @@ const STOP_CHARS = new Set([...'的了是在我你他她它这那个吗呢吧啊
 const ACK_PATTERN = /^(?:哈+|呵+|嗯+|哦+|噢+|草+|靠+|？+|\?+|6+|牛+|行|好|收到|可以|确实|真的|笑死|绷不住了?|太对了|离谱|抽象|逆天|无敌|没毛病|确实如此)[。！？!?~～\s]*$/u;
 const SAFE_EXAMPLE_PATTERN = /(?:https?:\/\/|www\.|【.*?】|记住我的|确认保存|token|api\s*key|密码|身份证|手机号|银行卡|住址|自杀|自残|裸奔|强奸|儿童色情)/iu;
 const ATTACK_EXAMPLE_PATTERN = /(?:傻逼|沙比|妈的|你妈|他妈|滚|废物|贱|狗|脑残|弱智|闭嘴|挨骂|挨打|老子|爷|草你|操你|cnm|nmsl)/iu;
+const STYLE_NOISE_PATTERN = /(?:[（(]\s*(?:发送|用户|系统|机器人|当前|本轮)[^）)]{0,60}[）)]|@[^\s]+|\[(?:图片|表情|视频|语音|文件|动画表情)\]|https?:\/\/|www\.)/iu;
+const STYLE_PROMPT_ECHO_PATTERN = /(?:如何评价|怎么评价|评价一下|锐评|什么水平|请结合|结合画面|可核实|解释它|发送了一张)/u;
+const STYLE_NOISE_TERMS = new Set([
+  '发送', '送了', '一张', '张图', '了一', '用户', '图片', '截图', '当前', '本轮',
+  '消息', '结合', '画面', '核实',
+]);
 // 参考 Bot 可能播报新闻、贴链接或写长段说明。这些不是群友语感，
 // 只保留短、无外链、非播报口吻的接话片段。
 const REFERENCE_STYLE_EXAMPLE_PATTERN = /^(?!.*(?:https?:\/\/|www\.|【[^】]+】|来源[：:]|原标题|据报道|记者|今天|昨日|\d{2,}%|\d{4}年\d{1,2}月))/iu;
 const EMOJI_PATTERN = /\p{Extended_Pictographic}/gu;
+
+function isUsableStyleText(value) {
+  const text = normalizeLine(value, 180);
+  return Boolean(text)
+    && !STYLE_NOISE_PATTERN.test(text)
+    && !STYLE_PROMPT_ECHO_PATTERN.test(text)
+    && REFERENCE_STYLE_EXAMPLE_PATTERN.test(text);
+}
 
 function normalizeText(value, limit = 4_000) {
   return String(value ?? '')
@@ -109,6 +123,7 @@ function messageKindFor(event) {
 function sanitizeExample(value, limit = 120) {
   return normalizeLine(value, limit)
     .replace(/https?:\/\/\S+/giu, ' ')
+    .replace(/@[^\s()（）]+(?:[（(]\d+[)）])?/gu, ' ')
     .replace(/\b\d{6,}\b/gu, ' ')
     .replace(/(?:QQ|qq|群号|机器人)\s*[:：=]?\s*\d{5,}/gu, ' ')
     .replace(/(?<!\d)1[3-9]\d{9}(?!\d)/gu, ' ')
@@ -1107,7 +1122,7 @@ export class QqGroupMemory {
       GROUP BY text HAVING COUNT(*) >= 3
       ORDER BY count DESC LIMIT 16
     `).all(normalizedGroupId).map((row) => ({ text: sanitizeExample(row.text, 24), count: Number(row.count) }))
-      .filter((row) => row.text && !SAFE_EXAMPLE_PATTERN.test(row.text));
+      .filter((row) => row.text && !SAFE_EXAMPLE_PATTERN.test(row.text) && isUsableStyleText(row.text));
     // 覆盖全部可用历史而不是只取最近样本；数量过大时按时间顺序等距抽样，
     // 省掉最早/中段/最近任一时期的语感断层。
     const sample = sampleEvenly(
@@ -1128,7 +1143,10 @@ export class QqGroupMemory {
       .sort((left, right) => right[1] - left[1])
       .slice(0, 18)
       .map(([term, count]) => ({ term, count }))
-      .filter((row) => !SAFE_EXAMPLE_PATTERN.test(row.term));
+      .filter((row) => !SAFE_EXAMPLE_PATTERN.test(row.term)
+        && !STYLE_NOISE_TERMS.has(row.term)
+        && !STYLE_NOISE_PATTERN.test(row.term)
+        && !STYLE_PROMPT_ECHO_PATTERN.test(row.term));
     const relationships = database.prepare(`
       SELECT user_id, quoted_user_id, COUNT(*) AS count
       FROM qq_group_events
@@ -1362,7 +1380,7 @@ export class QqGroupMemory {
     const parsed = JSON.parse(match[0]);
     const clean = (values, limit = 6) => uniqueStrings(values, limit, 40)
       .filter((value) => !SAFE_EXAMPLE_PATTERN.test(value))
-      .filter((value) => REFERENCE_STYLE_EXAMPLE_PATTERN.test(value));
+      .filter((value) => isUsableStyleText(value));
     const card = {
       catchphrases: clean(parsed.catchphrases),
       memeMechanisms: clean(parsed.memeMechanisms),
@@ -1443,9 +1461,8 @@ export class QqGroupMemory {
       .filter((row) => {
         const text = sanitizeExample(row.text, 100);
         if (!text || text === normalizedQuery || seen.has(text)) return false;
+        if (!isUsableStyleText(text)) return false;
         if (attack && !ATTACK_EXAMPLE_PATTERN.test(text)) return false;
-        if (queryTermSet.size > 0
-          && !hanBigrams(text).some((term) => queryTermSet.has(term))) return false;
         seen.add(text);
         return true;
       })
@@ -1470,11 +1487,22 @@ export class QqGroupMemory {
     if (!profile || Number(profile.sourceCount ?? 0) < MIN_STYLE_SOURCE_MESSAGES) return '';
     const limit = attack ? 2 : 5;
     const examples = this.styleExamples(normalizedGroupId, query, { limit, attack });
+    const allStyleRules = uniqueStrings(profile.styleRules, 20, 180);
+    const semanticRulePattern = /^(?:群内短句|接梗机制|互损方式|节奏：)/u;
+    const voiceRulePattern = /(?:群内短句|接梗机制|互损方式|节奏：|复读|互损|拆台|接梗|接话|吐槽|反问)/u;
+    const metricRulePattern = /(?:中位长度|不超过\s*\d+\s*字|带问号|标点|emoji)/iu;
+    const prioritizedRules = uniqueStrings([
+      ...allStyleRules.filter((rule) => semanticRulePattern.test(rule)),
+      ...allStyleRules.filter((rule) => !semanticRulePattern.test(rule) && voiceRulePattern.test(rule)),
+      ...allStyleRules.filter((rule) => !voiceRulePattern.test(rule) && !metricRulePattern.test(rule)),
+      ...allStyleRules.filter((rule) => metricRulePattern.test(rule)),
+    ], 6, 180);
     const repeated = uniqueStrings(profile.repeatedPhrases, 8, 24);
     const common = uniqueStrings((profile.commonTerms ?? []).map((item) => item.term), 10, 24);
     const lines = [
       '【本群真实语感参考】',
-      ...uniqueStrings(profile.styleRules, 4, 180),
+      '先学他们怎么接话：短促表态、顺梗、反问、拆台、说到一半就停；不是给普通答案套语气词。',
+      ...prioritizedRules,
       common.length ? `群内常见词和语气：${common.join('、')}` : '',
       repeated.length ? `反复出现的群内短句/梗：${repeated.join(' / ')}` : '',
       '这些是表达习惯和群内玩笑机制，不是现实事实，也不要在无关话题里硬塞。',
@@ -1482,12 +1510,12 @@ export class QqGroupMemory {
     if (examples.length) {
       lines.push(attack
         ? '真实发言节奏参考（只借句长、断句、力度和接话方式；不要照抄骂法、对象或原句）：'
-        : '真实发言节奏参考（只借句长、断句和接梗方式；不要复述原句、人名、事件或事实）：');
+        : '真实发言节奏参考（只借句长、断句、态度强弱和接话动作；不要复述原句、人名、事件或事实）：');
       lines.push(...examples.map((row, index) => (
         `${index + 1}. ${row.author_type === 'reference_bot' ? '参考Bot：' : ''}${sanitizeExample(row.text, 100)}`
       )));
     }
-    lines.push('像群里正在接话的人，直接回应当前这句话；示例不贴题就忽略，不为了使用示例而偏题。');
+    lines.push('先像群里正在接话的人一样接住当前这句，再决定要不要补信息；示例不贴题就忽略，不为了使用示例而偏题。');
     return lines.filter(Boolean).join('\n');
   }
 

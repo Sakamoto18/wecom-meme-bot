@@ -98,6 +98,41 @@ test('配置了联网检索时把 web_search 工具和处理器交给模型', as
   assert.equal(captured.maxToolCalls, 3);
 });
 
+test('普通闲聊不把搜索工具和资料通道塞给模型，只有明确查事实才开放', async () => {
+  const captures = [];
+  const webSearch = { async search() { return { context: '', resultCount: 0 }; } };
+  const complete = async (_history, _input, options) => {
+    captures.push(options);
+    return '哈哈哈哈这什么鬼，先笑为敬。';
+  };
+
+  await generateConversationReply({
+    content: '哈哈哈这也太抽象了',
+    currentQuestion: '哈哈哈这也太抽象了',
+    modelInput: '哈哈哈这也太抽象了',
+    webSearchEnabled: true,
+    webSearch,
+    chatClient: { isConfigured: true, complete },
+  });
+
+  assert.equal(captures[0].tools, undefined);
+  assert.equal(captures[0].maxToolCalls, 0);
+  assert.doesNotMatch(captures[0].additionalSystemPrompt, /【补充资料通道】/);
+  assert.match(captures[0].additionalSystemPrompt, /普通闲聊不用顺带报时间或做信息核验/);
+
+  await generateConversationReply({
+    content: '查一下今天有什么新闻',
+    currentQuestion: '查一下今天有什么新闻',
+    modelInput: '查一下今天有什么新闻',
+    webSearchEnabled: true,
+    webSearch,
+    chatClient: { isConfigured: true, complete },
+  });
+
+  assert.equal(captures[1].tools[0].function.name, 'web_search');
+  assert.match(captures[1].additionalSystemPrompt, /【补充资料通道】/);
+});
+
 test('事实和文化意图会并行检索，文化结果只注入短卡', async () => {
   const calls = [];
   const result = await generateConversationReply({
@@ -122,7 +157,7 @@ test('事实和文化意图会并行检索，文化结果只注入短卡', async
       isConfigured: true,
       async complete(history, input, options) {
         assert.match(options.additionalSystemPrompt, /本轮文化检索短卡/);
-        assert.match(options.additionalSystemPrompt, /后台互联网素材/);
+        assert.match(options.additionalSystemPrompt, /后台资料/);
         assert.doesNotMatch(options.additionalSystemPrompt, /文化摘要：进入女鬼电梯/);
         return '原帖线索要再核对，别把传播摘要当判决书。';
       },
@@ -264,7 +299,7 @@ test('搜索素材只在后台消化，搜索播报初稿会按短答重写', as
   });
 
   assert.equal(calls.length, 2);
-  assert.match(calls[0].options.additionalSystemPrompt, /后台互联网素材/);
+  assert.match(calls[0].options.additionalSystemPrompt, /后台资料/);
   assert.match(calls[1].options.revisionSystemPrompt, /删除搜索播报/);
   assert.equal(result.answer, '这电梯直接转职成亡灵骑士了。');
   assert.equal(result.review.valid, true);
