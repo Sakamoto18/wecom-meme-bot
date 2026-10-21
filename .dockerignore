@@ -1,6 +1,9 @@
 .env
 .env.qq
 .git
+.backups
+.deploy-backups
+.deploy-staging
 node_modules
 npm-debug.log*
 .DS_Store

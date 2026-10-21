@@ -3274,6 +3274,7 @@ class LongtuQqBridge(Star):
                 "sender_name": event.get_sender_name(),
                 "text": text,
                 "quoted_text": quoted_text,
+                "quoted_message_id": str(getattr(reply_component, "id", "") or ""),
                 "forwarded_text": forwarded_text,
                 "quoted_forwarded_text": quoted_forwarded_text,
                 "quoted_user_id": quoted_user_id,

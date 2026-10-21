@@ -152,7 +152,7 @@ function personaPhrasesFromContext(personaContext) {
 }
 
 function hasUnauthorizedFamilyAttack(value) {
-  return reviewNormalReply(value, { attackDuringAnswer: false })
+  return reviewNormalReply(value, { attackDuringAnswer: false, hardOnly: true })
     .issues.includes('family-attack-in-normal-mode');
 }
 
@@ -462,6 +462,8 @@ export async function generateConversationReply(options) {
     longtuRetrievalMaxQueries = 2,
     imageVisualWordplay = '',
     imageSemanticFrame = '',
+    groupTopicPrompt = '',
+    groupStyleProvider = null,
   } = options;
 
   const turnNow = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
@@ -1021,6 +1023,17 @@ export async function generateConversationReply(options) {
     && cultureCardUsed
     && abstractAssociationRequested
     && !attackStyle;
+  // Ordinary group chat only gets a hard fact/identity/security review. Length,
+  // customer-service tone, openings and report-shaped prose stay with the model
+  // instead of triggering a second rewrite. Media and proactive paths are
+  // different output contracts, so they keep the fuller semantic review.
+  const hardOnlyReview = !attackStyle
+    && !compactActiveReply
+    && !passiveImageComment
+    && !artAppraisal
+    && !abstractAssociationReviewRequired
+    && !cultureReviewRequired
+    && !imageCultureMode;
   const responseMaxTokens = passiveImageComment
     ? 260
     : (artAppraisal
@@ -1111,14 +1124,17 @@ export async function generateConversationReply(options) {
     // cachePrefixSystemPrompt 会让稳定前缀每分钟整体失效一次。
     buildCurrentTimePrompt(turnNow),
     buildRelativeDatePrompt(turnNow, relativeDateText),
+    String(groupTopicPrompt ?? '').trim(),
     !recordSummary
-      ? buildStyleAnchorPrompt(
-        selectStyleAnchors(history, {
-          currentContent: content,
-          maxAnchors: attackStyle ? 2 : 3,
-        }),
-        { mode: attackStyle ? 'attack' : 'normal' },
-      )
+      ? (typeof groupStyleProvider === 'function'
+        ? String(groupStyleProvider(attackStyle ? 'attack' : 'normal') ?? '').trim()
+        : buildStyleAnchorPrompt(
+          selectStyleAnchors(history, {
+            currentContent: content,
+            maxAnchors: attackStyle ? 2 : 3,
+          }),
+          { mode: attackStyle ? 'attack' : 'normal' },
+        ))
       : '',
     imageSafetyPrompt,
     visualWordplayPrompt,
@@ -1253,6 +1269,7 @@ export async function generateConversationReply(options) {
     hasImageContext,
     imageDescriptionRequested,
     imageCultureMode,
+    hardOnly: hardOnlyReview,
   });
   if (!review.valid && !qualityRewriteUsed) {
     qualityRewriteUsed = true;
@@ -1333,6 +1350,7 @@ export async function generateConversationReply(options) {
           hasImageContext,
           imageDescriptionRequested,
           imageCultureMode,
+          hardOnly: hardOnlyReview,
         });
         attempts += 1;
         normalPersonaRewritten = !needsSeriousExpansion;
@@ -1363,6 +1381,7 @@ export async function generateConversationReply(options) {
       abstractAssociationReviewRequired,
       cultureReviewRequired,
       shortChat,
+      hardOnly: true,
       attackDuringAnswer: attackStyle && !pureAttack,
       requireRoleVoice: false,
     });
@@ -1490,6 +1509,7 @@ export async function generateConversationReply(options) {
     hasImageContext,
     imageDescriptionRequested,
     imageCultureMode,
+    hardOnly: hardOnlyReview,
   });
 
   // A unified role prompt should produce the whole answer, but a model can

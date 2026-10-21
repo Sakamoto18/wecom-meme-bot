@@ -370,44 +370,39 @@ test('技术问题允许内部推理，但正确短答不自动扩写', async ()
   assert.equal(result.review.valid, true);
 });
 
-test('默认长草稿压缩成短答，普通追问不额外消耗搜索额度', async () => {
+test('普通群聊不再因长度二次重写，普通追问也不额外消耗搜索额度', async () => {
   const history = [{role: 'user', content: '详细介绍千兆交换机'}, {role: 'assistant', content: '五口交换机即可连接四台设备。'}];
   const calls = [];
-  const answer = '五口就够了，四台设备占四口，最后一口接路由器。';
+  const draft = '先回顾一下。' + '根据各家检索资料，端口数量要考虑设备和上联。'.repeat(22);
   const result = await generateConversationReply({
     content: '那买几口的', modelInput: '当前问题：那买几口的', history,
     chatClient: {isConfigured: true, async complete(h, i, o) {
       calls.push({h, o});
-      return calls.length === 1 ? '先回顾一下。' + '根据各家检索资料，端口数量要考虑设备和上联。'.repeat(22) : answer;
+      return draft;
     }},
     webSearch: {async search() {return {context: '厂商资料：每台设备占用一口，上联路由器占一口。', resultCount: 1};}},
   });
-  assert.equal(result.answer, '五口就够了，四台设备占四口，最后一口接路由器。');
-  assert.equal(calls.length, 2);
+  assert.equal(result.answer, draft);
+  assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].h, history);
-  assert.deepEqual(calls[1].h, history);
   assert.equal(result.detailedAnswerRequested, false);
-  assert.doesNotMatch(calls[1].o.additionalSystemPrompt, /厂商资料/);
-  assert.match(calls[1].o.revisionSystemPrompt, /默认群聊短答的压缩重写/);
   assert.equal(result.searchAttempted, false);
   assert.equal(result.review.valid, true);
 });
 
-test('截图中的第三人称客服开头走原有一次复核，不靠硬拼口头禅', async () => {
+test('普通聊天不再因第三人称客服开头二次改稿', async () => {
   const calls = [];
-  const revised = '就 PPT 美化、剪视频、修图这些。先接自己能交付的，别接完了还得求人救火。';
+  const draft = '黄胖子问的是闲鱼接单具体接啥，说白了就几类：做PPT、剪视频、修图。';
   const result = await generateConversationReply({
     content: '说的是咸鱼接单，接什么单？', modelInput: '黄胖子：说的是咸鱼接单，接什么单？',
     interactionContext: { speakerLabel: '黄胖子（成员-abcdef）' }, webSearchEnabled: false,
     chatClient: { isConfigured: true, async complete(history, input, options) {
       calls.push(options);
-      return calls.length === 1 ? '黄胖子问的是闲鱼接单具体接啥，说白了就几类：做PPT、剪视频、修图。' : revised;
+      return draft;
     } },
   });
-  assert.equal(result.answer, revised);
-  assert.equal(calls.length, 2);
-  assert.match(calls[1].revisionSystemPrompt, /narrated-question-opening/);
-  assert.equal(calls[0].cachePrefixSystemPrompt, calls[1].cachePrefixSystemPrompt);
+  assert.equal(result.answer, draft);
+  assert.equal(calls.length, 1);
   assert.equal(result.review.valid, true);
 });
 
@@ -422,22 +417,22 @@ test('口癖示范请求被模型空口带过时返回已确认原句，不增�
   assert.equal(calls, 1);
 });
 
-test('普通口癖不硬拼；已有合适口癖在长度重写中保留', async () => {
+test('普通口癖不硬拼，普通聊天也不因长度自动重写', async () => {
   const phrase = '我们龙龙都是亲切友好的';
   const calls = [];
   const answer = `${phrase}，凶不凶得看聊什么。`;
+  const draft = answer + '不用把普通聊天也搞成对线。'.repeat(35);
   const result = await generateConversationReply({
     content: '你不是挺凶的吗，怎么又装友好了？', modelInput: '怎么又装友好了？',
     personaContext: `偏好口癖：${phrase}`, webSearchEnabled: false,
     chatClient: { isConfigured: true, async complete(history, input, options) {
       calls.push(options);
-      return calls.length === 1 ? answer + '不用把普通聊天也搞成对线。'.repeat(35) : answer;
+      return draft;
     } },
   });
-  assert.equal(result.answer, answer);
-  assert.equal(calls.length, 2);
-  assert.match(calls[1].revisionSystemPrompt, /不要把所有口癖一起抹掉/);
-  assert.equal(calls[0].cachePrefixSystemPrompt, calls[1].cachePrefixSystemPrompt);
+  assert.equal(result.answer, draft);
+  assert.equal(calls.length, 1);
+  assert.equal(result.review.valid, true);
   const factual = await generateConversationReply({
     content: '一加一等于几', modelInput: '一加一等于几',
     personaContext: `偏好口癖：${phrase}`, webSearchEnabled: false,

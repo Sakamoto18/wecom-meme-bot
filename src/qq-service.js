@@ -1437,6 +1437,11 @@ export function normalizeQqPayload(payload) {
     groupId,
     senderName: normalizeString(payload.sender_name, MAX_NAME_CHARACTERS),
     text: normalizeString(payload.text, MAX_MESSAGE_CHARACTERS),
+    quotedMessageId: normalizeIdentifier(
+      payload.quoted_message_id,
+      'quoted_message_id',
+      false,
+    ),
     quotedText: normalizeString(payload.quoted_text, MAX_QUOTE_CHARACTERS),
     forwardedText: normalizeString(payload.forwarded_text, MAX_FORWARD_CHARACTERS),
     quotedForwardedText: normalizeString(
@@ -1586,6 +1591,7 @@ export function buildQqCompatibleMessage(payload) {
   if (quotedContent) {
     message.quote = {
       msgtype: 'text',
+      msgid: payload.quotedMessageId,
       text: { content: quotedContent },
       ...(payload.quotedAuthor
         ? {
@@ -1602,6 +1608,7 @@ export function buildQqCompatibleMessage(payload) {
         || payload.quotedForwardImageBase64s?.length > 0
         ? 'image'
         : 'text',
+      msgid: payload.quotedMessageId,
       from: {
         userid: payload.quotedAuthor.userId,
         name: payload.quotedAuthor.name,
@@ -2022,6 +2029,7 @@ export class QqBotService {
   constructor(options) {
     this.chatClient = options.chatClient;
     this.conversationStore = options.conversationStore;
+    this.groupMemory = options.groupMemory ?? null;
     this.memeStore = options.memeStore;
     this.webSearch = options.webSearch;
     this.webSearchEnabled = options.webSearchEnabled ?? true;
@@ -3363,8 +3371,12 @@ export class QqBotService {
     const personaContext = this.personaManager?.contextFor?.(message) ?? '';
 
     return this.conversationStore.runExclusive(conversationId, async () => {
+      const hasTopicContext = message.chattype === 'group'
+        && options.topicContext
+        && Array.isArray(options.topicContext.history);
+      const topicHistory = hasTopicContext ? options.topicContext.history : null;
       let history = sanitizeConversationHistory(
-        this.historyForGroup(
+        topicHistory ?? this.historyForGroup(
           message.chattype === 'group' ? message.chatid : '',
           this.conversationStore.get(conversationId),
           // 主动插话沿用旁观判定的短上下文；明确 @/引用仍由 activeReply
@@ -3373,15 +3385,17 @@ export class QqBotService {
         ),
         forbiddenHistoryRoleTerms,
       );
-      history = scopeReplyHistory(history, interactionContext, {
-        // Images and direct @/active turns are the cases where an unrelated
-        // member's old answer most often becomes a false visual premise.
-        enabled: message.chattype === 'group'
-          && (Array.isArray(options.imageBlocks) && options.imageBlocks.length > 0
-            || options.directBotMention === true
-            || options.activeReply === true),
-        speakerUserId,
-      });
+      if (!hasTopicContext) {
+        history = scopeReplyHistory(history, interactionContext, {
+          // Images and direct @/active turns are the cases where an unrelated
+          // member's old answer most often becomes a false visual premise.
+          enabled: message.chattype === 'group'
+            && (Array.isArray(options.imageBlocks) && options.imageBlocks.length > 0
+              || options.directBotMention === true
+              || options.activeReply === true),
+          speakerUserId,
+        });
+      }
       // 只取进入本轮前已经存在的历史图片；当前消息的图片仍由现有链路处理，
       // 不让 Jev 把它误当成“上一轮上下文图片”。
       // A previous member's picture is not evidence for a text-only turn.
@@ -3744,6 +3758,23 @@ export class QqBotService {
             model: this.chatClient.model,
           })
           : undefined,
+        groupTopicPrompt: options.topicContext?.prompt ?? '',
+        groupStyleProvider: message.chattype === 'group' && this.groupMemory?.isStyleEnabled?.(message.chatid)
+          ? (mode) => {
+            try {
+              return this.groupMemory.buildStylePrompt({
+                groupId: message.chatid,
+                query: content,
+                attack: mode === 'attack',
+              });
+            } catch (error) {
+              this.logger.warn(
+                `QQ 群级语感读取失败：group=${message.chatid || '-'} error=${error.message}`,
+              );
+              return '';
+            }
+          }
+          : null,
       });
       let generated;
       let activeImageBlocks = mergedReplyImageBlocks;
@@ -3856,6 +3887,19 @@ export class QqBotService {
         modelInput,
         buildStoredAssistantReply(message, interactionContext, answer),
       );
+      try {
+        this.groupMemory?.recordOwnReply?.({
+          groupId: message.chattype === 'group' ? message.chatid : '',
+          topicId: options.topicContext?.topicId || null,
+          text: answer,
+          messageId: `bot:${message.chatid || conversationId}:${message.msgid || this.now()}`,
+        });
+      } catch (error) {
+        this.logger.warn(
+          `QQ 群话题自回复回写失败：group=${message.chatid || '-'}`
+          + ` error=${error.message}`,
+        );
+      }
       if (this.backgroundSummariesEnabled(
         message.chattype === 'group' ? message.chatid : '',
       )) {
@@ -4034,6 +4078,75 @@ export class QqBotService {
     }
   }
 
+  recordGroupEvent(payload, message, conversationContent) {
+    try {
+      const topicEnabled = this.groupMemory?.isEnabled?.(payload.groupId) === true;
+      const styleEnabled = this.groupMemory?.isStyleEnabled?.(payload.groupId) === true;
+      if ((!topicEnabled && !styleEnabled)
+        || payload.messageType !== 'group'
+        || /^\s*\//u.test(String(payload.text ?? ''))) {
+        return null;
+      }
+      const text = String(conversationContent ?? '').trim();
+      if (!text && !payload.hasImage) return null;
+      const referenceBot = this.groupMemory.referenceBotIds?.(payload.groupId)
+        ?.has?.(String(payload.userId ?? '').trim()) === true;
+      const authorType = referenceBot
+        ? 'reference_bot'
+        : (this.isPeerBotMessage(payload) ? 'peer_bot' : 'human');
+      return this.groupMemory.recordEvent({
+        groupId: payload.groupId,
+        userId: payload.userId,
+        senderName: payload.senderName,
+        messageId: payload.messageId,
+        quotedMessageId: message?.quote?.msgid || payload.quotedMessageId || '',
+        quotedUserId: payload.quotedAuthor?.userId || '',
+        quotedText: extractMessageText(message?.quote),
+        text: text || (payload.hasImage ? '（发送了一张图片）' : ''),
+        kind: payload.hasImage ? 'image' : 'text',
+        authorType,
+        assignTopic: topicEnabled && payload.pureBotMention !== true,
+        scheduleSummary: topicEnabled,
+        createdAt: this.now(),
+      });
+    } catch (error) {
+      this.logger.warn(
+        `QQ 群话题事件记录失败：group=${payload.groupId || '-'}`
+        + ` message=${payload.messageId || '-'} error=${error.message}`,
+      );
+      return null;
+    }
+  }
+
+  topicContextFor(payload, { allowDirectFallback = false } = {}) {
+    try {
+      if (!this.groupMemory?.isEnabled?.(payload.groupId)) return null;
+      const context = this.groupMemory.resolveReplyContext({
+        groupId: payload.groupId,
+        messageId: payload.messageId,
+        allowDirectFallback,
+      });
+      if (context) {
+        this.logger.log(
+          `QQ 群话题上下文：group=${payload.groupId}`
+          + ` message=${payload.messageId || '-'}`
+          + ` status=${context.status}`
+          + ` topic=${context.topicId || '-'}`
+          + ` confidence=${Number(context.confidence || 0).toFixed(2)}`
+          + ` messages=${Number(context.contextMessages || 0)}`
+          + ` characters=${Number(context.contextCharacters || 0)}`,
+        );
+      }
+      return context;
+    } catch (error) {
+      this.logger.warn(
+        `QQ 群话题上下文解析失败：group=${payload.groupId || '-'}`
+        + ` message=${payload.messageId || '-'} error=${error.message}`,
+      );
+      return null;
+    }
+  }
+
   recordParticipants(payload) {
     if (payload.messageType !== 'group') return;
     this.conversationStore.recordGroupMember?.(
@@ -4182,6 +4295,21 @@ export class QqBotService {
       name: participant.name,
       inferredFromText: participant.inferred_from_text === true,
     }));
+    const directHumanEngagement = this.isDirectHumanEngagementTrigger(payload)
+      || (!peerBotMessage && !this.activeReplyDecider.addressesOthers?.(payload)
+        && this.activeReplyDecider.isNamed?.(payload));
+    const topicContext = this.topicContextFor(payload, {
+      allowDirectFallback: directHumanEngagement || peerBotMessage,
+    });
+    if (topicContext?.status === 'ambiguous' && !directHumanEngagement && !peerBotMessage) {
+      this.logger.log(
+        `QQ 群话题未定，跳过主动插话：group=${payload.groupId}`
+        + ` message=${payload.messageId || '-'}`
+        + ` topic=${topicContext.topicId || '-'}`
+        + ` confidence=${Number(topicContext.confidence || 0).toFixed(2)}`,
+      );
+      return this.observeMessage(payload, message);
+    }
     let passiveImage;
     // A bare image sent to a specific person has no public text to assess.
     // Keep its existing quiet path instead of starting OCR on their behalf.
@@ -4215,9 +4343,6 @@ export class QqBotService {
       this.logActiveDecision(payload, { reply: false, reason: 'ineligible' }, { engaged: Boolean(engagement) });
       return this.observeMessage(payload, message);
     }
-    const directHumanEngagement = this.isDirectHumanEngagementTrigger(payload)
-      || (!peerBotMessage && !this.activeReplyDecider.addressesOthers?.(payload)
-        && this.activeReplyDecider.isNamed?.(payload));
     const discussion = Boolean(passiveImage?.text || this.activeReplyDecider.isExplicitQuestion?.(payload)
       || this.activeReplyDecider.isBusy?.(payload.groupId, this.now(), { humanOnly: !peerBotMessage }));
     if (!peerBotMessage
@@ -4237,11 +4362,14 @@ export class QqBotService {
       currentContent: passiveImage?.text ? (payload.text || '（群友发来信息图片，未明确提问）') : conversationContent,
       imageAnalysis: passiveImage?.analysis,
       contextImageCandidates: historicalContextImageCandidates,
-      history: this.historyForGroup(
-        payload.groupId,
-        this.conversationStore.get(conversationId),
-        { passiveDecision: true },
-      ),
+      history: topicContext?.history?.length
+        ? topicContext.history
+        : this.historyForGroup(
+          payload.groupId,
+          this.conversationStore.get(conversationId),
+          { passiveDecision: true },
+        ),
+      topicContext,
     });
     this.logActiveDecision(payload, decision, { engaged: Boolean(engagement), discussion });
     if (!decision.reply) {
@@ -4271,6 +4399,7 @@ export class QqBotService {
         directBotMention: this.isDirectHumanMentionTrigger(payload),
         jevStyle: decision.jevStyle ?? null,
         contextImageCandidates: historicalContextImageCandidates,
+        topicContext,
       },
     );
     if (passiveImage?.text && !result.messages?.length) return this.observeMessage(payload, message);
@@ -5240,6 +5369,7 @@ export class QqBotService {
     this.recordParticipants(payload);
     this.inferPlainTextTargets(payload, message);
     this.recordMemberObservation(payload, message);
+    this.recordGroupEvent(payload, message, conversationContent);
     const adminStopCommand = payload.messageType === 'group'
       && isAdminStopCommand(payload.text);
     if (adminStopCommand) {
@@ -5353,6 +5483,7 @@ export class QqBotService {
 
     const conversationId = getConversationId(message);
     const history = this.conversationStore.get(conversationId);
+    const topicContext = this.topicContextFor(payload, { allowDirectFallback: true });
     if (shouldReplyOnlyWithLongtu(payload.text, history)) {
       return this.replyLongtu('文字请求', message);
     }
@@ -5371,6 +5502,7 @@ export class QqBotService {
         longtuAliases,
         pureBotMention: payload.pureBotMention,
         directBotMention: this.isDirectHumanMentionTrigger(payload),
+        topicContext,
       },
     );
   }

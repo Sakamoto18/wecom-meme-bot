@@ -106,6 +106,41 @@ QQ_PERSONA_MAX_CONTEXT_CHARACTERS=1200
 
 验收时先发 `/persona list` 查看当前已保存内容，再问“你口癖呢”，Bot 应原样展示至少一条；攻击性原句会以引号示范，不向测试者开骂。日常对话按语义选择合适原句，避免近期重复和无关硬插，不保证每轮出现。普通追问直接补充答案，不再自动添加“说白了”，也不以“某某问的是”转述提问。
 
+### 群话题记忆与群级语感
+
+群话题记忆和群级语感都使用独立的 `data/qq-group-memory.sqlite`，不影响角色人格、成员画像或普通会话记忆。建议先在这三个群灰度：`913546080`、`1109147947`、`239375116`。
+
+```dotenv
+QQ_TOPIC_MEMORY_ENABLED=true
+QQ_TOPIC_MEMORY_GROUPS=913546080,1109147947,239375116
+QQ_TOPIC_CONTEXT_MESSAGES=50
+QQ_TOPIC_CONTEXT_CHARACTERS=20000
+QQ_TOPIC_DIRECT_CONTEXT_MESSAGES=12
+QQ_TOPIC_DIRECT_CONTEXT_CHARACTERS=6000
+
+QQ_GROUP_STYLE_ENABLED=true
+QQ_GROUP_STYLE_GROUPS=913546080,1109147947,239375116
+QQ_GROUP_STYLE_REFRESH_HOURS=6
+QQ_GROUP_REFERENCE_BOTS=239375116:3791754277
+```
+
+话题路由优先使用精确引用（置信度 1.0），其次结合同一发言人、词面/字面重合、参与成员、引用对象和时间接近度。只有两个以上真人消息落入同一话题，且置信度达到阈值，才把上下文视为已匹配；否则主动插话直接静默，避免在多人混聊中猜错话题。明确 `@` 本 Bot 或引用本 Bot 时仍可回复，但只带最近 12 条、最多 6000 字的回退上下文。匹配话题最多带 50 条、20000 字，并且只读取该话题事件，不把相邻的并行讨论整段带入。
+
+群级语感从本群可用的原始观察和会话历史中学习，覆盖句长、短接话比例、标点、emoji、重复短句、引用接话和群友互损/接梗机制。至少 200 条真人消息才生成；Bot 自己的回复不计入。运行时会注入 3～5 条和当前话题相关的真实表达节奏示例，攻击轮最多 2 条；示例会清洗链接、QQ 号、手机号和内部成员编号，只借句长、断句与接话方式，不复制人名、事实或原句。`239375116` 群的 `3791754277` 被标记为参考 Bot，其短回复可作为群内语感参考；不会把参考 Bot 的话当成真人事实，也不会让一个真人话题仅因参考 Bot 发言就变成“已建立”。
+
+首次启用前建议先停止 `qq-bot`，回填现有 SQLite 历史并生成语感卡，再启动服务：
+
+```bash
+cd /opt/longtu-qq-bot
+sudo docker compose --env-file .env.qq -f docker-compose.server.yml stop qq-bot
+sudo docker compose --env-file .env.qq -f docker-compose.server.yml run --rm qq-bot npm run backfill:group-memory
+sudo docker compose --env-file .env.qq -f docker-compose.server.yml up -d qq-bot
+```
+
+回填会先写入原始群事件，再重建最近保留期内的话题分配；重复执行是幂等的。`/healthz` 的 `group_memory` 字段可查看事件、话题和语感画像数量，日志只记录群号、消息号、话题号、置信度和上下文条数，不记录消息正文。
+
+回滚时把 `QQ_TOPIC_MEMORY_GROUPS` 或 `QQ_GROUP_STYLE_GROUPS` 清空（或把对应总开关设为 `false`）并重建 `qq-bot` 即可；SQLite 数据会保留，后续重新加入群号可继续使用。未列入的群完全沿用原来的短期上下文和回复链路。
+
 ### 龙图显示与收藏
 
 龙图库选中的图片按 QQ 表情类型发送（OneBot `image.sub_type=1`），关键词、tag、图片匹配、随机选图和去重仍使用原有本地图库。Bridge 在文字发送后通过 OneBot 直接发送独立龙图，并记录 `message_id` 回执；自定义表情组件不能交给 AstrBot RespondStage，否则独立图片会被误判为空而跳过。视频分享卡、图文预览仍是普通图片。具体显示尺寸由 QQ 客户端决定，原始图片不会被缩小或覆盖。

@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { Jimp } from 'jimp';
 import { createQqApiServer } from '../src/qq-api.js';
 import { ConversationStore } from '../src/conversation-store.js';
+import { QqGroupMemory } from '../src/group-memory.js';
 import {
   calculateImageTileRegions,
   IMAGE_TILE_CORE_SIZE,
@@ -102,6 +106,7 @@ function createService(options = {}) {
     now: options.now,
     contextImageTtlMs: options.contextImageTtlMs,
     contextImageMaxItems: options.contextImageMaxItems,
+    groupMemory: options.groupMemory,
     logger: { log() {}, warn() {}, info() {} },
   });
   return { service, calls };
@@ -2161,6 +2166,174 @@ test('普通群消息经读空气判定命中后复用现有人格回复引擎',
   assert.equal(result.active_reply_priority, 'must');
   assert.deepEqual(result.messages.map((message) => message.type), ['text']);
   assert.deepEqual(recordedBotReplies, ['g-active']);
+});
+
+test('话题未定时旁观消息不进入主动插话判定', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'qq-service-topic-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const groupMemory = new QqGroupMemory({
+    databaseFilePath: path.join(directory, 'group-memory.sqlite'),
+    enabledGroups: ['g-topic-ambiguous'],
+    now: () => 10_000,
+    logger: { log() {}, warn() {} },
+  });
+  t.after(() => groupMemory.close());
+  let decisions = 0;
+  const { service } = createService({
+    groupMemory,
+    now: () => 10_000,
+    activeReplyDecider: {
+      async shouldReply() {
+        decisions += 1;
+        return { reply: true, reason: 'ai-must' };
+      },
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'ambiguous-1',
+    message_type: 'group',
+    group_id: 'g-topic-ambiguous',
+    user_id: 'u1',
+    sender_name: '群友甲',
+    text: '中午吃啥，有人点外卖吗',
+    observe_only: true,
+  });
+
+  assert.deepEqual(result, { mode: 'observed', messages: [] });
+  assert.equal(decisions, 0);
+});
+
+test('话题未定时明确艾特仍用回退语境回复', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'qq-service-topic-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const currentTime = 20_000;
+  const groupMemory = new QqGroupMemory({
+    databaseFilePath: path.join(directory, 'group-memory.sqlite'),
+    enabledGroups: ['g-topic-direct'],
+    now: () => currentTime,
+    logger: { log() {}, warn() {} },
+  });
+  t.after(() => groupMemory.close());
+  const { service, calls } = createService({
+    groupMemory,
+    now: () => currentTime,
+  });
+  await service.handleMessage({
+    message_id: 'direct-context-1',
+    message_type: 'group',
+    group_id: 'g-topic-direct',
+    user_id: 'u1',
+    sender_name: '群友甲',
+    text: '这个版本更新后有点卡',
+    observe_only: true,
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'direct-context-2',
+    message_type: 'group',
+    group_id: 'g-topic-direct',
+    user_id: 'u2',
+    sender_name: '群友乙',
+    text: '@龙玉涛 那现在怎么办',
+    bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot', name: '龙玉涛' }],
+  });
+
+  assert.ok(result.messages?.length);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].options.additionalSystemPrompt, /当前语境边界/);
+});
+
+test('话题回退为空时不会重新灌入旧的长会话历史', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'qq-service-topic-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const currentTime = 25_000;
+  const conversationStore = new ConversationStore({ now: () => currentTime });
+  conversationStore.appendExchange(
+    'group:g-topic-empty-fallback',
+    '旧会话里的无关长历史：上一版的排位和外卖讨论',
+    '旧会话里的无关回复',
+  );
+  const groupMemory = new QqGroupMemory({
+    databaseFilePath: path.join(directory, 'group-memory.sqlite'),
+    enabledGroups: ['g-topic-empty-fallback'],
+    now: () => currentTime,
+    logger: { log() {}, warn() {} },
+  });
+  t.after(() => groupMemory.close());
+  const { service, calls } = createService({
+    conversationStore,
+    groupMemory,
+    now: () => currentTime,
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'first-direct-1',
+    message_type: 'group',
+    group_id: 'g-topic-empty-fallback',
+    user_id: 'u1',
+    sender_name: '群友甲',
+    text: '@龙玉涛 你怎么看',
+    bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot', name: '龙玉涛' }],
+  });
+
+  assert.ok(result.messages?.length);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].history, []);
+});
+
+test('已匹配话题只把本话题历史交给主动接话判定', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'qq-service-topic-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let currentTime = 30_000;
+  const groupMemory = new QqGroupMemory({
+    databaseFilePath: path.join(directory, 'group-memory.sqlite'),
+    enabledGroups: ['g-topic-matched'],
+    now: () => currentTime,
+    logger: { log() {}, warn() {} },
+  });
+  t.after(() => groupMemory.close());
+  const contexts = [];
+  const { service } = createService({
+    groupMemory,
+    now: () => currentTime,
+    activeReplyDecider: {
+      async shouldReply(input) {
+        contexts.push(input.topicContext);
+        return { reply: false, reason: 'test-pass' };
+      },
+    },
+  });
+  const send = async (messageId, userId, text) => {
+    currentTime += 1_000;
+    return service.handleMessage({
+      message_id: messageId,
+      message_type: 'group',
+      group_id: 'g-topic-matched',
+      user_id: userId,
+      sender_name: userId,
+      text,
+      observe_only: true,
+    });
+  };
+
+  await send('version-1', 'u1', '新版本更新后一直卡顿，要不要回滚');
+  await send('version-2', 'u2', '我也遇到更新后卡顿，先回滚到上一版');
+  await send('food-1', 'u3', '中午吃啥，有人点外卖吗');
+  await send('food-2', 'u4', '中午我也想点外卖，牛肉面');
+  await send('version-3', 'u1', '更新后还是卡顿，回滚包有用吗');
+
+  const versionTopicId = groupMemory.getEventState('g-topic-matched', 'version-1').topicId;
+  const foodTopicId = groupMemory.getEventState('g-topic-matched', 'food-1').topicId;
+  const finalContext = contexts.at(-1);
+  assert.notEqual(versionTopicId, foodTopicId);
+  assert.equal(finalContext.status, 'matched');
+  assert.equal(finalContext.topicId, versionTopicId);
+  const transcript = finalContext.history.map((message) => message.content).join('\n');
+  assert.match(transcript, /卡顿|回滚/);
+  assert.doesNotMatch(transcript, /外卖|牛肉面/);
 });
 
 test('真人艾特后开启群级话题窗口，其他真人相关发言选择性接入并受群级节流', async () => {

@@ -55,6 +55,7 @@ const UNSUPPORTED_PROVENANCE_PATTERN = /(?:最早出自|原帖(?:来自|出自|�
 // 这是“像群友说话”的轻量钩子，不等于攻击性词汇。它可以落在事实、
 // 方案或结果上，让普通答案保留龙图语感，同时避开当前发言者和引用作者。
 const ROLE_VOICE_PATTERN = /(?:不是[，,]?哥们|说白了|这就|别把|老老实实|锅在|有点(?:离谱|抽象|拉胯|尴尬)|抽象|离谱|拉胯|摆烂|折腾|绷不住|汗流浃背|白等|别光|别急|省得|硬是|破(?:方案|事|局|系统|配置)|真够|就这|多嘴|不绕|不装|差一截|一摊活|扛不住|直接看|别拿|免得|吃亏)/i;
+const INTERNAL_REPLY_METADATA_PATTERN = /(?:成员-[a-f0-9]{6,12}|本轮回复对象|机器人群聊回复记录|内部身份映射|服务器配置|系统提示词|质量检查结果)/iu;
 // 抽象联想必须落到一个具体的角色、职业、物件或荒诞场面上。
 // 单独说“抽象/离谱”只是情绪词，不能冒充这一层已经生效。
 const ABSTRACT_COMPARISON_PATTERN = /(?:看起来\s*)?(?:像|仿佛|宛如|活像|简直像|简直是|转职(?:成|为)?|变(?:成|为)?|进化(?:成|为)?|化身(?:成|为)?|活成|当(?:上|成|起)?|已经是|俨然是)\s*(?:一个|一位|一只|一台|一条|个|位|只|台|条)?(?<target>[\p{L}\p{N}\p{Script=Han}][\p{L}\p{N}\p{Script=Han}A-Za-z0-9·_-]{1,24})/u;
@@ -779,6 +780,37 @@ export function reviewNormalReply(answer, options = {}) {
   const normalized = String(answer ?? '').trim();
   const issues = [];
   if (!normalized) issues.push('empty');
+  if (options.hardOnly) {
+    // 普通群聊只复核会改变事实、身份、来源或安全结论的问题。长度、开场、
+    // 客服腔、报告腔和重复句式交给生成提示与上下文，不再触发二次改稿。
+    if (options.searchEvidenceAvailable
+      && options.suppressSearchNarration
+      && hasSearchExplanationLeak(normalized)) {
+      issues.push('search-explanation-leak');
+    }
+    if (relativeDateContradiction(normalized, options.relativeDateFacts)) {
+      issues.push('relative-date-contradiction');
+    }
+    if (UNSUPPORTED_PROVENANCE_PATTERN.test(normalized)
+      && options.searchEvidenceQuality !== 'exact-source') {
+      issues.push('unsupported-provenance');
+    }
+    let hardAttackText = normalized;
+    for (const phrase of options.quotedPersonaPhrases ?? []) {
+      if (phrase) hardAttackText = hardAttackText.split(`“${phrase}”`).join('');
+    }
+    if (NORMAL_FAMILY_ATTACK_PATTERN.test(hardAttackText) && !options.attackDuringAnswer) {
+      issues.push('family-attack-in-normal-mode');
+    }
+    if (options.requiredIdentityRole
+      && !hasRequiredIdentityRole(normalized, options.requiredIdentityRole)) {
+      issues.push('missing-protected-identity');
+    }
+    if (INTERNAL_REPLY_METADATA_PATTERN.test(normalized)) {
+      issues.push('internal-metadata-leak');
+    }
+    return { valid: issues.length === 0, issues };
+  }
   if (CUSTOMER_SERVICE_PATTERN.test(normalized)) issues.push('customer-service');
   if (hasNarratedQuestionOpening(normalized, options)) issues.push('narrated-question-opening');
   if (options.hasImageContext

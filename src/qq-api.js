@@ -16,6 +16,7 @@ import {
   normalizeLongtuTagRelations,
 } from './longtu-tag-relations.js';
 import { QqMemoryStore } from './qq-memory-store.js';
+import { QqGroupMemory } from './group-memory.js';
 import { QqPersonaStore } from './qq-persona-store.js';
 import { QqPersonaManager } from './qq-persona-manager.js';
 import { QqBotService } from './qq-service.js';
@@ -94,6 +95,23 @@ function parseGroupProviderMap(value) {
       .filter(Boolean);
     if (!groupId || !providers.length) continue;
     result.set(groupId, new Set(providers));
+  }
+  return result;
+}
+
+// 按群登记参考 Bot，格式 `群号:QQ号|QQ号,群号:QQ号`。
+function parseGroupUserMap(value) {
+  const result = new Map();
+  for (const entry of String(value ?? '').split(',')) {
+    const separator = entry.indexOf(':');
+    if (separator <= 0) continue;
+    const groupId = entry.slice(0, separator).trim();
+    const userIds = entry.slice(separator + 1)
+      .split('|')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!groupId || userIds.length === 0) continue;
+    result.set(groupId, [...new Set([...(result.get(groupId) ?? []), ...userIds])]);
   }
   return result;
 }
@@ -644,6 +662,46 @@ export async function createQqRuntime() {
     model: process.env.LLM_MODEL || 'deepseek-chat',
     systemPrompt,
   }));
+  const groupTopicGroups = parseIdentifierSet(
+    process.env.QQ_TOPIC_MEMORY_GROUPS,
+  );
+  const groupStyleGroups = parseIdentifierSet(
+    process.env.QQ_GROUP_STYLE_GROUPS,
+  );
+  const groupMemory = new QqGroupMemory({
+    databaseFilePath: path.resolve(
+      projectRoot,
+      process.env.QQ_GROUP_MEMORY_DATABASE_FILE?.trim() || 'data/qq-group-memory.sqlite',
+    ),
+    enabledGroups: parseBoolean(process.env.QQ_TOPIC_MEMORY_ENABLED, false)
+      ? groupTopicGroups
+      : [],
+    styleGroups: parseBoolean(process.env.QQ_GROUP_STYLE_ENABLED, false)
+      ? (groupStyleGroups.size ? groupStyleGroups : groupTopicGroups)
+      : [],
+    // 默认只在 239375116 群把 3791754277 当作语感参考 Bot；配置显式覆盖后
+    // 完全按运维给出的映射执行。
+    referenceBotsByGroup: parseGroupUserMap(
+      process.env.QQ_GROUP_REFERENCE_BOTS?.trim() || '239375116:3791754277',
+    ),
+    chatClient,
+    contextMessages: parsePositiveInteger(
+      process.env.QQ_TOPIC_CONTEXT_MESSAGES,
+    ) ?? 50,
+    contextCharacters: parsePositiveInteger(
+      process.env.QQ_TOPIC_CONTEXT_CHARACTERS,
+    ) ?? 20_000,
+    directContextMessages: parsePositiveInteger(
+      process.env.QQ_TOPIC_DIRECT_CONTEXT_MESSAGES,
+    ) ?? 12,
+    directContextCharacters: parsePositiveInteger(
+      process.env.QQ_TOPIC_DIRECT_CONTEXT_CHARACTERS,
+    ) ?? 6_000,
+    styleRefreshHours: parsePositiveNumber(
+      process.env.QQ_GROUP_STYLE_REFRESH_HOURS,
+    ) ?? 6,
+    logger: console,
+  });
   const jevEnabled = parseBoolean(process.env.LONGTU_QQ_JEV_ENABLED, false);
   const jevRuntime = new JevRuntimeState({
     filePath: path.resolve(
@@ -846,6 +904,7 @@ export async function createQqRuntime() {
     webSearch: usageTracker.wrapWebSearch(webSearch),
     webSearchEnabled,
     cultureCache,
+    groupMemory,
     longtuRetrievalEnabled: parseBoolean(
       process.env.LONGTU_QQ_LONGTU_RETRIEVAL_ENABLED,
       true,
@@ -1014,6 +1073,7 @@ export async function createQqRuntime() {
     chatClient,
     conversationStore,
     personaStore,
+    groupMemory,
     memeStore,
     longtuLibrary,
     memberAliases,
@@ -1063,6 +1123,12 @@ export async function startQqApi() {
     usageReportUsers: runtime.usageReportUsers,
     health: async () => {
       const currentStats = await runtime.memeStore.getStats();
+      let groupMemoryStats;
+      try {
+        groupMemoryStats = runtime.groupMemory.getStats();
+      } catch {
+        groupMemoryStats = { ok: false };
+      }
       return {
         ok: true,
         platform: 'qq',
@@ -1070,6 +1136,7 @@ export async function startQqApi() {
         web_search_enabled: runtime.webSearchEnabled,
         web_search_provider: runtime.webSearch.provider,
         culture_cache: runtime.cultureCache.getStats(),
+        group_memory: groupMemoryStats,
         active_reply_enabled: runtime.activeReplyEnabled,
         repeat_enabled: runtime.repeatEnabled,
         peer_bot_context_gate_enabled: runtime.peerBotContextGateEnabled,
@@ -1107,6 +1174,13 @@ export async function startQqApi() {
   console.log(runtime.peerBotContextGateEnabled
     ? 'QQ peer Bot 续聊阀门已启用：仅直接 @/引用本 Bot 才进入，后续按语境判断并保留硬上限'
     : 'QQ peer Bot 续聊阀门未启用：仅使用硬上限');
+  console.log(runtime.groupMemory.enabledGroups.size > 0
+    ? `QQ 群话题记忆已启用：${[...runtime.groupMemory.enabledGroups].join(',')}`
+    : 'QQ 群话题记忆未启用');
+  console.log(runtime.groupMemory.styleGroups.size > 0
+    ? `QQ 群级语感卡已启用：${[...runtime.groupMemory.styleGroups].join(',')}`
+    : 'QQ 群级语感卡未启用');
+  runtime.groupMemory.startStyleRefresh();
 
   let shuttingDown = false;
   const shutdown = async (signal) => {
@@ -1123,6 +1197,7 @@ export async function startQqApi() {
     runtime.mediaUsageTracker.close();
     runtime.mediaResolver.close();
     runtime.cultureCache.close();
+    runtime.groupMemory.close();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
