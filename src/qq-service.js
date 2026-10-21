@@ -3934,11 +3934,14 @@ export class QqBotService {
       )) {
         this.scheduleMemorySummary(conversationId);
       }
+      // 普通闲聊按完整句子拆成几条更像群友接话；代码块和列表仍保持单条，
+      // 避免把结构化内容切碎。阈值保持在一整句以上，不退回碎片式发言。
+      const structuredReply = /```|(?:^|\n)\s*(?:[-*]|\d+\.)\s/u.test(answer);
       const messages = splitReplyText(answer, {
-        splitSentences: false,
-        splitLineBreaks: !/```|(?:^|\n)\s*(?:[-*]|\d+\.)\s/u.test(answer),
-        maxPartCharacters: 420,
-        maxParts: 3,
+        splitSentences: !structuredReply,
+        splitLineBreaks: !structuredReply,
+        maxPartCharacters: structuredReply ? 1_800 : 100,
+        maxParts: structuredReply ? 1 : 3,
       }).map((text) => ({ type: 'text', text }));
 
       try {

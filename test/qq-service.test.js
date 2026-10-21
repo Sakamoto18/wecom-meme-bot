@@ -222,6 +222,31 @@ test('模型输出的多段聊天会按换行拆成多条消息', async () => {
   );
 });
 
+test('群聊里的长回复会按完整句子拆成少量消息', async () => {
+  const answer = '@真正的龙bot 问得还行。日本网站确实还在大面积用 PHP，公开统计里 .jp 域名下 PHP 占比九成以上，CMS 那头 WordPress 也占大头。不过那是存量网站的口径，别当成新项目还抢着上 PHP，老屎山能跑不等于值得学。';
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return answer; },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'group-long-message',
+    message_type: 'group',
+    group_id: 'group-long-message',
+    user_id: 'group-long-user',
+    text: '@龙bot 日本还在大量用 php 吗',
+  });
+
+  assert.deepEqual(
+    result.messages.filter((message) => message.type === 'text').map((message) => message.text),
+    [
+      '问得还行。日本网站确实还在大面积用 PHP，公开统计里 .jp 域名下 PHP 占比九成以上，CMS 那头 WordPress 也占大头。',
+      '不过那是存量网站的口径，别当成新项目还抢着上 PHP，老屎山能跑不等于值得学。',
+    ],
+  );
+});
+
 test('普通场景无语境匹配时只发文字，明确攻击仍在末尾强制附图', async () => {
   const noMeme = createService();
   const quiet = await noMeme.service.handleMessage({
