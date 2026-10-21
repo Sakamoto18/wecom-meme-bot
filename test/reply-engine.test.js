@@ -57,6 +57,47 @@ test('普通闲聊不默认搜索，文化问题只走文化轨', async () => {
   assert.equal(searchCalls, 1);
 });
 
+test('JEV 判定需要核实事实或时效时，不依赖关键词也进入事实检索', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '这个说法可靠吗',
+    currentQuestion: '这个说法可靠吗',
+    modelInput: '这个说法可靠吗',
+    jevStyle: { mode: 'concise_answer', factLookupNeeded: 0.82, timeSensitive: 0.7 },
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        calls.push({ query, options });
+        return { context: '公开资料：该说法已有更新。', resultCount: 1 };
+      },
+    },
+    chatClient: { isConfigured: true, async complete() { return '这事有新说法，别拿旧版本硬套。'; } },
+  });
+  assert.equal(result.factSearchAttempted, true);
+  assert.equal(calls.length, 1);
+});
+
+test('配置了联网检索时把 web_search 工具和处理器交给模型', async () => {
+  let captured;
+  await generateConversationReply({
+    content: '查一下今天的日期',
+    currentQuestion: '查一下今天的日期',
+    modelInput: '查一下今天的日期',
+    webSearchEnabled: true,
+    webSearch: { async search() { return { context: '北京时间 2026-10-21。', resultCount: 1 }; } },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        captured = options;
+        return '今天是 2026-10-21。';
+      },
+    },
+  });
+  assert.equal(captured.tools[0].function.name, 'web_search');
+  assert.equal(typeof captured.onToolCall, 'function');
+  assert.equal(captured.maxToolCalls, 3);
+});
+
 test('事实和文化意图会并行检索，文化结果只注入短卡', async () => {
   const calls = [];
   const result = await generateConversationReply({
@@ -377,7 +418,7 @@ test('口癖示范请求被模型空口带过时返回已确认原句，不增�
     personaContext: '偏好口癖：我们龙龙都是亲切友好的',
     chatClient: { isConfigured: true, async complete() { calls++; return '记住了，当然记住了。'; } },
   });
-  assert.equal(result.answer, '口癖示范：“我们龙龙都是亲切友好的”');
+  assert.equal(result.answer, '口癖示范：“我们龙龙都是亲切友好的”\n记住了，当然记住了。');
   assert.equal(calls, 1);
 });
 
@@ -1381,4 +1422,31 @@ test('时效检索失败时禁止把模型旧知识冒充最新事实', async ()
   assert.equal(result.searchAttempted, true);
   assert.match(calls[0].options.additionalSystemPrompt, /联网检索失败：timeout/);
   assert.match(calls[0].options.additionalSystemPrompt, /不要把训练数据中的旧信息冒充最新事实/);
+});
+
+test('当前时间注入可变提示层，不污染 prompt 缓存前缀', async () => {
+  const calls = [];
+  await generateConversationReply({
+    content: '现在是几几年几月几日',
+    currentQuestion: '现在是几几年几月几日',
+    modelInput: '当前消息：现在是几几年几月几日',
+    webSearchEnabled: false,
+    knowledgeContext: '龙图知识底座',
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push(options);
+        return '今天就是今天，别问我日历。';
+      },
+    },
+  });
+  assert.ok(calls.length >= 1);
+  const [first] = calls;
+  // 时间每分钟都在变。它必须待在每轮重算的 additionalSystemPrompt 里，
+  // 一旦进入稳定前缀，整段缓存就会每分钟失效一次。
+  assert.match(first.additionalSystemPrompt, /【当前时间】北京时间 \d{4}-\d{2}-\d{2}/);
+  assert.ok(first.additionalSystemPrompt.startsWith('【当前时间】'));
+  assert.doesNotMatch(String(first.cachePrefixSystemPrompt ?? ''), /【当前时间】/);
+  assert.doesNotMatch(String(first.systemPrompt ?? ''), /【当前时间】/);
+  assert.doesNotMatch(String(first.stableSystemPrompt ?? ''), /【当前时间】/);
 });

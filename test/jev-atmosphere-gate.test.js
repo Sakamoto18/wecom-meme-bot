@@ -76,6 +76,24 @@ test('Jev 解析插话概率和风格路由', async () => {
   assert.equal(calls.length, 2);
 });
 
+test('Jev 的事实核验和时效字段透传到回复链路', async () => {
+  const runtime = new JevRuntimeState({ defaultMode: 'on' });
+  const gate = new JevAtmosphereGate({
+    apiKey: 'test',
+    protocol: 'chat',
+    runtime,
+    fetchImpl: async () => response({ choices: [{ message: { content: JSON.stringify(answers({
+      fact_lookup_needed: { noul: 0.83 },
+      time_sensitive: { noul: 0.71 },
+      unknown_concept: true,
+    })) } }] }),
+  });
+  const result = await gate.evaluateStyle({ currentMessage: '现在最新版本是多少' });
+  assert.equal(result.style.factLookupNeeded, 0.83);
+  assert.equal(result.style.timeSensitive, 0.71);
+  assert.equal(result.style.unknownConcept, true);
+});
+
 test('Jev 输出语境化攻击策略，而不是固定攻击台词', async () => {
   const runtime = new JevRuntimeState({ defaultMode: 'on' });
   const gate = new JevAtmosphereGate({

@@ -23,3 +23,20 @@ test('图片角色安全提示禁止把图片人物映射为 QQ 对话身份', (
   assert.match(IMAGE_INPUT_SAFETY_PROMPT, /当前 QQ 发言人、引用消息作者、被 @ 成员或机器人/u);
   assert.match(IMAGE_INPUT_SAFETY_PROMPT, /不要把“老师说”“我怎样”自动映射/u);
 });
+
+test('图片证据按像素事实、文字主张和低置信推断分层', () => {
+  const analysis = parseImageAnalysis(JSON.stringify({
+    visual_subject: '两名运动员站在起跑线前',
+    visible_text: ['只记得第一名'],
+    text_claims: ['只有冠军会被记住'],
+    scene_relation: '两组运动员被放在同一画面里对照',
+    implied_point: '用肤色和项目差异制造刻板印象反差',
+    visual_wordplay: '第一名→第1名',
+  }));
+  const context = formatImageAnalysisContext(analysis);
+  assert.match(context, /【像素可确认】/);
+  assert.match(context, /【图片文字主张（不等于事实）】/);
+  assert.match(context, /【推断（低置信，引用时必须保留归属）】/);
+  assert.match(context, /只有冠军会被记住/);
+  assert.match(context, /不得直接当成已确认事实/);
+});

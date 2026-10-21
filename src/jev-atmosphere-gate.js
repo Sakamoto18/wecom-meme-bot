@@ -319,6 +319,22 @@ const QUESTIONS = {
       false: '只是希望回复更像中文互联网、接梗或做抽象联想；风格需要不等于要联网。',
     },
   },
+  fact_lookup_needed: {
+    type: 'noul',
+    instructions: '当前问题是否需要联网核实现实世界事实、出处、数据或原帖？与互联网梗无关的普通事实问题也算。',
+    criteria: {
+      true: '答案依赖可验证的外部事实、公开数据、人物/作品出处、时间线或原帖，而模型不能只凭可靠常识确认。',
+      false: '普通闲聊、主观评价、创作类回答，或已有上下文足够且不需要外部证据。',
+    },
+  },
+  time_sensitive: {
+    type: 'noul',
+    instructions: '答案是否依赖可能在模型训练数据截止之后变化的信息（现任、最新版本、价格、赛果、政策、今年发生的事）？',
+    criteria: {
+      true: '问题涉及“现在/今年/最新/最近”、会随时间变化的排名、版本、价格、政策、赛事或公众人物。',
+      false: '稳定常识、历史事实、主观判断或与时间无关的语境。',
+    },
+  },
   culture_domain: {
     type: 'choice',
     instructions: '当前语境最接近哪个互联网语境？只有明确存在龙玉涛、龙图或相关古早互联网语境时才选 longtu；不要把现实文化、历史典故本身当作检索目标。',
@@ -607,6 +623,8 @@ const CHAT_GATE_SYSTEM_PROMPT = [
     meme_fit: 'number: 存在贴合当前语境的具体网络梗/反差联想的概率',
     explanation_needed: 'number: 必须解释事实、原理或步骤的概率',
     culture_lookup_needed: 'number: 需要联网核实互联网文化语境的概率',
+    fact_lookup_needed: 'number: 需要联网核实现实世界事实、出处、数据或原帖的概率；与互联网梗无关的普通事实问题也算',
+    time_sensitive: 'number: 答案依赖可能在模型训练数据截止之后变化的信息的概率',
     culture_domain: 'longtu|general|platform|none',
     longtu_lookup_needed: 'number: 值得检索贴吧中的龙玉涛/龙图语境的概率',
     platform: 'bilibili|xiaohongshu|douyin|weibo|tieba|general|unknown',
@@ -656,6 +674,8 @@ function normalizeCultureAnswers(answers, context = {}) {
   const target = choice(answers?.target, TARGETS, 'unknown');
   const lookupNeeded = answerNumber(answers, 'culture_lookup_needed');
   const longtuLookupNeeded = answerNumber(answers, 'longtu_lookup_needed');
+  const factLookupNeeded = answerNumber(answers, 'fact_lookup_needed');
+  const timeSensitive = answerNumber(answers, 'time_sensitive');
   const retrievalNeeded = Math.max(lookupNeeded, longtuLookupNeeded);
   const terms = listValue(answers?.query_terms ?? answers?.culture_terms);
   const longtuTerms = listValue(answers?.longtu_terms);
@@ -725,6 +745,8 @@ function normalizeCultureAnswers(answers, context = {}) {
     tone,
     target,
     cultureLookupNeeded: lookupNeeded,
+    factLookupNeeded,
+    timeSensitive,
     longtuLookupNeeded,
     retrievalNeeded,
     queryTerms: [...new Set([...terms, ...derivedTerms])].slice(0, 8),
@@ -998,6 +1020,8 @@ export class JevAtmosphereGate {
       meme_fit: QUESTIONS.meme_fit,
       explanation_needed: QUESTIONS.explanation_needed,
       culture_lookup_needed: QUESTIONS.culture_lookup_needed,
+      fact_lookup_needed: QUESTIONS.fact_lookup_needed,
+      time_sensitive: QUESTIONS.time_sensitive,
       culture_domain: QUESTIONS.culture_domain,
       longtu_lookup_needed: QUESTIONS.longtu_lookup_needed,
       platform: QUESTIONS.platform,
@@ -1135,7 +1159,7 @@ export function buildJevSemanticPrompt(style) {
       ? '图片文化模式的具体落点：回复至少要使用语义候选中的一个具体关系（例如“项目A↔项目B、属性X↔属性Y”或同等明确的并置关系），不能只回一个情绪标签。'
       : '',
     Number(style.semanticConfidence) > 0 && Number(style.semanticConfidence) < 0.55
-      ? '语义候选置信度有限，必须回到原图核对；不成立就舍弃。'
+      ? '语义候选置信度有限，必须回到原图核对；不成立就舍弃。宁可只说像素能确认的部分，也不要把低置信推断写成结论。'
       : '',
   ].filter(Boolean);
   return lines.join('\n');

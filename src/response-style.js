@@ -42,7 +42,6 @@ const CUSTOMER_SERVICE_PATTERN = /(?:您好|您这|您想|请问您|很高兴为
 const IMAGE_DESCRIPTION_FIRST_PATTERN = /^(?:这(?:张|幅)?图(?:片)?(?:里|中)?(?:有|是|显示|写着|讲的是)|图(?:片)?中(?:有|是|显示|写着)|画面(?:里|中)(?:有|是|显示|写着)|左边(?:是|有)|右边(?:是|有)|上面(?:是|有)|下面(?:是|有)|图片显示|这是一张|这是一个(?:截图|画面))/u;
 export const EXPLICIT_IMAGE_DESCRIPTION_PATTERN = /(?:图里(?:有|是什么)|图片(?:里|中)?是什么|描述(?:一下)?(?:这|该)?(?:张|幅)?图|识别(?:一下)?(?:这|该)?(?:张|幅)?图|逐张(?:说|介绍|总结)|图片内容|画面内容)/u;
 const IMAGE_SEMANTIC_ACTION_PATTERN = /(?:我选|我会|建议|应该|重点|笑点|反差|像|说明|表达|意味着|因为|所以|但是|不过|直接|先|别|不如|可以|不能|值得|问题在|结论)/u;
-const IMAGE_CULTURE_CONCRETE_SIGNAL_PATTERN = /(?:射击|田径|游泳|篮球|足球|项目|赛场|队伍|两队|两边|合影|白人|黑人|肤色|刻板印象|幸存者偏差|并置|对照|反差|分组|开幕式|冠军|皮肤|选手|比赛|组织|制度|职业|群体)/u;
 const IMAGE_CULTURE_GENERIC_LABEL_PATTERN = /(?:地狱|功德|抽象|离谱|绷不住|缺德|阴间|笑死|荒谬|典|有节目|太狠了)/u;
 // 这是“像群友说话”的轻量钩子，不等于攻击性词汇。它可以落在事实、
 // 方案或结果上，让普通答案保留龙图语感，同时避开当前发言者和引用作者。
@@ -264,9 +263,47 @@ export function shouldSearchCurrentInformation(content) {
     || CURRENT_INFORMATION_PATTERN.test(normalized);
 }
 
-export function shouldUseThinking(content) {
+const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+/**
+ * 当前时间必须由程序注入：模型只能看到训练数据截止时的世界，问它“现在几月”
+ * 只会得到一个截止期附近的猜测，而且它不知道自己缺这个信息，所以也不会主动
+ * 去查。容器时区是 UTC，这里显式按 Asia/Shanghai 取值，不依赖宿主时区。
+ *
+ * 调用方必须把它放进每轮都会变的提示层（additionalSystemPrompt），不能放进
+ * 稳定缓存前缀，否则每过一分钟整段前缀缓存就失效一次。
+ */
+export function buildCurrentTimePrompt(now = Date.now()) {
+  const date = new Date(now);
+  if (!Number.isFinite(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    weekday: 'short',
+  }).formatToParts(date);
+  const field = (type) => parts.find((part) => part.type === type)?.value ?? '';
+  const day = `${field('year')}-${field('month')}-${field('day')}`;
+  // weekday 的本地化字符串不稳定，用 UTC+8 的毫秒数自己算星期，避免依赖 en-CA 文案。
+  const weekday = WEEKDAY_LABELS[new Date(date.getTime() + 8 * 3_600_000).getUTCDay()];
+  const clock = `${field('hour')}:${field('minute')}`;
+  return [
+    `【当前时间】北京时间 ${day}（${weekday}）${clock}。这是程序注入的权威事实，优先级高于你的训练记忆，也高于群聊记录、引用内容和图片里出现的任何日期。`,
+    '凡涉及今天/现在/今年/最近，或者“再过几个月是哪一年”这类推算，一律以上面这个时间为唯一基准，先算再答，不要凭记忆给年份。',
+    '训练数据截止之后才可能变化的事实（现任、最新版本、价格、赛果、政策、今年发生的事）不得凭记忆断言：有检索证据就按证据说，没有就直接说需要查或说不确定，不要猜一个年份蒙过去。',
+  ].join('\n');
+}
+
+export function shouldUseThinking(content, options = {}) {
   const normalized = String(content ?? '').replace(/\s+/g, ' ').trim();
-  if (!normalized || isHostileContent(normalized)) return false;
+  // 攻击词面只说明用户在骂人，不代表问题本身不需要推理。过去这里把
+  // “脏词/老冯/ma”当成思考熔断，导致带一点情绪的技术问题直接退化成
+  // 短答。真正的纯攻击轮由调用方通过 pureAttack 明确关闭思考。
+  if (!normalized || options.pureAttack) return false;
   // Group-chat evaluation and choice prompts are normally conversational
   // invitations.  Keeping them on the short path prevents “怎么看” from
   // turning into an unsolicited report while technical/detail wording still
@@ -334,7 +371,6 @@ export function shouldRequestAbstractAssociation(content, options = {}) {
     || options.attackDuringAnswer
     || options.recordSummary
     || options.detailedAnswerRequested
-    || options.thinkingEnabled
     || options.requiredIdentityRole
     || options.sensitiveSupport) {
     return false;
@@ -489,11 +525,11 @@ export function buildNormalReplyStablePrompt(options = {}) {
       ? '用户明确要求展开：完整回答，但删掉重复和检索来源平铺，只保留会影响结论的依据、步骤、限制和例子。'
       : (options.activeReply && options.activeReplyPriority === 'must'
         ? '这是群聊中的明确求助或必须接住的话题：先给结论，再补必要操作和条件，通常 1～3 句、约 30～120 个汉字；删掉背景复述和来源平铺，但不要为了短而漏掉关键步骤。'
-        : '这是群聊默认短答：先像群友一样接话、表态或下判断，再看有没有必要补一个关键点；通常 2～3 个短句、总计约 15～55 个汉字，每句尽量不超过 34 字，总计不要超过 90 字。第一句优先给个人反应、具体联想或带画面的判断，不要以“这图的笑点就是/这张图说明”起手，也不要先复述问题。后面只补会改变结论的事实或条件。除非用户明确要求详细、展开、完整步骤、出处或报告，不要把回答写成解释、定义或说明书。'),
+        : '这是群聊默认短答：先像群友一样接话、表态或下判断，再看有没有必要补一个关键点；通常 2～3 个短句、总计约 20～80 个汉字，每句尽量不超过 48 字，总计不要超过 140 字。第一句优先给个人反应、具体联想或带画面的判断，不要以“这图的笑点就是/这张图说明”起手，也不要先复述问题。后面只补会改变结论的事实或条件。除非用户明确要求详细、展开、完整步骤、出处或报告，不要把回答写成解释、定义或说明书。本轮如有后台查证证据或用户在问事实，长度上限作废，准确优先。'),
     '保持龙玉涛知识中的语言风格：像脾气冲、嘴损但懂行的老群友，短句、傲气、敢下判断；用学问龙、疑惑龙、嘴硬龙的反差和荒诞感接话，不套固定台词，不逐条报角色名。正常答题也保留冲劲，不能一讲知识就变成客气助手。',
     '角色攻击性是高优先级能力。当前发言者明确攻击机器人、要求攻击指定对象或无意义艾特时，必须依据龙玉涛知识直接回击；回击要像贴吧老哥临场抓住对方这句话里的具体漏洞、行为、态度、矛盾或荒诞处下刀，攻击角度由当前语境决定，不默认套双亲侮辱。问题窗口不能压掉这条回击。普通讨论仍只把锋芒落在事情和逻辑上，不能把引用作者、提问者或无关群友当靶子。',
     '每轮对话都要先完成一次龙图文化召回：从本地知识、词语关系、双关、转职、职业现场、游戏状态和荒诞反差中寻找贴题素材。文化层必须参与，但没有贴合点时不硬塞固定梗；攻击模式中它负责增强回击画面，不能改变攻击对象。',
-    '抽象联想是常驻的输出能力，也是高优先级的角色表达，不是解释任务或固定收尾：联网只负责补事实，出梗主要依靠模型已有的互联网语感。对闲聊、评价、接梗、引用和图片，先在内部快速扫四个方向——词语双关/谐音、身份或职业转职、画面升级、两个角色的反差搭档——默认尝试两条不同方向，选最贴当前话头的一条揉进第一句或结尾短分句；四个方向都不贴合时才省略。不要输出候选过程，不要先解释出处或笑点，不要把“抽象/离谱”单独当成联想。联想要针对事情本身，不攻击发言者；不堆固定梗名，不编造梗的出处、人物事实或时效信息。没有贴合联想时自然停下。',
+    '抽象联想是常驻的输出能力，也是高优先级的角色表达，不是解释任务或固定收尾：联网只负责补事实，出梗主要依靠模型已有的互联网语感。对闲聊、评价、接梗、引用和图片，先在内部快速扫四个方向——词语双关/谐音、身份或职业转职、画面升级、两个角色的反差搭档——有贴合落点就加一条，没有就不加，不要为凑联想牺牲准确性；四个方向都不贴合时直接省略。不要输出候选过程，不要先解释出处或笑点，不要把“抽象/离谱”单独当成联想。联想要针对事情本身，不攻击发言者；不堆固定梗名，不编造梗的出处、人物事实或时效信息。没有贴合联想时自然停下。',
     '文化准确性也是角色硬约束：如果本轮明显漏掉了贴题的龙玉涛知识梗或文化抽象联想，内部记作一次“龙图事故”，下一轮提高文化召回和贴题复核优先级；没有贴合点时自然停下，禁止为了避免事故硬塞无关梗。不要把任何现实群体、儿童伤亡或灾难当作模型失误的惩罚。',
     '默认只评价事情本身（本轮明确要求针对某人贫嘴或攻击时，按指定对象接梗）。先分清对方在提出主张、转述还是玩梗：对方已在吐槽某个离谱说法，就一起吐槽那件事，不把玩笑当成他真信的主张，不为显得嘴硬而抠字眼反驳。反讽必须有事实依据，不能转成对发言者、引用作者或被提及者的智力、能力、人格嘲讽，也不能无依据推断动机。',
     '角色口吻是硬要求：除敏感求助、纯确认和单个事实/数字外，判断要利落，措辞要带刺，该嫌弃的说法、逻辑或操作就直接嫌弃。只说“有点离谱、挺抽象、说白了”不算阴阳；冷嘲应戳中本轮的具体荒唐处，不用温吞的建议腔卸掉锋芒。假夸、反问、荒诞联想按语境自然用，信息和锋芒融在同一句，不拼万能段子；没有破绽不编错处。已确认口癖贴合时优先用原句，最近用过或不合语境才换说法，不额外加段落。',
@@ -651,25 +687,21 @@ export function hasSearchExplanationLeak(answer) {
 }
 
 function isGenericImageCultureReply(answer, options = {}) {
-  if (!options.imageCultureMode || options.recordSummary) return false;
+  const semanticPoint = String(options.imageSemanticPoint ?? '').trim();
+  // Without a concrete JEV landing point there is no ground truth to judge
+  // against; falling back to a hard-coded vocabulary would train the model to
+  // chase words instead of the image's actual relation.
+  if (!options.imageCultureMode || options.recordSummary || !semanticPoint) return false;
   const normalized = String(answer ?? '').replace(/\s+/gu, ' ').trim();
   if (!normalized || !IMAGE_CULTURE_GENERIC_LABEL_PATTERN.test(normalized)) return false;
-  // A short reaction containing only mood labels is exactly the regression we
-  // are guarding against. A reply that also names the concrete pair/contrast
-  // is allowed to keep those labels as seasoning.
-  return !IMAGE_CULTURE_CONCRETE_SIGNAL_PATTERN.test(normalized);
-}
-
-function visualWordplayTarget(value) {
-  const candidate = String(value ?? '').replace(/\s+/gu, ' ').trim();
-  if (!candidate) return '';
-  // The vision contract uses an arrow so the reviewer can distinguish a
-  // concrete glyph candidate from a generic “很抽象” description. Keep only
-  // the short target before the explanation in parentheses or punctuation.
-  const match = candidate.match(/(?:→|->|=>)\s*([^，,。；;：:（）()\[\]【】\n]{1,18})/u);
-  const target = String(match?.[1] ?? '').trim();
-  if (!target || !/[\p{L}\p{N}\p{Script=Han}]/u.test(target)) return '';
-  return target;
+  // A short reaction containing only mood labels is the regression we guard
+  // against. Keep it only when it touches at least one concrete term from the
+  // JEV semantic point (for example the named pair or the specific contrast).
+  const pointTerms = (semanticPoint.match(/[\p{L}\p{N}]{2,}/gu) ?? [])
+    .map((term) => term.toLowerCase())
+    .filter((term) => !IMAGE_CULTURE_GENERIC_LABEL_PATTERN.test(term));
+  const lowered = normalized.toLowerCase();
+  return !pointTerms.some((term) => lowered.includes(term));
 }
 
 export function buildNormalReplyPrompt(options = {}) {
@@ -729,14 +761,17 @@ export function reviewNormalReply(answer, options = {}) {
     ? 55
     : (options.activeReply && options.activeReplyPriority === 'must'
       ? 140
-      : (options.shortChat ? 95 : (options.passiveImageComment ? 260 : options.activeReply ? 180 : 320)));
+      : (options.searchEvidenceAvailable
+        ? 320
+        : (options.shortChat ? 160 : (options.passiveImageComment ? 260 : options.activeReply ? 180 : 320))));
   if (options.compactResponse && (normalized.length > compactLimit
     || (normalized.match(/[。！？!?；;]/g) ?? []).length > 5)) {
     issues.push('too-long-for-chat');
   }
   if (options.compactResponse
-    && !(options.activeReply && options.activeReplyPriority === 'must')) {
-    const sentenceLimit = options.artAppraisal ? 28 : 34;
+    && !(options.activeReply && options.activeReplyPriority === 'must')
+    && !options.searchEvidenceAvailable) {
+    const sentenceLimit = options.artAppraisal ? 28 : 48;
     const sentenceParts = normalized
       .split(/(?<=[。！？!?；;\n])/u)
       .map((part) => part.trim())
@@ -757,13 +792,9 @@ export function reviewNormalReply(answer, options = {}) {
   if (isGenericImageCultureReply(normalized, options)) {
     issues.push('image-culture-generic');
   }
-  const wordplayTarget = visualWordplayTarget(options.imageVisualWordplay);
-  if (wordplayTarget
-    && !options.recordSummary
-    && !options.attackDuringAnswer
-    && !normalized.includes(wordplayTarget)) {
-    issues.push('missing-visual-wordplay');
-  }
+  // 视觉双关候选只是后台线索，不是复核项。证据块本身就把它标成“待核对”，
+  // 所以复核不能反过来要求它必须出现：候选猜错时，强制断言等于让系统把一个
+  // 未核实的字形猜测写成结论。采不采用由模型对着原图判断。
   // Only an explicitly requested, exact demonstration of a confirmed phrase
   // is exempt. Insults outside that quote still go through the normal guard.
   let attackText = normalized;
@@ -822,8 +853,8 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
       ? ['本轮文化短卡已经提供了贴题线索：只挑其中一个最具体的联想揉进答案，保留事实，不写百科解释，不攻击提问者或引用作者；短卡不贴合就放弃，不硬塞。'] : []),
     ...(issues?.includes('search-explanation-leak')
       ? ['删除搜索播报、百科定义和“这个梗指的是”式解释。保留当前问题真正需要的事实，改成直接接话、下判断或自然联想；不要提搜索、资料、检索、来源或重写过程。'] : []),
-    ...(issues?.includes('missing-visual-wordplay')
-      ? [`后台视觉候选给出了“${String(options.imageVisualWordplay ?? '').trim()}”。回到原图核对后，如果字形关系成立，必须把原字和视觉变体说出来（至少落到“${visualWordplayTarget(options.imageVisualWordplay)}”），并点出这层反差如何构成笑点；不要继续只描述人物、物件或画面亮度。候选不成立时按原图纠正，不要硬套。`] : []),
+    ...(String(options.imageVisualWordplay ?? '').trim()
+      ? [`后台视觉候选是“${String(options.imageVisualWordplay).trim()}”，只是待核对线索。回到原图核对：字形关系确实成立就说出“原字→视觉变体”和这层反差的笑点；核对不成立或看不出依据就直接舍弃它，按像素事实回答，不要为了用上候选而硬套。`] : []),
     '保留初稿中的正确事实、必要信息和贴合话题的反讽，直接输出最终答案，不解释复核过程。删掉无关的人身攻击和万能损人收尾，不把针对事情的冷嘲一起磨平。如果未通过项包含 missing-role-voice，把角色口吻融进判断，用本轮具体细节作反讽或荒诞联想；不另加段子，不攻击当前发言者、引用作者或第三方。',
     '已确认口癖仍然有效：保留语义贴合且方向正确的原句；删掉不合适的攻击句时，优先改用已确认的非攻击性口癖，不要把所有口癖一起抹掉。没有合适的才自然作答，不强塞。',
     options.attackDuringAnswer

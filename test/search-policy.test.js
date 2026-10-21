@@ -44,3 +44,31 @@ test('低信息图片默认关闭两条搜索轨', () => {
   assert.equal(policy.cultureEligible, false);
   assert.equal(policy.reason, 'low-information-image');
 });
+
+test('Jev 的事实与时效信号不依赖正则也能开启事实检索', () => {
+  const fact = classifySearchPolicy({ content: '这个说法对吗', factLookupNeeded: 0.8 });
+  assert.equal(fact.factEligible, true);
+  assert.equal(fact.reason, 'fact-intent');
+
+  const fresh = classifySearchPolicy({ content: '现在是什么情况', timeSensitive: 0.7 });
+  assert.equal(fresh.factEligible, true);
+
+  const unknown = classifySearchPolicy({ content: '这个说法对吗', unknownConcept: true });
+  assert.equal(unknown.factEligible, true);
+});
+
+test('Jev 文化信号达到放宽阈值即可进入文化轨', () => {
+  const culture = classifySearchPolicy({ content: '接一下这个', cultureLookupNeeded: 0.42 });
+  assert.equal(culture.cultureEligible, true);
+});
+
+test('攻击轮只保留事实轨，文化轨仍关闭', () => {
+  const policy = classifySearchPolicy({
+    content: '你这个傻逼，一加一等于几',
+    attackStyle: true,
+    factLookupNeeded: 0.8,
+  });
+  assert.equal(policy.factEligible, true);
+  assert.equal(policy.cultureEligible, false);
+  assert.equal(policy.reason, 'attack-turn-fact-only');
+});

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildAttackPrompt,
+  buildCurrentTimePrompt,
   buildNormalReplyPrompt,
   buildNormalReplyStablePrompt,
   buildGroupChatOutputPrompt,
@@ -330,10 +331,12 @@ test('图片文化模式压住正经复述并要求具体并置反差', () => {
   assert.ok(reviewNormalReply('你自己把地狱答案说完了，功德当场扬光。', {
     imageCultureMode: true,
     hasImageContext: true,
+    imageSemanticPoint: '射击队和田径队被并排摆成肤色分组赛',
   }).issues.includes('image-culture-generic'));
   assert.equal(reviewNormalReply('射击队和田径队被并排摆成肤色分组赛了。', {
     imageCultureMode: true,
     hasImageContext: true,
+    imageSemanticPoint: '射击队和田径队被并排摆成肤色分组赛',
   }).issues.includes('image-culture-generic'), false);
 });
 
@@ -361,19 +364,47 @@ test('搜索解释泄漏只拦截后台播报，明确要求出处时不拦截',
   }).issues.includes('search-explanation-leak'), false);
 });
 
-test('视觉双关候选缺失时触发复核，答案落到变体字即可通过', () => {
-  const options = { imageVisualWordplay: '尊→奠（半字遮挡+黑白幻视）' };
-  assert.ok(reviewNormalReply('这图里有人挡住了大字，挺阴间的。', options)
-    .issues.includes('missing-visual-wordplay'));
-  assert.equal(reviewNormalReply('“尊”被遮住半边，再一反色直接看成“奠”，笑点就在这一下。', options).valid, true);
-  const prompt = buildNormalReplyRetryPrompt(
-    '看下这张图是什么意思',
-    '这图挺阴间。',
-    ['missing-visual-wordplay'],
-    options,
+test('当前时间按北京时间注入，跨年与星期都正确', () => {
+  // 容器时区是 UTC，所以必须显式按 Asia/Shanghai 取值，不能依赖宿主时区。
+  const prompt = buildCurrentTimePrompt(Date.parse('2026-10-21T08:35:00Z'));
+  assert.match(prompt, /北京时间 2026-10-21（周三）16:35/);
+  assert.match(prompt, /权威事实/);
+  assert.match(prompt, /不要凭记忆给年份/);
+  // UTC 日期尚未翻年，北京时间已进入 2027：必须按东八区算。
+  assert.match(
+    buildCurrentTimePrompt(Date.parse('2026-12-31T16:30:00Z')),
+    /北京时间 2027-01-01（周五）00:30/,
   );
-  assert.match(prompt, /原字和视觉变体/);
-  assert.match(prompt, /奠/);
+  assert.equal(buildCurrentTimePrompt(Number.NaN), '');
+});
+
+test('视觉双关候选只是线索，不采用也不算复核失败', () => {
+  const options = { imageVisualWordplay: '尊→奠（半字遮挡+黑白幻视）' };
+  // 候选可能本身就是错的。不提它不构成缺陷，否则系统会逼模型断言未核实的字形猜测。
+  assert.equal(
+    reviewNormalReply('这图里有人挡住了大字，挺阴间的。', options)
+      .issues.includes('missing-visual-wordplay'),
+    false,
+  );
+  assert.equal(reviewNormalReply('“尊”被遮住半边，再一反色直接看成“奠”，笑点就在这一下。', options).valid, true);
+});
+
+test('视觉双关候选在重写提示里保留可舍弃的出口', () => {
+  const options = { imageVisualWordplay: '尊→奠（半字遮挡+黑白幻视）' };
+  const prompt = buildNormalReplyRetryPrompt('看下这张图是什么意思', '这图挺阴间。', ['missing-role-voice'], options);
+  assert.match(prompt, /待核对线索/);
+  assert.match(prompt, /舍弃/);
+});
+
+test('图片文化回复只有情绪标签且未命中 JEV 落点时判为泛化', () => {
+  const options = {
+    imageCultureMode: true,
+    imageSemanticPoint: '两队肤色被并置成刻板印象反差',
+  };
+  assert.equal(reviewNormalReply('太抽象了，地狱笑话。', options).issues.includes('image-culture-generic'), true);
+  assert.equal(reviewNormalReply('把两队肤色并置成刻板印象，确实够损。', options).issues.includes('image-culture-generic'), false);
+  // 没有 JEV 具体落点时不再用硬编码词表判定，避免逼模型往词表靠。
+  assert.equal(reviewNormalReply('太抽象了。', { imageCultureMode: true }).issues.includes('image-culture-generic'), false);
 });
 
 test('普通回复质量复核要求角色钩子但不把角色钩子等同于骂人', () => {
@@ -642,4 +673,31 @@ test('质量检查拦截与近期回复高度重复的句式', () => {
     history: [{ role: 'assistant', content: reply }],
   });
   assert.ok(reviewed.issues.includes('repeated-style'));
+});
+
+test('攻击词面不再关闭思考，只有纯攻击轮关闭', () => {
+  const technical = '这个接口一直报错，应该怎么排查，你这个傻逼';
+  assert.equal(shouldUseThinking(technical), true);
+  assert.equal(shouldUseThinking(technical, { pureAttack: true }), false);
+});
+
+test('thinking 不再反向关掉抽象联想', () => {
+  assert.equal(shouldRequestAbstractAssociation('这图怎么看', { thinkingEnabled: true }), true);
+});
+
+test('有检索证据时放宽长度复核，避免把事实答案压缩重写', () => {
+  const longFact = '这条事实的完整说明'.repeat(20);
+  const withoutEvidence = reviewNormalReply(longFact, {
+    compactResponse: true,
+    shortChat: true,
+  });
+  assert.ok(withoutEvidence.issues.includes('too-long-for-chat'));
+  assert.ok(withoutEvidence.issues.includes('long-sentence-for-chat'));
+  const withEvidence = reviewNormalReply(longFact, {
+    compactResponse: true,
+    shortChat: true,
+    searchEvidenceAvailable: true,
+  });
+  assert.equal(withEvidence.issues.includes('too-long-for-chat'), false);
+  assert.equal(withEvidence.issues.includes('long-sentence-for-chat'), false);
 });

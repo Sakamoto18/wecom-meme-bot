@@ -148,3 +148,102 @@ test('OpenAI 兼容客户端允许单次请求覆盖超时时间', async () => {
     /请求超时（10ms）/,
   );
 });
+
+test('工具调用会回灌 assistant/tool 消息并继续生成最终回答', async () => {
+  const requests = [];
+  const client = new OpenAICompatibleChatClient({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.example.com',
+    model: 'test-model',
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [{
+                id: 'call-1',
+                type: 'function',
+                function: { name: 'web_search', arguments: '{"query":"今天日期"}' },
+              }],
+            },
+          }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '最终回答' } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const answer = await client.complete([], '现在几号', {
+    tools: [{ type: 'function', function: { name: 'web_search', parameters: { type: 'object' } } }],
+    onToolCall: async ({ name, arguments: args }) => `tool:${name}:${args.query}`,
+  });
+
+  assert.equal(answer, '最终回答');
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].tool_choice, 'auto');
+  assert.equal(requests[1].messages.at(-2).role, 'assistant');
+  assert.equal(requests[1].messages.at(-2).tool_calls[0].id, 'call-1');
+  assert.deepEqual(requests[1].messages.at(-1), {
+    role: 'tool',
+    tool_call_id: 'call-1',
+    content: 'tool:web_search:今天日期',
+  });
+});
+
+test('工具处理器抛错不会让整轮回复失败', async () => {
+  let requestCount = 0;
+  const client = new OpenAICompatibleChatClient({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.example.com',
+    model: 'test-model',
+    fetchImpl: async (_url, options) => {
+      requestCount += 1;
+      const body = JSON.parse(options.body);
+      if (requestCount === 1) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { tool_calls: [{
+            id: 'call-2', type: 'function', function: { name: 'web_search', arguments: '{}' },
+          }] } }],
+        }), { status: 200 });
+      }
+      const toolMessage = body.messages.find((message) => message.role === 'tool');
+      assert.match(toolMessage.content, /工具调用失败/);
+      return new Response(JSON.stringify({ choices: [{ message: { content: '降级回答' } }] }), { status: 200 });
+    },
+  });
+  const answer = await client.complete([], '问题', {
+    tools: [{ type: 'function', function: { name: 'web_search' } }],
+    onToolCall: async () => { throw new Error('upstream down'); },
+  });
+  assert.equal(answer, '降级回答');
+});
+
+test('上游不支持 tools 时去掉工具重试一次', async () => {
+  const requests = [];
+  const client = new OpenAICompatibleChatClient({
+    apiKey: 'test-key',
+    baseUrl: 'https://api.example.com',
+    model: 'test-model',
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      if (requests.length === 1) {
+        return new Response(JSON.stringify({ error: { message: 'tools are not supported' } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: '普通回答' } }] }), { status: 200 });
+    },
+  });
+  const answer = await client.complete([], '问题', {
+    tools: [{ type: 'function', function: { name: 'web_search' } }],
+    onToolCall: async () => 'unused',
+  });
+  assert.equal(answer, '普通回答');
+  assert.ok(Array.isArray(requests[0].tools));
+  assert.equal('tools' in requests[1], false);
+});

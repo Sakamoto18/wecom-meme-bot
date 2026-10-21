@@ -31,17 +31,38 @@ export function classifySearchPolicy(options = {}) {
   const lowInformationImage = options.hasImageContext === true
     && LOW_INFORMATION_IMAGE_PATTERN.test(imagePolicy);
   const explicitImageSearch = options.explicitImageSearch === true;
-  const jevCultureDomain = String(options.cultureDomain ?? '').trim().toLowerCase();
   const jevCultureLookupNeeded = Number(options.cultureLookupNeeded) || 0;
   const jevLongtuLookupNeeded = Number(options.longtuLookupNeeded) || 0;
+  const jevFactLookupNeeded = Number(options.factLookupNeeded) || 0;
+  const jevTimeSensitive = Number(options.timeSensitive) || 0;
+
+  const longtuTopic = shouldSearchLongtuKnowledge(content);
+  const memeTopic = shouldSearchMemeKnowledge(content);
+  const currentFacts = shouldSearchCurrentInformation(content);
+  const explicitFacts = EXPLICIT_FACT_PATTERN.test(content);
+  const highConfidenceCulture = HIGH_CONFIDENCE_CULTURE_PATTERN.test(content);
+  const jevCultureEligible = !imageSearch && jevCultureLookupNeeded >= 0.4;
+  const cultureEligible = !imageSearch
+    && (longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible);
+  // Asking for a meme's source/原帖 is both a cultural lookup and a factual
+  // verification request. Keep the two rails independent so one does not
+  // silently suppress the other. JEV's own fact/time signals join the union so
+  // a plain “现在最新版本是多少” does not depend on the lexical regex alone.
+  const factEligible = !imageSearch && (
+    currentFacts
+    || explicitFacts
+    || jevFactLookupNeeded >= 0.45
+    || jevTimeSensitive >= 0.5
+    || options.unknownConcept === true
+  );
 
   if (attackStyle) {
     return {
-      factEligible: false,
+      factEligible,
       cultureEligible: false,
-      confidence: 'none',
+      confidence: factEligible ? 'medium' : 'none',
       lowInformationImage,
-      reason: 'attack-turn',
+      reason: 'attack-turn-fact-only',
     };
   }
   if (lowInformationImage && !explicitImageSearch) {
@@ -53,21 +74,6 @@ export function classifySearchPolicy(options = {}) {
       reason: 'low-information-image',
     };
   }
-
-  const longtuTopic = shouldSearchLongtuKnowledge(content);
-  const memeTopic = shouldSearchMemeKnowledge(content);
-  const currentFacts = shouldSearchCurrentInformation(content);
-  const explicitFacts = EXPLICIT_FACT_PATTERN.test(content);
-  const highConfidenceCulture = HIGH_CONFIDENCE_CULTURE_PATTERN.test(content);
-  const jevCultureEligible = !imageSearch
-    && ['longtu', 'general', 'platform'].includes(jevCultureDomain)
-    && jevCultureLookupNeeded >= 0.55;
-  const cultureEligible = !imageSearch
-    && (longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible);
-  // Asking for a meme's source/原帖 is both a cultural lookup and a factual
-  // verification request. Keep the two rails independent so one does not
-  // silently suppress the other.
-  const factEligible = !imageSearch && (currentFacts || explicitFacts);
 
   if (imageSearch) {
     return {
