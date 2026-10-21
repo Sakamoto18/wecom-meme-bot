@@ -172,6 +172,13 @@ test('普通长答拆成连续完整消息，保留每句条件并不超过四�
     }),
     ['先别急着夸，这图的因果链断了，', '笑点就在这里。'],
   );
+  assert.deepEqual(
+    splitReplyText('第一段判断。\n第二段补充。', {
+      splitLineBreaks: true,
+      maxParts: 3,
+    }),
+    ['第一段判断。', '第二段补充。'],
+  );
 });
 
 test('普通群聊回复不再按 40 字拆成多条碎片消息', async () => {
@@ -191,6 +198,28 @@ test('普通群聊回复不再按 40 字拆成多条碎片消息', async () => {
 
   assert.equal(result.messages.length, 1);
   assert.equal(result.messages[0].text, answer);
+});
+
+test('模型输出的多段聊天会按换行拆成多条消息', async () => {
+  const answer = 'exa 补的是资料，不是脑子。抽象话靠上下文和中文语感。\n'
+    + '中文语料厚度是差距，但搜得多不等于听得懂。';
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return answer; },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'multi-paragraph-message',
+    message_type: 'private',
+    user_id: 'multi-paragraph-user',
+    text: '为什么搜索强化没让抽象话变强',
+  });
+
+  assert.deepEqual(
+    result.messages.filter((message) => message.type === 'text').map((message) => message.text),
+    ['exa 补的是资料，不是脑子。抽象话靠上下文和中文语感。', '中文语料厚度是差距，但搜得多不等于听得懂。'],
+  );
 });
 
 test('普通场景无语境匹配时只发文字，明确攻击仍在末尾强制附图', async () => {

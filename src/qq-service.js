@@ -1647,7 +1647,8 @@ export function splitReplyText(value, options = {}) {
   const maxPartCharacters = Math.max(1, Number(options.maxPartCharacters ?? 180));
   const maxParts = Math.max(1, Number(options.maxParts ?? 4));
   const splitSentences = options.splitSentences === true;
-  const paragraphs = normalized.split(/\n{2,}/u).map((part) => part.trim()).filter(Boolean);
+  const paragraphPattern = options.splitLineBreaks === true ? /\n+/u : /\n{2,}/u;
+  const paragraphs = normalized.split(paragraphPattern).map((part) => part.trim()).filter(Boolean);
   const parts = [];
   for (const paragraph of paragraphs) {
     if (paragraph.length <= maxPartCharacters && !splitSentences) {
@@ -3935,8 +3936,9 @@ export class QqBotService {
       }
       const messages = splitReplyText(answer, {
         splitSentences: false,
-        maxPartCharacters: 1_800,
-        maxParts: 1,
+        splitLineBreaks: !/```|(?:^|\n)\s*(?:[-*]|\d+\.)\s/u.test(answer),
+        maxPartCharacters: 420,
+        maxParts: 3,
       }).map((text) => ({ type: 'text', text }));
 
       try {
