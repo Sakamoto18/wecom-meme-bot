@@ -101,6 +101,27 @@ test('B站公开接口按 bvid 获取 cid 和 MP4 流', async () => {
   assert.equal(result.publishedAt, 1789113600);
 });
 
+test('B站公开接口携带配置的 Cookie，避免匿名请求被风控返回 412', async () => {
+  const calls = [];
+  const cookie = 'SESSDATA=test-session; buvid3=test-buvid';
+  await resolveBilibiliMedia('https://www.bilibili.com/video/BV1DV5v6HELu', {
+    bilibiliCookie: cookie,
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url: String(url), cookie: options.headers?.cookie });
+      if (String(url).includes('/view?')) {
+        return new Response(JSON.stringify({ code: 0, data: { cid: 99, title: 'Cookie 测试' } }));
+      }
+      return new Response(JSON.stringify({
+        code: 0, data: { durl: [{ size: 100, url: 'https://cdn.example/cookie.mp4' }] },
+      }));
+    },
+  });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.cookie), [cookie, cookie]);
+  assert.match(calls[0].url, /\/x\/web-interface\/view/u);
+  assert.match(calls[1].url, /\/x\/player\/playurl/u);
+});
+
 test('B站单文件 MP4 注册为流式中转，不等待完整下载', async () => {
   const resolver = new MediaResolver({ enabled: true, cacheTtlMs: 60_000 });
   const result = resolver.registerRemoteMedia({

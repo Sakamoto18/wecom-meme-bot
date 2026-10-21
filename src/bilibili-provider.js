@@ -7,6 +7,21 @@ const HEADERS = {
   referer: 'https://www.bilibili.com/',
 };
 
+function headersWithCookie(cookie) {
+  const value = String(cookie || '').trim();
+  return value ? { ...HEADERS, cookie: value } : HEADERS;
+}
+
+async function resolveBilibiliCookie(cookie, cookieProvider) {
+  const value = String(cookie || '').trim();
+  if (value || typeof cookieProvider !== 'function') return value;
+  try {
+    return String(await cookieProvider() || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 export function bilibiliPartError(message) {
   const error = new Error(message);
   error.code = 'BILIBILI_PART_UNAVAILABLE';
@@ -96,14 +111,14 @@ export function extractBilibiliVideoIdFromToolOutput(value) {
   return extractorId ? { bvid: `BV${extractorId}` } : null;
 }
 
-async function followBilibiliRedirect(value, fetchImpl, timeoutMs) {
+async function followBilibiliRedirect(value, fetchImpl, timeoutMs, headers = HEADERS) {
   const url = new URL(value);
   if (url.hostname !== 'b23.tv' && !url.hostname.endsWith('.b23.tv')) return value;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetchImpl(value, {
-      redirect: 'manual', headers: HEADERS, signal: controller.signal,
+      redirect: 'manual', headers, signal: controller.signal,
     });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
@@ -116,11 +131,11 @@ async function followBilibiliRedirect(value, fetchImpl, timeoutMs) {
   }
 }
 
-async function getJson(url, fetchImpl, timeoutMs) {
+async function getJson(url, fetchImpl, timeoutMs, headers = HEADERS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, { headers: HEADERS, signal: controller.signal });
+    const response = await fetchImpl(url, { headers, signal: controller.signal });
     if (!response.ok) throw new Error(`B站接口返回 HTTP ${response.status}`);
     const payload = await response.json();
     if (payload?.code !== 0 || !payload.data) {
@@ -140,12 +155,14 @@ export async function resolveBilibiliMedia(value, {
   fetchImpl = fetch, timeoutMs = 15_000, shortLinkIdResolver,
   bilibiliCookie = '', bilibiliCookieProvider = null, aiSummaryTimeoutMs = 1_500,
 } = {}) {
+  const cookie = await resolveBilibiliCookie(bilibiliCookie, bilibiliCookieProvider);
+  const requestHeaders = headersWithCookie(cookie);
   let id = extractBilibiliVideoId(value);
   let requestedPage = extractBilibiliPage(value);
   let uncertainPart = false;
   if (!id) {
     try {
-      const finalUrl = await followBilibiliRedirect(value, fetchImpl, timeoutMs);
+      const finalUrl = await followBilibiliRedirect(value, fetchImpl, timeoutMs, requestHeaders);
       id = extractBilibiliVideoId(finalUrl);
       requestedPage ??= extractBilibiliPage(finalUrl);
     } catch (error) {
@@ -164,7 +181,10 @@ export async function resolveBilibiliMedia(value, {
   let cardMetadata;
   try {
     const metadata = await getJson(
-      `https://api.bilibili.com/x/web-interface/view?${query}`, fetchImpl, timeoutMs,
+      `https://api.bilibili.com/x/web-interface/view?${query}`,
+      fetchImpl,
+      timeoutMs,
+      requestHeaders,
     );
     const pages = Array.isArray(metadata.pages) ? metadata.pages : [];
     if (uncertainPart && (pages.length > 1 || Number(metadata.videos) > 1)) {
@@ -210,13 +230,18 @@ export async function resolveBilibiliMedia(value, {
       bvid: cardMetadata.bvid,
       cid,
       upMid: cardMetadata.upMid,
-      cookie: bilibiliCookie,
-      cookieProvider: bilibiliCookieProvider,
+      cookie,
+      cookieProvider: cookie ? bilibiliCookieProvider : null,
       fetchImpl,
       timeoutMs: Math.min(Number(aiSummaryTimeoutMs) || 1_500, timeoutMs),
     });
     const [play, aiSummary] = await Promise.all([
-      getJson(`https://api.bilibili.com/x/player/playurl?${query}`, fetchImpl, timeoutMs),
+      getJson(
+        `https://api.bilibili.com/x/player/playurl?${query}`,
+        fetchImpl,
+        timeoutMs,
+        requestHeaders,
+      ),
       aiSummaryPromise,
     ]);
     const stream = [...(play.durl || [])]
