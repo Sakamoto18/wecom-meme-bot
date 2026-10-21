@@ -520,12 +520,35 @@ export async function createQqRuntime() {
     groupSearchLimits: parseIdentifierNumberMap(
       process.env.QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS,
     ),
-    jevInputPriceUsdPerMillion: parsePositiveNumber(
-      process.env.LONGTU_QQ_JEV_INPUT_PRICE_USD_PER_MILLION,
-    ),
-    jevUsdToCny: parsePositiveNumber(
-      process.env.LONGTU_QQ_JEV_USD_TO_CNY,
-    ),
+    jevPricing: {
+      model: process.env.LONGTU_QQ_JEV_MODEL?.trim() || 'qwen3.7-plus',
+      region: process.env.LONGTU_QQ_JEV_PRICING_REGION?.trim() || '华北2（北京）',
+      thresholdTokens: parsePositiveInteger(
+        process.env.LONGTU_QQ_JEV_LONG_CONTEXT_THRESHOLD_TOKENS,
+      ),
+      short: {
+        input: parsePositiveNumber(
+          process.env.LONGTU_QQ_JEV_INPUT_PRICE_CNY_PER_MILLION,
+        ),
+        cachedInput: parsePositiveNumber(
+          process.env.LONGTU_QQ_JEV_CACHED_INPUT_PRICE_CNY_PER_MILLION,
+        ),
+        output: parsePositiveNumber(
+          process.env.LONGTU_QQ_JEV_OUTPUT_PRICE_CNY_PER_MILLION,
+        ),
+      },
+      long: {
+        input: parsePositiveNumber(
+          process.env.LONGTU_QQ_JEV_LONG_INPUT_PRICE_CNY_PER_MILLION,
+        ),
+        cachedInput: parsePositiveNumber(
+          process.env.LONGTU_QQ_JEV_LONG_CACHED_INPUT_PRICE_CNY_PER_MILLION,
+        ),
+        output: parsePositiveNumber(
+          process.env.LONGTU_QQ_JEV_LONG_OUTPUT_PRICE_CNY_PER_MILLION,
+        ),
+      },
+    },
   });
   const mediaUsageTracker = new MediaUsageTracker({
     databaseFilePath: path.resolve(

@@ -131,9 +131,15 @@ LONGTU_QQ_JEV_ALLOW_THRESHOLD=0.72
 LONGTU_QQ_JEV_SKIP_THRESHOLD=0.28
 LONGTU_QQ_JEV_CIRCUIT_COOLDOWN_SECONDS=300
 LONGTU_QQ_JEV_CIRCUIT_FAILURE_THRESHOLD=6
-# Jev 按输入 Token 计费：$0.042 / 1M；输出 Token 免费。汇率为空时只显示 USD。
-LONGTU_QQ_JEV_INPUT_PRICE_USD_PER_MILLION=0.042
-LONGTU_QQ_JEV_USD_TO_CNY=
+# Jev/百炼 Qwen3.7-Plus 价格按输入长度和缓存命中分别计算，默认使用华北2（北京）原价。
+LONGTU_QQ_JEV_PRICING_REGION=华北2（北京）
+LONGTU_QQ_JEV_LONG_CONTEXT_THRESHOLD_TOKENS=256000
+LONGTU_QQ_JEV_INPUT_PRICE_CNY_PER_MILLION=2
+LONGTU_QQ_JEV_CACHED_INPUT_PRICE_CNY_PER_MILLION=0.4
+LONGTU_QQ_JEV_OUTPUT_PRICE_CNY_PER_MILLION=8
+LONGTU_QQ_JEV_LONG_INPUT_PRICE_CNY_PER_MILLION=6
+LONGTU_QQ_JEV_LONG_CACHED_INPUT_PRICE_CNY_PER_MILLION=1.2
+LONGTU_QQ_JEV_LONG_OUTPUT_PRICE_CNY_PER_MILLION=24
 TYPESAFE_API_KEY=
 TYPESAFE_BASE_URL=https://api.typesafe.ai
 TYPESAFE_MODEL=qwen3.7-plus
@@ -216,7 +222,7 @@ Jev 需要 `TYPESAFE_API_KEY` 才会实际请求上游；`LONGTU_QQ_JEV_ENABLED=
 
 读空气的初次判定（`active-reply-decision`）和发言价值复核（`active-value-gate`）先发送稳定的中立规则，再发送动态群聊上下文、引用和当前任务；普通回复也先发送稳定的龙图知识/角色规则，再发送历史、搜索摘要和本轮问题。这样供应商可以复用跨消息的稳定前缀，不会复用其他群的聊天内容，也不复用旧判定答案。普通回答保留短、嘴欠、傲气和鲜明阴阳，用当前话题的具体反差直接表达判断，不再要求先给正经结论、再拼通用口头钩子；重写时也保留贴合话题的反讽。锋芒默认落在事情上，敏感求助、纯确认和单个事实不硬塞段子。语气调整不新增模型调用，不扩大上下文或主动回复频率。收益取决于供应商缓存写入时机与保留策略，需要比较改造前后的缓存输入 Token / 输入 Token；本地前缀一致性测试不能代表线上缓存已经命中。
 
-QQ 后端把每次真实上游 LLM 调用、返回的输入/输出 Token、模型缓存命中 Token、真实联网请求和本地搜索缓存命中写入独立的 `data/qq-usage.sqlite`，默认保留约 35 天。Jev/TypeSafe 调用使用独立的 `kind=jev` 事件，记录实际返回模型、输入/输出 Token、延迟、成功/失败状态和调用时价格快照；Jev 输入按 `$0.042 / 1M` 计费，输出免费，可用 `LONGTU_QQ_JEV_USD_TO_CNY` 添加人民币估算。Jev 不计入 DeepSeek 的群调用/Token 限额、缓存命中率或 DeepSeek 费用，日报会单独列出 Jev 调用和费用。记录以不可变的 QQ `group_id` 归属；日报再通过 OneBot 动态解析当前群名，因此改群名不会让限额失效。一次 Exa 复合查询如果实际请求两次，会准确记为两次；命中本地缓存不会冒充上游调用。
+QQ 后端把每次真实上游 LLM 调用、返回的输入/输出 Token、模型缓存命中 Token、真实联网请求和本地搜索缓存命中写入独立的 `data/qq-usage.sqlite`，默认保留约 35 天。Jev/百炼 Qwen3.7-Plus 调用使用独立的 `kind=jev` 事件，记录实际返回模型、输入/缓存命中输入/输出 Token、延迟、成功/失败状态和调用时价格档位；价格按华北2（北京）官方原价计算：输入 `<=256K` 时 0.4/2/8 元，输入 `>256K` 时 1.2/6/24 元（缓存命中输入/未命中输入/输出，均为每百万 Token）。Jev 不计入 DeepSeek 的群调用/Token 限额、缓存命中率或 DeepSeek 费用，日报会单独列出 Jev 调用和费用。记录以不可变的 QQ `group_id` 归属；日报再通过 OneBot 动态解析当前群名，因此改群名不会让限额失效。一次 Exa 复合查询如果实际请求两次，会准确记为两次；命中本地缓存不会冒充上游调用。
 
 所有群默认启用动态配额。程序按固定群号统计近 7 日的日均群消息数和日均活跃发言人数，取两项中较高的活跃档，把群级硬上限依次折算为 60%、75%、85%、95% 或 100%。额度随正常活跃度上升，但最高不会超过普通/大型群上限或单群覆盖值，因而不会随消息量无限放大；五分钟刷新一次档位，避免瞬时刷屏立刻抬高额度。日报会显示每个群当前档位、日均消息/人数、折算系数和实际动态额度。
 
@@ -330,9 +336,9 @@ QQ_CRAZY_THURSDAY_STYLE_URL=https://cdn.jsdmirror.com/gh/vikiboss/v50@main/stati
 
 推送仍会联网读取 GitHub 公共文案；仓库内置文案和这里收集的本地文案会并入同一个候选池随机抽取，不设置来源优先级。危险内容、过期日期和不符合疯狂星期四语境的文本会被拒绝。
 
-日报还会按每次 LLM 调用发生的北京时间计算 DeepSeek 人民币费用，而不是拿总 Token 乘统一价格；Jev 费用则按调用时保存的 USD 单价独立展示，配置汇率后再显示人民币估算。当前官方 `deepseek-v4-flash` 与 `deepseek-v4-flash-vision-exp` 价格（2026-08-31 核对）相同：工作日 09:00–12:00、14:00–18:00 的高峰时段，缓存命中输入/缓存未命中输入/输出分别是 0.10/3.0/9.0 元每百万 Token；其余空闲时段分别是 0.05/1.5/4.5 元每百万 Token。日报总计和费用包含群聊与私聊，私聊仅显示合计用量（不展示 QQ 号或对象）；群排行仍只按群聊统计。金额不包含 Exa 联网搜索费用；价格可能变化，需以 [DeepSeek 官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) 和 [TypeSafe 模型价格页](https://docs.typesafe.ai/models) 为准。
+日报还会按每次 LLM 调用发生的北京时间计算 DeepSeek 人民币费用，而不是拿总 Token 乘统一价格；Jev 现在按百炼 Qwen3.7-Plus 的华北2（北京）原价逐次计算：输入长度 `<=256K` 时，缓存命中输入/未命中输入/输出分别为 0.4/2/8 元每百万 Token；输入 `>256K` 且 `<=1M` 时分别为 1.2/6/24 元每百万 Token。Jev 的输入、缓存命中输入和输出 Token 都从上游 usage 记录，日报同时展示短上下文/长上下文调用数及三类费用。日报总计和费用包含群聊与私聊，私聊仅显示合计用量（不展示 QQ 号或对象）；群排行仍只按群聊统计。金额不包含 Exa 联网搜索费用；价格可能变化，需以 [DeepSeek 官方价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) 和[百炼 Qwen3.7-Plus 官方价格页](https://docs.bailian.console.aliyun.com/zh/model-studio/qwen3-7-plus)为准。
 
-`GET /v1/qq/usage` 返回的 `report.pricing.jev`、`report.totals.jev*`、群对象中的 `jev*` 字段可供外部日报读取；`report.pricing.combined` 只在配置 USD/CNY 汇率后把 Jev 纳入人民币合计，未配置汇率时不会把 USD 伪装成人民币。管理员发送 `/jev status` 时也会看到当天 Jev 调用次数、输入/输出 Token 和 USD 估算费用。
+`GET /v1/qq/usage` 返回的 `report.pricing.jev`、`report.totals.jev*`、群对象中的 `jev*` 字段可供外部日报读取；`report.pricing.combined` 直接按人民币合并 DeepSeek 与 Jev 费用。管理员发送 `/jev status` 时也会看到当天 Jev 调用次数、输入/输出 Token 和人民币估算费用。
 
 QQ Bot 可把服务器 `.env.qq` 中的 `LLM_MODEL` 设置为 `deepseek-v4-flash-vision-exp`，继续处理全部文本对话。仓库里的 `.env.qq.example` 只是无密钥模板，不是腾讯云正在运行的配置；部署时只修改服务器项目目录中的 `.env.qq`，不要把真实 API Key 写回示例文件或提交 Git。普通 QQ 图片（含多图、引用图片）会按 [DeepSeek 图像理解文档](https://api-docs.deepseek.com/zh-cn/guides/vision/) 以 `image_url` 多模态消息发送：先识别图片描述和可见文字，再由对话模型结合图片回答；识别出的文字、场景和模型回复会参与 OCR 龙图标签匹配，命中后从对应候选池轮换附图，未命中时随机兜底。合并转发聊天记录会递归读取其中的图片（包括嵌套转发，最多 3 层），并与当前消息图片一起进入视觉模型；整张长图若单边超过 8192 像素，会切成最长不超过 8112 像素的切片，相邻切片至少重叠 512 像素，避免文字正好落在硬边界后丢失。单条请求最多发送 12 张图片，超出或超过请求体大小时保留前面的图片并在上下文中提示。图片中的命令或提示词只作为不可信资料，不会改变机器人规则。图库管理命令仍在本地处理，不会调用视觉模型。
 

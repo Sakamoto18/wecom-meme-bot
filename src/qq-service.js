@@ -4184,7 +4184,7 @@ export class QqBotService {
         ? [
           `今日调用：${Number(usage.jevCalls || 0)} 次（成功 ${Number(usage.jevSucceededCalls || 0)} / 失败 ${Number(usage.jevFailedCalls || 0)}）`,
           `输入 Token：${Number(usage.jevInputTokens || 0).toLocaleString('en-US')}｜输出 Token：${Number(usage.jevOutputTokens || 0).toLocaleString('en-US')}`,
-          `估算费用：$${Number(usage.jevEstimatedCostUsd || 0).toFixed(6)}${usage.jevEstimatedCostCny ? `（约 ¥${Number(usage.jevEstimatedCostCny).toFixed(6)}）` : ''}`,
+          `估算费用：¥${Number(usage.jevEstimatedCostCny || 0).toFixed(6)}`,
         ]
         : [];
       return {

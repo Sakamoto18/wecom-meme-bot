@@ -110,8 +110,8 @@ test('日报总计包含私聊用量，但群排行只展示群聊聚合', async
   }
 });
 
-test('Jev 用量按输入 Token 独立计费，不进入 DeepSeek 配额和缓存统计', async () => {
-  const fixture = createTracker({ jevUsdToCny: 7.2 });
+test('Jev 按百炼 Qwen3.7-Plus 的输入、缓存和输出价格独立计费', async () => {
+  const fixture = createTracker();
   try {
     fixture.tracker.runWithContext({
       groupId: 'jev-group',
@@ -121,7 +121,11 @@ test('Jev 用量按输入 Token 独立计费，不进入 DeepSeek 配额和缓�
     }, () => fixture.tracker.recordJevUsage({
       source: 'jev-style',
       model: 'jev-1.14.0',
-      usage: { input_tokens: 1_000_000, output_tokens: 50_000 },
+      usage: {
+        input_tokens: 1_000_000,
+        prompt_cache_hit_tokens: 200_000,
+        output_tokens: 50_000,
+      },
       latencyMs: 321,
       succeeded: true,
       status: 200,
@@ -133,11 +137,17 @@ test('Jev 用量按输入 Token 独立计费，不进入 DeepSeek 配额和缓�
     assert.equal(report.totals.cachedInputTokens, 0);
     assert.equal(report.totals.jevCalls, 1);
     assert.equal(report.totals.jevInputTokens, 1_000_000);
+    assert.equal(report.totals.jevCachedInputTokens, 200_000);
+    assert.equal(report.totals.jevUncachedInputTokens, 800_000);
     assert.equal(report.totals.jevOutputTokens, 50_000);
-    assert.equal(report.pricing.jev.jevEstimatedCostUsd, 0.042);
-    assert.equal(report.pricing.jev.jevEstimatedCostCny, 0.3024);
+    // 长上下文：0.2M×1.2 + 0.8M×6 + 0.05M×24 = ¥6.24。
+    assert.equal(report.pricing.jev.jevEstimatedCostCny, 6.24);
+    assert.equal(report.pricing.jev.jevCachedInputCostCny, 0.24);
+    assert.equal(report.pricing.jev.jevUncachedInputCostCny, 4.8);
+    assert.equal(report.pricing.jev.jevOutputCostCny, 1.2);
+    assert.equal(report.pricing.jev.jevLongContextCalls, 1);
     assert.equal(group.jevMaxLatencyMs, 321);
-    assert.equal(group.combinedEstimatedCostCny, 0.3024);
+    assert.equal(group.combinedEstimatedCostCny, 6.24);
     assert.equal(fixture.tracker.getJevUsage().jevCalls, 1);
   } finally {
     fixture.close();

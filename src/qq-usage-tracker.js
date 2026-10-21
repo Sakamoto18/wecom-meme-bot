@@ -28,9 +28,15 @@ const LOCALLY_REPAIRABLE_REVIEW_ISSUES = new Set([
 const PRICE_UNIT_TOKENS = 1_000_000;
 const DEEPSEEK_PRICING_SOURCE = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/';
 const DEEPSEEK_PRICING_CHECKED_AT = '2026-09-10';
-const JEV_PRICING_SOURCE = 'https://docs.typesafe.ai/models';
-const JEV_PRICING_CHECKED_AT = '2026-10-15';
-const DEFAULT_JEV_INPUT_PRICE_USD_PER_MILLION = 0.042;
+const JEV_PRICING_SOURCE = 'https://docs.bailian.console.aliyun.com/zh/model-studio/qwen3-7-plus';
+const JEV_PRICING_CHECKED_AT = '2026-10-21';
+const JEV_PRICING_REGION = '华北2（北京）';
+const JEV_PRICING_MODEL = 'qwen3.7-plus';
+const JEV_LONG_CONTEXT_THRESHOLD_TOKENS = 256_000;
+const DEFAULT_JEV_PRICING_CNY = Object.freeze({
+  short: Object.freeze({ input: 2, cachedInput: 0.4, output: 8 }),
+  long: Object.freeze({ input: 6, cachedInput: 1.2, output: 24 }),
+});
 // Flash 价格按 DeepSeek-V4.1-Flash。旧模型名 deepseek-v4-flash、
 // deepseek-v4-flash-vision-exp 已下线，请求由 V4.1-Flash 承接并按 Flash 价计费，
 // 因此三个 flash 键共用同一份价格。
@@ -82,6 +88,40 @@ function percentage(value, fallback = 0) {
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100
     ? parsed
     : fallback;
+}
+
+function positivePrice(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function normalizeJevPricing(options = {}) {
+  const short = options.short ?? {};
+  const long = options.long ?? {};
+  return {
+    region: String(options.region ?? JEV_PRICING_REGION).trim() || JEV_PRICING_REGION,
+    model: String(options.model ?? JEV_PRICING_MODEL).trim() || JEV_PRICING_MODEL,
+    thresholdTokens: positiveInteger(
+      options.thresholdTokens,
+      JEV_LONG_CONTEXT_THRESHOLD_TOKENS,
+    ) || JEV_LONG_CONTEXT_THRESHOLD_TOKENS,
+    short: {
+      input: positivePrice(short.input, DEFAULT_JEV_PRICING_CNY.short.input),
+      cachedInput: positivePrice(
+        short.cachedInput,
+        DEFAULT_JEV_PRICING_CNY.short.cachedInput,
+      ),
+      output: positivePrice(short.output, DEFAULT_JEV_PRICING_CNY.short.output),
+    },
+    long: {
+      input: positivePrice(long.input, DEFAULT_JEV_PRICING_CNY.long.input),
+      cachedInput: positivePrice(
+        long.cachedInput,
+        DEFAULT_JEV_PRICING_CNY.long.cachedInput,
+      ),
+      output: positivePrice(long.output, DEFAULT_JEV_PRICING_CNY.long.output),
+    },
+  };
 }
 
 function ascendingIntegerList(value, fallback, expectedLength) {
@@ -222,8 +262,13 @@ function emptyJevCostSummary() {
     jevSucceededCalls: 0,
     jevFailedCalls: 0,
     jevInputTokens: 0,
+    jevCachedInputTokens: 0,
+    jevUncachedInputTokens: 0,
     jevOutputTokens: 0,
     jevTotalTokens: 0,
+    jevCachedInputCostCny: 0,
+    jevUncachedInputCostCny: 0,
+    jevOutputCostCny: 0,
     jevEstimatedCostUsd: 0,
     jevEstimatedCostCny: 0,
     jevPricedCalls: 0,
@@ -231,6 +276,8 @@ function emptyJevCostSummary() {
     jevUnpricedTokens: 0,
     jevLatencyMs: 0,
     jevMaxLatencyMs: 0,
+    jevShortContextCalls: 0,
+    jevLongContextCalls: 0,
     jevModels: new Set(),
   };
 }
@@ -242,8 +289,13 @@ function serializeJevCostSummary(summary) {
     jevSucceededCalls: summary.jevSucceededCalls,
     jevFailedCalls: summary.jevFailedCalls,
     jevInputTokens: summary.jevInputTokens,
+    jevCachedInputTokens: summary.jevCachedInputTokens,
+    jevUncachedInputTokens: summary.jevUncachedInputTokens,
     jevOutputTokens: summary.jevOutputTokens,
     jevTotalTokens: summary.jevTotalTokens,
+    jevCachedInputCostCny: money(summary.jevCachedInputCostCny),
+    jevUncachedInputCostCny: money(summary.jevUncachedInputCostCny),
+    jevOutputCostCny: money(summary.jevOutputCostCny),
     jevEstimatedCostUsd: money(summary.jevEstimatedCostUsd),
     jevEstimatedCostCny: money(summary.jevEstimatedCostCny),
     jevPricedCalls: summary.jevPricedCalls,
@@ -251,11 +303,53 @@ function serializeJevCostSummary(summary) {
     jevUnpricedTokens: summary.jevUnpricedTokens,
     jevLatencyMs: summary.jevLatencyMs,
     jevMaxLatencyMs: summary.jevMaxLatencyMs,
+    jevShortContextCalls: summary.jevShortContextCalls,
+    jevLongContextCalls: summary.jevLongContextCalls,
     jevModels: [...summary.jevModels].sort(),
   };
 }
 
-function calculateJevCosts(rows) {
+function jevUsageCachedInputTokens(usage = {}) {
+  return usageNumber(
+    usage.cached_input_tokens
+      ?? usage.cachedInputTokens
+      ?? usage.prompt_cache_hit_tokens
+      ?? usage.prompt_tokens_details?.cached_tokens
+      ?? usage.input_tokens_details?.cached_tokens
+      ?? usage.cached_tokens,
+  );
+}
+
+function calculateJevRowCost(row, pricing) {
+  const inputTokens = usageNumber(row.inputTokens);
+  const cachedInputTokens = Math.min(
+    inputTokens,
+    usageNumber(row.cachedInputTokens),
+  );
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+  const outputTokens = usageNumber(row.outputTokens);
+  const totalTokens = usageNumber(row.totalTokens) || inputTokens + outputTokens;
+  const longContext = inputTokens > pricing.thresholdTokens;
+  const prices = longContext ? pricing.long : pricing.short;
+  const cachedInputCostCny = cachedInputTokens / PRICE_UNIT_TOKENS * prices.cachedInput;
+  const uncachedInputCostCny = uncachedInputTokens / PRICE_UNIT_TOKENS * prices.input;
+  const outputCostCny = outputTokens / PRICE_UNIT_TOKENS * prices.output;
+  return {
+    inputTokens,
+    cachedInputTokens,
+    uncachedInputTokens,
+    outputTokens,
+    totalTokens,
+    cachedInputCostCny,
+    uncachedInputCostCny,
+    outputCostCny,
+    estimatedCostCny: cachedInputCostCny + uncachedInputCostCny + outputCostCny,
+    longContext,
+    priced: inputTokens + outputTokens > 0,
+  };
+}
+
+function calculateJevCosts(rows, pricing = normalizeJevPricing()) {
   const total = emptyJevCostSummary();
   const byGroup = new Map();
   const bySource = new Map();
@@ -271,33 +365,33 @@ function calculateJevCosts(rows) {
       bySource.set(source, sourceSummary);
       targets.push(sourceSummary);
     }
-    const inputTokens = usageNumber(row.inputTokens);
-    const outputTokens = usageNumber(row.outputTokens);
-    const totalTokens = usageNumber(row.totalTokens) || inputTokens + outputTokens;
+    const rowCost = calculateJevRowCost(row, pricing);
     const succeeded = Number(row.succeeded) === 1;
-    const inputPrice = Number(row.inputPriceUsdPerMillion);
-    const estimatedCostUsd = Number(row.estimatedCostUsd) || 0;
-    const estimatedCostCny = Number(row.estimatedCostCny) || 0;
     const latencyMs = usageNumber(row.latencyMs);
-    const hasPrice = Number.isFinite(inputPrice) && inputPrice > 0
-      && inputTokens > 0;
     for (const target of targets) {
       target.jevCalls += 1;
       target.jevSucceededCalls += succeeded ? 1 : 0;
       target.jevFailedCalls += succeeded ? 0 : 1;
-      target.jevInputTokens += inputTokens;
-      target.jevOutputTokens += outputTokens;
-      target.jevTotalTokens += totalTokens;
-      target.jevEstimatedCostUsd += estimatedCostUsd;
-      target.jevEstimatedCostCny += estimatedCostCny;
+      target.jevInputTokens += rowCost.inputTokens;
+      target.jevCachedInputTokens += rowCost.cachedInputTokens;
+      target.jevUncachedInputTokens += rowCost.uncachedInputTokens;
+      target.jevOutputTokens += rowCost.outputTokens;
+      target.jevTotalTokens += rowCost.totalTokens;
+      target.jevCachedInputCostCny += rowCost.cachedInputCostCny;
+      target.jevUncachedInputCostCny += rowCost.uncachedInputCostCny;
+      target.jevOutputCostCny += rowCost.outputCostCny;
+      target.jevEstimatedCostUsd += 0;
+      target.jevEstimatedCostCny += rowCost.estimatedCostCny;
       target.jevLatencyMs += latencyMs;
       target.jevMaxLatencyMs = Math.max(target.jevMaxLatencyMs, latencyMs);
-      if (hasPrice) {
+      if (rowCost.priced) {
         target.jevPricedCalls += 1;
       } else {
         target.jevUnpricedCalls += 1;
-        target.jevUnpricedTokens += totalTokens;
+        target.jevUnpricedTokens += rowCost.totalTokens;
       }
+      if (rowCost.longContext) target.jevLongContextCalls += 1;
+      else target.jevShortContextCalls += 1;
       const model = String(row.model ?? '').trim();
       if (model) target.jevModels.add(model);
     }
@@ -498,14 +592,7 @@ export class QqUsageTracker {
     this.groupSearchLimits = options.groupSearchLimits instanceof Map
       ? new Map(options.groupSearchLimits)
       : new Map();
-    this.jevInputPriceUsdPerMillion = Number.isFinite(Number(options.jevInputPriceUsdPerMillion))
-      && Number(options.jevInputPriceUsdPerMillion) > 0
-      ? Number(options.jevInputPriceUsdPerMillion)
-      : DEFAULT_JEV_INPUT_PRICE_USD_PER_MILLION;
-    this.jevUsdToCny = Number.isFinite(Number(options.jevUsdToCny))
-      && Number(options.jevUsdToCny) > 0
-      ? Number(options.jevUsdToCny)
-      : 0;
+    this.jevPricing = normalizeJevPricing(options.jevPricing);
     this.retentionMs = positiveInteger(options.retentionMs, DEFAULT_RETENTION_MS)
       || DEFAULT_RETENTION_MS;
     this.now = options.now ?? Date.now;
@@ -1094,19 +1181,21 @@ export class QqUsageTracker {
     );
     const totalTokens = usageNumber(normalizedUsage.total_tokens)
       || inputTokens + outputTokens;
-    const estimatedCostUsd = inputTokens / PRICE_UNIT_TOKENS
-      * this.jevInputPriceUsdPerMillion;
-    const estimatedCostCny = this.jevUsdToCny > 0
-      ? estimatedCostUsd * this.jevUsdToCny
-      : 0;
+    const cachedInputTokens = Math.min(inputTokens, jevUsageCachedInputTokens(normalizedUsage));
+    const rowCost = calculateJevRowCost({
+      inputTokens,
+      cachedInputTokens,
+      outputTokens,
+      totalTokens,
+    }, this.jevPricing);
     const normalizedError = String(error ?? '').trim().slice(0, 300);
     this.ensureOpen().prepare(`
       INSERT INTO qq_usage_events(
         created_at, group_id, user_id, message_type, kind, source, model,
         provider, allowed, succeeded, input_tokens, output_tokens, total_tokens,
-        estimated_cost_usd, estimated_cost_cny, input_price_usd_per_million,
+        cached_input_tokens, estimated_cost_usd, estimated_cost_cny, input_price_usd_per_million,
         usd_to_cny, latency_ms, error_status, large_group, limit_reason
-      ) VALUES (?, ?, ?, ?, 'jev', ?, ?, 'typesafe', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, 'jev', ?, ?, 'aliyun-bailian', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       this.now(),
       context.groupId,
@@ -1118,10 +1207,11 @@ export class QqUsageTracker {
       inputTokens,
       outputTokens,
       totalTokens,
-      estimatedCostUsd,
-      estimatedCostCny,
-      this.jevInputPriceUsdPerMillion,
-      this.jevUsdToCny,
+      cachedInputTokens,
+      0,
+      rowCost.estimatedCostCny,
+      0,
+      0,
       usageNumber(latencyMs),
       Number.isInteger(Number(status)) ? Number(status) : 0,
       context.largeGroup ? 1 : 0,
@@ -1222,6 +1312,7 @@ export class QqUsageTracker {
         model,
         succeeded,
         input_tokens AS inputTokens,
+        cached_input_tokens AS cachedInputTokens,
         output_tokens AS outputTokens,
         total_tokens AS totalTokens,
         estimated_cost_usd AS estimatedCostUsd,
@@ -1235,14 +1326,22 @@ export class QqUsageTracker {
       startAt: start,
       endAt: end,
       pricing: {
-        provider: 'typesafe',
-        currency: 'USD',
-        inputPriceUsdPerMillion: this.jevInputPriceUsdPerMillion,
-        usdToCny: this.jevUsdToCny || null,
+        provider: 'aliyun-bailian',
+        model: this.jevPricing.model,
+        region: this.jevPricing.region,
+        currency: 'CNY',
+        priceUnitTokens: PRICE_UNIT_TOKENS,
+        thresholdTokens: this.jevPricing.thresholdTokens,
+        inputPriceCnyPerMillion: this.jevPricing.short.input,
+        cachedInputPriceCnyPerMillion: this.jevPricing.short.cachedInput,
+        outputPriceCnyPerMillion: this.jevPricing.short.output,
+        longContextInputPriceCnyPerMillion: this.jevPricing.long.input,
+        longContextCachedInputPriceCnyPerMillion: this.jevPricing.long.cachedInput,
+        longContextOutputPriceCnyPerMillion: this.jevPricing.long.output,
         priceSourceUrl: JEV_PRICING_SOURCE,
         checkedAt: JEV_PRICING_CHECKED_AT,
       },
-      ...calculateJevCosts(rows).total,
+      ...calculateJevCosts(rows, this.jevPricing).total,
     };
   }
 
@@ -1277,6 +1376,7 @@ export class QqUsageTracker {
         model,
         succeeded,
         input_tokens AS inputTokens,
+        cached_input_tokens AS cachedInputTokens,
         output_tokens AS outputTokens,
         total_tokens AS totalTokens,
         estimated_cost_usd AS estimatedCostUsd,
@@ -1287,7 +1387,7 @@ export class QqUsageTracker {
       WHERE kind = 'jev'
         AND created_at >= ? AND created_at < ?
     `).all(start, end);
-    const jevCosts = calculateJevCosts(jevRows);
+    const jevCosts = calculateJevCosts(jevRows, this.jevPricing);
     const savingCostRows = database.prepare(`
       SELECT
         group_id AS groupId,
@@ -1504,22 +1604,27 @@ export class QqUsageTracker {
         peakPeriods: '工作日 09:00-12:00、14:00-18:00',
         ...costs.total,
         jev: {
-          provider: 'typesafe',
-          currency: 'USD',
-          inputPriceUsdPerMillion: this.jevInputPriceUsdPerMillion,
-          usdToCny: this.jevUsdToCny || null,
+          provider: 'aliyun-bailian',
+          model: this.jevPricing.model,
+          region: this.jevPricing.region,
+          currency: 'CNY',
+          priceUnitTokens: PRICE_UNIT_TOKENS,
+          thresholdTokens: this.jevPricing.thresholdTokens,
+          inputPriceCnyPerMillion: this.jevPricing.short.input,
+          cachedInputPriceCnyPerMillion: this.jevPricing.short.cachedInput,
+          outputPriceCnyPerMillion: this.jevPricing.short.output,
+          longContextInputPriceCnyPerMillion: this.jevPricing.long.input,
+          longContextCachedInputPriceCnyPerMillion: this.jevPricing.long.cachedInput,
+          longContextOutputPriceCnyPerMillion: this.jevPricing.long.output,
           priceSourceUrl: JEV_PRICING_SOURCE,
           checkedAt: JEV_PRICING_CHECKED_AT,
           ...jevTotals,
         },
         combined: {
-          currency: this.jevUsdToCny > 0 ? 'CNY' : 'CNY+USD',
+          currency: 'CNY',
           deepseekEstimatedCostCny: costs.total.estimatedCostCny,
-          jevEstimatedCostUsd: jevTotals.jevEstimatedCostUsd,
           jevEstimatedCostCny: jevTotals.jevEstimatedCostCny,
-          estimatedCostCny: this.jevUsdToCny > 0
-            ? costs.total.estimatedCostCny + jevTotals.jevEstimatedCostCny
-            : costs.total.estimatedCostCny,
+          estimatedCostCny: costs.total.estimatedCostCny + jevTotals.jevEstimatedCostCny,
         },
       },
       adaptiveLimitsEnabled: this.adaptiveLimitsEnabled,
