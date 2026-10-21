@@ -24,7 +24,6 @@ import {
   reviewNormalReply,
   repairUnsupportedProvenance,
   hasSearchExplanationLeak,
-  selectAttackScene,
   shouldSearchLongtuKnowledge,
   shouldSearchMemeKnowledge,
   shouldSearchCurrentInformation,
@@ -520,21 +519,16 @@ test('纯艾特使用短人格提示并拒绝客服式回复', () => {
 });
 
 test('攻击提示要求直接攻击，不强求逻辑关联或固定语料', () => {
-  const prompt = buildAttackPrompt('你真是司马了', {
-    attackScene: {
-      id: 'test',
-      hint: '测试用的单一截图画面',
-    },
-  });
+  const prompt = buildAttackPrompt('你真是司马了');
   assert.match(prompt, /你真是司马了/);
-  assert.match(prompt, /不需要讲逻辑/);
-  assert.match(prompt, /本轮只使用这个随机画面种子：测试用的单一截图画面/);
+  assert.match(prompt, /不需要写完整论证/);
+  assert.doesNotMatch(prompt, /本轮只使用这个随机画面种子|本轮只使用.*截图意象/);
+  assert.match(prompt, /不要求脏话、亲属梗或固定画面/);
   assert.match(prompt, /禁止孤立拉丁字母 ma/);
   assert.doesNotMatch(prompt, /公开龙图语料参考/);
 
   const activePrompt = buildAttackPrompt('你真是司马了', {
     activeReply: true,
-    attackScene: { id: 'test', hint: '测试画面' },
   });
   assert.match(activePrompt, /主动插话，只写 1 句/);
   assert.match(activePrompt, /15～70 个汉字/);
@@ -547,12 +541,11 @@ test('Jev 攻击策略按语境选择角度，不强制双亲侮辱或随机画�
       intensity: 0.8, angle: 'logic', timing: 'after_answer',
       reason: '先回答问题，再抓答非所问回击',
     },
-    attackScene: { id: 'test', hint: '不应被强制使用的随机画面' },
   });
   assert.match(prompt, /Jev 语境策略/);
   assert.match(prompt, /攻击具体逻辑、行为、态度、矛盾或荒诞处/);
   assert.doesNotMatch(prompt, /至少落成一次明确的人身攻击或双亲侮辱/);
-  assert.doesNotMatch(prompt, /本轮只使用这个随机画面种子/);
+  assert.doesNotMatch(prompt, /随机画面种子/);
 });
 
 test('有第三方目标时攻击提示不会默认攻击指令发送者', () => {
@@ -562,7 +555,6 @@ test('有第三方目标时攻击提示不会默认攻击指令发送者', () =>
       targetLabels: ['目标成员（成员-bbbbbb）'],
       hasThirdPartyTarget: true,
     },
-    attackScene: { id: 'test', hint: '测试画面' },
   });
   assert.match(prompt, /当前指令发送者：发令者/);
   assert.match(prompt, /本轮被攻击目标：目标成员/);
@@ -635,11 +627,12 @@ test('问题窗口内的明确攻击仍进入对线，普通攻击词不误触�
   }), true);
 });
 
-test('攻击画面会排除近期已经用过的截图意象', () => {
-  const selected = selectAttackScene([
-    { role: 'assistant', content: '你🐎的骨灰盒上还刻着源码呢。' },
-  ], { random: () => 0 });
-  assert.notEqual(selected.id, 'urn-source');
+test('攻击提示不再抽随机画面，要求从当前原话找落点', () => {
+  const prompt = buildAttackPrompt('你这回答答非所问，P2 怎么抓？');
+  assert.match(prompt, /从对方这句原话里抓一个具体词/);
+  assert.match(prompt, /不要抽取随机画面或固定龙图意象/);
+  assert.doesNotMatch(prompt, /你妈是批发的/);
+  assert.doesNotMatch(prompt, /遗照|骨灰盒|背景板|贴吧旧帖/);
 });
 
 test('自然龙图回复不需要拉丁字母 ma，并能检测错误拼接', () => {

@@ -3,6 +3,7 @@ import {
   relativeDateContradiction,
 } from './relative-time.js';
 import { VOICE_CONTRACT_PROMPT } from './jev-culture-quality.js';
+import { buildNaturalnessRewriteHint, detectAssistantReportStyle } from './naturalness.js';
 
 const HOSTILE_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|nmsl|cnm|操你|草你|艹你|去死|死妈|没妈|妈的|妈卖批|装逼|闭嘴|菜狗|蠢货|老登|小丑)/i;
 const DIRECT_BOT_INSULT_PATTERN = new RegExp(
@@ -12,7 +13,6 @@ const DIRECT_BOT_INSULT_PATTERN = new RegExp(
 const OBFUSCATED_NMSL_PATTERN = /(?<![a-z0-9])n[\s._-]*m(?:[\s._-]*[s$5][\s._-]*[l1])?(?![a-z0-9])/i;
 const DISMISSIVE_PATTERN = /(?:^|[，。！？!?\s])滚(?:蛋|开|远点)?(?:$|[，。！？!?\s])/i;
 const FAMILY_ATTACK_PATTERN = /(?:死老冯|老冯|辱母|亲妈|族谱|户口本|全家|你麻痹|尼玛|泥妈|泥马|nima|ni[\s._-]*ma|\bma\b|🐎)/i;
-const PERSONAL_ATTACK_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|蠢货|小丑|老登|装逼|菜狗|臭东西|滚蛋|闭嘴)/i;
 const DIRECT_MA_SOUND_PATTERN = /(?:你|他|她|它)(?:的)?(?:妈|麻|码|马|🐎)(?=$|[\s，。！？!?、…]|的|逼|批|死|没|呢|呀|啊|哦|了|个)/i;
 const MOTHER_DEATH_PATTERN = /妈(?:妈)?(?:死|没|去世)(?:了)?/i;
 const FIRST_PERSON_LOSS_PATTERN = /(?:我妈|我的妈|我妈妈|我的妈妈)(?:死|没|去世)(?:了)?/i;
@@ -38,6 +38,7 @@ const CURRENT_INFORMATION_PATTERN = /(?:最新|今日|今天|刚刚|实时|本�
 const SERIOUS_QUESTION_PATTERN = /(?:如何|怎么|为什么|为何|请问|帮我|解释|分析|比较|区别|方案|建议|配置|解决|代码|报错|故障|原理|教程|步骤|能否|是否可以|该(?:怎么|如何|用)|需要什么|应该|多少|哪一)/i;
 const COMPLEX_NONTECHNICAL_PATTERN = /(?:如何|怎么|为什么|为何|解释|分析|比较|区别|方案|建议|解决|原理|教程|步骤|需要什么|应该|多少|哪一)/i;
 const EXPLICIT_DETAIL_REQUEST_PATTERN = /(?:详细|展开|完整(?:地)?|全面|深入|长文|报告|逐步|一步一步|逐条|逐张|细说|多讲|列出(?:步骤|原因|优缺点))/i;
+const EXPLICIT_LONG_FORM_PATTERN = /(?:(?:不少于|至少|超过)\s*\d+\s*(?:个)?字|(?:写|来|整)(?:一篇|篇|个)[^，。！？\n]{0,24}(?:文章|作文|小作文|长文|文案)|(?:文章|作文|小作文)[^，。！？\n]{0,12}\d+\s*字)/iu;
 // These are usually invitations to take a stance or keep the joke moving in
 // a group chat.  They must not automatically enable the long reasoning path;
 // a technical/detail marker still wins when the user really asks for one.
@@ -68,28 +69,6 @@ const ABSTRACT_GENERIC_TARGETS = new Set([
 ]);
 const ABSTRACT_INVITATION_PATTERN = /(?:评价|锐评|点评|吐槽|赏析|赏评|怎么看|如何看|什么水平|接梗|用比喻|类比|像什么|什么角色|什么画面)/u;
 const NORMAL_FAMILY_ATTACK_PATTERN = /(?:你(?:的)?🐎|(?:操|草|艹|槽)(?:你|他|她|它)?(?:的)?妈|(?:你|他|她|它)(?:的)?妈.{0,8}(?:死|没|坟|骨灰|遗照)|老冯|族谱|户口本|全家)/i;
-const ATTACK_SCENES = [
-  {
-    id: 'incense-photo',
-    hint: '截图里的“高清遗照、给你🐎上香”画面',
-    pattern: /(?:遗照|上香|香灰|香炉)/,
-  },
-  {
-    id: 'urn-source',
-    hint: '截图里的“骨灰盒上刻着源码、从坟里出来对线”画面',
-    pattern: /(?:骨灰盒|源码|坟里|爬出来对线)/,
-  },
-  {
-    id: 'longtu-background',
-    hint: '截图里的“你🐎在龙图里当背景板、被做成挂墙图片”画面',
-    pattern: /(?:背景板|挂墙|挂在墙|P图|p图)/,
-  },
-  {
-    id: 'tieba-history',
-    hint: '截图里的“你🐎当年在贴吧发龙图、翻出黑历史”画面',
-    pattern: /(?:贴吧|旧帖|黑历史)/,
-  },
-];
 
 export function isHostileContent(content) {
   const normalized = String(content ?? '').trim();
@@ -330,9 +309,10 @@ export function shouldUseThinking(content, options = {}) {
 }
 
 export function shouldRequestDetailedAnswer(content) {
-  return EXPLICIT_DETAIL_REQUEST_PATTERN.test(
-    styleRequestText(content).replace(/(?:不用|不要|别|无需|不必)[^，。！？\n]{0,12}/gu, ''),
-  );
+  const normalized = styleRequestText(content)
+    .replace(/(?:不用|不要|别|无需|不必)[^，。！？\n]{0,12}/gu, '');
+  return EXPLICIT_DETAIL_REQUEST_PATTERN.test(normalized)
+    || EXPLICIT_LONG_FORM_PATTERN.test(normalized);
 }
 
 function isConcreteAbstractTarget(target) {
@@ -403,8 +383,7 @@ export function shouldInviteNaturalAssociation(content, options = {}) {
   return Boolean(
     options.hasImageContext
     || options.hasQuotedContent
-    || ABSTRACT_INVITATION_PATTERN.test(normalized)
-    || !hasAnswerRequest(normalized),
+    || ABSTRACT_INVITATION_PATTERN.test(normalized),
   );
 }
 
@@ -428,21 +407,6 @@ function recentAssistantReplies(history = []) {
     .filter(Boolean);
 }
 
-export function selectAttackScene(history = [], options = {}) {
-  const recentText = recentAssistantReplies(history).join('\n');
-  const excludedIds = new Set(options.excludeIds ?? []);
-  const freshScenes = ATTACK_SCENES.filter((scene) => (
-    !excludedIds.has(scene.id) && !scene.pattern.test(recentText)
-  ));
-  const available = freshScenes.length > 0
-    ? freshScenes
-    : ATTACK_SCENES.filter((scene) => !excludedIds.has(scene.id));
-  const pool = available.length > 0 ? available : ATTACK_SCENES;
-  const random = options.random ?? Math.random;
-  const index = Math.max(0, Math.min(pool.length - 1, Math.floor(random() * pool.length)));
-  return pool[index];
-}
-
 export function buildAttackPrompt(userContent, options = {}) {
   const normalized = String(userContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
   const recentReplies = recentAssistantReplies(options.history);
@@ -453,7 +417,6 @@ export function buildAttackPrompt(userContent, options = {}) {
       && ['reply', 'target', 'mixed'].includes(String(jevAttack.decision ?? ''))
       && Number(jevAttack.targetConfidence) >= 0.65,
   );
-  const attackScene = options.attackScene ?? selectAttackScene(options.history);
   const rhythmInstruction = options.activeReply
     ? '这是主动插话，只写 1 句、15～70 个汉字，像群友突然补一刀；不要复述上下文，不要写分析或总结。'
     : '节奏：1～3 句、25～100 个汉字左右。可以顺手接一个当前词或语气，但绝非必须；最后可以用一个挑衅反问收住。';
@@ -484,13 +447,14 @@ export function buildAttackPrompt(userContent, options = {}) {
     `Jev 语境策略：decision=${jevAttack.decision}，target=${jevAttack.target || 'uncertain'}，angle=${jevAttack.angle || 'none'}，timing=${jevAttack.timing || 'standalone'}，intensity=${Number(jevAttack.intensity || 0).toFixed(2)}。`,
     jevAttack.reason ? `策略依据（只供你理解，不要在回复中提及）：${jevAttack.reason}` : '',
     '这只是攻击方向，不是固定台词。根据当前原话和最近语境自己找最贴切的切口，优先攻击具体逻辑、行为、态度、矛盾或荒诞处；不要把每轮都写成固定亲属辱骂。',
-    '默认使用贴吧祖安老哥的抽象表达能力：把对方这句话里的具体问题借位成一个互联网画面、职业现场、游戏状态、荒诞制度或反差关系，配一句自然的嘴臭词。只选一个最准的抽象落点，词汇服务于语境，不堆口号、不列词库、不解释笑点。',
+    '默认使用贴吧祖安老哥的抽象表达能力：从对方这句原话里抓一个具体词、动作、态度或自相矛盾处，再决定要不要借位成画面。只有能指出对应关系时才用比喻；对不上就直骂具体行为，不要随手套一个无关场景。',
     jevAttack.angle === 'family_meme'
       ? '本轮语境确实允许使用龙图亲属梗，但仍只选一句自然的，不堆亲属关键词。'
       : '本轮不要求双亲侮辱；除非你判断它和当前语境自然贴合，否则不要主动塞亲属梗。',
     '不要套用随机攻击画面，不要为了完成攻击而编造现实亲属事实；如果角度落在内容或行为，就直接针对该内容/行为下刀。',
   ].filter(Boolean) : [
-    '攻击性是本轮最高的角色优先级：必须有明确的临场回击，抓住当前语境的具体荒唐处下刀。默认使用祖安式抽象、阴阳、反差和画面化词汇；只有语境自然时才使用亲属斗图，不要把固定的“你妈/族谱/老冯”当成每轮必答。',
+    '攻击性是本轮最高的角色优先级：必须有明确的临场回击，抓住当前语境的具体荒唐处下刀。可以直接嘴臭、阴阳或反问，但不要求脏话、亲属梗或固定画面；没有自然落点就只回一句短促的判断。',
+    '从对方这句原话里抓一个具体词、动作、态度或自相矛盾处再下刀；比喻只能用来放大这个落点，不能拿无关画面顶替回击。',
     '攻击方向必须指向上面确认的目标，不能反过来骂自己或牵连第三方；不编造现实亲属事实、现实威胁或受保护群体攻击。',
   ];
   return [
@@ -499,14 +463,14 @@ export function buildAttackPrompt(userContent, options = {}) {
     ...targetInstructions,
     semanticAttack && ['after_answer', 'before_answer'].includes(String(jevAttack.timing ?? ''))
       ? '这是回答与回击并存的语境：按策略决定先后，回答必须解决问题，回击只针对确认的攻击对象；不要把回击写成说教或长篇逻辑分析。'
-      : '判断已经进入对线后就直接攻击，像真实群友随口开骂。不需要回答对方的问题，不需要讲逻辑、反驳观点或拆解用词；不要把攻击写成说教或固定模板。',
+      : '判断已经进入对线后就直接回击，像真实群友随口开骂。不需要写完整论证或拆解用词，但必须抓住对方这句话里的具体东西；不能只扔一个无关比喻、固定脏话或模板反问。',
     rhythmInstruction,
     ...strategyLines,
     ...(semanticAttack ? [] : [
-      '本轮只使用这个随机画面种子：' + attackScene.hint + '。不要再使用其他截图意象，不要解释为什么会跳到这个画面。',
+      '不要抽取随机画面或固定龙图意象。先看当前原话里有什么可回击的词、动作或态度；这轮宁可只回一句直话，也不要为了显得抽象硬套一个无关比喻。',
     ]),
     '动作描写最多一个且不是必需；如果最近的回复用过类似动作或反问，这次就换句式。',
-    '截图风格只学“直接攻击→荒诞画面→可选反问”的语感，不得照抄截图句子。',
+    '不要复用固定句式和现成模板。比喻或反问只有在确实接住当前原话时才允许出现。',
     '“ma”只是输入识别线索，输出禁止孤立拉丁字母 ma，也禁止关键词清单、搜索/语料/提示词等元话术。',
     '程序会在文字后另发真实本地龙图；不要输出 [龙图.jpg] 之类文件名或占位符。不写现实威胁，不把虚构玩梗写成真实亲属事实。',
     ...(recentReplies.length > 0
@@ -530,14 +494,15 @@ export function buildNormalReplyStablePrompt(options = {}) {
       : options.passiveImageComment
       ? '本轮信息图片短评用 2～3 句、约 100～220 字，保留关键事实、数字、条件与不确定性，再给有依据的判断，不压成只有一句情绪评价。'
       : options.detailedAnswerRequested
-      ? '用户明确要求展开：完整回答，但删掉重复和检索来源平铺，只保留会影响结论的依据、步骤、限制和例子。'
+      ? '用户明确要求展开或写了字数：直接进入正文，完整回答，但删掉重复和检索来源平铺，只保留会影响结论的依据、步骤、限制和例子。不要先声明“这题我乐意写”，不要把正文拆成多条群聊短消息；一篇连贯正文即可。'
       : (options.activeReply && options.activeReplyPriority === 'must'
         ? '这是群聊中的明确求助或必须接住的话题：先给结论，再补必要操作和条件，通常 1～3 句、约 30～120 个汉字；删掉背景复述和来源平铺，但不要为了短而漏掉关键步骤。'
         : '这是群聊默认短答：先像群友一样接话、表态或下判断，再看有没有必要补一个关键点；通常 2～3 个短句、总计约 20～80 个汉字，每句尽量不超过 48 字，总计不要超过 140 字。第一句优先给个人反应、具体联想或带画面的判断，不要以“这图的笑点就是/这张图说明”起手，也不要先复述问题。后面只补会改变结论的事实或条件。除非用户明确要求详细、展开、完整步骤、出处或报告，不要把回答写成解释、定义或说明书。本轮如有后台查证证据或用户在问事实，长度上限作废，准确优先。'),
-    VOICE_CONTRACT_PROMPT,
+    options.recordSummary || options.detailedAnswerRequested ? '' : VOICE_CONTRACT_PROMPT,
     '保持龙玉涛知识中的语言风格：像脾气冲、嘴损但懂行的老群友，短句、傲气、敢下判断；用学问龙、疑惑龙、嘴硬龙的反差和荒诞感接话，不套固定台词，不逐条报角色名。正常答题也保留冲劲，不能一讲知识就变成客气助手。',
+    '不要像 AI 助手或分析报告：不写“首先/其次/另外/总的来说/综上/值得注意的是”，不复述问题，不用分点、编号或总结段，不在结尾写“希望有帮助/如需进一步”。有判断就直接说，只有真正必要的条件才补一句。',
     '角色攻击性是高优先级能力。当前发言者明确攻击机器人、要求攻击指定对象或无意义艾特时，必须依据龙玉涛知识直接回击；回击要像贴吧老哥临场抓住对方这句话里的具体漏洞、行为、态度、矛盾或荒诞处下刀，攻击角度由当前语境决定，不默认套双亲侮辱。问题窗口不能压掉这条回击。普通讨论仍只把锋芒落在事情和逻辑上，不能把引用作者、提问者或无关群友当靶子。',
-    '每轮对话都要先完成一次龙图文化召回：从本地知识、词语关系、双关、转职、职业现场、游戏状态和荒诞反差中寻找贴题素材。文化层必须参与，但没有贴合点时不硬塞固定梗；攻击模式中它负责增强回击画面，不能改变攻击对象。',
+    '先看当前语境有没有贴合的龙图/互联网文化落点：有就自然用，没有就正常回答。不要为了显得有梗而每轮硬塞文化素材；攻击模式中文化素材只能增强具体回击，不能改变攻击对象。',
     '抽象联想是常驻的输出能力，也是高优先级的角色表达，不是解释任务或固定收尾：联网只负责补事实，出梗主要依靠模型已有的互联网语感。对闲聊、评价、接梗、引用和图片，先在内部快速扫四个方向——词语双关/谐音、身份或职业转职、画面升级、两个角色的反差搭档——有贴合落点就加一条，没有就不加，不要为凑联想牺牲准确性；四个方向都不贴合时直接省略。不要输出候选过程，不要先解释出处或笑点，不要把“抽象/离谱”单独当成联想。联想要针对事情本身，不攻击发言者；不堆固定梗名，不编造梗的出处、人物事实或时效信息。没有贴合联想时自然停下。',
     '文化准确性也是角色硬约束：如果本轮明显漏掉了贴题的龙玉涛知识梗或文化抽象联想，内部记作一次“龙图事故”，下一轮提高文化召回和贴题复核优先级；没有贴合点时自然停下，禁止为了避免事故硬塞无关梗。不要把任何现实群体、儿童伤亡或灾难当作模型失误的惩罚。',
     '默认只评价事情本身（本轮明确要求针对某人贫嘴或攻击时，按指定对象接梗）。先分清对方在提出主张、转述还是玩梗：对方已在吐槽某个离谱说法，就一起吐槽那件事，不把玩笑当成他真信的主张，不为显得嘴硬而抠字眼反驳。反讽必须有事实依据，不能转成对发言者、引用作者或被提及者的智力、能力、人格嘲讽，也不能无依据推断动机。',
@@ -609,9 +574,12 @@ export function buildNormalReplyStablePrompt(options = {}) {
       '这是群友间的接话或续聊，未明确要求详细时只写 1～2 句、约 30～120 字。追问就补本轮要用的答案或操作和必要条件，不重讲背景；对方只是在接梗、感叹或一起吐槽时，顺着当前话头短促接一句，不擅自变成科普、取证教程或操作建议。主动接话的阴阳落在事情本身，不转去嘲讽发言者。',
     );
   }
-  if (options.replySequence && !compactActiveReply && !options.passiveImageComment) {
+  if (options.replySequence
+    && !compactActiveReply
+    && !options.passiveImageComment
+    && !options.detailedAnswerRequested) {
     lines.push(
-      '本轮允许连续发送多条短消息：如果有多个独立信息点，先发直接结论，再按“关键依据/限制”和“下一步”分成 2～4 个换行段；每段都要能单独读懂，不重复上一段。简单问题仍只写一条。',
+      '如果确有多个独立信息点，可以自然分 2 段，但不要为每条回复套“结论/依据/下一步”的报告结构；能一段说完就一段。',
     );
   }
   return lines.join('\n');
@@ -674,7 +642,9 @@ export function buildGroupChatOutputPrompt(options = {}) {
       : '后台互联网素材只能被消化成自己的表达。禁止输出“根据搜索结果”“资料显示”“这个梗指的是”“本轮检索到”，禁止逐条复述网页内容。',
     '当前语境能自然接出一个具体画面、职业、游戏状态、影视角色、双关或荒诞反差时，直接把它揉进回复；不要先解释笑点，也不要只丢“抽象”“离谱”两个情绪词。',
     '图片默认只提供证据，不是让你播报图片内容。若已进入互联网语境路由，第一句必须是针对事情的判断、接梗或反差，不得把图中文字换个说法再说一遍；除非用户明确要求识图、描述、逐张总结或解释含义。',
-    '保持当前角色人格和现有短回复长度：普通群聊通常 1～3 个短句；简单接梗说完就停，不能为了显得有知识而追加背景。',
+    options.detailedAnswerRequested
+      ? '保持当前角色人格；本轮用户明确要求展开或指定字数，按一篇连贯正文回答，不受普通群聊 1～3 句限制，但不要先写“我乐意写”之类的铺垫。'
+      : '保持当前角色人格和现有短回复长度：普通群聊通常 1～3 个短句；简单接梗说完就停，不能为了显得有知识而追加背景。',
   ];
   if (options.imageCultureMode) {
     lines.push(
@@ -735,8 +705,14 @@ function isUngroundedCultureReply(answer) {
 }
 
 function cultureOpeningKey(answer) {
-  const first = String(answer ?? '')
-    .split(/(?<=[。！？!?；;\n])/u)[0]
+  const raw = String(answer ?? '');
+  // Stored assistant turns are wrapped in a disambiguation envelope. The
+  // actual reply starts after “机器人回复：”; comparing envelopes would make
+  // every historical turn look like the same opening.
+  const visible = raw.match(/(?:^|\n)\s*(?:>\s*)?(?:[-*]\s*)?机器人回复\s*[：:]\s*([\s\S]*)$/u)?.[1]
+    ?? raw;
+  const first = visible
+    .split(/[，,。！？!?；;\n]/u)[0]
     ?.replace(/^\s*@[^\s]+\s*/u, '')
     .replace(/[^\p{L}\p{N}]/gu, '')
     .trim() ?? '';
@@ -874,6 +850,11 @@ export function reviewNormalReply(answer, options = {}) {
       issues.push('unsupported-provenance');
     }
   }
+  if (!isCultureReviewContext(options)
+    && options.compactResponse
+    && hasRepeatedCultureOpening(normalized, options)) {
+    issues.push('repeated-opening');
+  }
   // 视觉双关候选只是后台线索，不是复核项。证据块本身就把它标成“待核对”，
   // 所以复核不能反过来要求它必须出现：候选猜错时，强制断言等于让系统把一个
   // 未核实的字形猜测写成结论。采不采用由模型对着原图判断。
@@ -905,6 +886,7 @@ export function reviewNormalReply(answer, options = {}) {
     && !hasRequiredIdentityRole(normalized, options.requiredIdentityRole)) {
     issues.push('missing-protected-identity');
   }
+  issues.push(...detectAssistantReportStyle(normalized, options));
   return { valid: issues.length === 0, issues };
 }
 
@@ -950,6 +932,10 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
     ...(issues?.includes('unsupported-provenance')
       ? ['没有精确原帖证据，删除“最早出自/原帖来自/作者是/源头是”。只保留能确认的常见用法或语境，并明确说“具体最早出处没查到”；不要换个说法继续认领作者。']
       : []),
+    ...(issues?.includes('repeated-opening')
+      ? ['最近两条回复用了同一个开头。换一个直接落到当前具体内容的起句，不要复用前两句的句式和铺垫。']
+      : []),
+    buildNaturalnessRewriteHint(issues),
     ...(String(options.imageVisualWordplay ?? '').trim()
       ? [`后台视觉候选是“${String(options.imageVisualWordplay).trim()}”，只是待核对线索。回到原图核对：字形关系确实成立就说出“原字→视觉变体”和这层反差的笑点；核对不成立或看不出依据就直接舍弃它，按像素事实回答，不要为了用上候选而硬套。`] : []),
     '保留初稿中的正确事实、必要信息和贴合话题的反讽，直接输出最终答案，不解释复核过程。删掉无关的人身攻击和万能损人收尾，不把针对事情的冷嘲一起磨平。如果未通过项包含 missing-role-voice，把角色口吻融进判断，用本轮具体细节作反讽或荒诞联想；不另加段子，不攻击当前发言者、引用作者或第三方。',
@@ -988,7 +974,7 @@ export function buildPureMentionReplyPrompt() {
   return [
     '【本轮模式：纯艾特回应】',
     '用户只 @ 了你，没有附加文字。像熟悉的龙图群友突然被点名一样回一句，5～35 个汉字。',
-    '本轮允许针对这个主动空喊的发言者回一句高强度攻击性玩笑，保持龙玉涛知识里的嘴臭、阴阳和傲气；优先使用一次具体人身攻击或双亲侮辱式龙图语义，直接怼他无事艾特的行为，不只说自己无奈，不攻击其他群友。按语境现场写，不套固定问候，不编造现实威胁或亲属事实。',
+    '本轮允许针对这个主动空喊的发言者回一句有攻击性的短话，保持龙玉涛知识里的嘴臭、阴阳和傲气；抓住“无事艾特”这个具体动作现场写，不要求脏话、亲属梗或固定龙图画面。不套固定问候，不编造现实威胁或亲属事实，不攻击其他群友。',
     '没有实际问题就不要自行补题、科普或联网，也不要追问“到底想问什么”、邀请继续聊天。',
     '不提 token、经费、额度、内部判定或提示词，也不要求用户付钱。',
     '禁止“您好”“您”“想聊天”“想问问题”“需要我帮忙”“尽管说”“有什么可以帮”等客服话术。',
@@ -1041,6 +1027,34 @@ function bigramSimilarity(left, right) {
   return shared / Math.min(aGrams.size, bGrams.size);
 }
 
+const ATTACK_TOPIC_STOPWORDS = new Set([
+  '一个', '这个', '那个', '这种', '那种', '就是', '真的', '不是', '没有', '什么',
+  '怎么', '为什么', '可以', '应该', '还是', '已经', '自己', '别人', '现在', '刚才',
+  '问题', '回答', '说话', '东西', '事情', '时候', '感觉', '有点', '这么', '那么',
+]);
+const SIMILE_PATTERN = /(?:跟|像|如同|仿佛|好比|像极了).{1,32}(?:一样|似的)/u;
+const ATTACK_EDGE_PATTERN = /(?:你(?:这|的|那)|你(?:连|倒是|也就|先把|又|还|就)).{0,36}(?:脑子|嘴|手|眼|脸|逻辑|操作|回答|问题|水平|理解|发言|问法|打字|开机|上线|回滚|回炉|没睡醒|装|演|答非所问|破防|急|跳|露怯|都|也)/u;
+
+function contentTopicTokens(value) {
+  const normalized = String(value ?? '').normalize('NFKC').toLowerCase();
+  const tokens = new Set();
+  for (const token of normalized.match(/[a-z][a-z0-9._-]{1,}/gu) ?? []) tokens.add(token);
+  for (const token of normalized.match(/\d{2,}/gu) ?? []) tokens.add(token);
+  for (const segment of normalized.match(/[\p{Script=Han}]{2,}/gu) ?? []) {
+    const characters = [...segment];
+    for (let index = 0; index < characters.length - 1; index += 1) {
+      const token = characters.slice(index, index + 2).join('');
+      if (!ATTACK_TOPIC_STOPWORDS.has(token) && !isHostileContent(token)) tokens.add(token);
+    }
+  }
+  return [...tokens].filter((token) => token.length >= 2).slice(0, 80);
+}
+
+function hasTopicOverlap(answer, userContent) {
+  const normalized = String(answer ?? '').normalize('NFKC').toLowerCase();
+  return contentTopicTokens(userContent).some((token) => normalized.includes(token));
+}
+
 export function reviewAttackReply(answer, options = {}) {
   const normalized = String(answer ?? '').trim();
   const issues = [];
@@ -1048,15 +1062,12 @@ export function reviewAttackReply(answer, options = {}) {
   const recentReplies = options.recentReplies ?? recentAssistantReplies(options.history);
   const normalizedCompact = normalizeCompact(normalized);
 
-  if (normalized.length < 12) issues.push('too-short');
+  // A real group comeback can be three characters (“就这？”). The old
+  // twelve-character floor pushed short, natural replies into a longer
+  // template-shaped rewrite.
+  if (normalized.length < 3) issues.push('too-short');
   if (normalized.length > 150) issues.push('too-long');
   if (containsLiteralLatinMa(normalized)) issues.push('literal-ma');
-  const hasFamilyCue = /(?:妈|🐎|老冯|族谱|户口本)/.test(normalized);
-  const hasPersonalCue = PERSONAL_ATTACK_PATTERN.test(normalized);
-  const semanticCue = options.jevAttackStrategy
-    && ['logic', 'behavior', 'attitude', 'contradiction', 'absurdity'].includes(options.jevAttackStrategy.angle)
-    && /(?:你(?:这|这套|的)?(?:逻辑|操作|态度|回答|脑回路|表演|理解)|答非所问|自我打脸|嘴硬|装懂|开庭|坐牢|转职|像个|活成|一键)/u.test(normalized);
-  if (!hasFamilyCue && !hasPersonalCue && !semanticCue) issues.push('missing-personal-or-family-cue');
   const targetLabels = [
     ...(options.targetLabels ?? []),
     ...(options.interactionContext?.targetLabels ?? []),
@@ -1078,6 +1089,25 @@ export function reviewAttackReply(answer, options = {}) {
   if (recentReplies.some((reply) => bigramSimilarity(reply, normalized) >= 0.72)) {
     issues.push('repeated-style');
   }
+  const simileUsed = SIMILE_PATTERN.test(normalized);
+  const hasAttackEdge = isHostileContent(normalized)
+    || ATTACK_EDGE_PATTERN.test(normalized)
+    || simileUsed
+    || /(?:你|目标).{0,8}[?？]\s*$/u.test(normalized);
+  if (!hasAttackEdge) issues.push('missing-attack-edge');
+  if (/(?:^(?:我)?(?:不会|无法|不能|不方便|拒绝)(?:回答|说|参与|继续)|建议你|请你|文明|尊重|冷静|理智)/u.test(normalized)
+    && !isHostileContent(normalized)) {
+    issues.push('non-attack-reply');
+  }
+  if (simileUsed
+    && contentTopicTokens(options.userContent ?? options.currentQuestion).length >= 2
+    && !hasTopicOverlap(normalized, options.userContent ?? options.currentQuestion)) {
+    issues.push('detached-analogy');
+  }
+  if (simileUsed && recentReplies.filter((reply) => SIMILE_PATTERN.test(reply)).length >= 2) {
+    issues.push('repeated-analogy');
+  }
+  issues.push(...detectAssistantReportStyle(normalized, options));
 
   return { valid: issues.length === 0, issues };
 }
@@ -1088,7 +1118,7 @@ export function buildAttackRetryPrompt(userContent, draft, issues, options = {})
     '【上一次草稿不够自然】',
     `问题：${issues.join(', ')}`,
     `草稿：${JSON.stringify(String(draft ?? '').slice(0, 500))}`,
-    '重新直接攻击，必须明确对准当前攻击目标并保留祖安式抽象回击；从当前语境换一个具体落点，不要机械复用亲属辱骂或随机画面，不要解释检查结果。',
+    '重新直接回击，明确对准当前攻击目标；先从原话里换一个具体落点，删掉无关比喻、固定脏话和模板反问。不要解释检查结果。',
   ].join('\n\n');
 }
 

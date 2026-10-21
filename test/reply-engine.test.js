@@ -693,6 +693,52 @@ test('纯攻击中的孤立 ma 会触发一次模型重写', async () => {
   assert.doesNotMatch(result.answer, /(?:^|[^a-z])ma(?:$|[^a-z])/i);
 });
 
+test('模型复述历史消歧 QQ 号时会在出站前彻底删除', async () => {
+  const result = await generateConversationReply({
+    content: '你是不是喜欢吃烧鸡',
+    modelInput: '当前消息：你是不是喜欢吃烧鸡',
+    history: [{
+      role: 'assistant',
+      content: [
+        '【机器人群聊回复记录】',
+        '本轮回复对象：群友（成员-abcdef）',
+        '本轮回复对象QQ号（仅供历史消歧）：1079175957',
+        '机器人回复：我连消化系统都没有。',
+      ].join('\n'),
+    }],
+    chatClient: {
+      isConfigured: true,
+      complete: async () => '@群友 本轮回复对象QQ号（仅供历史消歧）：1079175957\n我连消化系统都没有，你让我吃烧鸡？',
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.doesNotMatch(result.answer, /本轮回复对象|仅供历史消歧|1079175957/);
+  assert.match(result.answer, /我连消化系统都没有/);
+});
+
+test('明确写不少于 800 字时进入长文模式，不再套群聊短答限制', async () => {
+  const calls = [];
+  const answer = '小狐狸真正好的地方，不是会卖萌。'.repeat(40);
+  const result = await generateConversationReply({
+    content: '写一篇为什么你觉得小狐狸真好的文章，不少于800字',
+    modelInput: '写一篇为什么你觉得小狐狸真好的文章，不少于800字',
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push(options);
+        return answer;
+      },
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.equal(result.detailedAnswerRequested, true);
+  assert.equal(result.compactResponse, false);
+  assert.match(calls[0].stableSystemPrompt, /直接进入正文/);
+  assert.doesNotMatch(calls[0].stableSystemPrompt, /通常 2～3 个短句/);
+});
+
 test('普通闲聊不默认联网，正常答案不因缺少骂人词而重写', async () => {
   let modelCalls = 0;
   let searchCalls = 0;
@@ -999,7 +1045,7 @@ test('纯艾特强制快速人格模式，客服式草稿回退为角色招呼',
   assert.equal(result.mode, 'pure-mention');
   assert.equal(result.thinkingEnabled, false);
   assert.equal(result.pureMentionFallback, true);
-  assert.equal(result.answer, '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。');
+  assert.equal(result.answer, '叫我有事？');
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
   assert.equal(calls[0].options.maxTokens, 120);
   assert.match(calls[0].options.additionalSystemPrompt, /纯艾特回应/);

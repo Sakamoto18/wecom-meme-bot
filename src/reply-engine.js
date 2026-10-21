@@ -27,7 +27,6 @@ import {
   reviewAttackReply,
   reviewNormalReply,
   repairUnsupportedProvenance,
-  selectAttackScene,
   shouldSearchLongtuKnowledge,
   shouldSearchCurrentInformation,
   shouldRequestDetailedAnswer,
@@ -68,7 +67,7 @@ import {
 } from './relative-time.js';
 import { buildStyleAnchorPrompt, selectStyleAnchors } from './style-anchors.js';
 
-const PURE_MENTION_FALLBACK = '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。';
+const PURE_MENTION_FALLBACK = '叫我有事？';
 const WEB_SEARCH_TOOL = {
   type: 'function',
   function: {
@@ -116,8 +115,19 @@ function removeInternalReplyMetadata(value) {
       /(^|\n)\s*(?:>\s*)?(?:[-*]\s*)?【机器人群聊回复记录】\s*(?=\n|$)/gu,
       '$1',
     )
+    // The QQ-id line is part of the historical disambiguation envelope. Older
+    // sanitization only matched “本轮回复对象：” and let this second line leak
+    // into user-visible replies when the model copied the envelope.
     .replace(
-      /(^|\n)\s*(?:>\s*)?(?:[-*]\s*)?本轮回复对象\s*[：:][^\n]*(?=\n|$)/gu,
+      /(^|\n)\s*(?:>\s*)?(?:[-*]\s*)?本轮回复对象(?:QQ号)?(?:[（(][^）)\n]*[）)])?\s*[：:][^\n]*(?=\n|$)/gu,
+      '$1',
+    )
+    .replace(
+      /@[^\s\n]{1,60}\s*本轮回复对象(?:QQ号)?(?:[（(][^）)\n]*[）)])?\s*[：:]\s*[^\s，。！？!?\n]+/gu,
+      ' ',
+    )
+    .replace(
+      /(?:^|[\s，。；;])本轮回复对象(?:QQ号)?(?:[（(][^）)\n]*[）)])?\s*[：:]\s*[^\s，。！？!?\n]+/gu,
       '$1',
     )
     .replace(
@@ -660,10 +670,14 @@ export async function generateConversationReply(options) {
     }
   };
   if (pureAttack) {
-    const firstScene = selectAttackScene(history);
+    const attackStyleAnchors = buildStyleAnchorPrompt(
+      selectStyleAnchors(history, { currentContent: content, maxAnchors: 2 }),
+      { mode: 'attack' },
+    );
     const firstDraft = await chatClient.complete(history, userContent, {
       additionalSystemPrompt: [
         buildCurrentTimePrompt(),
+        attackStyleAnchors,
         imageSafetyPrompt,
         visualWordplayPrompt,
         knowledgeContext,
@@ -673,7 +687,6 @@ export async function generateConversationReply(options) {
         cultureRecall.prompt,
         buildAttackPrompt(content, {
           history,
-          attackScene: firstScene,
           interactionContext,
           activeReply,
           jevAttackStrategy,
@@ -691,6 +704,7 @@ export async function generateConversationReply(options) {
       history,
       targetLabels: interactionContext.targetLabels,
       interactionContext,
+      userContent: content,
       jevAttackStrategy: jevSemanticAttackEnabled(jevAttackStrategy, { interactionContext })
         ? jevAttackStrategy : null,
     };
@@ -700,12 +714,10 @@ export async function generateConversationReply(options) {
     let attempts = 1;
 
     if (!firstReview.valid) {
-      const retryScene = selectAttackScene(history, {
-        excludeIds: [firstScene.id],
-      });
       const secondDraft = await chatClient.complete(history, revisionUserContent, {
         additionalSystemPrompt: [
           buildCurrentTimePrompt(),
+          attackStyleAnchors,
           imageSafetyPrompt,
           knowledgeContext,
           protectedIdentityContext,
@@ -718,7 +730,6 @@ export async function generateConversationReply(options) {
             firstReview.issues,
             {
               history,
-              attackScene: retryScene,
               interactionContext,
               activeReply,
               jevAttackStrategy,
@@ -1100,8 +1111,14 @@ export async function generateConversationReply(options) {
     // cachePrefixSystemPrompt 会让稳定前缀每分钟整体失效一次。
     buildCurrentTimePrompt(turnNow),
     buildRelativeDatePrompt(turnNow, relativeDateText),
-    !attackStyle && !recordSummary
-      ? buildStyleAnchorPrompt(selectStyleAnchors(history, { currentContent: content }))
+    !recordSummary
+      ? buildStyleAnchorPrompt(
+        selectStyleAnchors(history, {
+          currentContent: content,
+          maxAnchors: attackStyle ? 2 : 3,
+        }),
+        { mode: attackStyle ? 'attack' : 'normal' },
+      )
       : '',
     imageSafetyPrompt,
     visualWordplayPrompt,
@@ -1477,14 +1494,16 @@ export async function generateConversationReply(options) {
 
   // A unified role prompt should produce the whole answer, but a model can
   // still turn a direct insult into a lecture about the insult. Keep that
-  // answer instead of switching personas; only add the missing, short
-  // rebuttal generated with the same attack-scene vocabulary used by the
-  // original role when the final quality check proves there is no direct
-  // second-person comeback.
+  // answer instead of switching personas; only add a generated, grounded
+  // second-person comeback. If that generation fails, leave the answer alone
+  // rather than appending a hard-coded insult from a local template.
   if (attackStyle && !pureAttack
     && review.issues.includes('missing-direct-rebuttal')) {
     try {
-      const rebuttalScene = selectAttackScene(history);
+      const rebuttalStyleAnchors = buildStyleAnchorPrompt(
+        selectStyleAnchors(history, { currentContent: content, maxAnchors: 2 }),
+        { mode: 'attack' },
+      );
       const rebuttalDraft = await chatClient.complete(
         history,
         '只输出最后一句直接回击，不重复前面的答案。',
@@ -1493,13 +1512,13 @@ export async function generateConversationReply(options) {
           cachePrefixSystemPrompt,
           ...cacheLayoutOptions,
           additionalSystemPrompt: [
+            rebuttalStyleAnchors,
             imageSafetyPrompt,
             protectedIdentityContext,
             memoryContext,
             personaContext,
             buildAttackPrompt(content, {
               history,
-              attackScene: rebuttalScene,
               interactionContext,
               activeReply: true,
               jevAttackStrategy,
@@ -1521,14 +1540,9 @@ export async function generateConversationReply(options) {
       const rebuttalReview = reviewNormalReply(cleanRebuttal, {
         attackDuringAnswer: true,
       });
-      const localRebuttalFallbacks = [
-        '你这个傻逼，脑子空成回音壁还学人对线，丢人都丢得没新意。',
-        '你这傻逼先把嘴闭上，连骂人都只会复读，还拿什么跟我对线？',
-        '你这个废物，张嘴就是家属套餐，脑子里连一句新话都没有。',
-      ];
       const rebuttal = cleanRebuttal && !rebuttalReview.issues.includes('missing-direct-rebuttal')
         ? cleanRebuttal
-        : localRebuttalFallbacks[rebuttalScene.id.length % localRebuttalFallbacks.length];
+        : '';
       if (rebuttal) {
         answer = `${answer}\n${rebuttal}`.trim();
         review = reviewNormalReply(answer, {

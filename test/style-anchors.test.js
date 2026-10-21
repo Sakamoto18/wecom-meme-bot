@@ -47,3 +47,27 @@ test('普通回复注入语感锚点，但不把锚点当答案素材', async ()
   assert.match(prompt, /你先别急着甩锅/);
   assert.match(prompt, /不是哥们/);
 });
+
+test('攻击回复也注入语感锚点，但只借节奏，不借对象和骂法', async () => {
+  let prompt = '';
+  await generateConversationReply({
+    content: '你这个傻逼',
+    currentQuestion: '你这个傻逼',
+    modelInput: '你这个傻逼',
+    history: [
+      { role: 'user', content: '你先别急着甩锅，报错原文贴一下' },
+      { role: 'user', content: '不是哥们，这也能上线啊' },
+    ],
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '你这张嘴倒是先上线了，脑子还在回滚。';
+      },
+    },
+  });
+  assert.match(prompt, /语感锚点：不是内容素材/);
+  assert.match(prompt, /这是回击轮/);
+  assert.match(prompt, /不能从锚点里借对象、骂法、亲属梗或比喻/);
+});

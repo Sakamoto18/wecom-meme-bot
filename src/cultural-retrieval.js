@@ -115,10 +115,10 @@ export function buildCultureRecallContext(options = {}) {
   const matches = compactLines(ranked.slice(0, MAX_RECALL_LINES).map((entry) => entry.line));
   const associationDirections = buildAssociationDirections(`${content}\n${currentQuestion}`);
   const mode = options.attackStyle
-    ? '当前是角色回击：优先召回龙图里的嘴硬、红温、辱亲属和荒诞画面语感。'
+    ? '当前是角色回击：优先召回龙图里的嘴硬、红温、反问和具体回击语感。'
     : '当前是普通对话：优先召回贴合当前词语、动作或关系的反差、双关、转职和具体场景。';
   const attackRule = options.attackStyle
-    ? '攻击性优先级高于解释腔；素材只帮助组织人身或双亲侮辱式回击，不能改换攻击对象。'
+    ? '攻击性优先级高于解释腔；素材只帮助组织具体、自然的回击，不能改换攻击对象。不要求亲属梗或固定骂法。'
     : '文化素材只提供联想方向，不强迫塞梗；不贴合就自然停下。';
 
   const prompt = [

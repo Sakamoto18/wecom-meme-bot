@@ -42,7 +42,7 @@ export function selectStyleAnchors(history = [], options = {}) {
   return anchors.reverse();
 }
 
-export function buildStyleAnchorPrompt(anchors = []) {
+export function buildStyleAnchorPrompt(anchors = [], options = {}) {
   const usable = (Array.isArray(anchors) ? anchors : [])
     .map((item) => String(item ?? '').trim())
     .filter(Boolean)
@@ -51,6 +51,9 @@ export function buildStyleAnchorPrompt(anchors = []) {
   return [
     '【语感锚点：不是内容素材】',
     '以下来自当前群最近的真人发言。只参考句长、断句、口语词密度、语气强弱和接话节奏；不要复制原句、昵称、具体事件、事实或梗，也不要把它们当成当前问题的答案。',
+    options.mode === 'attack'
+      ? '这是回击轮：只能借用说话的节奏和力度。攻击落点必须来自当前原话，不能从锚点里借对象、骂法、亲属梗或比喻。'
+      : '先像一个正在群里说话的人，而不是在写答案：没有自然口语节奏就缩短，不要为了完整补背景。',
     ...usable.map((item, index) => `${index + 1}. ${item}`),
   ].join('\n');
 }

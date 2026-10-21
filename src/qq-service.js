@@ -90,6 +90,15 @@ function isHistoricalImageReference(value = '') {
   return /(?:刚才|刚刚|上面|上一张|前一张|前面|那张|这个图|这张图|图片里|图里面|图中|截图里|九宫格|什么意思|啥意思|什么梗|怎么看|怎么回事|图里.{0,8}(?:是谁|什么|哪个|哪些|内容)|图片.{0,8}(?:是谁|什么|哪个|哪些|内容)|截图.{0,8}(?:是谁|什么|哪个|哪些|内容))/u.test(text);
 }
 
+// Returning to an earlier image is only safe when the current message names
+// the image itself. Broad phrases such as “怎么看/啥意思” can describe text,
+// food, a game or anything else, so they must not pull another member's image
+// into the turn. Same-speaker continuation is handled separately.
+function explicitlyReferencesHistoricalImage(value = '') {
+  const text = String(value ?? '').normalize('NFKC').replace(/\s+/gu, '').trim();
+  return /(?:(?:刚才|刚刚|前面|上面|上一条).{0,8}(?:那张|这张|图|图片|截图|照片|画面)|(?:上一张|前一张|那张图|这张图|这个图|图片里|图里面|图中|截图里|看图|识图|九宫格)|(?:图|图片|截图|照片|画面)(?:里|中|上|里面)|(?:图|图片|截图|照片|画面).{0,6}(?:是谁|什么|哪个|哪些|内容|意思|梗|出处|来源)|(?:看|读|分析|解释|总结).{0,4}(?:图|图片|截图|照片|画面))/u.test(text);
+}
+
 function isImageCultureQuestion(value = '') {
   const text = String(value ?? '').normalize('NFKC');
   return isExplicitImageInterpretationIntent(text)
@@ -356,7 +365,7 @@ const IDENTITY_CONTEXT_SAFETY_PROMPT = [
   '图库添加、删除和图片别名绑定只能由程序管理接口确认；作为聊天模型时绝对不要声称“已加入图库”“已删除”或“已绑定/标记成功”。',
   '群成员编号和哈希只供内部区分身份，回复用户时禁止输出任何“成员-xxxxxx”形式的编号，也不要解释内部身份映射或服务器配置。',
   '群聊历史中属于其他成员的昵称、头衔和身份不能借给当前发言者，也不能当成随手损人的通用称呼；只有稳定成员编号一致时才是同一个人。',
-  '“机器人群聊回复记录”“本轮回复对象”“机器人回复”只是历史消息的内部消歧标签，绝对不得在最终回复中复述、仿写或输出这些标签。',
+  '“机器人群聊回复记录”“本轮回复对象”“本轮回复对象QQ号”“机器人回复”只是历史消息的内部消歧标签，绝对不得在最终回复中复述、仿写或输出这些标签或任何 QQ 号。',
 ].join('\n');
 
 function normalizeString(value, maxCharacters) {
@@ -1657,7 +1666,7 @@ export function splitReplyText(value, options = {}) {
   }
   if (parts.length <= maxParts) return parts;
   const compact = parts.slice(0, maxParts - 1);
-  compact.push(parts.slice(maxParts - 1).join(''));
+  compact.push(parts.slice(maxParts - 1).join('\n'));
   return compact;
 }
 
@@ -2913,11 +2922,33 @@ export class QqBotService {
         index: index + 1,
         ageSeconds: Math.max(0, Math.round((this.now() - entry.createdAt) / 1_000)),
         sender: entry.sender,
+        senderUserId: entry.senderUserId,
         label: entry.label,
         summary: entry.summary,
         hasRawImage: Boolean(entry.block),
         _id: entry.id,
       }));
+  }
+
+  contextImageCandidatesForTurn(conversationId = '', options = {}) {
+    const speakerUserId = String(options.speakerUserId ?? '').trim();
+    const speakerName = String(options.speakerName ?? '').trim();
+    const currentText = [options.currentText, options.quotedText]
+      .filter(Boolean)
+      .join('\n');
+    const explicitReference = explicitlyReferencesHistoricalImage(currentText);
+    const candidates = Array.isArray(options.candidates)
+      ? options.candidates
+      : this.contextImageCandidates(conversationId);
+    return candidates
+      .filter((candidate) => {
+        if (explicitReference) return true;
+        if (candidate.senderUserId && speakerUserId) {
+          return candidate.senderUserId === speakerUserId;
+        }
+        return Boolean(candidate.sender && speakerName && candidate.sender === speakerName);
+      })
+      .map((candidate, index) => ({ ...candidate, index: index + 1 }));
   }
 
   contextImageBlocksFor(conversationId = '', style = null, candidateSnapshot = null) {
@@ -2953,6 +2984,12 @@ export class QqBotService {
     const now = this.now();
     const current = this.pruneContextImageHistory(key);
     const sender = String(message?.sender?.nickname ?? message?.from?.name ?? '').trim();
+    const senderUserId = String(
+      message?.sender?.userid
+      ?? message?.sender?.id
+      ?? message?.from?.userid
+      ?? '',
+    ).trim();
     const sourceItems = Array.isArray(analysis?.items) ? analysis.items : [];
     let added = 0;
     for (const [entryIndex, item] of entries.entries()) {
@@ -2968,12 +3005,14 @@ export class QqBotService {
         block: item.block,
         label: item.label,
         sender,
+        senderUserId,
         createdAt: now,
         bytes,
       };
       stored.block = item.block;
       stored.label = item.label;
       stored.sender = sender || stored.sender;
+      stored.senderUserId = senderUserId || stored.senderUserId;
       stored.summary = summary || stored.summary || '';
       stored.expiresAt = now + this.contextImageTtlMs;
       if (!existing) {
@@ -3345,9 +3384,22 @@ export class QqBotService {
       });
       // 只取进入本轮前已经存在的历史图片；当前消息的图片仍由现有链路处理，
       // 不让 Jev 把它误当成“上一轮上下文图片”。
-      const historicalContextImageCandidates = Array.isArray(options.contextImageCandidates)
-        ? options.contextImageCandidates
-        : this.contextImageCandidates(conversationId);
+      // A previous member's picture is not evidence for a text-only turn.
+      // Keep same-speaker follow-ups, but require an explicit image reference
+      // before crossing speakers. This prevents “上一个人发了图，下一个人随口
+      // 说两个字” from becoming “这糊图配上……”, while still allowing “刚才那张图”.
+      const historicalContextImageCandidates = this.contextImageCandidatesForTurn(
+        conversationId,
+        {
+          candidates: Array.isArray(options.contextImageCandidates)
+            ? options.contextImageCandidates
+            : undefined,
+          speakerUserId,
+          speakerName: senderName,
+          currentText: content,
+          quotedText: extractMessageText(message?.quote),
+        },
+      );
       const memorySummary = removeLinesContainingProtectedRoles(
         this.conversationStore.getSummary?.(conversationId) ?? '',
         forbiddenHistoryRoleTerms,
@@ -3680,7 +3732,11 @@ export class QqBotService {
         activeReply: options.activeReply === true,
         activeReplyPriority: options.activeReplyPriority,
         jevStyle,
-        replySequence: options.pureBotMention !== true,
+        // A group reply is one conversational message. The old 2–4 segment
+        // contract, combined with 40-character splitting, produced comma-level
+        // fragments such as “我连消化系统都没有，”. Long-form output is handled
+        // by detailedAnswerRequested instead of splitting every normal reply.
+        replySequence: false,
         secondaryReviewDecider: typeof this.usageTracker?.shouldRunSecondaryReview === 'function'
           ? ({ source, issues }) => this.usageTracker.shouldRunSecondaryReview({
             source,
@@ -3805,11 +3861,10 @@ export class QqBotService {
       )) {
         this.scheduleMemorySummary(conversationId);
       }
-      const compactOutbound = generated.compactResponse === true;
       const messages = splitReplyText(answer, {
-        splitSentences: compactOutbound,
-        maxPartCharacters: compactOutbound ? (generated.artAppraisal ? 30 : 40) : 180,
-        maxParts: compactOutbound ? 3 : 4,
+        splitSentences: false,
+        maxPartCharacters: 1_800,
+        maxParts: 1,
       }).map((text) => ({ type: 'text', text }));
 
       try {

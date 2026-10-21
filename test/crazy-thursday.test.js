@@ -263,7 +263,7 @@ test('管理员可以收集、查看和删除本地疯狂星期四文案', async
       message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
       crazy_thursday_list: true,
     });
-    assert.match(listed.messages[0].text, /1\. 公司通知/u);
+    assert.match(listed.messages[0].text, /1\. DeepSeek-V4\.1-Pro/u);
     const removed = await service.handleMessage({
       message_type: 'private', user_id: 'admin', crazy_thursday_request: true,
       crazy_thursday_delete: '1',

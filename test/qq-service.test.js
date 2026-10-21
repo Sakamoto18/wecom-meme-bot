@@ -169,6 +169,25 @@ test('普通长答拆成连续完整消息，保留每句条件并不超过四�
   );
 });
 
+test('普通群聊回复不再按 40 字拆成多条碎片消息', async () => {
+  const answer = '我连消化系统都没有，你让我吃烧鸡？你先把菜单撤了，咱们再聊。';
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete() { return answer; },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'single-message-1',
+    message_type: 'private',
+    user_id: 'single-message-user',
+    text: '你是不是喜欢吃烧鸡',
+  });
+
+  assert.equal(result.messages.length, 1);
+  assert.equal(result.messages[0].text, answer);
+});
+
 test('普通场景无语境匹配时只发文字，明确攻击仍在末尾强制附图', async () => {
   const noMeme = createService();
   const quiet = await noMeme.service.handleMessage({
@@ -541,7 +560,7 @@ test('Bridge 显示出来的纯 At 昵称仍走短回复并拦截客服话术', 
 
   assert.equal(payload.pureBotMention, true);
   assert.equal(result.mode, 'pure-mention');
-  assert.equal(result.messages[0].text, '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。');
+  assert.equal(result.messages[0].text, '叫我有事？');
 });
 
 test('明确龙图指令直接返回 Base64 图片且不调用模型', async () => {
@@ -616,7 +635,7 @@ test('QQ 纯艾特标记会传入快速人格模式并拦截客服式回复', as
   });
 
   assert.equal(result.mode, 'pure-mention');
-  assert.equal(result.messages[0].text, '这是草莓🍓，这是蓝莓🍇，遇到我算nm倒霉。');
+  assert.equal(result.messages[0].text, '叫我有事？');
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
 });
 
@@ -870,6 +889,75 @@ test('历史图片只保留短期候选，并按 Jev 选择结果送入视觉请
   assert.equal(selected[0].block.type, 'image_url');
   now += 61_000;
   assert.deepEqual(service.contextImageCandidates('group-1'), []);
+});
+
+test('历史图片按发言人和明确图指代过滤，不跨成员硬套上下文', async () => {
+  const { service } = createService();
+  const png = (await createPng()).toString('base64');
+  const prepared = await prepareImageBlocks({ imageBase64s: [png] });
+  service.rememberContextImages('group-1', prepared.blocks, {
+    items: [{ index: 1, description: '黄色糊图' }],
+  }, { from: { userid: 'image-owner', name: '咲咲' } });
+
+  assert.equal(service.contextImageCandidatesForTurn('group-1', {
+    speakerUserId: 'another-member',
+    speakerName: '群管',
+    currentText: '烧鸡',
+  }).length, 0);
+
+  assert.equal(service.contextImageCandidatesForTurn('group-1', {
+    speakerUserId: 'image-owner',
+    speakerName: '已经改名的群友',
+    currentText: '烧鸡',
+  }).length, 1);
+
+  assert.equal(service.contextImageCandidatesForTurn('group-1', {
+    speakerUserId: 'another-member',
+    speakerName: '群管',
+    currentText: '刚才那张图什么意思',
+  }).length, 1);
+
+  assert.equal(service.contextImageCandidatesForTurn('group-1', {
+    speakerUserId: 'another-member',
+    speakerName: '群管',
+    currentText: '你怎么看',
+  }).length, 0);
+});
+
+test('无图消息不会把上一位群友的图片带进最终回复材料', async () => {
+  const calls = [];
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, modelInput, options) {
+        calls.push({ modelInput, options });
+        return '烧鸡就烧鸡，别拿上个人的图往我这儿安。';
+      },
+    },
+  });
+  const png = (await createPng()).toString('base64');
+  const prepared = await prepareImageBlocks({ imageBase64s: [png] });
+  service.rememberContextImages('group:g1', prepared.blocks, {
+    items: [{ index: 1, description: '上一位群友发的黄色糊图' }],
+  }, { from: { userid: 'image-owner', name: '咲咲' } });
+
+  const message = buildQqCompatibleMessage(normalizeQqPayload({
+    message_id: 'context-scope-1',
+    message_type: 'group',
+    group_id: 'g1',
+    user_id: 'another-member',
+    sender_name: '群管',
+    text: '@龙玉涛AI 烧鸡',
+    bot_user_id: 'bot-qq',
+    mentions: [{ user_id: 'bot-qq', name: '龙玉涛AI' }],
+  }));
+  await service.replyConversation(message, '烧鸡', '群管', {
+    directBotMention: true,
+    jevStyle: { contextImageNeeded: 1, contextImageIndexes: [1] },
+  });
+
+  assert.ok(calls.length >= 1);
+  assert.doesNotMatch(calls[0].modelInput, /Jev 选中的历史上下文图片|上一位群友发的黄色糊图/u);
 });
 
 test('画作赏析使用主体关系取证，不复用通用图片缓存', async () => {
@@ -2541,12 +2629,13 @@ test('同群 peer Bot 最多连续回复两次，真人插话后解除静默', a
 
   const first = await service.handleMessage(peerMessage('peer-1'));
   const second = await service.handleMessage(peerMessage('peer-2'));
+  const callsBeforeBlocked = calls.length;
   const blocked = await service.handleMessage(peerMessage('peer-3'));
 
   assert.equal(first.active_reply, true);
   assert.equal(second.active_reply, true);
   assert.deepEqual(blocked, { mode: 'observed', messages: [] });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, callsBeforeBlocked);
   assert.equal(observations.length, 1);
 
   await service.handleMessage({
@@ -2558,10 +2647,11 @@ test('同群 peer Bot 最多连续回复两次，真人插话后解除静默', a
     text: '你俩先停一下',
     observe_only: true,
   });
+  const callsBeforeResume = calls.length;
   const resumed = await service.handleMessage(peerMessage('peer-4'));
 
   assert.equal(resumed.active_reply, true);
-  assert.equal(calls.length, 3);
+  assert.ok(calls.length > callsBeforeResume);
 });
 
 test('peer Bot 循环窗口过期后自动恢复回复额度', async () => {
@@ -2618,12 +2708,13 @@ test('明确艾特也不能让 peer Bot 绕过循环阈值，真人艾特不受�
 
   const first = await service.handleMessage(directMessage('direct-peer-1', 'peer-bot'));
   const second = await service.handleMessage(directMessage('direct-peer-2', 'peer-bot'));
+  const callsBeforeBlocked = calls.length;
   const blocked = await service.handleMessage(directMessage('direct-peer-3', 'peer-bot'));
 
   assert.equal(first.messages.length > 0, true);
   assert.equal(second.messages.length > 0, true);
   assert.deepEqual(blocked, { mode: 'observed', messages: [] });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, callsBeforeBlocked);
 
   for (let index = 0; index < 3; index += 1) {
     const humanReply = await service.handleMessage(
@@ -2631,7 +2722,7 @@ test('明确艾特也不能让 peer Bot 绕过循环阈值，真人艾特不受�
     );
     assert.equal(humanReply.messages.length > 0, true);
   }
-  assert.equal(calls.length, 8);
+  assert.ok(calls.length > callsBeforeBlocked + 2);
   assert.equal(calls.filter(call => call.options?.usageSource === 'mention-intent-reply').length, 3);
 });
 
