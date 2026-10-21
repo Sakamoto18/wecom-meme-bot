@@ -618,6 +618,43 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆，未匹�
   assert.equal(second.messages[0].text, '这是 QQ 回答，别把问题绕复杂了。');
 });
 
+test('私聊问候开启新话题时清掉旧方案讨论，不把旧摘要带进接梗', async () => {
+  const { service, calls } = createService();
+  await service.handleMessage({
+    message_id: 'private-old-topic',
+    message_type: 'private',
+    user_id: 'private-topic-user',
+    text: '现在网上有没有可以套用的梗百科模板？',
+  });
+  const result = await service.handleMessage({
+    message_id: 'private-new-greeting',
+    message_type: 'private',
+    user_id: 'private-topic-user',
+    text: '你好，我超市你',
+  });
+
+  assert.equal(calls[1].history.length, 0);
+  assert.equal(result.messages.length, 1);
+});
+
+test('私聊问候后明确接着旧话题时仍保留上下文', async () => {
+  const { service, calls } = createService();
+  await service.handleMessage({
+    message_id: 'private-followup-old',
+    message_type: 'private',
+    user_id: 'private-followup-user',
+    text: '这个报错怎么解决',
+  });
+  await service.handleMessage({
+    message_id: 'private-followup-new',
+    message_type: 'private',
+    user_id: 'private-followup-user',
+    text: '你好，刚才那个问题继续',
+  });
+
+  assert.equal(calls[1].history.length, 2);
+});
+
 test('QQ 纯艾特标记会传入快速人格模式并拦截客服式回复', async () => {
   const calls = [];
   const { service } = createService({

@@ -336,6 +336,8 @@ const MIN_USAGE_HISTORY_CHARACTERS = 600;
 const MANAGEMENT_TARGET_TTL_MS = 15 * 60 * 1000;
 const MANAGEMENT_TARGET_MAX_ENTRIES = 500;
 const MEMBER_HISTORY_INTENT_PATTERN = /(?:之前|以前|历史|上次|上回|曾经|说过|提过|聊过|记得|原话|哪次|什么时候)/;
+const PRIVATE_GREETING_PATTERN = /^(?:你好|您好|嗨|哈喽|hello|hi|在吗|在不在|早上好|中午好|晚上好|晚安)(?:[\s，,。.!！?？~～]+|$)/iu;
+const PRIVATE_PRIOR_CONTEXT_PATTERN = /(?:刚才|刚刚|上次|之前|前面|继续|接着|上一条|上面|那个问题|这个错误|你刚|你说过|上一轮)/u;
 const EXPLICIT_TARGETED_ATTACK_PATTERN = /(?:骂|攻击|怼|喷|拷打|羞辱|嘲讽|对线)(?:一下|一顿|几句|他|她|它|这个人)?/i;
 const PROTECTED_SELF_IDENTITY_PATTERN = /(?:我是谁|知道我是谁|还(?:认得|认识|记得)我|不认识(?:你的)?超管|认不出我)/i;
 const MEMORY_SUMMARIZER_SYSTEM_PROMPT = [
@@ -1865,6 +1867,18 @@ function sanitizeConversationHistory(history, terms) {
   })).filter((message) => message.content);
 }
 
+function shouldStartFreshPrivateConversation(message, content, options = {}) {
+  if (message?.chattype !== 'single' || options.hasRichContext) return false;
+  const text = String(content ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
+  if (!text || text.length > 48) return false;
+  const greeting = text.match(PRIVATE_GREETING_PATTERN);
+  if (!greeting) return false;
+  const remainder = text.slice(greeting[0].length).trim();
+  if (!remainder) return true;
+  if (PRIVATE_PRIOR_CONTEXT_PATTERN.test(remainder)) return false;
+  return remainder.length <= 24;
+}
+
 function sanitizeMemberMemories(memories, protectedRoles) {
   return (memories ?? []).map((entry) => {
     const terms = [...new Set([...(protectedRoles ?? [])]
@@ -3354,6 +3368,11 @@ export class QqBotService {
       buildModelInput(message, content, aliases),
     ].filter(Boolean).join('\n\n');
     const imageBlocks = Array.isArray(options.imageBlocks) ? options.imageBlocks : [];
+    const resetPrivateHistory = shouldStartFreshPrivateConversation(message, content, {
+      hasRichContext: imageBlocks.length > 0
+        || Boolean(options.forwardedContext)
+        || Boolean(extractMessageText(message?.quote)),
+    });
     const interactionContext = getGroupInteractionContext(message, aliases);
     const speakerUserId = String(message?.from?.userid ?? '').trim();
     const speakerForbiddenProtectedRoleTerms = [...new Set(
@@ -3371,18 +3390,25 @@ export class QqBotService {
     const personaContext = this.personaManager?.contextFor?.(message) ?? '';
 
     return this.conversationStore.runExclusive(conversationId, async () => {
+      if (resetPrivateHistory) {
+        this.conversationStore.clear(conversationId);
+        this.contextImageHistory?.delete(conversationId);
+        this.logger.log(`QQ 私聊问候开启新话题，已忽略旧上下文：${conversationId}`);
+      }
       const hasTopicContext = message.chattype === 'group'
         && options.topicContext
         && Array.isArray(options.topicContext.history);
       const topicHistory = hasTopicContext ? options.topicContext.history : null;
       let history = sanitizeConversationHistory(
-        topicHistory ?? this.historyForGroup(
-          message.chattype === 'group' ? message.chatid : '',
-          this.conversationStore.get(conversationId),
-          // 主动插话沿用旁观判定的短上下文；明确 @/引用仍由 activeReply
-          // 进入同一引擎，但只带最近语境，避免短答反复重传整段旧群聊。
-          { passiveDecision: options.activeReply === true },
-        ),
+        resetPrivateHistory
+          ? []
+          : topicHistory ?? this.historyForGroup(
+            message.chattype === 'group' ? message.chatid : '',
+            this.conversationStore.get(conversationId),
+            // 主动插话沿用旁观判定的短上下文；明确 @/引用仍由 activeReply
+            // 进入同一引擎，但只带最近语境，避免短答反复重传整段旧群聊。
+            { passiveDecision: options.activeReply === true },
+          ),
         forbiddenHistoryRoleTerms,
       );
       if (!hasTopicContext) {
@@ -3414,10 +3440,12 @@ export class QqBotService {
           quotedText: extractMessageText(message?.quote),
         },
       );
-      const memorySummary = removeLinesContainingProtectedRoles(
-        this.conversationStore.getSummary?.(conversationId) ?? '',
-        forbiddenHistoryRoleTerms,
-      );
+      const memorySummary = resetPrivateHistory
+        ? ''
+        : removeLinesContainingProtectedRoles(
+          this.conversationStore.getSummary?.(conversationId) ?? '',
+          forbiddenHistoryRoleTerms,
+        );
       const recordContext = options.forwardedContext ?? '';
       const recordSummary = Boolean(recordContext
         && /总结|概括|梳理|提炼|汇总/u.test(options.imageQuestion ?? content));
