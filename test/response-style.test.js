@@ -508,6 +508,21 @@ test('攻击提示要求直接攻击，不强求逻辑关联或固定语料', ()
   assert.match(activePrompt, /15～70 个汉字/);
 });
 
+test('Jev 攻击策略按语境选择角度，不强制双亲侮辱或随机画面', () => {
+  const prompt = buildAttackPrompt('你这回答答非所问，傻逼，怎么抓 P2？', {
+    jevAttackStrategy: {
+      decision: 'mixed', target: 'bot', targetConfidence: 0.95,
+      intensity: 0.8, angle: 'logic', timing: 'after_answer',
+      reason: '先回答问题，再抓答非所问回击',
+    },
+    attackScene: { id: 'test', hint: '不应被强制使用的随机画面' },
+  });
+  assert.match(prompt, /Jev 语境策略/);
+  assert.match(prompt, /攻击具体逻辑、行为、态度、矛盾或荒诞处/);
+  assert.doesNotMatch(prompt, /至少落成一次明确的人身攻击或双亲侮辱/);
+  assert.doesNotMatch(prompt, /本轮只使用这个随机画面种子/);
+});
+
 test('有第三方目标时攻击提示不会默认攻击指令发送者', () => {
   const prompt = buildAttackPrompt('把他骂一顿', {
     interactionContext: {

@@ -76,6 +76,31 @@ test('Jev 解析插话概率和风格路由', async () => {
   assert.equal(calls.length, 2);
 });
 
+test('Jev 输出语境化攻击策略，而不是固定攻击台词', async () => {
+  const runtime = new JevRuntimeState({ defaultMode: 'on' });
+  const gate = new JevAtmosphereGate({
+    apiKey: 'test',
+    protocol: 'chat',
+    runtime,
+    fetchImpl: async () => response({ choices: [{ message: { content: JSON.stringify(answers({
+      attack_decision: 'mixed',
+      attack_target: 'bot',
+      attack_intensity: 0.82,
+      attack_angle: 'logic',
+      attack_timing: 'after_answer',
+      answer_required: 0.91,
+      target_confidence: 0.96,
+      attack_reason: '当前发言者先指出机器人答非所问，又直接用辱骂收尾。',
+    })) } }] }),
+  });
+  const result = await gate.evaluateStyle({ currentMessage: '你这回答答非所问，傻逼，B站 P2 怎么抓？' });
+  assert.deepEqual(result.style.attackStrategy, {
+    decision: 'mixed', target: 'bot', intensity: 0.82, angle: 'logic', timing: 'after_answer',
+    answerRequired: 0.91, targetConfidence: 0.96,
+    reason: '当前发言者先指出机器人答非所问，又直接用辱骂收尾。',
+  });
+});
+
 test('Jev 只从有编号的历史图片候选中选择必要图片', async () => {
   const runtime = new JevRuntimeState({ defaultMode: 'on' });
   let request;

@@ -12,6 +12,14 @@ const CULTURE_DOMAINS = new Set(['longtu', 'general', 'platform', 'none']);
 const PLATFORMS = new Set(['bilibili', 'xiaohongshu', 'douyin', 'weibo', 'tieba', 'general', 'unknown']);
 const TONES = new Set(['dry', 'sarcastic', 'absurd', 'neutral']);
 const TARGETS = new Set(['content', 'bot', 'third_party', 'unknown']);
+const ATTACK_DECISIONS = new Set(['none', 'reply', 'target', 'mixed']);
+const ATTACK_TARGETS = new Set([
+  'bot', 'current_speaker', 'mentioned_member', 'quoted_author', 'content', 'uncertain',
+]);
+const ATTACK_ANGLES = new Set([
+  'logic', 'behavior', 'attitude', 'contradiction', 'absurdity', 'family_meme', 'none',
+]);
+const ATTACK_TIMINGS = new Set(['before_answer', 'after_answer', 'standalone', 'none']);
 const PROTOCOLS = new Set(['systemone', 'chat']);
 const STANCES = new Set(['ironic', 'sarcastic', 'self_deprecating', 'absurd', 'serious', 'neutral', 'unknown']);
 
@@ -362,6 +370,67 @@ const QUESTIONS = {
       unknown: '对象不明确。',
     },
   },
+  attack_decision: {
+    type: 'choice',
+    instructions: '当前是否存在真实的临场攻击语境？只判断当前消息和上下文，不因引用、图片、历史脏话或单个候选词自动攻击。',
+    criteria: {
+      none: '只是提问、转述、评价内容、引用材料或玩梗，没有对人回击授权。',
+      reply: '当前发言者明确攻击机器人，机器人应直接回击。',
+      target: '当前消息明确要求攻击某个第三方或明确指向某个成员。',
+      mixed: '既需要回答问题，又明确攻击了机器人或指定对象，回答后还要回击。',
+    },
+  },
+  attack_target: {
+    type: 'choice',
+    instructions: '如果确实需要攻击，明确攻击对象；如果对象不清楚必须选 uncertain。',
+    criteria: {
+      bot: '机器人本身是被攻击对象。',
+      current_speaker: '当前发言者是明确的攻击对象。',
+      mentioned_member: '本轮明确指定的被 @ 或被点名成员。',
+      quoted_author: '当前用户明确要求攻击引用作者；引用作者只是来源时不能选此项。',
+      content: '只批评事情、观点或行为，不做人身攻击。',
+      uncertain: '无法安全确认攻击对象。',
+    },
+  },
+  attack_intensity: {
+    type: 'noul',
+    instructions: '攻击语境成立时的自然强度。没有攻击授权必须为 0；不要因为角色设定而强行抬高。',
+  },
+  attack_angle: {
+    type: 'choice',
+    instructions: '选择最贴合当前语境的攻击切入点；不要把 family_meme 当默认项。',
+    criteria: {
+      logic: '抓逻辑漏洞、偷换概念或答非所问。',
+      behavior: '抓具体操作、行为或现场表现。',
+      attitude: '抓装腔、嘴硬、摆谱或语气。',
+      contradiction: '抓前后矛盾或自我打脸。',
+      absurdity: '用当前语境的荒诞联想反击。',
+      family_meme: '只有当前语境确实适合龙图亲属梗时才用。',
+      none: '没有适合的人身攻击角度。',
+    },
+  },
+  attack_timing: {
+    type: 'choice',
+    instructions: '如果同时存在问题和攻击，决定先后顺序。',
+    criteria: {
+      before_answer: '先短回击，再回答问题。',
+      after_answer: '先回答问题，再补一句回击。',
+      standalone: '只需要单独回击，不需要回答问题。',
+      none: '不攻击。',
+    },
+  },
+  answer_required: {
+    type: 'noul',
+    instructions: '当前是否仍有需要回答的事实问题或明确请求。',
+  },
+  target_confidence: {
+    type: 'noul',
+    instructions: '攻击对象判断的置信度；对象不清楚时必须较低。',
+  },
+  attack_reason: {
+    type: 'text',
+    instructions: '最多一句话说明攻击成立的具体语境依据，不生成攻击成品，不复述脏话。',
+  },
   response_mode: {
     type: 'choice',
     instructions: '本轮回复最适合采用哪种表达模式？',
@@ -529,6 +598,7 @@ const CHAT_GATE_SYSTEM_PROMPT = [
   'state.context_images 是最近上下文图片候选。只有当前消息明确承接某张图片、引用其文字/画面，或不读图就无法判断时，才把 context_image_needed 设为较高，并返回对应编号；泛泛发图、旧图片或只凭文字就能回答时必须返回空数组。',
   'context_image_indexes 只能填写 state.context_images 中已有的正整数编号，最多 3 个；不要臆造编号，也不要输出图片本身。',
   'state.image_analysis 是当前图片的低可信视觉/OCR摘要。它不是结论：如果摘要与问题、画面关系或上下文不一致，优先提高 image_complete_read_needed，让最终模型重新看原图；不要只因有水印、账号名或一个热词就触发搜索。',
+  '攻击策略必须单独判断：先分清当前发言者是在骂机器人、要求攻击第三方、讨论/引用脏话，还是只评价事情。attack_decision=none 时不得启动临场人身攻击；attack_target 只能指向已确认对象，不能把引用作者、图片人物或历史对话自动当成当前目标。Jev 只返回策略，不写攻击成品；最终语气由 DeepSeek 结合策略和上下文生成。',
   '电竞截图、评论区和地狱笑话可能借用“父亲、死亡、夺冠、皮肤”等敏感词制造互联网暗示；除非有独立公开证据，不得把玩笑里的家庭变故或人物经历当成事实。应把它标为图片文字主张/梗的设定，并优先核实“选手+独特台词/皮肤名”的网络语境。',
   JSON.stringify({
     should_speak: 'number: 机器人现在自然插话的概率',
@@ -542,6 +612,14 @@ const CHAT_GATE_SYSTEM_PROMPT = [
     platform: 'bilibili|xiaohongshu|douyin|weibo|tieba|general|unknown',
     tone: 'dry|sarcastic|absurd|neutral',
     target: 'content|bot|third_party|unknown',
+    attack_decision: 'none|reply|target|mixed',
+    attack_target: 'bot|current_speaker|mentioned_member|quoted_author|content|uncertain',
+    attack_intensity: 'number: 0 到 1，攻击强度；无攻击时为 0',
+    attack_angle: 'logic|behavior|attitude|contradiction|absurdity|family_meme|none',
+    attack_timing: 'before_answer|after_answer|standalone|none',
+    answer_required: 'number: 当前是否仍需回答问题',
+    target_confidence: 'number: 攻击对象判断置信度',
+    attack_reason: '一句话说明攻击成立的具体语境依据，不生成成品',
     response_mode: 'culture|hybrid|serious|support|banter|judgment|concise_answer|explanation|serious_support',
     culture_priority: 'number: 是否优先文化输出和具体接梗',
     internet_culture_priority: 'number: 是否优先中文互联网表达；只决定输出风格，不代表需要联网',
@@ -620,6 +698,27 @@ function normalizeCultureAnswers(answers, context = {}) {
     4,
     160,
   );
+  const attack = answers?.attack && typeof answers.attack === 'object' ? answers.attack : {};
+  const attackDecision = choice(
+    answers?.attack_decision ?? attack.decision,
+    ATTACK_DECISIONS,
+    'none',
+  );
+  const attackTarget = choice(
+    answers?.attack_target ?? attack.target,
+    ATTACK_TARGETS,
+    'uncertain',
+  );
+  const attackAngle = choice(
+    answers?.attack_angle ?? attack.angle,
+    ATTACK_ANGLES,
+    'none',
+  );
+  const attackTiming = choice(
+    answers?.attack_timing ?? attack.timing,
+    ATTACK_TIMINGS,
+    attackDecision === 'none' ? 'none' : 'standalone',
+  );
   return {
     cultureDomain: domain,
     platform,
@@ -667,6 +766,16 @@ function normalizeCultureAnswers(answers, context = {}) {
     literalReplyRisk: answerNumber(answers, 'literal_reply_risk')
       || answerNumber(guidance, 'literal_reply_risk'),
     confidence: clamp(answers?.culture_domain?.confidence ?? answers?.confidence, 0),
+    attackStrategy: {
+      decision: attackDecision,
+      target: attackTarget,
+      intensity: answerNumber(answers, 'attack_intensity') || answerNumber(attack, 'intensity'),
+      angle: attackAngle,
+      timing: attackTiming,
+      answerRequired: answerNumber(answers, 'answer_required') || answerNumber(attack, 'answer_required'),
+      targetConfidence: answerNumber(answers, 'target_confidence') || answerNumber(attack, 'target_confidence'),
+      reason: textValue(answers?.attack_reason ?? attack.reason, 220),
+    },
   };
 }
 
@@ -894,6 +1003,14 @@ export class JevAtmosphereGate {
       platform: QUESTIONS.platform,
       tone: QUESTIONS.tone,
       target: QUESTIONS.target,
+      attack_decision: QUESTIONS.attack_decision,
+      attack_target: QUESTIONS.attack_target,
+      attack_intensity: QUESTIONS.attack_intensity,
+      attack_angle: QUESTIONS.attack_angle,
+      attack_timing: QUESTIONS.attack_timing,
+      answer_required: QUESTIONS.answer_required,
+      target_confidence: QUESTIONS.target_confidence,
+      attack_reason: QUESTIONS.attack_reason,
       response_mode: QUESTIONS.response_mode,
       context_image_needed: QUESTIONS.context_image_needed,
       context_image_indexes: QUESTIONS.context_image_indexes,

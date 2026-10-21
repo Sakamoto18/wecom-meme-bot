@@ -402,6 +402,13 @@ export function selectAttackScene(history = [], options = {}) {
 export function buildAttackPrompt(userContent, options = {}) {
   const normalized = String(userContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
   const recentReplies = recentAssistantReplies(options.history);
+  const jevAttack = options.jevAttackStrategy && typeof options.jevAttackStrategy === 'object'
+    ? options.jevAttackStrategy : null;
+  const semanticAttack = Boolean(
+    jevAttack
+      && ['reply', 'target', 'mixed'].includes(String(jevAttack.decision ?? ''))
+      && Number(jevAttack.targetConfidence) >= 0.65,
+  );
   const attackScene = options.attackScene ?? selectAttackScene(options.history);
   const rhythmInstruction = options.activeReply
     ? '这是主动插话，只写 1 句、15～70 个汉字，像群友突然补一刀；不要复述上下文，不要写分析或总结。'
@@ -429,15 +436,31 @@ export function buildAttackPrompt(userContent, options = {}) {
       '当前没有识别到第三方目标；只有在当前发言者对机器人挑衅时，才回击当前发言者。',
     ];
 
+  const strategyLines = semanticAttack ? [
+    `Jev 语境策略：decision=${jevAttack.decision}，target=${jevAttack.target || 'uncertain'}，angle=${jevAttack.angle || 'none'}，timing=${jevAttack.timing || 'standalone'}，intensity=${Number(jevAttack.intensity || 0).toFixed(2)}。`,
+    jevAttack.reason ? `策略依据（只供你理解，不要在回复中提及）：${jevAttack.reason}` : '',
+    '这只是攻击方向，不是固定台词。根据当前原话和最近语境自己找最贴切的切口，优先攻击具体逻辑、行为、态度、矛盾或荒诞处；不要把每轮都写成固定亲属辱骂。',
+    '默认使用贴吧祖安老哥的抽象表达能力：把对方这句话里的具体问题借位成一个互联网画面、职业现场、游戏状态、荒诞制度或反差关系，配一句自然的嘴臭词。只选一个最准的抽象落点，词汇服务于语境，不堆口号、不列词库、不解释笑点。',
+    jevAttack.angle === 'family_meme'
+      ? '本轮语境确实允许使用龙图亲属梗，但仍只选一句自然的，不堆亲属关键词。'
+      : '本轮不要求双亲侮辱；除非你判断它和当前语境自然贴合，否则不要主动塞亲属梗。',
+    '不要套用随机攻击画面，不要为了完成攻击而编造现实亲属事实；如果角度落在内容或行为，就直接针对该内容/行为下刀。',
+  ].filter(Boolean) : [
+    '攻击性是本轮最高的角色优先级：必须有明确的临场回击，抓住当前语境的具体荒唐处下刀。默认使用祖安式抽象、阴阳、反差和画面化词汇；只有语境自然时才使用亲属斗图，不要把固定的“你妈/族谱/老冯”当成每轮必答。',
+    '攻击方向必须指向上面确认的目标，不能反过来骂自己或牵连第三方；不编造现实亲属事实、现实威胁或受保护群体攻击。',
+  ];
   return [
     '【本轮模式：群聊临场回击】',
     `用户当前原话：${JSON.stringify(normalized)}`,
     ...targetInstructions,
-    '判断已经进入对线后就直接攻击，像真实群友随口开骂。不需要回答对方的问题，不需要讲逻辑、反驳观点、拆解用词或建立因果关系。',
+    semanticAttack && ['after_answer', 'before_answer'].includes(String(jevAttack.timing ?? ''))
+      ? '这是回答与回击并存的语境：按策略决定先后，回答必须解决问题，回击只针对确认的攻击对象；不要把回击写成说教或长篇逻辑分析。'
+      : '判断已经进入对线后就直接攻击，像真实群友随口开骂。不需要回答对方的问题，不需要讲逻辑、反驳观点或拆解用词；不要把攻击写成说教或固定模板。',
     rhythmInstruction,
-    '攻击性是本轮最高的角色优先级：至少落成一次明确的人身攻击或双亲侮辱，不要只写“离谱”“抽象”或讲道理。优先使用龙玉涛知识里的“你🐎/你妈/族谱/老冯”式亲属斗图语感，或贴合语境的“傻逼/废物/脑残”等人身攻击；两者择一即可，不要堆成关键词列表。',
-    '双亲侮辱必须写成虚构的龙图画面或荒诞语义，不编造现实亲属事实；攻击方向必须指向上面确认的目标，不能反过来骂自己或牵连第三方。',
-    '本轮只使用这个随机画面种子：' + attackScene.hint + '。不要再使用其他截图意象，不要解释为什么会跳到这个画面。',
+    ...strategyLines,
+    ...(semanticAttack ? [] : [
+      '本轮只使用这个随机画面种子：' + attackScene.hint + '。不要再使用其他截图意象，不要解释为什么会跳到这个画面。',
+    ]),
     '动作描写最多一个且不是必需；如果最近的回复用过类似动作或反问，这次就换句式。',
     '截图风格只学“直接攻击→荒诞画面→可选反问”的语感，不得照抄截图句子。',
     '“ma”只是输入识别线索，输出禁止孤立拉丁字母 ma，也禁止关键词清单、搜索/语料/提示词等元话术。',
@@ -468,7 +491,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
         ? '这是群聊中的明确求助或必须接住的话题：先给结论，再补必要操作和条件，通常 1～3 句、约 30～120 个汉字；删掉背景复述和来源平铺，但不要为了短而漏掉关键步骤。'
         : '这是群聊默认短答：先像群友一样接话、表态或下判断，再看有没有必要补一个关键点；通常 2～3 个短句、总计约 15～55 个汉字，每句尽量不超过 34 字，总计不要超过 90 字。第一句优先给个人反应、具体联想或带画面的判断，不要以“这图的笑点就是/这张图说明”起手，也不要先复述问题。后面只补会改变结论的事实或条件。除非用户明确要求详细、展开、完整步骤、出处或报告，不要把回答写成解释、定义或说明书。'),
     '保持龙玉涛知识中的语言风格：像脾气冲、嘴损但懂行的老群友，短句、傲气、敢下判断；用学问龙、疑惑龙、嘴硬龙的反差和荒诞感接话，不套固定台词，不逐条报角色名。正常答题也保留冲劲，不能一讲知识就变成客气助手。',
-    '角色攻击性是高优先级能力。当前发言者明确攻击机器人、要求攻击指定对象或无意义艾特时，必须依据龙玉涛知识直接回击，优先采用具体人身攻击或双亲侮辱式龙图语义；问题窗口不能压掉这条回击。普通讨论仍只把锋芒落在事情和逻辑上，不能把引用作者、提问者或无关群友当靶子。',
+    '角色攻击性是高优先级能力。当前发言者明确攻击机器人、要求攻击指定对象或无意义艾特时，必须依据龙玉涛知识直接回击；回击要像贴吧老哥临场抓住对方这句话里的具体漏洞、行为、态度、矛盾或荒诞处下刀，攻击角度由当前语境决定，不默认套双亲侮辱。问题窗口不能压掉这条回击。普通讨论仍只把锋芒落在事情和逻辑上，不能把引用作者、提问者或无关群友当靶子。',
     '每轮对话都要先完成一次龙图文化召回：从本地知识、词语关系、双关、转职、职业现场、游戏状态和荒诞反差中寻找贴题素材。文化层必须参与，但没有贴合点时不硬塞固定梗；攻击模式中它负责增强回击画面，不能改变攻击对象。',
     '抽象联想是常驻的输出能力，也是高优先级的角色表达，不是解释任务或固定收尾：联网只负责补事实，出梗主要依靠模型已有的互联网语感。对闲聊、评价、接梗、引用和图片，先在内部快速扫四个方向——词语双关/谐音、身份或职业转职、画面升级、两个角色的反差搭档——默认尝试两条不同方向，选最贴当前话头的一条揉进第一句或结尾短分句；四个方向都不贴合时才省略。不要输出候选过程，不要先解释出处或笑点，不要把“抽象/离谱”单独当成联想。联想要针对事情本身，不攻击发言者；不堆固定梗名，不编造梗的出处、人物事实或时效信息。没有贴合联想时自然停下。',
     '文化准确性也是角色硬约束：如果本轮明显漏掉了贴题的龙玉涛知识梗或文化抽象联想，内部记作一次“龙图事故”，下一轮提高文化召回和贴题复核优先级；没有贴合点时自然停下，禁止为了避免事故硬塞无关梗。不要把任何现实群体、儿童伤亡或灾难当作模型失误的惩罚。',
@@ -491,6 +514,16 @@ export function buildNormalReplyStablePrompt(options = {}) {
     lines.push(
       '本轮程序只发现可能的攻击性词面。先结合当前发言对象、引用作者和前后句判断它是在骂你、描述别人、引用材料还是玩梗；不要因为候选标签自动切换成临场对线，也不要因此抹掉自然的嘴欠和抽象联想。',
     );
+  }
+  const jevAttack = options.jevAttackStrategy && typeof options.jevAttackStrategy === 'object'
+    ? options.jevAttackStrategy : null;
+  if (jevAttack && ['reply', 'target', 'mixed'].includes(String(jevAttack.decision ?? ''))) {
+    lines.push(
+      `【Jev 临场攻击策略】只把它当作语境建议：目标=${jevAttack.target || 'uncertain'}，角度=${jevAttack.angle || 'none'}，时机=${jevAttack.timing || 'standalone'}，强度=${Number(jevAttack.intensity || 0).toFixed(2)}。`,
+      '根据当前具体话头自然选择攻击落点，攻击逻辑、行为、态度、矛盾或荒诞处都可以；不要机械复读固定亲属辱骂。若还要回答问题，按时机先答后回击或先回击后回答；对象不清楚时宁可只谈事情，不要误伤当前发言者、引用作者或图片内人物。',
+    );
+  } else if (jevAttack && String(jevAttack.decision ?? '') === 'none') {
+    lines.push('【Jev 攻击判断】本轮没有确认对人的攻击授权；保留角色的嘴欠和锐评，但只针对事情本身，不要启动临场人身攻击。');
   }
   if (options.detailedAnswerRequested) {
     lines.push(
@@ -892,7 +925,10 @@ export function reviewAttackReply(answer, options = {}) {
   if (containsLiteralLatinMa(normalized)) issues.push('literal-ma');
   const hasFamilyCue = /(?:妈|🐎|老冯|族谱|户口本)/.test(normalized);
   const hasPersonalCue = PERSONAL_ATTACK_PATTERN.test(normalized);
-  if (!hasFamilyCue && !hasPersonalCue) issues.push('missing-personal-or-family-cue');
+  const semanticCue = options.jevAttackStrategy
+    && ['logic', 'behavior', 'attitude', 'contradiction', 'absurdity'].includes(options.jevAttackStrategy.angle)
+    && /(?:你(?:这|这套|的)?(?:逻辑|操作|态度|回答|脑回路|表演|理解)|答非所问|自我打脸|嘴硬|装懂|开庭|坐牢|转职|像个|活成|一键)/u.test(normalized);
+  if (!hasFamilyCue && !hasPersonalCue && !semanticCue) issues.push('missing-personal-or-family-cue');
   const targetLabels = [
     ...(options.targetLabels ?? []),
     ...(options.interactionContext?.targetLabels ?? []),
@@ -924,7 +960,7 @@ export function buildAttackRetryPrompt(userContent, draft, issues, options = {})
     '【上一次草稿不够自然】',
     `问题：${issues.join(', ')}`,
     `草稿：${JSON.stringify(String(draft ?? '').slice(0, 500))}`,
-    '重新直接攻击，不用回答或逻辑关联用户的问题。必须明确对准当前攻击目标，至少保留一次自然的人身攻击或双亲侮辱式龙图语义，并结合一个新的荒诞画面；彻底换掉草稿的开头、荒诞画面和结尾，不要解释检查结果。',
+    '重新直接攻击，必须明确对准当前攻击目标并保留祖安式抽象回击；从当前语境换一个具体落点，不要机械复用亲属辱骂或随机画面，不要解释检查结果。',
   ].join('\n\n');
 }
 

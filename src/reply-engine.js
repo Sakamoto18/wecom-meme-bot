@@ -191,6 +191,41 @@ function normalizedJevCulture(style = {}) {
   };
 }
 
+function normalizedJevAttackStrategy(style = {}) {
+  const value = style?.attackStrategy && typeof style.attackStrategy === 'object'
+    ? style.attackStrategy : style;
+  const decision = ['none', 'reply', 'target', 'mixed'].includes(String(value?.decision ?? ''))
+    ? String(value.decision) : 'none';
+  const target = [
+    'bot', 'current_speaker', 'mentioned_member', 'quoted_author', 'content', 'uncertain',
+  ].includes(String(value?.target ?? '')) ? String(value.target) : 'uncertain';
+  const angle = [
+    'logic', 'behavior', 'attitude', 'contradiction', 'absurdity', 'family_meme', 'none',
+  ].includes(String(value?.angle ?? '')) ? String(value.angle) : 'none';
+  const timing = ['before_answer', 'after_answer', 'standalone', 'none'].includes(String(value?.timing ?? ''))
+    ? String(value.timing) : 'none';
+  return {
+    decision,
+    target,
+    angle,
+    timing,
+    intensity: Math.max(0, Math.min(1, Number(value?.intensity) || 0)),
+    answerRequired: Math.max(0, Math.min(1, Number(value?.answerRequired) || 0)),
+    targetConfidence: Math.max(0, Math.min(1, Number(value?.targetConfidence) || 0)),
+    reason: String(value?.reason ?? '').trim().slice(0, 220),
+  };
+}
+
+function jevSemanticAttackEnabled(strategy, options = {}) {
+  if (!strategy || !['reply', 'target', 'mixed'].includes(strategy.decision)) return false;
+  if (strategy.target === 'content' || strategy.target === 'uncertain') return false;
+  if (strategy.targetConfidence < 0.65 || strategy.intensity < 0.35) return false;
+  if (strategy.target === 'bot' && options.interactionContext?.hasThirdPartyTarget) return false;
+  if (strategy.target === 'quoted_author' && !options.interactionContext?.quotedAuthorLabel) return false;
+  if (strategy.target === 'mentioned_member' && !(options.interactionContext?.targetLabels?.length > 0)) return false;
+  return true;
+}
+
 function combineCultureSearchResults(results = []) {
   const usable = results.filter(Boolean);
   const rows = [...new Map(usable.flatMap((result) => result.results ?? [])
@@ -414,12 +449,29 @@ export async function generateConversationReply(options) {
     personaContext,
   ].filter(Boolean).join('\n\n');
 
-  const attackStyle = !recordSummary && shouldUseAttackStyle(content, history, {
+  const lexicalAttackStyle = !recordSummary && shouldUseAttackStyle(content, history, {
     ...interactionContext,
     activeReply,
     hasImageContext,
     hasQuotedContent,
   });
+  const jevAttackStrategy = normalizedJevAttackStrategy(jevStyle ?? {});
+  // Keep the existing relation-aware lexical route as the hard signal. A
+  // direct insult in a quote authored by someone else must not be promoted
+  // merely because the text itself starts with “你这个傻逼”.
+  const explicitStrongAttack = lexicalAttackStyle
+    && (isDirectBotAttack(content) || isExplicitThirdPartyAttackRequest(content, interactionContext));
+  // Jev can suppress a weak lexical candidate when it recognizes quoted or
+  // descriptive language, but never suppresses an explicit direct attack.
+  const jevRejectsWeakAttack = jevStyle
+    && jevAttackStrategy.decision === 'none'
+    && jevAttackStrategy.targetConfidence >= 0.7
+    && !explicitStrongAttack;
+  const attackStyle = !recordSummary && (
+    explicitStrongAttack
+    || (lexicalAttackStyle && !jevRejectsWeakAttack)
+    || jevSemanticAttackEnabled(jevAttackStrategy, { interactionContext })
+  );
   const styleSignals = getReplyStyleSignals(content, {
     ...interactionContext,
     hasImageContext,
@@ -549,6 +601,7 @@ export async function generateConversationReply(options) {
           attackScene: firstScene,
           interactionContext,
           activeReply,
+          jevAttackStrategy,
         }),
       ].filter(Boolean).join('\n\n'),
       maxTokens: activeReply ? 160 : 220,
@@ -559,6 +612,8 @@ export async function generateConversationReply(options) {
       history,
       targetLabels: interactionContext.targetLabels,
       interactionContext,
+      jevAttackStrategy: jevSemanticAttackEnabled(jevAttackStrategy, { interactionContext })
+        ? jevAttackStrategy : null,
     };
     const firstReview = reviewAttackReply(firstDraft, attackReviewOptions);
     let answer = firstDraft;
@@ -586,6 +641,7 @@ export async function generateConversationReply(options) {
               attackScene: retryScene,
               interactionContext,
               activeReply,
+              jevAttackStrategy,
             },
           ),
         ].filter(Boolean).join('\n\n'),
@@ -904,6 +960,7 @@ export async function generateConversationReply(options) {
     attackDuringAnswer: attackStyle && !pureAttack,
     imageDescriptionRequested,
     imageCultureMode,
+    jevAttackStrategy,
   };
   const personaDemonstration = !attackStyle
     && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
@@ -1291,6 +1348,7 @@ export async function generateConversationReply(options) {
               attackScene: rebuttalScene,
               interactionContext,
               activeReply: true,
+              jevAttackStrategy,
             }),
           ].filter(Boolean).join('\n\n'),
           revisionSystemPrompt: [
