@@ -118,6 +118,28 @@ test('被说 AI 味时拦截二次比喻和命令式收尾', () => {
   assert.match(prompt, /不要围绕“AI味\/香水\/闻\/验货\/开场白\/循环播放”继续做二次比喻/);
 });
 
+test('拦截同一比喻连续加码和反问式抖机灵收尾', () => {
+  const first = '辈分牌刚打完转头就骂没爹没妈，你这自相矛盾得跟寿司郎那套 PHP 一样，半夜自己崩自己。要吵就挑一个方向，别一边认爹一边拆爹。';
+  assert.ok(detectAssistantReportStyle(first, { compactResponse: true })
+    .includes('assistant-overwritten-comeback'));
+  const answer = '吵架当然得挑方向，你刚才一边认爹一边拆爹，方向盘都快被你拧断了。这架再吵下去，该先给你导航还是叫拖车？';
+  const issues = detectAssistantReportStyle(answer, { compactResponse: true });
+  assert.ok(issues.includes('assistant-rhetorical-escalation'));
+  assert.deepEqual(
+    detectAssistantReportStyle('想走就走，别磨叽。', { compactResponse: true }),
+    [],
+  );
+  assert.equal(
+    detectAssistantReportStyle('这架再吵下去，该先给你导航还是叫拖车？', {
+      compactResponse: true,
+    }).includes('assistant-rhetorical-escalation'),
+    false,
+  );
+
+  const retry = buildNaturalnessRewriteHint(['assistant-rhetorical-escalation']);
+  assert.match(retry, /一句直接回击或判断就停/);
+});
+
 test('连续三条普通回复使用同一开头时要求换起句', () => {
   const reviewed = reviewNormalReply('不是哥们，这方案还是先别上线。', {
     compactResponse: true,

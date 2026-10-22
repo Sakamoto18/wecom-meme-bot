@@ -32,6 +32,7 @@ import {
   shouldRequestDetailedAnswer,
   shouldUseThinking,
   shouldUseAttackStyle,
+  isAttackFrameChallenge,
   getReplyStyleSignals,
   isExplicitThirdPartyAttackRequest,
   isDirectBotAttack,
@@ -861,7 +862,9 @@ export async function generateConversationReply(options) {
   // direct insult in a quote authored by someone else must not be promoted
   // merely because the text itself starts with “你这个傻逼”.
   const explicitStrongAttack = lexicalAttackStyle
-    && (isDirectBotAttack(content) || isExplicitThirdPartyAttackRequest(content, interactionContext));
+    && (isDirectBotAttack(content)
+      || isExplicitThirdPartyAttackRequest(content, interactionContext)
+      || isAttackFrameChallenge(content, history));
   // Jev can suppress a weak lexical candidate when it recognizes quoted or
   // descriptive language, but never suppresses an explicit direct attack.
   const jevRejectsWeakAttack = jevStyle
@@ -992,7 +995,10 @@ export async function generateConversationReply(options) {
     && isDirectBotAttack(content)
     && !hasAnswerRequest(content)
     && !plannedAnswerRequired;
-  const pureAttack = pureThirdPartyAttack || pureDirectBotAttack;
+  const pureAttackFrameChallenge = attackStyle
+    && isAttackFrameChallenge(content, history)
+    && !plannedAnswerRequired;
+  const pureAttack = pureThirdPartyAttack || pureDirectBotAttack || pureAttackFrameChallenge;
   const webSearchToolsAvailable = Boolean(webSearchEnabled && webSearch);
   const runWebSearchTool = async ({ name, arguments: toolArgs = {} } = {}) => {
     if (name !== 'web_search') return `未知工具：${String(name ?? '')}`;

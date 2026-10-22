@@ -18,6 +18,7 @@ import {
   isThinSeriousReply,
   isHostileContent,
   isDirectBotAttack,
+  isAttackFrameChallenge,
   isInvalidPureMentionReply,
   removeInternalParticipantIds,
   reviewAttackReply,
@@ -116,6 +117,19 @@ test('对线语境可延续一轮，但明确降级时停止攻击', () => {
   assert.equal(shouldUseAttackStyle('认真回答，别骂了', history), false);
   assert.equal(shouldUseAttackStyle('今天天气怎么样', history), false);
   assert.equal(shouldUseAttackStyle('nmsl 是什么意思', history), false);
+});
+
+test('短句质疑攻击框架时延续对线，但脱离上下文不误触发', () => {
+  const history = [
+    { role: 'user', content: '我骂你爹你也不反驳，就似乎你不是你爹亲生的' },
+    { role: 'assistant', content: '辈分牌刚打完转头就骂没爹没妈。要吵就挑一个方向，别一边认爹一边拆爹。' },
+  ];
+  assert.equal(isAttackFrameChallenge('吵架还挑方向？？', history), true);
+  assert.equal(shouldUseAttackStyle('吵架还挑方向？？', history), true);
+  assert.equal(shouldUseAttackStyle('吵架还挑方向？？', history, { activeReply: true }), true);
+  assert.equal(isAttackFrameChallenge('吵架还挑方向？？'), false);
+  assert.equal(shouldUseAttackStyle('吵架还挑方向？？'), false);
+  assert.equal(shouldUseAttackStyle('认真回答，别骂了，吵架还挑方向？', history), false);
 });
 
 test('只在用户询问龙图出处或含义时触发联网资料', () => {
@@ -583,8 +597,11 @@ test('攻击提示要求直接攻击，不强求逻辑关联或固定语料', ()
   const prompt = buildAttackPrompt('你真是司马了');
   assert.match(prompt, /你真是司马了/);
   assert.match(prompt, /不需要写完整论证/);
+  assert.match(prompt, /至少有一个明确的第二人称贬损动作/);
+  assert.match(prompt, /祖安式压强/);
+  assert.match(prompt, /龙图式落刀/);
+  assert.match(prompt, /至少写成两拍/);
   assert.doesNotMatch(prompt, /本轮只使用这个随机画面种子|本轮只使用.*截图意象/);
-  assert.match(prompt, /不要求脏话、亲属梗或固定画面/);
   assert.match(prompt, /禁止孤立拉丁字母 ma/);
   assert.doesNotMatch(prompt, /公开龙图语料参考/);
 
@@ -692,6 +709,7 @@ test('攻击提示不再抽随机画面，要求从当前原话找落点', () =>
   const prompt = buildAttackPrompt('你这回答答非所问，P2 怎么抓？');
   assert.match(prompt, /从对方这句原话里抓一个具体词/);
   assert.match(prompt, /不要抽取随机画面或固定龙图意象/);
+  assert.match(prompt, /族谱、户口本、老冯、你🐎、红温龙、龙怒/);
   assert.doesNotMatch(prompt, /你妈是批发的/);
   assert.doesNotMatch(prompt, /遗照|骨灰盒|背景板|贴吧旧帖/);
 });

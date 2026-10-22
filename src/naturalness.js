@@ -15,12 +15,15 @@ const EMPTY_TRIAD_PATTERN = new RegExp(
 const DASH_OVERLOAD_PATTERN = /(?:——[^。！？!?\n]{0,40}){2,}/u;
 const STYLE_META_COMPLAINT_PATTERN = /(?:AI\s*味|机器味|人机味|机器人味|模板味|套路味|像\s*AI|AI\s*感|一股\s*AI|太\s*AI|味儿太冲)/iu;
 const OVEREXPLAINED_COMEBACK_PATTERN = /(?:又不是[^。！？!?\n]{1,40}[。！？!?]\s*(?:想|要)[^。！？!?\n]{1,24}(?:就|还是)[^。！？!?\n]{0,28}[，,]\s*别[^。！？!?\n]{1,40}|(?:想|要)[^。！？!?\n]{1,20}(?:还是|或者)[^。！？!?\n]{1,20}[，,]?\s*都行[，,]\s*别)/u;
+const COMMANDING_COMEBACK_PATTERN = /(?:要|想)[^。！？!?\n]{1,24}(?:就|还是)[^。！？!?\n]{1,28}[，,]\s*别/u;
+const RHETORICAL_ESCALATION_PATTERN = /[^。！？!?\n]{4,60}[。！？!?]\s*(?:这|那)[^。！？!?\n]{0,28}(?:再|要是|继续)[^。！？!?\n]{0,24}[，,]\s*(?:该|是不是|要不要|先)[^。！？!?\n]{0,32}(?:还是|或者)[^。！？!?\n]{0,32}[？?]/u;
 
 export const GROUP_CHAT_HUMANIZER_PROMPT = [
   '【群聊去 AI 腔】直接说具体对象、动作、数字或判断；不要用“不只是X，更是Y”“真正重要的是”“这背后是”“这意味着”给普通结论抬重量。',
   '少用“赋能/闭环/抓手/底层逻辑/认知升级/范式/重塑/彰显/未来可期”这类大词，除非它们就是准确术语。',
   '不写“随着……的发展”“在……时代背景下”“值得一提的是”，也不要为了节奏凑“创新、突破和无限可能”这类抽象排比。',
   '比喻扔出去就停，不接着解释它、追加命令式收尾，也不把同一个意思换词再说一遍。',
+  '一个回复最多用一个核心比喻，不要把“方向”继续拧成方向盘、导航、拖车；也别用“这……再……，该先……还是……？”的反问收尾来显得机灵。',
   '被说“AI味/像AI/机器味”时，最多一句承认或反呛就停；不要围绕这个标签继续做“香水/闻/验货”之类的二次比喻，也不要指挥对方换个正经话题。',
   '去 AI 味不是变礼貌、变完整或加免责声明；保留龙玉涛的短、冲、损和具体画面。',
 ].join('\n');
@@ -53,8 +56,12 @@ export function detectHumanizerTells(value, options = {}) {
   }
   if (EMPTY_TRIAD_PATTERN.test(normalized)) issues.push('assistant-empty-triad');
   if (DASH_OVERLOAD_PATTERN.test(normalized)) issues.push('assistant-dash-overload');
-  if (OVEREXPLAINED_COMEBACK_PATTERN.test(normalized)) {
+  if (OVEREXPLAINED_COMEBACK_PATTERN.test(normalized)
+    || (normalized.length >= 34 && COMMANDING_COMEBACK_PATTERN.test(normalized))) {
     issues.push('assistant-overwritten-comeback');
+  }
+  if (RHETORICAL_ESCALATION_PATTERN.test(normalized)) {
+    issues.push('assistant-rhetorical-escalation');
   }
   if (isStyleMetaComplaint(options.currentQuestion)) {
     const repeatedMeta = (normalized.match(/AI\s*味|机器味|像\s*AI|开场白|这三个字/giu) ?? []).length >= 2;
@@ -122,6 +129,7 @@ export function buildNaturalnessRewriteHint(issues = []) {
     'assistant-dash-overload',
     'assistant-overwritten-comeback',
     'assistant-style-meta-loop',
+    'assistant-rhetorical-escalation',
   ].some((issue) => set.has(issue));
   if (!needsRewrite) return '';
   const targetedHints = [
@@ -145,6 +153,9 @@ export function buildNaturalnessRewriteHint(issues = []) {
       : '',
     set.has('assistant-style-meta-loop')
       ? '别解释自己像不像 AI，也不要继续香水、闻、验货、开场白这些二次比喻；一句短反应后直接回到具体内容，不指挥对方换话题。'
+      : '',
+    set.has('assistant-rhetorical-escalation')
+      ? '删掉“这……再……，该先……还是……？”的反问收尾，也不要继续把上一句的比喻往外延伸；一句直接回击或判断就停。'
       : '',
   ].filter(Boolean);
   return [

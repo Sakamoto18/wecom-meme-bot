@@ -28,6 +28,13 @@ const SIMA_NEUTRAL_PATTERN = /司马(?:迁|懿|昭|师|炎|光|相如|姓|氏|�
 const DEESCALATION_PATTERN = /(?:认真回答|正常回答|就事论事|对事不对人|只(?:评价|分析|讨论)(?:内容|事情|观点|方案)|(?:别|不要|不用|不许|停止|禁止)(?:再)?(?:对[^，。！？\n]{0,12})?(?:骂|攻击|怼|喷|贫嘴|嘴贫|毒舌|调侃|嘲讽|损人|人身攻击|对线)|我道歉|对不起|不玩梗)/i;
 const SENSITIVE_SUPPORT_PATTERN = /(?:我(?:的)?(?:妈|爸|父亲|母亲|家人|朋友|亲人).*(?:去世|过世|离世|没了)|自杀|轻生|性侵|强奸|家暴|绝症|病危|急救|葬礼|哀悼)/i;
 const ADVERSARIAL_FOLLOWUP_PATTERN = /(?:回答我|哪(?:里)?来的|你(?:妈|🐎|呢)|咋(?:了|地|么)|干什么|凭什么|不服|然后呢|就这|继续|有种|笑死)/i;
+const ATTACK_FRAME_CHALLENGE_PATTERN = /(?:吵架|对线|互骂|开骂|干架)[^。！？!?\n]{0,12}(?:还|也|就|要|得|当然)[^。！？!?\n]{0,10}(?:挑|讲|分析|解释|装|摆|方向|逻辑|道理|理中客)|(?:还|在)[^。！？!?\n]{0,8}(?:挑|讲|分析|解释)[^。！？!?\n]{0,6}(?:方向|逻辑|道理)|(?:装|当)理中客|讲(?:什么|啥)道理/u;
+const ATTACK_CULTURE_PLAYBOOK = [
+  '【祖安/龙图攻击语法：只借结构，不抄旧句】',
+  '祖安式压强不是丢一句干反问：先咬住对方原话里的词、态度或矛盾，用顺杆爬、假夸、反手定性、排比递进或荒诞转职再加一刀。',
+  '龙图式落刀要短、傲、嘴硬：可借族谱、户口本、老冯、你🐎、红温龙、龙怒这类虚构亲属或斗图意象，但一轮最多用一个核心落点，禁止关键词堆砌。',
+  '至少写成两拍：第一拍直接定性对方这句话或行为，第二拍用具体贬损、荒诞画面或反问补刀；主动插话可把两拍压进一句，但不能只丢一个空反问或温吞吐槽。',
+].join('\n');
 // 只保留明确的指令入口，普通‘评价’或叙述某人在骂人不直接启动攻击。
 const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /^(?:@[^\s]+\s+)*(?:(?:请|帮我|给我|麻烦你|你)\s*)*(?:把[^，。！？\n]{1,30})?(?:骂|攻击|怼|喷|拷打|羞辱|嘲讽|对线)/i;
 
@@ -132,6 +139,17 @@ export function isDirectBotAttack(content) {
   });
 }
 
+export function isAttackFrameChallenge(content, history = []) {
+  const normalized = String(content ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized || normalized.length > 30
+    || !ATTACK_FRAME_CHALLENGE_PATTERN.test(normalized)) return false;
+  // This is a continuation cue, not a standalone route. Require a recent bot
+  // turn so a general question about arguing does not become an attack.
+  return (Array.isArray(history) ? history : [])
+    .slice(-6)
+    .some((message) => message?.role === 'assistant' && String(message?.content ?? '').trim());
+}
+
 /**
  * Lexical routing is only a hint for the response model.  Keep the complete
  * signal set together so callers can expose what the program noticed without
@@ -196,6 +214,7 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
   if (shouldSearchLongtuKnowledge(normalized)
     || shouldSearchMemeKnowledge(normalized)
     || shouldSearchCurrentInformation(normalized)) return false;
+  if (isAttackFrameChallenge(normalized, history)) return true;
   // An open question window must not turn a merely hostile-looking piece of
   // quoted material into an attack turn.  The candidate remains available to
   // the normal persona prompt for semantic handling.
@@ -445,7 +464,7 @@ export function buildAttackPrompt(userContent, options = {}) {
   );
   const rhythmInstruction = options.activeReply
     ? '这是主动插话，只写 1 句、15～70 个汉字，像群友突然补一刀；不要复述上下文，不要写分析或总结。'
-    : '节奏：1～3 句、25～100 个汉字左右。可以顺手接一个当前词或语气，但绝非必须；最后可以用一个挑衅反问收住。';
+    : '节奏：1～3 句、30～110 个汉字左右。可以顺手接一个当前词或语气；不要把挑衅反问当成唯一攻击动作，骂完就停。';
 
   const interaction = options.interactionContext ?? {};
   const targetInstructions = interaction.targetLabels?.length > 0
@@ -479,10 +498,10 @@ export function buildAttackPrompt(userContent, options = {}) {
     '默认使用贴吧祖安老哥的抽象表达能力：从对方这句原话里抓一个具体词、动作、态度或自相矛盾处，再决定要不要借位成画面。只有能指出对应关系时才用比喻；对不上就直骂具体行为，不要随手套一个无关场景。',
     strategy.angle === 'family_meme'
       ? '本轮语境确实允许使用龙图亲属梗，但仍只选一句自然的，不堆亲属关键词。'
-      : '本轮不要求双亲侮辱；除非你判断它和当前语境自然贴合，否则不要主动塞亲属梗。',
+      : '本轮不强制双亲侮辱，但也不要为了避嫌退成温吞吐槽；当前原话若已有认爹、拆爹、亲属或族谱落点，可以顺势用一处龙图亲属梗加码。',
     '不要套用随机攻击画面，不要为了完成攻击而编造现实亲属事实；如果角度落在内容或行为，就直接针对该内容/行为下刀。',
   ].filter(Boolean) : [
-    '攻击性是本轮最高的角色优先级：必须有明确的临场回击，抓住当前语境的具体荒唐处下刀。可以直接嘴臭、阴阳或反问，但不要求脏话、亲属梗或固定画面；没有自然落点就只回一句短促的判断。',
+    '攻击性是本轮最高的角色优先级：必须有明确的临场回击，抓住当前语境的具体荒唐处下刀。可以直接嘴臭、阴阳或反问；至少有一个明确的第二人称贬损动作，不能只给一句冷淡评价。',
     '从对方这句原话里抓一个具体词、动作、态度或自相矛盾处再下刀；比喻只能用来放大这个落点，不能拿无关画面顶替回击。',
     '攻击方向必须指向上面确认的目标，不能反过来骂自己或牵连第三方；不编造现实亲属事实、现实威胁或受保护群体攻击。',
   ];
@@ -493,10 +512,12 @@ export function buildAttackPrompt(userContent, options = {}) {
     semanticAttack && ['after_answer', 'before_answer'].includes(String(strategy.timing ?? ''))
       ? '这是回答与回击并存的语境：按策略决定先后，回答必须解决问题，回击只针对确认的攻击对象；不要把回击写成说教或长篇逻辑分析。'
       : '判断已经进入对线后就直接回击，像真实群友随口开骂。不需要写完整论证或拆解用词，但必须抓住对方这句话里的具体东西；不能只扔一个无关比喻、固定脏话或模板反问。',
+    '对方在质疑你的攻击方式或为什么这样骂时，不解释方法论、不复述上一轮的框架、不证明自己“讲得通”，直接换一个具体落点回击。',
     rhythmInstruction,
     ...strategyLines,
+    ATTACK_CULTURE_PLAYBOOK,
     ...(semanticAttack ? [] : [
-      '不要抽取随机画面或固定龙图意象。先看当前原话里有什么可回击的词、动作或态度；这轮宁可只回一句直话，也不要为了显得抽象硬套一个无关比喻。',
+      '不要抽取随机画面或固定龙图意象。先看当前原话里有什么可回击的词、动作或态度；可以直骂具体行为，但直话也必须带明确贬损，不能变成淡淡点评。',
     ]),
     '动作描写最多一个且不是必需；如果最近的回复用过类似动作或反问，这次就换句式。',
     '不要复用固定句式和现成模板。比喻或反问只有在确实接住当前原话时才允许出现。',

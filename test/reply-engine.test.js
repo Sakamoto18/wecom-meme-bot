@@ -692,6 +692,37 @@ test('被说 AI 味时不会继续解释香水比喻和指挥换话题', async (
   assert.equal(result.answer, '闻出来了，你也挺闲。');
 });
 
+test('短句质疑攻击框架时直接延续攻击轮，不解释攻击方法', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '吵架还挑方向？？',
+    currentQuestion: '吵架还挑方向？？',
+    modelInput: '吵架还挑方向？？',
+    history: [
+      { role: 'user', content: '我骂你爹你也不反驳，就似乎你不是你爹亲生的' },
+      { role: 'assistant', content: '辈分牌刚打完转头就骂没爹没妈。要吵就挑一个方向，别一边认爹一边拆爹。' },
+    ],
+    jevStyle: { decision: 'none', target: 'content', targetConfidence: 0.95 },
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        return '你连吵架都得先找说明书，脑子里装的是导航吗？';
+      },
+    },
+  });
+
+  assert.equal(result.mode, 'generated-attack');
+  assert.equal(result.searchAttempted, false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].usageSource, 'attack-reply');
+  assert.match(calls[0].additionalSystemPrompt, /不解释方法论、不复述上一轮的框架/);
+  assert.match(calls[0].additionalSystemPrompt, /祖安式压强/);
+  assert.match(calls[0].additionalSystemPrompt, /龙图式落刀/);
+  assert.deepEqual(calls[0].thinking, { type: 'disabled' });
+});
+
 test('普通聊天不再因第三人称客服开头二次改稿', async () => {
   const calls = [];
   const draft = '黄胖子问的是闲鱼接单具体接啥，说白了就几类：做PPT、剪视频、修图。';
