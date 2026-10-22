@@ -834,18 +834,18 @@ export async function generateConversationReply(options) {
   const cultureSearchMode = useLongtuKnowledge ? 'longtu' : 'meme';
   const unknownConcept = jevCulture.unknownConcept === true;
   const cultureTerms = (jevCulture.terms.join(' ') || String(currentQuestion || content || '').trim()).slice(0, 120);
-  const cultureLookupQuery = (unknownConcept ? `梗百科 ${cultureTerms}` : cultureTerms).slice(0, 120);
+  const cultureLookupQuery = (unknownConcept ? `wiki ${cultureTerms}` : cultureTerms).slice(0, 120);
   const cultureQuery = unknownConcept
     ? cultureLookupQuery
     : [
       jevCulture.terms.join(' '),
       String(currentQuestion || content || '').trim(),
     ].filter(Boolean).join(' ').slice(0, 240);
-  const unknownConceptScope = buildSourceScope(normalizeSourceCandidates([{
-    platform: 'bilibili',
-    confidence: 'high',
-    evidence: '陌生名词定向检索 B 站梗百科',
-  }]));
+  const unknownConceptScope = {
+    candidates: [],
+    includeDomains: ['baike.baidu.com', 'zh.moegirl.org.cn', 'zh.wikipedia.org', 'en.wikipedia.org'],
+    crossCheck: false,
+  };
   const jevPlatformScope = buildSourceScope(normalizeSourceCandidates(
     jevCulture.platform && !['unknown', 'general'].includes(jevCulture.platform)
       ? [{
