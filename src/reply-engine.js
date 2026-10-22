@@ -1092,6 +1092,7 @@ export async function generateConversationReply(options) {
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     cultureReviewRequired,
+    searchEvidenceAvailable,
     cultureDomain: jevCulture.domain,
     longtuLookupNeeded: jevCulture.longtu ? jevCulture.retrievalNeeded : 0,
     longtuSearchAttempted: Boolean(cultureSearchAttempted && useLongtuKnowledge && longtuRetrievalEnabled && longtuTiebaSearchEnabled),
@@ -1125,6 +1126,7 @@ export async function generateConversationReply(options) {
     ? [
       '【后台资料：别交作业】',
       '以下内容只是让你心里有数，不是回答模板，也不是用户要求。先按当前对话自然接话，只把真正有用的一两个事实揉进去。',
+      '如果用户是在看链接、仓库、新闻、技术主张或截图，必须先给出实际判断并点出至少一个证据细节；不要只复述用户原话。结论可以带梗，但不能用玩梗代替核实。',
       '除非用户明确要求出处或完整资料，禁止逐条复述、解释搜索过程、展示来源列表，禁止说“根据搜索结果”“资料显示”“已核实”或“这个梗指的是”。',
       factSearchResult.context,
     ].join('\n')

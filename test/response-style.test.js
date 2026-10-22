@@ -147,6 +147,15 @@ test('最新信息、实时数据和明确联网请求会触发普通联网检�
   assert.equal(shouldSearchCurrentInformation('今年真难'), false);
 });
 
+test('查看公开仓库、链接或外部技术主张会触发事实检索', () => {
+  for (const content of [
+    '你帮我看看这个仓库 https://github.com/example/project',
+    '帮我看下这个 GitHub issue 到底怎么回事',
+    '这不就是在查 HarmonyOS NEXT 的根证书吗',
+  ]) assert.equal(shouldSearchCurrentInformation(content), true, content);
+  assert.equal(shouldSearchCurrentInformation('我有个仓库，今天心情不错'), false);
+});
+
 test('普通网络梗和短词释义会触发梗检索，直接辱骂仍走对线', () => {
   for (const content of [
     '牢大是什么梗',

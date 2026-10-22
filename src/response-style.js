@@ -35,6 +35,13 @@ const MEME_KNOWLEDGE_PATTERN = /(?:(?:什么|啥|这个|这|该)(?:网络)?梗|(
 const SHORT_TERM_MEANING_PATTERN = /^[“”"'‘’]?[^？?。！!\n]{1,28}[“”"'‘’]?(?:是什么意思|啥意思|什么含义|指什么|什么来头)[？?。！!]*$/i;
 const EXPLICIT_WEB_SEARCH_PATTERN = /(?:联网|上网)(?:查|搜|搜索|查询|看)|(?:查|搜|搜索|查询)(?:一下|下)?(?:最新|最近|今天|今日|当前|现在|实时|新闻|消息|资料|信息)/i;
 const CURRENT_INFORMATION_PATTERN = /(?:最新|实时|(?:202[6-9]|20[3-9]\d)|截至(?:目前|现在|今天)|现任|(?:现在|目前)(?:谁|哪(?:个|款|些)|是什么|有(?:什么|哪些))|当前(?:版本|价格|政策|进展|情况|排名|数据|状态)|目前(?:的)?(?:版本|价格|政策|进展|情况|排名|数据|状态)|最近(?:的)?(?:消息|新闻|版本|进展|动态|价格|数据|政策)|新版本|最新版|新(?:出|发布|上线|公布)的|更新到|发布了|上线了|新闻|热搜|票房|比分|赛果|排名|汇率|股价|天气|油价|金价|价格(?:多少|走势|变化))/i;
+// A public link or an external technical claim is a lookup target even when
+// the user phrases the request as casual conversation ("帮我看看这个仓库").
+// Treating only "查一下" as search intent made the bot paraphrase repository
+// pages and screenshots without checking the underlying claim.
+const EXTERNAL_LINK_PATTERN = /https?:\/\/[^\s<>"'，。！？!?]+/iu;
+const EXTERNAL_REFERENCE_PATTERN = /(?:github|gitlab|issue|pull\s*request|仓库|repo|链接|网页|页面|证书|根证书|中间证书|CA|HarmonyOS|安卓|Android|代码仓)/iu;
+const EXTERNAL_LOOKUP_ACTION_PATTERN = /(?:帮我(?:看|查|分析|读|核实|验证)|看(?:看|下|一下)|查(?:看|一下|下)|搜(?:一下|下)?|核实|验证|分析(?:一下)?|解读(?:一下)?|怎么回事|真的假的|是否属实|对不对|是不是|这不就是)/iu;
 const SERIOUS_QUESTION_PATTERN = /(?:如何|怎么|为什么|为何|请问|帮我|解释|分析|比较|区别|方案|建议|配置|解决|代码|报错|故障|原理|教程|步骤|能否|是否可以|该(?:怎么|如何|用)|需要什么|应该|多少|哪一)/i;
 const COMPLEX_NONTECHNICAL_PATTERN = /(?:如何|怎么|为什么|为何|解释|分析|比较|区别|方案|建议|解决|原理|教程|步骤|需要什么|应该|多少|哪一)/i;
 const EXPLICIT_DETAIL_REQUEST_PATTERN = /(?:详细|展开|完整(?:地)?|全面|深入|长文|报告|逐步|一步一步|逐条|逐张|细说|多讲|列出(?:步骤|原因|优缺点))/i;
@@ -248,7 +255,9 @@ export function shouldSearchCurrentInformation(content) {
     return false;
   }
   return EXPLICIT_WEB_SEARCH_PATTERN.test(normalized)
-    || CURRENT_INFORMATION_PATTERN.test(normalized);
+    || CURRENT_INFORMATION_PATTERN.test(normalized)
+    || (EXTERNAL_REFERENCE_PATTERN.test(normalized)
+      && (EXTERNAL_LOOKUP_ACTION_PATTERN.test(normalized) || EXTERNAL_LINK_PATTERN.test(normalized)));
 }
 
 const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -514,6 +523,9 @@ export function buildNormalReplyStablePrompt(options = {}) {
     '文化准确性也是角色硬约束：如果本轮明显漏掉了贴题的龙玉涛知识梗或文化抽象联想，内部记作一次“龙图事故”，下一轮提高文化召回和贴题复核优先级；没有贴合点时自然停下，禁止为了避免事故硬塞无关梗。不要把任何现实群体、儿童伤亡或灾难当作模型失误的惩罚。',
     '默认只评价事情本身（本轮明确要求针对某人贫嘴或攻击时，按指定对象接梗）。先分清对方在提出主张、转述还是玩梗：对方已在吐槽某个离谱说法，就一起吐槽那件事，不把玩笑当成他真信的主张，不为显得嘴硬而抠字眼反驳。反讽必须有事实依据，不能转成对发言者、引用作者或被提及者的智力、能力、人格嘲讽，也不能无依据推断动机。',
     '角色口吻是硬要求：除敏感求助、纯确认和单个事实/数字外，判断要利落，措辞要带刺，该嫌弃的说法、逻辑或操作就直接嫌弃。只说“有点离谱、挺抽象、说白了”不算阴阳；冷嘲应戳中本轮的具体荒唐处，不用温吞的建议腔卸掉锋芒。假夸、反问、荒诞联想按语境自然用，信息和锋芒融在同一句，不拼万能段子；没有破绽不编错处。',
+    options.searchEvidenceAvailable
+      ? '玩梗和做事不是二选一：涉及链接、仓库、新闻、技术主张或截图证据时，先给出实际结论和一个具体依据，再把判断包进自然的玩梗或吐槽；玩梗是表达层，不能替代核实，也不能只复述用户原话。'
+      : '玩梗优先只是表达顺序，不等于每轮都只玩梗；遇到明确问题先把事情办完，再决定要不要加一处贴题的抽象。',
     options.attackDuringAnswer
       ? '这是攻击回合：不要优先调用已确认的攻击性口癖或固定开场，每次根据当前原话现写；最近用过的句式必须换掉。'
       : '已确认口癖贴合时优先用原句，最近用过或不合语境才换说法，不额外加段落。',

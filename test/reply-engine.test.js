@@ -77,6 +77,34 @@ test('JEV 判定需要核实事实或时效时，不依赖关键词也进入事�
   assert.equal(calls.length, 1);
 });
 
+test('用户要求查看公开仓库链接时进入事实检索并把证据交给回复模型', async () => {
+  const calls = [];
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '你帮我看看这个仓库 https://github.com/example/project',
+    currentQuestion: '你帮我看看这个仓库 https://github.com/example/project',
+    modelInput: '你帮我看看这个仓库 https://github.com/example/project',
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        calls.push({ query, options });
+        return { context: 'GitHub issue #73 的公开正文提到 HarmonyOS NEXT 仍包含该根证书列表。', resultCount: 1 };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = [options.stableSystemPrompt, options.additionalSystemPrompt].filter(Boolean).join('\n');
+        return '先看证据：issue 正文确实提到证书列表；这事不能只靠标题开喷。';
+      },
+    },
+  });
+  assert.equal(result.factSearchAttempted, true);
+  assert.equal(calls.length, 1);
+  assert.match(prompt, /issue #73/);
+  assert.match(prompt, /玩梗和做事不是二选一/);
+});
+
 test('配置了联网检索时把 web_search 工具和处理器交给模型', async () => {
   let captured;
   await generateConversationReply({
