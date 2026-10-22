@@ -29,6 +29,7 @@ import { createXhsProvider } from './xhs-provider.js';
 import { createDouyinProvider } from './douyin-provider.js';
 import { createBilibiliSessionProvider } from './bilibili-session-provider.js';
 import { CultureCache } from './culture-cache.js';
+import { MemeKnowledgeStore } from './meme-knowledge.js';
 import { JevAtmosphereGate, JevRuntimeState } from './jev-atmosphere-gate.js';
 import { JevResponseModeMemory } from './jev-response-mode.js';
 
@@ -640,6 +641,14 @@ export async function createQqRuntime() {
     maxEntries: parsePositiveInteger(process.env.QQ_CULTURE_CACHE_MAX_ENTRIES) ?? 2_000,
     logger: console,
   });
+  const memeKnowledge = new MemeKnowledgeStore({
+    databaseFilePath: path.resolve(
+      projectRoot,
+      process.env.QQ_MEME_KNOWLEDGE_DATABASE_FILE?.trim() || 'data/qq-meme-knowledge.sqlite',
+    ),
+    ttlMs: (parsePositiveNumber(process.env.QQ_MEME_KNOWLEDGE_TTL_DAYS) ?? 30)
+      * 24 * 60 * 60 * 1000,
+  });
 
   const promptPath = path.resolve(
     projectRoot,
@@ -923,6 +932,7 @@ export async function createQqRuntime() {
     webSearch: usageTracker.wrapWebSearch(webSearch),
     webSearchEnabled,
     cultureCache,
+    memeKnowledge,
     groupMemory,
     longtuRetrievalEnabled: parseBoolean(
       process.env.LONGTU_QQ_LONGTU_RETRIEVAL_ENABLED,
@@ -1098,6 +1108,7 @@ export async function createQqRuntime() {
     memberAliases,
     webSearch,
     cultureCache,
+    memeKnowledge,
     usageTracker,
     mediaUsageTracker,
     mediaResolver,
@@ -1155,6 +1166,7 @@ export async function startQqApi() {
         web_search_enabled: runtime.webSearchEnabled,
         web_search_provider: runtime.webSearch.provider,
         culture_cache: runtime.cultureCache.getStats(),
+        meme_knowledge: runtime.memeKnowledge.getStats(),
         group_memory: groupMemoryStats,
         active_reply_enabled: runtime.activeReplyEnabled,
         repeat_enabled: runtime.repeatEnabled,
@@ -1216,6 +1228,7 @@ export async function startQqApi() {
     runtime.mediaUsageTracker.close();
     runtime.mediaResolver.close();
     runtime.cultureCache.close();
+    runtime.memeKnowledge.close();
     runtime.groupMemory.close();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));

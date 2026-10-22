@@ -2049,6 +2049,7 @@ export class QqBotService {
     this.webSearch = options.webSearch;
     this.webSearchEnabled = options.webSearchEnabled ?? true;
     this.cultureCache = options.cultureCache ?? null;
+    this.memeKnowledge = options.memeKnowledge ?? null;
     this.longtuRetrievalEnabled = options.longtuRetrievalEnabled !== false;
     this.longtuTiebaSearchEnabled = options.longtuTiebaSearchEnabled !== false;
     this.longtuRetrievalMaxQueries = Math.max(
@@ -3762,6 +3763,7 @@ export class QqBotService {
         chatClient: this.chatClient,
         webSearch: this.webSearch,
         cultureCache: this.cultureCache,
+        memeKnowledge: this.memeKnowledge,
         longtuRetrievalEnabled: this.longtuRetrievalEnabled,
         longtuTiebaSearchEnabled: this.longtuTiebaSearchEnabled,
         longtuRetrievalMaxQueries: this.longtuRetrievalMaxQueries,
@@ -3886,6 +3888,8 @@ export class QqBotService {
           + `，culture=${generated.cultureSearchAttempted ? 'on' : 'off'}`
           + `，culture_cache=${generated.cultureCacheHit ? 'hit' : 'miss'}`
           + `，culture_card=${generated.cultureCardUsed ? 'yes' : 'no'}`
+          + `，meme_knowledge=${generated.memeKnowledgeUsed ? (generated.memeKnowledgeCacheHit ? 'hit' : 'fresh') : 'off'}`
+          + `，meme_review=${generated.memeKnowledgeReview ? 'on' : 'off'}`
           + `，culture_domain=${generated.cultureDomain || 'none'}`
           + `，longtu_lookup=${Number(generated.longtuLookupNeeded || 0).toFixed(2)}`
           + `，tieba=${generated.longtuSearchAttempted ? 'on' : 'off'}`
