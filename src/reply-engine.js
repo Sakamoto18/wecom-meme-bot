@@ -492,6 +492,10 @@ export async function generateConversationReply(options) {
   const relativeDateText = [content, currentQuestion, modelInput]
     .filter(Boolean).join('\n');
   const relativeDateFacts = extractRelativeDateFacts(turnNow, relativeDateText);
+  const relativeDateSearchHint = relativeDateFacts
+    .map((fact) => `${fact.targetDate} ${fact.targetYear}年${fact.targetMonth}月`)
+    .join(' ')
+    .slice(0, 120);
   // 图片只在首轮生成时上传一次；重写、质量复核和思考降级使用已经注入的
   // OCR/场景摘要，避免重复消耗视觉 Token 和请求体体积。
   const revisionUserContent = modelInput;
@@ -901,7 +905,7 @@ export async function generateConversationReply(options) {
       // evidence returned for the others or prevent the picture explanation.
       const outcomes = await Promise.allSettled(queries.map((query, index) => searchWithSourceScope(
         webSearch,
-        query,
+        [query, relativeDateSearchHint].filter(Boolean).join(' ').slice(0, 300),
         { mode: factSearchMode, usageSource: 'web-search-image' },
         imageSearchPlan?.[index],
       )));
@@ -925,9 +929,10 @@ export async function generateConversationReply(options) {
     }
     const scope = sourceScopeFromText(content);
     const searchOptions = { mode: factSearchMode, usageSource: `web-search-${factSearchMode}` };
+    const factualQuery = [content, relativeDateSearchHint].filter(Boolean).join(' ').slice(0, 300);
     return scope.includeDomains.length
-      ? searchWithSourceScope(webSearch, content, searchOptions, scope)
-      : webSearch.search(content, searchOptions);
+      ? searchWithSourceScope(webSearch, factualQuery, searchOptions, scope)
+      : webSearch.search(factualQuery, searchOptions);
   };
 
   const runCultureSearch = async () => {

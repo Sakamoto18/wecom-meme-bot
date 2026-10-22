@@ -15,7 +15,7 @@ const GENERIC_IMAGE_TERMS = new Set([
   'logo', '标志', '品牌', '图标', '图片logo',
 ]);
 
-const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|真的假的|辟谣|谣言|真实吗|是否属实|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志|几个月后|三个月后|跨年|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景|(?:图|图片|截图|九宫格).{0,8}(?:谁|人物|身份|名字))/iu;
+const EXPLICIT_IMAGE_SEARCH_PATTERN = /(?:来源|出处|原图|原帖|原视频|作者|哪来的|核实|验证|真假|真的假的|辟谣|谣言|真实吗|是否属实|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志|(?:\d+|[一二两三四五六七八九十几]+)\s*(?:天|日)后|过几天|下周|本周末|月底|下个月|几个月后|三个月后|跨年|什么梗|梗的含义|查(?:一下|下)?|搜(?:一下|下)?|搜索|检索|联网|上网|背景|(?:图|图片|截图|九宫格).{0,8}(?:谁|人物|身份|名字))/iu;
 const IMAGE_EVALUATION_PATTERN = /(?:评价|点评|评一下|说说(?:这|该)?(?:张|幅)?图|怎么看(?:这|该)?(?:张|幅)?图|赏析|吐槽(?:一下)?(?:这|该)?(?:张|幅)?图|好不好看)/u;
 // “调侃/地狱笑话/接梗”不是字面上的识图请求，但它明确要求模型理解
 // 图片背后的关系、反差和互联网语境。若不把它视为图片语义问题，Jev
@@ -345,7 +345,7 @@ export function buildImageSearchPlan(analysis, content = '') {
   // happens to invent a plausible title or watermark clue.
   const items = analysis?.items?.length ? analysis.items : (analysis ? [analysis] : []);
   const explicitIntent = hasExplicitImageSearchIntent(content);
-  const verificationIntent = /(?:真的假的|真假|是否属实|核实|验证|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志|几个月后|三个月后|跨年)/iu.test(content);
+  const verificationIntent = /(?:真的假的|真假|是否属实|核实|验证|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志|(?:\d+|[一二两三四五六七八九十几]+)\s*(?:天|日)后|过几天|下周|本周末|月底|下个月|几个月后|三个月后|跨年)/iu.test(content);
   if (isImageEvaluationIntent(content) && !explicitIntent && !verificationIntent) return [];
   const cultureIntent = IMAGE_CULTURE_REQUEST_PATTERN.test(compactText(content));
   const maxQueries = explicitIntent

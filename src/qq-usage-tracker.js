@@ -30,12 +30,18 @@ const DEEPSEEK_PRICING_SOURCE = 'https://api-docs.deepseek.com/zh-cn/quick_start
 const DEEPSEEK_PRICING_CHECKED_AT = '2026-09-10';
 const JEV_PRICING_SOURCE = 'https://docs.bailian.console.aliyun.com/zh/model-studio/qwen3-7-plus';
 const JEV_PRICING_CHECKED_AT = '2026-10-21';
+const JEV_DEEPSEEK_PRICING_SOURCE = DEEPSEEK_PRICING_SOURCE;
+const JEV_DEEPSEEK_PRICING_CHECKED_AT = DEEPSEEK_PRICING_CHECKED_AT;
 const JEV_PRICING_REGION = '华北2（北京）';
 const JEV_PRICING_MODEL = 'qwen3.7-plus';
 const JEV_LONG_CONTEXT_THRESHOLD_TOKENS = 256_000;
 const DEFAULT_JEV_PRICING_CNY = Object.freeze({
   short: Object.freeze({ input: 2, cachedInput: 0.4, output: 8 }),
   long: Object.freeze({ input: 6, cachedInput: 1.2, output: 24 }),
+});
+const DEFAULT_JEV_DEEPSEEK_PRICING_CNY = Object.freeze({
+  short: Object.freeze({ input: 1, cachedInput: 0.02, output: 4 }),
+  long: Object.freeze({ input: 1, cachedInput: 0.02, output: 4 }),
 });
 // Flash 价格按 DeepSeek-V4.1-Flash。旧模型名 deepseek-v4-flash、
 // deepseek-v4-flash-vision-exp 已下线，请求由 V4.1-Flash 承接并按 Flash 价计费，
@@ -96,30 +102,43 @@ function positivePrice(value, fallback) {
 }
 
 function normalizeJevPricing(options = {}) {
+  const model = String(options.model ?? JEV_PRICING_MODEL).trim() || JEV_PRICING_MODEL;
+  const isDeepSeek = /^deepseek(?:-|$)/i.test(model);
+  const defaults = isDeepSeek
+    ? DEFAULT_JEV_DEEPSEEK_PRICING_CNY
+    : DEFAULT_JEV_PRICING_CNY;
   const short = options.short ?? {};
   const long = options.long ?? {};
   return {
+    provider: String(options.provider ?? (isDeepSeek ? 'deepseek' : 'aliyun-bailian')).trim()
+      || (isDeepSeek ? 'deepseek' : 'aliyun-bailian'),
+    priceSourceUrl: String(options.priceSourceUrl
+      ?? (isDeepSeek ? JEV_DEEPSEEK_PRICING_SOURCE : JEV_PRICING_SOURCE)).trim()
+      || (isDeepSeek ? JEV_DEEPSEEK_PRICING_SOURCE : JEV_PRICING_SOURCE),
+    checkedAt: String(options.checkedAt
+      ?? (isDeepSeek ? JEV_DEEPSEEK_PRICING_CHECKED_AT : JEV_PRICING_CHECKED_AT)).trim()
+      || (isDeepSeek ? JEV_DEEPSEEK_PRICING_CHECKED_AT : JEV_PRICING_CHECKED_AT),
     region: String(options.region ?? JEV_PRICING_REGION).trim() || JEV_PRICING_REGION,
-    model: String(options.model ?? JEV_PRICING_MODEL).trim() || JEV_PRICING_MODEL,
+    model,
     thresholdTokens: positiveInteger(
       options.thresholdTokens,
       JEV_LONG_CONTEXT_THRESHOLD_TOKENS,
     ) || JEV_LONG_CONTEXT_THRESHOLD_TOKENS,
     short: {
-      input: positivePrice(short.input, DEFAULT_JEV_PRICING_CNY.short.input),
+      input: positivePrice(short.input, defaults.short.input),
       cachedInput: positivePrice(
         short.cachedInput,
-        DEFAULT_JEV_PRICING_CNY.short.cachedInput,
+        defaults.short.cachedInput,
       ),
-      output: positivePrice(short.output, DEFAULT_JEV_PRICING_CNY.short.output),
+      output: positivePrice(short.output, defaults.short.output),
     },
     long: {
-      input: positivePrice(long.input, DEFAULT_JEV_PRICING_CNY.long.input),
+      input: positivePrice(long.input, defaults.long.input),
       cachedInput: positivePrice(
         long.cachedInput,
-        DEFAULT_JEV_PRICING_CNY.long.cachedInput,
+        defaults.long.cachedInput,
       ),
-      output: positivePrice(long.output, DEFAULT_JEV_PRICING_CNY.long.output),
+      output: positivePrice(long.output, defaults.long.output),
     },
   };
 }
@@ -1195,7 +1214,7 @@ export class QqUsageTracker {
         provider, allowed, succeeded, input_tokens, output_tokens, total_tokens,
         cached_input_tokens, estimated_cost_usd, estimated_cost_cny, input_price_usd_per_million,
         usd_to_cny, latency_ms, error_status, large_group, limit_reason
-      ) VALUES (?, ?, ?, ?, 'jev', ?, ?, 'aliyun-bailian', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, 'jev', ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       this.now(),
       context.groupId,
@@ -1203,6 +1222,7 @@ export class QqUsageTracker {
       context.messageType,
       String(source || context.source || 'jev-atmosphere'),
       String(model || '').trim(),
+      this.jevPricing.provider,
       succeeded ? 1 : 0,
       inputTokens,
       outputTokens,
@@ -1326,7 +1346,7 @@ export class QqUsageTracker {
       startAt: start,
       endAt: end,
       pricing: {
-        provider: 'aliyun-bailian',
+        provider: this.jevPricing.provider,
         model: this.jevPricing.model,
         region: this.jevPricing.region,
         currency: 'CNY',
@@ -1338,8 +1358,8 @@ export class QqUsageTracker {
         longContextInputPriceCnyPerMillion: this.jevPricing.long.input,
         longContextCachedInputPriceCnyPerMillion: this.jevPricing.long.cachedInput,
         longContextOutputPriceCnyPerMillion: this.jevPricing.long.output,
-        priceSourceUrl: JEV_PRICING_SOURCE,
-        checkedAt: JEV_PRICING_CHECKED_AT,
+        priceSourceUrl: this.jevPricing.priceSourceUrl,
+        checkedAt: this.jevPricing.checkedAt,
       },
       ...calculateJevCosts(rows, this.jevPricing).total,
     };
@@ -1604,7 +1624,7 @@ export class QqUsageTracker {
         peakPeriods: '工作日 09:00-12:00、14:00-18:00',
         ...costs.total,
         jev: {
-          provider: 'aliyun-bailian',
+          provider: this.jevPricing.provider,
           model: this.jevPricing.model,
           region: this.jevPricing.region,
           currency: 'CNY',
@@ -1616,8 +1636,8 @@ export class QqUsageTracker {
           longContextInputPriceCnyPerMillion: this.jevPricing.long.input,
           longContextCachedInputPriceCnyPerMillion: this.jevPricing.long.cachedInput,
           longContextOutputPriceCnyPerMillion: this.jevPricing.long.output,
-          priceSourceUrl: JEV_PRICING_SOURCE,
-          checkedAt: JEV_PRICING_CHECKED_AT,
+          priceSourceUrl: this.jevPricing.priceSourceUrl,
+          checkedAt: this.jevPricing.checkedAt,
           ...jevTotals,
         },
         combined: {

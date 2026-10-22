@@ -154,6 +154,36 @@ test('Jev 按百炼 Qwen3.7-Plus 的输入、缓存和输出价格独立计费',
   }
 });
 
+test('Jev 使用 DeepSeek 模型时按 DeepSeek 价格独立计费', async () => {
+  const fixture = createTracker({
+    jevPricing: { model: 'deepseek-flash' },
+  });
+  try {
+    fixture.tracker.runWithContext({ groupId: 'jev-deepseek' }, () => (
+      fixture.tracker.recordJevUsage({
+        source: 'jev-atmosphere',
+        model: 'deepseek-flash',
+        usage: {
+          input_tokens: 1_000_000,
+          prompt_cache_hit_tokens: 200_000,
+          output_tokens: 50_000,
+        },
+        succeeded: true,
+        status: 200,
+      })
+    ));
+    const report = fixture.tracker.getReport();
+    assert.equal(report.pricing.jev.provider, 'deepseek');
+    assert.equal(report.pricing.jev.model, 'deepseek-flash');
+    assert.equal(report.pricing.jev.jevCachedInputCostCny, 0.004);
+    assert.equal(report.pricing.jev.jevUncachedInputCostCny, 0.8);
+    assert.equal(report.pricing.jev.jevOutputCostCny, 0.2);
+    assert.equal(report.pricing.jev.jevEstimatedCostCny, 1.004);
+  } finally {
+    fixture.close();
+  }
+});
+
 test('Jev 缺少 usage 或失败时保留失败事件并标记未计价', async () => {
   const fixture = createTracker();
   try {

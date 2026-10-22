@@ -101,3 +101,15 @@ test('低信息图只有明确求证或来源问题才打开事实轨', () => {
   assert.equal(evaluate.factEligible, false);
   assert.equal(evaluate.reason, 'low-information-image');
 });
+
+test('相对天数追问即使承接低信息图片也必须打开事实检索', () => {
+  const policy = classifySearchPolicy({
+    content: '9天后有什么事情',
+    imageSearch: true,
+    hasImageContext: true,
+    imageInformationLevel: 'low_information',
+  });
+  assert.equal(policy.factEligible, true);
+  assert.equal(policy.verificationRequested, true);
+  assert.equal(policy.reason, 'explicit-low-information-image');
+});

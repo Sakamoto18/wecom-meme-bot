@@ -11,7 +11,7 @@ const EXPLICIT_FACT_PATTERN = /(?:发生了什么|怎么回事|是否属实|真�
 // A verification request is stronger than a generic culture lookup. It must
 // survive the low-information-image gate so “谁家的 logo”“真的假的” can
 // reach fact retrieval even when OCR found little text.
-const EXPLICIT_VERIFICATION_PATTERN = /(?:真的假的|真假|是否属实|属实吗|真的吗|假的吧|假的吗|是不是真的|核实|验证|辟谣|谣言|谁家的|哪家的?|哪个品牌|什么品牌|logo|标志|几个月后|三个月后|跨年)/iu;
+const EXPLICIT_VERIFICATION_PATTERN = /(?:真的假的|真假|是否属实|属实吗|真的吗|假的吧|假的吗|是不是真的|核实|验证|辟谣|谣言|谁家的|哪家的?|哪个品牌|什么品牌|logo|标志|(?:\d+|[一二两三四五六七八九十几]+)\s*(?:天|日)后|过几天|下周|本周末|月底|下个月|几个月后|三个月后|跨年)/iu;
 // Style requests such as “接梗一下”“来点抽象” only choose the reply
 // voice.  They must not spend web-search quota.  This pattern is reserved for
 // an explicit request to identify, explain, or verify a meme/online term.
@@ -62,6 +62,10 @@ export function classifySearchPolicy(options = {}) {
     || verificationRequested
     || jevFactLookupNeeded >= 0.45
     || jevTimeSensitive >= 0.5
+    // A bare policy call may only have the unknown-concept flag; in the full
+    // reply route a strong culture score owns this lookup and must stay on the
+    // wiki/culture rail rather than launching a second generic fact search.
+    || (unknownConcept && jevCultureLookupNeeded < 0.4 && jevLongtuLookupNeeded < 0.4)
   );
 
   if (attackStyle) {

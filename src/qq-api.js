@@ -81,6 +81,23 @@ function parseIdentifierSet(value) {
     .filter(Boolean));
 }
 
+function resolveJevConfig() {
+  const mainModel = process.env.LLM_MODEL?.trim() || 'deepseek-chat';
+  const model = process.env.LONGTU_QQ_JEV_MODEL?.trim() || mainModel;
+  const usesDeepSeek = /^deepseek(?:-|$)/i.test(model);
+  return {
+    model,
+    apiKey: process.env.LONGTU_QQ_JEV_API_KEY?.trim()
+      || (usesDeepSeek
+        ? process.env.LLM_API_KEY?.trim()
+        : process.env.TYPESAFE_API_KEY?.trim()),
+    baseUrl: process.env.LONGTU_QQ_JEV_BASE_URL?.trim()
+      || (usesDeepSeek
+        ? process.env.LLM_BASE_URL?.trim()
+        : process.env.TYPESAFE_BASE_URL?.trim()),
+  };
+}
+
 // 按群限定可解析的平台，格式 `群号:平台|平台,群号:平台`。列进来的群只放行
 // 列出的平台，比 QQ_MEDIA_EXCLUDED_GROUPS 的整群开关更精确，因此优先生效。
 function parseGroupProviderMap(value) {
@@ -464,6 +481,8 @@ export async function createQqRuntime() {
   });
   await personaStore.load();
 
+  const jevConfig = resolveJevConfig();
+
   const usageTracker = new QqUsageTracker({
     databaseFilePath: path.resolve(
       projectRoot,
@@ -539,7 +558,7 @@ export async function createQqRuntime() {
       process.env.QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS,
     ),
     jevPricing: {
-      model: process.env.LONGTU_QQ_JEV_MODEL?.trim() || 'qwen3.7-plus',
+      model: jevConfig.model,
       region: process.env.LONGTU_QQ_JEV_PRICING_REGION?.trim() || '华北2（北京）',
       thresholdTokens: parsePositiveInteger(
         process.env.LONGTU_QQ_JEV_LONG_CONTEXT_THRESHOLD_TOKENS,
@@ -719,9 +738,9 @@ export async function createQqRuntime() {
   });
   await jevRuntime.load();
   const jevGate = new JevAtmosphereGate({
-    apiKey: process.env.TYPESAFE_API_KEY,
-    baseUrl: process.env.TYPESAFE_BASE_URL,
-    model: process.env.LONGTU_QQ_JEV_MODEL?.trim() || 'qwen3.7-plus',
+    apiKey: jevConfig.apiKey,
+    baseUrl: jevConfig.baseUrl,
+    model: jevConfig.model,
     protocol: process.env.LONGTU_QQ_JEV_PROTOCOL?.trim() || 'chat',
     chatMaxTokens: parsePositiveInteger(process.env.LONGTU_QQ_JEV_CHAT_MAX_TOKENS) ?? 1_800,
     timeoutMs: parsePositiveInteger(

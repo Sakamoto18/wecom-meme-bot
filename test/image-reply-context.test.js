@@ -298,6 +298,7 @@ test('低信息图在真的假的问题下进入事实核验，而不是纯玩�
     imageInformationLevel: 'low_information',
     jevStyle: { imageCultureNeeded: 0.9, seriousRequest: 0 },
     imageSearchQueries: ['三个月后 2027 事实核查'],
+    now: Date.parse('2026-10-21T12:00:00+08:00'),
     webSearch: { async search() {
       return { context: '日历事实摘要', resultCount: 1, results: [], evidenceQuality: 'related-only' };
     } },
@@ -311,4 +312,27 @@ test('低信息图在真的假的问题下进入事实核验，而不是纯玩�
   assert.match(prompt, /2027-01-21/);
   assert.match(prompt, /求证优先/);
   assert.doesNotMatch(prompt, /图片互联网梗输出模式/);
+});
+
+test('低信息图的九天后追问会带日期线索进入事实核验', async () => {
+  const queries = [];
+  const result = await generateConversationReply({
+    content: '9天后有什么事情',
+    currentQuestion: '9天后有什么事情',
+    modelInput: '图片可见文字：还有九天',
+    hasImageContext: true,
+    imageInformationLevel: 'low_information',
+    imageSearchQueries: ['冯骥 还有九天'],
+    now: Date.parse('2026-10-22T00:00:00Z'),
+    webSearch: { async search(query) {
+      queries.push(query);
+      return { context: '2026-10-31 没有对应的游戏发售公告', resultCount: 1, results: [], evidenceQuality: 'related-only' };
+    } },
+    chatClient: { isConfigured: true, async complete() {
+      return '先查当前日期对应的公开安排，不能拿图片里的旧倒计时直接当答案。';
+    } },
+  });
+  assert.equal(result.factSearchAttempted, true);
+  assert.match(queries[0], /2026-10-31/);
+  assert.match(result.answer, /旧倒计时/);
 });
