@@ -18,6 +18,7 @@ import {
   prepareImageBlocks,
   QqBotService,
   buildQqCompatibleMessage,
+  classifyAbstractAssociationFeedback,
   normalizeQqPayload,
   shouldSendJevRawImage,
   splitReplyText,
@@ -107,10 +108,55 @@ function createService(options = {}) {
     contextImageTtlMs: options.contextImageTtlMs,
     contextImageMaxItems: options.contextImageMaxItems,
     groupMemory: options.groupMemory,
+    memeKnowledge: options.memeKnowledge,
     logger: { log() {}, warn() {}, info() {} },
   });
   return { service, calls };
 }
+
+test('抽象联想反馈识别明确认同和纠正，忽略普通追问', () => {
+  assert.equal(classifyAbstractAssociationFeedback('确实，就是这个味'), 'positive');
+  assert.equal(classifyAbstractAssociationFeedback('哈哈哈哈哈没绷住'), 'positive');
+  assert.equal(classifyAbstractAssociationFeedback('不对，根本不像这个'), 'negative');
+  assert.equal(classifyAbstractAssociationFeedback('这个图是从哪来的'), '');
+});
+
+test('只把实际写进回复的抽象候选挂起，并用下一条真人反馈回写', () => {
+  const feedback = [];
+  const { service } = createService({
+    memeKnowledge: {
+      recordAssociationFeedback(entry) {
+        feedback.push(entry);
+        return true;
+      },
+    },
+  });
+  service.rememberAbstractAssociationFeedback('group:1', [{
+    trigger: '弯腰双手前伸',
+    target: '野兽先辈 / 114514',
+    mechanism: '姿势印象与互联网文化密码',
+  }, {
+    trigger: '无关的构图',
+    target: '另一个梗',
+    mechanism: '无关机制',
+  }], '这姿势越看越往 114514 那边长。');
+  assert.equal(feedback.length, 0);
+  service.consumeAbstractAssociationFeedback('group:1', '确实，就是这个味');
+  assert.deepEqual(feedback, [{
+    trigger: '弯腰双手前伸',
+    target: '野兽先辈 / 114514',
+    mechanism: '姿势印象与互联网文化密码',
+    signal: 'positive',
+  }]);
+
+  service.rememberAbstractAssociationFeedback('group:1', [{
+    trigger: '弯腰双手前伸',
+    target: '野兽先辈 / 114514',
+    mechanism: '姿势印象与互联网文化密码',
+  }], '这姿势越看越往 114514 那边长。');
+  service.consumeAbstractAssociationFeedback('group:1', '这图哪来的');
+  assert.equal(feedback.length, 1);
+});
 
 test('Jev 原图只对高价值图片语义问题启用，低信息图不增加二次视觉调用', () => {
   const block = { type: 'image_url', image_url: { url: 'data:image/png;base64,' + 'A'.repeat(400) } };

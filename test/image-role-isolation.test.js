@@ -18,6 +18,24 @@ test('图片分析保留图片内部对话角色并标记为非 QQ 身份', () =
   assert.match(context, /我：有人会记得第二名吗/u);
 });
 
+test('图片分析保留主体未知时的整体抽象联想', () => {
+  const analysis = parseImageAnalysis(JSON.stringify({
+    visual_subject: '',
+    abstract_impression: '旋转后像一个弯腰伸手的人，带一点恶臭熟悉感',
+    abstract_associations: [{
+      target: '野兽先辈 / 114514',
+      trigger: '弯腰伸手的整体姿势',
+      mechanism: '姿势印象与互联网文化密码',
+      register: '恶臭梗',
+      confidence: 'high',
+    }],
+  }));
+  assert.equal(analysis.visualSubject, '');
+  assert.match(analysis.abstractImpression, /弯腰伸手/u);
+  assert.equal(analysis.abstractAssociations[0].target, '野兽先辈 / 114514');
+  assert.match(formatImageAnalysisContext(analysis), /抽象联想候选（不是身份事实）/u);
+});
+
 test('图片角色安全提示禁止把图片人物映射为 QQ 对话身份', () => {
   assert.match(IMAGE_INPUT_SAFETY_PROMPT, /图片内部叙事角色/u);
   assert.match(IMAGE_INPUT_SAFETY_PROMPT, /当前 QQ 发言人、引用消息作者、被 @ 成员或机器人/u);

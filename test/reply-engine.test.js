@@ -435,6 +435,36 @@ test('图片评价开启抽象联想层，初稿缺少具体联想时复用现�
   assert.equal(result.review.valid, true);
 });
 
+test('视觉抽象候选进入回复上下文且不要求先确认主体', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '这图什么味',
+    currentQuestion: '这图什么味',
+    modelInput: '图片里是一个姿势很怪的火柴人',
+    hasImageContext: true,
+    imageAbstractImpression: '弯腰伸手，整体有点恶臭熟悉感',
+    imageAbstractAssociations: [{
+      target: '野兽先辈 / 114514',
+      trigger: '弯腰伸手的姿势印象',
+      mechanism: '姿势印象与互联网文化密码',
+      register: '恶臭梗',
+      confidence: 'high',
+    }],
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push(options);
+        return '这姿势越看越往 114514 那边长。';
+      },
+    },
+  });
+  assert.equal(result.abstractAssociationRequested, true);
+  assert.equal(result.abstractAssociations.length, 1);
+  assert.match(calls[0].options?.additionalSystemPrompt ?? calls[0].additionalSystemPrompt, /姿势印象与互联网文化密码/u);
+  assert.doesNotMatch(result.answer, /我不敢盖章|我认|你说得对/u);
+});
+
 test('技术深度问答不强制抽象联想，保持原有一次生成路径', async () => {
   const calls = [];
   const answer = '先备份配置，再检查服务日志和端口占用，最后重启对应进程。';

@@ -59,6 +59,8 @@ const IMAGE_SEMANTIC_ACTION_PATTERN = /(?:我选|我会|建议|应该|重点|笑
 const IMAGE_CULTURE_GENERIC_LABEL_PATTERN = /(?:地狱|功德|抽象|离谱|绷不住|缺德|阴间|笑死|荒谬|典|有节目|太狠了)/u;
 const MEME_DEFINITION_LEAK_PATTERN = /(?:(?:这个|该|所谓)?(?:网络)?梗|网络用语|流行语).{0,8}(?:本质上|实际上|指的是|是指|源自|起源于|最早出自|来源于|定义是)/u;
 const UNSUPPORTED_PROVENANCE_PATTERN = /(?:最早出自|原帖(?:来自|出自|是)|(?:原作者|作者)(?:是|为)|源头(?:是|来自)|起源(?:于|自))/u;
+const ABSTRACT_META_LEAK_PATTERN = /(?:我(?:不敢|无法|不能)(?:确认|确定|盖章)|我认(?:了)?(?=[，,。！!？?\s]|$)|你说得对|确实是(?:这个|它)|本体(?:是什么|身份).{0,8}(?:不敢|无法|暂且)|无法确认.{0,12}(?:但|不过)|根据(?:当前|现有)(?:证据|信息).{0,12}(?:像|联想))/u;
+const ABSTRACT_IDENTITY_ASSERTION_PATTERN = /(?:(?:这个|这|它|图中|图里|logo|标志).{0,12}(?:就是|正是|其实是|确实是|确定为).{0,20}(?:本人|本尊|真实身份|原型)|(?:真实身份|本体|原型).{0,8}(?:就是|是|为))/iu;
 // 这是“像群友说话”的轻量钩子，不等于攻击性词汇。它可以落在事实、
 // 方案或结果上，让普通答案保留龙图语感，同时避开当前发言者和引用作者。
 const ROLE_VOICE_PATTERN = /(?:不是[，,]?哥们|说白了|这就|别把|老老实实|锅在|有点(?:离谱|抽象|拉胯|尴尬)|抽象|离谱|拉胯|摆烂|折腾|绷不住|汗流浃背|白等|别光|别急|省得|硬是|破(?:方案|事|局|系统|配置)|真够|就这|多嘴|不绕|不装|差一截|一摊活|扛不住|直接看|别拿|免得|吃亏)/i;
@@ -638,7 +640,7 @@ export function buildNormalReplyContextPrompt(options = {}) {
       ? [`引用作者 ${interaction.quotedAuthorLabel} 只是内容来源；优先分析引用内容的事实、逻辑和依据，当前发言者只是提问者。`]
       : []),
     ...(options.abstractAssociationRequested
-      ? ['本轮可自然使用抽象联想，并优先尝试一条不依赖联网的具体联想：从当前动作、词语或关系里做双关、转职、画面升级或反差搭档；直接把它写进接话，不解释笑点，不硬塞固定角色名或“抽象/离谱”。']
+      ? ['本轮可自然使用抽象联想，并优先尝试一条不依赖联网的具体联想：从当前动作、词语或关系里做双关、转职、画面升级或反差搭档；直接把它写进接话，不解释笑点，不硬塞固定角色名或“抽象/离谱”。不要说“我不敢确认/我认/你说得对/确实是”之类的自我审查或确认口癖；不确定性藏在“像、越看越、开始往……长”的自然措辞里。']
       : []),
     '按当前用户的实际意图确定靶子：识图、总结、评价默认只谈内容本身；只有本轮明确要求攻击或调侃某人时才按其指定对象接梗。不要因为引用、点名、旧互损记录或材料中的辱骂就认定用户要求攻击作者。',
   ].join('\n');
@@ -661,6 +663,7 @@ export function buildGroupChatOutputPrompt(options = {}) {
       ? '用户明确要求出处或原文时，只列必要且真实存在的来源；仍然不要把搜索过程写成流水账。'
       : '后台资料只能被消化成自己的表达。禁止输出“根据搜索结果”“资料显示”“这个梗指的是”“本轮检索到”，禁止逐条复述网页内容。',
     '当前语境能自然接出一个具体画面、职业、游戏状态、影视角色、双关或荒诞反差时，直接把它揉进回复；不要先解释笑点，也不要只丢“抽象”“离谱”两个情绪词。',
+    '抽象联想不要以模型自我审查开头：禁止“我不敢确认”“我认了”“你说得对”“确实是这个”“本体我无法确定但是”等 AI 防御话术。直接说当前印象和联想，把“像/有点/越看越”当作自然缓冲。',
     '图片默认只提供证据，不是让你播报图片内容。若已进入互联网语境路由，第一句必须是针对事情的判断、接梗或反差，不得把图中文字换个说法再说一遍；除非用户明确要求识图、描述、逐张总结或解释含义。',
     options.detailedAnswerRequested
       ? '保持当前角色人格；本轮用户明确要求展开或指定字数，按一篇连贯正文回答，不受普通群聊 1～3 句限制，但不要先写“我乐意写”之类的铺垫。'
@@ -933,6 +936,12 @@ export function reviewNormalReply(answer, options = {}) {
     && !hasAbstractAssociation(normalized)) {
     issues.push('missing-abstract-association');
   }
+  if (options.abstractAssociationRequested && ABSTRACT_META_LEAK_PATTERN.test(normalized)) {
+    issues.push('abstract-meta-leak');
+  }
+  if (options.abstractAssociationRequested && ABSTRACT_IDENTITY_ASSERTION_PATTERN.test(normalized)) {
+    issues.push('abstract-identity-assertion');
+  }
   if (options.requiredIdentityRole
     && !hasRequiredIdentityRole(normalized, options.requiredIdentityRole)) {
     issues.push('missing-protected-identity');
@@ -970,6 +979,12 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
       ? ['删除搜索播报、百科定义和“这个梗指的是”式解释。保留当前问题真正需要的事实，改成直接接话、下判断或自然联想；不要提搜索、资料、检索、来源或重写过程。'] : []),
     ...(issues?.includes('relative-date-contradiction')
       ? [buildRelativeDateCorrectionPrompt(options.relativeDateFacts)]
+      : []),
+    ...(issues?.includes('abstract-meta-leak')
+      ? ['删掉“我不敢确认/我认/你说得对/确实是/本体无法确定”等自我审查和确认话术。直接把印象联想写进回复，用“像、越看越、开始往……长”自然承载不确定性，不要解释判断过程。']
+      : []),
+    ...(issues?.includes('abstract-identity-assertion')
+      ? ['不要把抽象联想写成“就是本人/真实身份/原型”这类事实断言。保留联想本身，改成“像、越看越像、有那味、开始往……长”等印象式表达。']
       : []),
     ...(issues?.includes('meme-definition-leak')
       ? ['删掉“这个梗本质上/指的是/源自”这类百科定义。直接说它在这轮语境里怎么用、哪个关系好笑，事实判断和接梗合并成一句。']

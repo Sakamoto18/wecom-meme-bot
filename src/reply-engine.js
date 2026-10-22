@@ -57,6 +57,8 @@ import {
 } from './culture-cache.js';
 import {
   buildMemeKnowledgeEntry,
+  buildAbstractAssociationEntry,
+  abstractAssociationPrompt,
   memeKnowledgePrompt,
   reviewMemeKnowledgeReply,
   MEME_WIKI_DOMAINS,
@@ -505,6 +507,8 @@ export async function generateConversationReply(options) {
     longtuTiebaSearchEnabled = true,
     longtuRetrievalMaxQueries = 2,
     imageVisualWordplay = '',
+    imageAbstractImpression = '',
+    imageAbstractAssociations = [],
     imageSemanticFrame = '',
     groupTopicPrompt = '',
     groupStyleProvider = null,
@@ -540,6 +544,11 @@ export async function generateConversationReply(options) {
       '这只是后台候选，不是事实。若原图确实支持其中的字形关系，回答当前问题时优先说出“原字→视觉变体”和笑点，不要只描述人物、物件或亮度；若原图不支持，舍弃候选并按像素事实回答。',
     ].join('\n')
     : '';
+  const abstractSignalEntries = (Array.isArray(imageAbstractAssociations) ? imageAbstractAssociations : [])
+    .map((entry) => buildAbstractAssociationEntry(entry))
+    .filter(Boolean)
+    .slice(0, 6);
+  const abstractImpressionText = String(imageAbstractImpression ?? '').trim().slice(0, 900);
 
   const memoryContext = buildMemoryContext(memorySummary);
   // Keep the reusable prefix small and invariant. The full turn-aware
@@ -928,6 +937,8 @@ export async function generateConversationReply(options) {
   let cultureCacheHit = false;
   let memeKnowledgeEntry = null;
   let memeKnowledgeCacheHit = false;
+  let abstractAssociationEntries = [...abstractSignalEntries];
+  let abstractAssociationMemoryHit = false;
   if (unknownConcept && memeKnowledge && cultureTerms) {
     try {
       memeKnowledgeEntry = memeKnowledge.lookup(cultureTerms);
@@ -936,6 +947,35 @@ export async function generateConversationReply(options) {
       // The dedicated knowledge store is best effort; live retrieval remains available.
     }
   }
+  if (memeKnowledge && (abstractImpressionText || imageSemanticFrame)) {
+    try {
+      const impression = [abstractImpressionText, imageSemanticFrame].filter(Boolean).join(' ').slice(0, 900);
+      const recalled = memeKnowledge.lookupAssociations(impression, { limit: 4 });
+      if (recalled.length > 0) {
+        abstractAssociationEntries = [...abstractAssociationEntries, ...recalled].slice(0, 6);
+        abstractAssociationMemoryHit = true;
+      }
+    } catch {
+      // Abstract memory is best effort; it must never block the normal reply.
+    }
+  }
+  const abstractAssociationKeys = new Set();
+  abstractAssociationEntries = abstractAssociationEntries.filter((entry) => {
+    const key = `${entry.trigger}\u0000${entry.target}\u0000${entry.mechanism}`;
+    if (abstractAssociationKeys.has(key)) return false;
+    abstractAssociationKeys.add(key);
+    return true;
+  });
+  if (memeKnowledge && abstractSignalEntries.length > 0) {
+    abstractSignalEntries.forEach((entry) => {
+      if (entry.confidence === 'high') {
+        try { memeKnowledge.putAssociation(entry); } catch { /* best effort */ }
+      }
+    });
+  }
+  const abstractAssociationContext = abstractAssociationEntries.length > 0
+    ? abstractAssociationPrompt(abstractAssociationEntries, abstractAssociationMemoryHit ? 'memory' : 'fresh-vision')
+    : '';
   if (retrievalPolicy.cultureEligible && cultureCache && cultureLookupQuery) {
     try {
       cultureCard = cultureCache.lookup(cultureLookupQuery, {
@@ -1116,7 +1156,8 @@ export async function generateConversationReply(options) {
   const shortChat = compactResponse && !passiveImageComment && !recordSummary;
   const factEvidenceAvailable = Boolean(factSearchResult.context);
   const searchEvidenceAvailable = factEvidenceAvailable || cultureCardUsed;
-  const abstractAssociationRequested = !factEvidenceAvailable && shouldInviteNaturalAssociation(content, {
+  const hasAbstractSignals = Boolean(abstractImpressionText || abstractAssociationEntries.length > 0);
+  const abstractAssociationRequested = hasAbstractSignals || (!factEvidenceAvailable && shouldInviteNaturalAssociation(content, {
     currentQuestion,
     activeReply,
     activeReplyPriority,
@@ -1129,7 +1170,7 @@ export async function generateConversationReply(options) {
     thinkingEnabled,
     attackStyle,
     attackDuringAnswer: attackStyle && !pureAttack,
-  });
+  }));
   // The association capability is always present in the persona prompt, but
   // a missing association should only trigger the existing secondary review
   // on turns where the user is actually asking to interpret visual/quoted
@@ -1138,7 +1179,8 @@ export async function generateConversationReply(options) {
   // review when the first draft misses the concrete association.
   const associationReviewText = [content, currentQuestion].filter(Boolean).join('\n');
   const abstractAssociationReviewRequired = abstractAssociationRequested
-    && (isHighConfidenceCulturePolicy(retrievalPolicy) && cultureCardUsed && !attackStyle
+    && (hasAbstractSignals
+      || isHighConfidenceCulturePolicy(retrievalPolicy) && cultureCardUsed && !attackStyle
       || artAppraisal
       || ((hasImageContext || hasQuotedContent)
         && /(?:评价|锐评|赏析|赏评|怎么看|如何看|为什么|为何|什么梗|啥意思|接梗|像什么|什么水平)/u.test(associationReviewText))
@@ -1274,6 +1316,10 @@ export async function generateConversationReply(options) {
       : '',
     imageSafetyPrompt,
     visualWordplayPrompt,
+    abstractImpressionText
+      ? ['【图片整体抽象印象】', abstractImpressionText, '这是主观联想素材，不是主体身份；允许顺着印象发散，但不要把它写成事实。'].join('\n')
+      : '',
+    abstractAssociationContext,
     imageSearch && queries.length === 0
       ? '本轮没有合适的公开检索线索或用户要求不联网，未进行图片联网查询；按可见证据回答当前问题，不要声称已搜索，也不必为了说明没搜索而另起一段。' : '',
     protectedIdentityContext,
@@ -1777,6 +1823,7 @@ export async function generateConversationReply(options) {
     artAppraisal,
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
+    abstractAssociations: abstractAssociationEntries,
     cultureRecallUsed: cultureRecall.used,
     styleSignals,
     activeReply,

@@ -342,6 +342,19 @@ test('抽象联想能力写进统一基座和本轮上下文，但不把固定�
   ), /自然接一个具体/);
 });
 
+test('抽象联想拒绝 AI 式确认口癖，保留自然印象表达', () => {
+  const options = { abstractAssociationRequested: true, compactResponse: true };
+  assert.ok(reviewNormalReply('这东西本体我不敢盖章，但有点像野兽先辈。', options)
+    .issues.includes('abstract-meta-leak'));
+  assert.ok(!reviewNormalReply('我认为这个姿势越看越像野兽先辈。', options)
+    .issues.includes('abstract-meta-leak'));
+  assert.ok(reviewNormalReply('这 logo 转 90 度就是野兽先辈本人。', options)
+    .issues.includes('abstract-identity-assertion'));
+  assert.ok(!reviewNormalReply('这 logo 转 90 度越看越像野兽先辈。', options)
+    .issues.includes('abstract-identity-assertion'));
+  assert.equal(reviewNormalReply('这个姿势越看越往 114514 那边长。', options).valid, true);
+});
+
 test('图片文化模式压住正经复述并要求具体并置反差', () => {
   const stable = buildNormalReplyStablePrompt({ imageCultureMode: true });
   const group = buildGroupChatOutputPrompt({ imageCultureMode: true });
