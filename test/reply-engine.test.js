@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateConversationReply } from '../src/reply-engine.js';
+import { generateConversationReply, removeInternalReplyMetadata } from '../src/reply-engine.js';
+
+test('清理固定认错开场但保留事实修正', () => {
+  assert.equal(
+    removeInternalReplyMetadata('你说得对，我上一轮理解错了：根证书列表仍在。'),
+    '根证书列表仍在。',
+  );
+  assert.equal(
+    removeInternalReplyMetadata('你提醒得对：这个链接已经失效了。'),
+    '这个链接已经失效了。',
+  );
+});
 
 test('带图默认只输出判断或接梗，不复述图片文字', async () => {
   let prompt = '';

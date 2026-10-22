@@ -19,7 +19,9 @@ const DEFAULT_SUMMARY_IDLE_MS = 60 * 1000;
 const DEFAULT_SUMMARY_TRIGGER_MESSAGES = 10;
 const DEFAULT_MAX_STYLE_EXAMPLES = 3_000;
 const DEFAULT_MAX_REFERENCE_EXAMPLES = 300;
-const MIN_STYLE_SOURCE_MESSAGES = 200;
+// 新群先积累一小批真实发言就开始提供基础语感；后续刷新会持续用全量历史重建。
+const MIN_STYLE_SOURCE_MESSAGES = 30;
+const MIN_STYLE_CARD_MESSAGES = 24;
 const TOPIC_MATCH_THRESHOLD = 0.65;
 const TOPIC_ASSIGN_THRESHOLD = 0.45;
 const TOPIC_AMBIGUITY_MARGIN = 0.08;
@@ -41,6 +43,8 @@ const SAFE_EXAMPLE_PATTERN = /(?:https?:\/\/|www\.|【.*?】|记住我的|确认
 const ATTACK_EXAMPLE_PATTERN = /(?:傻逼|沙比|妈的|你妈|他妈|滚|废物|贱|狗|脑残|弱智|闭嘴|挨骂|挨打|老子|爷|草你|操你|cnm|nmsl)/iu;
 const STYLE_NOISE_PATTERN = /(?:[（(]\s*(?:发送|用户|系统|机器人|当前|本轮)[^）)]{0,60}[）)]|@[^\s]+|\[(?:图片|表情|视频|语音|文件|动画表情)\]|https?:\/\/|www\.)/iu;
 const STYLE_PROMPT_ECHO_PATTERN = /(?:如何评价|怎么评价|评价一下|锐评|什么水平|请结合|结合画面|可核实|解释它|发送了一张)/u;
+// 认错过程不是群友语感，避免被模型学成每轮固定开场。
+const STYLE_META_CORRECTION_PATTERN = /^\s*(?:(?:你说得对|你提醒得对)\s*[，,、:：]\s*)?(?:(?:我)?(?:上一轮|刚才|前面)理解错了|这条修正我收下|这点我收回)(?:\s*[：:，,、。；;!]\s*|\s+)/u;
 const STYLE_NOISE_TERMS = new Set([
   '发送', '送了', '一张', '张图', '了一', '用户', '图片', '截图', '当前', '本轮',
   '消息', '结合', '画面', '核实',
@@ -55,6 +59,7 @@ function isUsableStyleText(value) {
   return Boolean(text)
     && !STYLE_NOISE_PATTERN.test(text)
     && !STYLE_PROMPT_ECHO_PATTERN.test(text)
+    && !STYLE_META_CORRECTION_PATTERN.test(text)
     && REFERENCE_STYLE_EXAMPLE_PATTERN.test(text);
 }
 
@@ -1256,6 +1261,7 @@ export class QqGroupMemory {
       for (const row of [...examples, ...referenceExamples]) {
         const text = sanitizeExample(row.text, 100);
         if (!text || SAFE_EXAMPLE_PATTERN.test(text)) continue;
+        if (!isUsableStyleText(text)) continue;
         if (row.author_type === 'reference_bot' && !REFERENCE_STYLE_EXAMPLE_PATTERN.test(text)) continue;
         const terms = hanBigrams(text).join(' ');
         if (!terms) continue;
@@ -1343,8 +1349,10 @@ export class QqGroupMemory {
       WHERE group_id = ? AND author_type = 'human' AND text <> '' AND text NOT LIKE '/%'
       ORDER BY id ASC
     `).all(String(groupId ?? '').trim())
-      .filter((row) => needsSummary(row.text) && !SAFE_EXAMPLE_PATTERN.test(row.text));
-    if (rows.length < 40) return null;
+      .filter((row) => needsSummary(row.text)
+        && !SAFE_EXAMPLE_PATTERN.test(row.text)
+        && isUsableStyleText(row.text));
+    if (rows.length < MIN_STYLE_CARD_MESSAGES) return null;
     const windows = [];
     for (let index = 0; index < rows.length; index += 6) {
       const window = rows.slice(index, index + 6);
@@ -1502,6 +1510,8 @@ export class QqGroupMemory {
     const lines = [
       '【本群真实语感参考】',
       '先学他们怎么接话：短促表态、顺梗、反问、拆台、说到一半就停；不是给普通答案套语气词。',
+      '逻辑是骨架，玩梗是表达：涉及事实、判断或解决办法时，先把具体结论和依据说清楚，再用贴题的反问、比喻、吐槽或群梗包住；不要把玩梗和回答二选一。',
+      '不要照抄样本，也不要用“你说得对”“你提醒得对”“我上一轮理解错了”等认错或客服式元话术固定开场；需要纠正时直接给出修正后的事实和回答。',
       ...prioritizedRules,
       common.length ? `群内常见词和语气：${common.join('、')}` : '',
       repeated.length ? `反复出现的群内短句/梗：${repeated.join(' / ')}` : '',
@@ -1533,6 +1543,8 @@ export class QqGroupMemory {
 
   startStyleRefresh() {
     if (this.styleRefreshTimer || this.styleGroups.size === 0) return;
+    // 启动后先用当前历史重建一次，不等第一个 6 小时周期。
+    void this.refreshStyles();
     this.styleRefreshTimer = setInterval(() => {
       void this.refreshStyles();
     }, this.styleRefreshHours * HOUR_MS);

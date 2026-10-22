@@ -197,6 +197,8 @@ test('群级语感画像使用全部历史、清洗敏感内容并支持参考 B
         createdAt: clock.now,
         text: index % 4 === 0
           ? '确实，笑死'
+          : index === 1
+            ? '你说得对，我上一轮理解错了：根证书列表仍在'
           : `这版本更新后有点卡，我先回滚了 https://example.com/${index}`,
       });
     }
@@ -242,6 +244,7 @@ test('群级语感画像使用全部历史、清洗敏感内容并支持参考 B
     const styleCalls = calls.filter((call) => call.options.usageSource === 'group-style-card');
     assert.equal(styleCalls.length, 1);
     assert.doesNotMatch(styleCalls[0].input, /https:\/\/example\.com/);
+    assert.doesNotMatch(styleCalls[0].input, /你说得对|上一轮理解错了/);
 
     const prompt = clock.memory.buildStylePrompt({
       groupId: 'g1',
@@ -254,12 +257,35 @@ test('群级语感画像使用全部历史、清洗敏感内容并支持参考 B
     assert.match(prompt, /参考Bot/);
     assert.doesNotMatch(prompt, /https?:\/\//);
     assert.doesNotMatch(prompt, /发送了一张图片|如何评价|@某人/);
+    assert.doesNotMatch(prompt, /根证书列表仍在/);
+    assert.match(prompt, /逻辑是骨架，玩梗是表达/);
     assert.ok(prompt.indexOf('接梗机制') >= 0);
     assert.ok(prompt.indexOf('接梗机制') < prompt.indexOf('真实发言节奏参考'));
 
     const other = createMemory(directory, { styleGroups: ['g2'] });
     assert.equal(other.memory.buildStylePrompt({ groupId: 'g2', query: '版本' }), '');
     other.memory.close();
+    clock.memory.close();
+  });
+});
+
+test('新群达到首批样本后即可生成基础语感卡', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const clock = createMemory(directory);
+    for (let index = 0; index < 30; index += 1) {
+      clock.advance(1_000);
+      clock.memory.recordEvent({
+        groupId: 'g1',
+        userId: `u${index % 3}`,
+        senderName: `群友${index % 3}`,
+        messageId: `bootstrap-${index}`,
+        createdAt: clock.now,
+        text: `这也太抽象了${index}`,
+      });
+    }
+    assert.equal(await clock.memory.refreshStyleProfile('g1'), true);
+    assert.equal(clock.memory.loadStyleProfile('g1').sourceCount, 30);
+    assert.match(clock.memory.buildStylePrompt({ groupId: 'g1', query: '抽象' }), /本群真实语感参考/);
     clock.memory.close();
   });
 });

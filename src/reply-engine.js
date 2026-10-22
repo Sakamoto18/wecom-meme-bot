@@ -109,7 +109,7 @@ function buildMultimodalUserContent(modelInput, imageBlocks = [], videoBlocks = 
   ];
 }
 
-function removeInternalReplyMetadata(value) {
+export function removeInternalReplyMetadata(value) {
   return String(value ?? '')
     .replace(
       /(^|\n)\s*(?:>\s*)?(?:[-*]\s*)?【机器人群聊回复记录】\s*(?=\n|$)/gu,
@@ -133,6 +133,15 @@ function removeInternalReplyMetadata(value) {
     .replace(
       /(^|\n)\s*(?:>\s*)?(?:[-*]\s*)?机器人回复\s*[：:]\s*/gu,
       '$1',
+    )
+    // 模型偶尔把纠错过程当成回复正文。只清掉开头的元话术，保留后面的事实修正。
+    .replace(
+      /^\s*(?:(?:你说得对|你提醒得对)\s*[，,、:：]\s*)?(?:(?:我)?(?:上一轮|刚才|前面)理解错了|这条修正我收下|这点我收回)(?:\s*[：:，,、。；;!]\s*|\s+)/u,
+      '',
+    )
+    .replace(
+      /^\s*(?:你说得对|你提醒得对)\s*[，,、:：]\s*/u,
+      '',
     )
     .replace(/\n{3,}/g, '\n\n')
     .trim();
