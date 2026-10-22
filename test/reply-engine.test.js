@@ -102,7 +102,7 @@ test('用户要求查看公开仓库链接时进入事实检索并把证据交�
   assert.equal(result.factSearchAttempted, true);
   assert.equal(calls.length, 1);
   assert.match(prompt, /issue #73/);
-  assert.match(prompt, /玩梗和做事不是二选一/);
+  assert.match(prompt, /逻辑是回复的骨架，玩梗是表达方式/);
 });
 
 test('配置了联网检索时把 web_search 工具和处理器交给模型', async () => {
