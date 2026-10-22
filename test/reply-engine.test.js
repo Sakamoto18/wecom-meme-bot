@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateConversationReply, removeInternalReplyMetadata } from '../src/reply-engine.js';
+import {
+  generateConversationReply,
+  removeInternalReplyMetadata,
+  repairUnsupportedNewsScope,
+} from '../src/reply-engine.js';
 
 test('清理固定认错开场但保留事实修正', () => {
   assert.equal(
@@ -408,6 +412,127 @@ test('普通回复和直接回击都经过龙图文化召回层', async () => {
   assert.equal(attack.review.valid, true);
 });
 
+test('战术卡要求回击但当前消息没有明确挑衅时，只降级为锐评事情', async () => {
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '这方案做得跟用胶带修发动机一样',
+    currentQuestion: '这方案做得跟用胶带修发动机一样',
+    modelInput: '这方案做得跟用胶带修发动机一样',
+    webSearchEnabled: false,
+    turnPlan: {
+      mode: 'attack',
+      answerRequired: false,
+      firstBeat: 'reaction',
+      attack: {
+        decision: 'reply',
+        target: 'current_speaker',
+        angle: 'absurdity',
+        intensity: 0.7,
+        timing: 'standalone',
+        reason: '把方案问题说成个人问题',
+      },
+      search: { factNeeded: false, cultureNeeded: false, factQueries: [], cultureQueries: [] },
+      meme: {},
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = [options.stableSystemPrompt, options.additionalSystemPrompt].filter(Boolean).join('\n');
+        return '胶带修发动机好歹还能着火，这方案连缸都没装上。';
+      },
+    },
+  });
+  assert.notEqual(result.mode, 'generated-attack');
+  assert.match(prompt, /本轮不启动针对个人的人身攻击/);
+  assert.doesNotMatch(prompt, /target=current_speaker，angle=absurdity/);
+});
+
+test('战术卡的具体事实查询能补足攻击轮里被正则漏掉的检索', async () => {
+  const queries = [];
+  const prompts = [];
+  const result = await generateConversationReply({
+    content: '你这个傻逼，昨天那个漏洞到底怎么回事',
+    currentQuestion: '你这个傻逼，昨天那个漏洞到底怎么回事',
+    modelInput: '你这个傻逼，昨天那个漏洞到底怎么回事',
+    now: Date.parse('2026-10-22T12:00:00+08:00'),
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        queries.push({ query, options });
+        return { context: 'PHP2Shell 是未认证远程代码执行漏洞，已有公开 CVE。', resultCount: 1 };
+      },
+    },
+    turnPlan: {
+      mode: 'mixed',
+      answerRequired: true,
+      firstBeat: 'anchor_meme',
+      attack: {
+        decision: 'reply',
+        target: 'current_speaker',
+        angle: 'behavior',
+        intensity: 0.6,
+        timing: 'after_answer',
+        reason: '当前发言者直接辱骂机器人',
+      },
+      search: {
+        factNeeded: true,
+        cultureNeeded: false,
+        freshness: 'current',
+        factQueries: ['PHP2Shell CVE-2025-12345 RCE'],
+        cultureQueries: [],
+      },
+      meme: { anchor: 'PHP2Shell 未认证远程代码执行漏洞' },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompts.push([options.stableSystemPrompt, options.additionalSystemPrompt].filter(Boolean).join('\n'));
+        return '先看事实：PHP2Shell 是未认证 RCE；你嘴比补丁快，倒是先把版本升了。';
+      },
+    },
+  });
+  assert.equal(result.factSearchAttempted, true);
+  assert.equal(queries[0].query, 'PHP2Shell CVE-2025-12345 RCE 2026-10-21 北京时间');
+  assert.equal(queries[0].options.mode, 'current');
+  assert.ok(prompts.some((prompt) => /PHP2Shell 是未认证远程代码执行漏洞/.test(prompt)));
+  assert.ok(prompts.some((prompt) => /首句必须把具体现实主体\/规则和接梗判断放在同一句/.test(prompt)));
+  assert.ok(prompts.some((prompt) => /对不上就说没查到对应那天的消息/.test(prompt)));
+  assert.ok(prompts.some((prompt) => /【时间核对】检索资料没有出现 2026-10-21 北京时间/.test(prompt)));
+});
+
+test('战术卡判定明确求证时先给真假，再接现实锚点梗', async () => {
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '昨天那个 PHP2Shell 漏洞是真的吗',
+    currentQuestion: '昨天那个 PHP2Shell 漏洞是真的吗',
+    modelInput: '昨天那个 PHP2Shell 漏洞是真的吗',
+    webSearchEnabled: false,
+    turnPlan: {
+      mode: 'verification',
+      answerRequired: true,
+      firstBeat: 'verdict',
+      attack: { decision: 'none', target: 'none' },
+      search: { factNeeded: false, cultureNeeded: false, factQueries: [], cultureQueries: [] },
+      meme: {
+        anchor: 'PHP2Shell 未认证远程代码执行漏洞',
+        claim: '把补丁发布说成新皮肤上线',
+        mechanism: '反差',
+        informationKind: 'news',
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = [options.stableSystemPrompt, options.additionalSystemPrompt].filter(Boolean).join('\n');
+        return '真的，PHP2Shell 确实是未认证 RCE；补丁被吹成新皮肤这事儿才是真抽象。';
+      },
+    },
+  });
+  assert.equal(result.informationMemeMode, true);
+  assert.match(prompt, /先给真\/假\/无法确认/);
+  assert.match(prompt, /mode=verification/);
+});
+
 test('图片评价开启抽象联想层，初稿缺少具体联想时复用现有复核调用补齐', async () => {
   const calls = [];
   const result = await generateConversationReply({
@@ -521,6 +646,28 @@ test('普通群聊不再因长度二次重写，普通追问也不额外消耗�
   assert.equal(result.detailedAnswerRequested, false);
   assert.equal(result.searchAttempted, false);
   assert.equal(result.review.valid, true);
+});
+
+test('普通群聊的硬复核遇到假对比和拔高时会触发一次去 AI 腔重写', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '你觉得这个新功能怎么样',
+    currentQuestion: '你觉得这个新功能怎么样',
+    modelInput: '你觉得这个新功能怎么样',
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options.usageSource);
+        return calls.length === 1
+          ? '这不只是一个功能，更是效率革命的新开始。'
+          : '就是能少点两下，别吹成效率革命。';
+      },
+    },
+  });
+
+  assert.deepEqual(calls, ['conversation-reply', 'conversation-reply-review']);
+  assert.equal(result.answer, '就是能少点两下，别吹成效率革命。');
 });
 
 test('普通聊天不再因第三人称客服开头二次改稿', async () => {
@@ -1646,4 +1793,218 @@ test('当前时间注入可变提示层，不污染 prompt 缓存前缀', async 
   assert.doesNotMatch(String(first.cachePrefixSystemPrompt ?? ''), /【当前时间】/);
   assert.doesNotMatch(String(first.systemPrompt ?? ''), /【当前时间】/);
   assert.doesNotMatch(String(first.stableSystemPrompt ?? ''), /【当前时间】/);
+});
+
+test('图中的现实新闻追问会先查文字事实，再按信息型梗回答', async () => {
+  const searches = [];
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '昨天的php漏洞是个什么情况没看懂什么意思',
+    currentQuestion: '昨天的php漏洞是个什么情况没看懂什么意思',
+    modelInput: '图片可见文字：PHP2Shell，远程代码执行漏洞',
+    hasImageContext: true,
+    imageInformationPolicy: { level: 'informative_clue' },
+    imageSearchQueries: ['PHP2Shell 漏洞 新闻 事件 背景'],
+    imageRealityAnchor: 'PHP2Shell 漏洞',
+    imageInformationKind: 'news',
+    imageMemeClaim: '把专业漏洞通报改写成群聊里的“昨天的 PHP 漏洞”',
+    now: Date.parse('2026-10-22T12:00:00+08:00'),
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        searches.push({ query, options });
+        return {
+          context: '2026-10-21 披露 PHP2Shell，涉及未认证远程代码执行。',
+          resultCount: 1,
+          results: [],
+          endpoint: 'https://example.com/search',
+        };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '昨天的 PHP2Shell 是未认证 RCE 漏洞；这梗就是拿“背个版本号就算安全”开涮。';
+      },
+    },
+  });
+
+  assert.equal(result.factSearchAttempted, true);
+  assert.equal(result.informationMemeMode, true);
+  assert.ok(searches.some(({ query, options }) => (
+    options.usageSource === 'web-search-image-text-fact'
+    && /PHP 漏洞/u.test(query)
+    && /2026-10-21/u.test(query)
+  )));
+  assert.match(prompt, /【信息型梗：先现实，后笑点】/);
+  assert.match(prompt, /【信息型梗模式】/);
+  assert.match(prompt, /短数字、短词或技术词不要按外观判死/);
+  assert.match(prompt, /私钥这类整数标量/);
+  assert.match(prompt, /PHP2Shell/);
+});
+
+test('信息型梗会关闭缺抽象联想的强制重写', async () => {
+  const result = await generateConversationReply({
+    content: '为什么这个4就是完整密钥',
+    currentQuestion: '为什么这个4就是完整密钥',
+    modelInput: '图片文字：完整私钥：4',
+    hasImageContext: true,
+    imageInformationPolicy: { level: 'informative_clue' },
+    imageSearchQueries: ['ECDSA 私钥 4 规则 合法 范围'],
+    imageRealityAnchor: 'ECDSA 私钥是 [1, n-1] 范围的整数标量',
+    imageInformationKind: 'technical_rule',
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '4 还真是个合法私钥，只是弱到谁都能把你钱包端走；这梗笑的就是“完整但没用”。';
+      },
+    },
+  });
+  assert.equal(result.informationMemeMode, true);
+  assert.equal(result.abstractAssociationReviewRequired, false);
+});
+
+test('图片被判低信息时，用户文字里的新闻锚点仍能单独触发检索', async () => {
+  const searches = [];
+  const result = await generateConversationReply({
+    content: '昨天的php漏洞是个什么情况没看懂什么意思',
+    currentQuestion: '昨天的php漏洞是个什么情况没看懂什么意思',
+    modelInput: '图片：糊到看不清正文',
+    hasImageContext: true,
+    imageInformationPolicy: { level: 'low_information' },
+    imageSearchQueries: [],
+    imageRealityAnchor: 'PHP2Shell 漏洞',
+    imageInformationKind: 'news',
+    now: Date.parse('2026-10-22T12:00:00+08:00'),
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        searches.push({ query, options });
+        return {
+          context: '2026-10-21 披露 PHP2Shell 远程代码执行漏洞。',
+          resultCount: 1,
+          results: [],
+          endpoint: 'https://example.com/search',
+        };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return 'PHP2Shell 是昨天披露的未认证 RCE，图糊不影响你问的是这条。';
+      },
+    },
+  });
+  assert.equal(result.factSearchAttempted, true);
+  assert.ok(searches.some(({ query, options }) => (
+    options.usageSource === 'web-search-image-text-fact'
+    && /PHP 漏洞/u.test(query)
+    && /2026-10-21/u.test(query)
+  )));
+});
+
+test('群友省略漏洞二字时也会按近期技术事件检索，而不是说没跟上', async () => {
+  const searches = [];
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '不是最近php的事情你不知道吗？影响最大的是日本it你不知道吗',
+    currentQuestion: '不是最近php的事情你不知道吗？影响最大的是日本it你不知道吗',
+    modelInput: '不是最近php的事情你不知道吗？影响最大的是日本it你不知道吗',
+    hasImageContext: true,
+    imageInformationPolicy: { level: 'low_information' },
+    imageSearchQueries: [],
+    now: Date.parse('2026-10-22T12:00:00+08:00'),
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        searches.push({ query, options });
+        return {
+          context: '2026-10-21 PHP2Shell 未认证远程代码执行漏洞影响大量 PHP 服务。',
+          resultCount: 1,
+          results: [],
+          endpoint: 'https://example.com/search',
+        };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return 'PHP2Shell，未认证 RCE，这两天补丁都排到日本老系统门口了。';
+      },
+    },
+  });
+
+  assert.equal(result.factSearchAttempted, true);
+  assert.equal(result.searchMode, 'current');
+  assert.ok(searches.some(({ query }) => (
+    /PHP 日本 IT 漏洞 安全事件/u.test(query)
+    && /2026-10-20 2026-10-22/u.test(query)
+  )));
+  assert.ok(searches.some(({ query }) => /PHP 日本 IT 新闻/u.test(query)));
+  assert.match(prompt, /禁止用“最近这波我没跟上\/具体编号没把握”回避已有证据/);
+  assert.match(prompt, /不要自行扩写成银行、通信、医院等具体行业/);
+});
+
+test('新闻范围兜底会删掉检索没有支持的行业细节', () => {
+  const evidence = '2026-10-21 PHP2Shell 未认证 RCE，广泛网站受影响，多个行业出现停机。';
+  assert.equal(
+    repairUnsupportedNewsScope(
+      'PHP2Shell 是未认证 RCE，日本那边银行、通信停了一片。',
+      { evidence, question: '最近 PHP 漏洞' },
+    ),
+    'PHP2Shell 是未认证 RCE，日本那边不少网站停了一片。',
+  );
+});
+
+test('新闻范围兜底保留证据明确提到的行业', () => {
+  assert.equal(
+    repairUnsupportedNewsScope(
+      '日本那边银行停了一片。',
+      { evidence: '公告称银行系统也受到本次漏洞影响。', question: 'PHP 漏洞' },
+    ),
+    '日本那边银行停了一片。',
+  );
+});
+
+test('新闻范围兜底不会保留只被部分证据支持的混合行业列表', () => {
+  assert.equal(
+    repairUnsupportedNewsScope(
+      '日本那边银行、通信停了一片。',
+      { evidence: '公告称银行系统也受到本次漏洞影响。', question: 'PHP 漏洞' },
+    ),
+    '日本那边不少网站停了一片。',
+  );
+});
+
+test('最终回复会用检索证据收敛模型自行扩写的新闻影响范围', async () => {
+  const result = await generateConversationReply({
+    content: '最近 PHP 漏洞是怎么回事',
+    currentQuestion: '最近 PHP 漏洞是怎么回事',
+    modelInput: '最近 PHP 漏洞是怎么回事',
+    now: Date.parse('2026-10-22T12:00:00+08:00'),
+    webSearchEnabled: true,
+    webSearch: {
+      async search() {
+        return {
+          context: '2026-10-21 PHP2Shell 是未认证远程代码执行漏洞，广泛网站受影响，多个行业出现停机。',
+          resultCount: 1,
+          results: [],
+        };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return 'PHP2Shell 是未认证 RCE，日本那边银行、通信停了一片。';
+      },
+    },
+  });
+
+  assert.equal(result.factSearchAttempted, true);
+  assert.match(result.answer, /PHP2Shell/);
+  assert.match(result.answer, /不少网站/);
+  assert.doesNotMatch(result.answer, /银行|通信/);
 });

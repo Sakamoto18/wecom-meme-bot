@@ -5,6 +5,7 @@ import {
   detectAssistantReportStyle,
 } from '../src/naturalness.js';
 import {
+  buildNormalReplyPrompt,
   buildNormalReplyRetryPrompt,
   reviewAttackReply,
   reviewNormalReply,
@@ -39,6 +40,60 @@ test('明确要求文章时不用自然度规则误伤结构', () => {
     }),
     [],
   );
+});
+
+test('识别假对比、伪深度、空背景和 AI 大词堆叠', () => {
+  const answer = '这不只是一次更新，更是整个协作方式的重塑。真正重要的是，我们如何看待效率。随着人工智能的发展，这套方案赋能了整个团队，也开启了无限可能。';
+  const issues = detectAssistantReportStyle(answer, { compactResponse: true });
+  assert.ok(issues.includes('assistant-false-contrast'));
+  assert.ok(issues.includes('assistant-pseudo-depth'));
+  assert.ok(issues.includes('assistant-vague-background'));
+  assert.ok(issues.includes('assistant-hype-jargon'));
+
+  const triad = detectAssistantReportStyle('这次更新带来创新、突破和无限的未来。', {
+    compactResponse: true,
+  });
+  assert.ok(triad.includes('assistant-empty-triad'));
+});
+
+test('真实的纠正和具体信息不会被假对比规则误伤', () => {
+  for (const answer of [
+    '错误发生在保存阶段，而不是上传阶段。',
+    '先备份，再升级；出了问题就回滚。',
+    '这个接口可以导出 CSV，也能按时间筛选。',
+  ]) {
+    assert.deepEqual(
+      detectAssistantReportStyle(answer, { compactResponse: true }),
+      [],
+      answer,
+    );
+  }
+});
+
+test('普通群聊的硬复核仍会拦截高置信 AI 腔', () => {
+  const reviewed = reviewNormalReply('这不是一次普通更新，而是安全体系的一次重塑。', {
+    hardOnly: true,
+    compactResponse: true,
+    shortChat: true,
+  });
+  assert.ok(reviewed.issues.includes('assistant-false-contrast'));
+
+  const retry = buildNormalReplyRetryPrompt(
+    '怎么评价这次更新',
+    '这不是一次普通更新，而是安全体系的一次重塑。',
+    reviewed.issues,
+    { compactResponse: true, shortChat: true },
+  );
+  assert.match(retry, /不只是X，更是Y/);
+  assert.match(retry, /不改事实、否定、程度、时间、范围或归因/);
+  assert.match(buildNaturalnessRewriteHint(['assistant-pseudo-depth']), /伪深刻过渡/);
+});
+
+test('生成提示包含群聊去 AI 腔约束', () => {
+  const prompt = buildNormalReplyPrompt({ compactResponse: true, shortChat: true });
+  assert.match(prompt, /【群聊去 AI 腔】/);
+  assert.match(prompt, /不要用“不只是X，更是Y”/);
+  assert.match(prompt, /保留龙玉涛的短、冲、损和具体画面/);
 });
 
 test('连续三条普通回复使用同一开头时要求换起句', () => {

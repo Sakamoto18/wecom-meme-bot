@@ -16,6 +16,7 @@ function createService(options = {}) {
       },
     },
     adminUsers: new Set(['admin']),
+    logger: { log() {}, debug() {}, warn() {} },
     ...options,
   });
   return { service, calls };

@@ -66,6 +66,11 @@ function createService(options = {}) {
     imageOcrEnabled: options.imageOcrEnabled ?? false,
     imageOcrRecognizer: options.imageOcrRecognizer,
     activeReplyDecider: options.activeReplyDecider,
+    replyTurnPlanner: options.replyTurnPlanner,
+    jevGate: options.jevGate,
+    jevOutputEnabled: options.jevOutputEnabled,
+    jevResponseRoutingEnabled: options.jevResponseRoutingEnabled,
+    jevSemanticEnabled: options.jevSemanticEnabled,
     repeatDetector: options.repeatDetector,
     repeatEnabled: options.repeatEnabled,
     repeatWindowMs: options.repeatWindowMs,
@@ -156,6 +161,33 @@ test('只把实际写进回复的抽象候选挂起，并用下一条真人反�
   }], '这姿势越看越往 114514 那边长。');
   service.consumeAbstractAssociationFeedback('group:1', '这图哪来的');
   assert.equal(feedback.length, 1);
+});
+
+test('Jev 输出路由默认关闭，普通回复不会调用门控模型', async () => {
+  let gateCalls = 0;
+  const { service } = createService({
+    jevGate: {
+      getStatus() {
+        gateCalls += 1;
+        return { effectiveMode: 'on', mode: 'on' };
+      },
+      async evaluateStyle() {
+        gateCalls += 1;
+        return {
+          decision: 'allow',
+          style: { mode: 'culture', semanticPoint: '不得进入回复的 Jev 语义' },
+        };
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'jev-output-default-off',
+    message_type: 'private',
+    user_id: 'jev-user',
+    text: '今天群里有什么乐子',
+  });
+  assert.equal(result.mode, 'model');
+  assert.equal(gateCalls, 0);
 });
 
 test('Jev 原图只对高价值图片语义问题启用，低信息图不增加二次视觉调用', () => {
@@ -714,7 +746,7 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆，未匹�
   assert.equal(first.messages[0].text, '这是 QQ 回答，别把问题绕复杂了。');
   assert.match(calls[0].modelInput, /发言人：QQ 小明/);
   assert.equal(calls[1].history.length, 2);
-  assert.match(calls[1].history[0].content, /当前消息：你好/);
+  assert.equal(calls[1].history[0].content, '你好');
   assert.equal(second.messages[0].text, '这是 QQ 回答，别把问题绕复杂了。');
 });
 
@@ -4060,4 +4092,258 @@ test('真人无意义艾特发一条回怼再附表情龙图，peer Bot 保留�
   assert.equal(engagementOpens, 0);
   await service.handleMessage({ ...message, message_id: 'idle-peer', user_id: 'peer' });
   assert.equal(calls.filter(o => o.usageSource === 'mention-intent-reply').length, 1);
+});
+
+test('视觉分析保留现实锚点、信息类型和角色主体类型', async () => {
+  const png = (await createPng()).toString('base64');
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        assert.equal(options.usageSource, 'image-understanding');
+        return JSON.stringify({
+          description: '游戏 CG 中的蓝发角色和一条对话框',
+          subject_kind: 'game_character',
+          information_kind: 'unknown',
+          reality_anchor: '',
+          meme_claim: '',
+          visible_text: ['水星号', '这些箭吗？嗯……让我想想该怎么解释。'],
+        });
+      },
+    },
+  });
+  const blocks = (await prepareImageBlocks({ imageBase64s: [png] })).blocks;
+  const analysis = await service.analyzeImages(blocks, '解释一下');
+  assert.equal(analysis.subjectKind, 'game_character');
+  assert.equal(analysis.items[0].subjectKind, 'game_character');
+  assert.equal(analysis.informationKind, 'unknown');
+  assert.equal(analysis.items[0].informationKind, 'unknown');
+});
+
+test('纯游戏角色图要求评价时直接拒绝，不进入模型或联网', async () => {
+  const png = (await createPng()).toString('base64');
+  const calls = [];
+  let searches = 0;
+  const { service } = createService({
+    webSearchEnabled: true,
+    webSearch: {
+      async search() {
+        searches += 1;
+        return { context: '', resultCount: 0, results: [] };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        if (options.usageSource === 'image-understanding') {
+          return JSON.stringify({
+            description: '视觉小说游戏 CG，蓝发长翼女性角色，画面有对话框',
+            subject_kind: 'game_character',
+            information_kind: 'unknown',
+            visible_text: ['水星号', '这些箭吗？嗯……让我想想该怎么解释。'],
+            keywords: ['游戏角色', 'CG'],
+          });
+        }
+        return '不应该走到这里。';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'pure-character-evaluate',
+    message_type: 'private',
+    user_id: 'character-user',
+    text: '评价一下这张图',
+    image_base64: png,
+  });
+  assert.equal(result.mode, 'character-image-skip');
+  assert.match(result.messages[0].text, /二次元角色图我不评/);
+  assert.equal(searches, 0);
+  assert.equal(calls.filter((options) => options.usageSource === 'conversation-reply').length, 0);
+});
+
+test('普通模型轮只调用一次回合规划器，并把战术卡交给回复引擎', async () => {
+  const plannerInputs = [];
+  const calls = [];
+  const turnPlan = {
+    mode: 'explanation',
+    answerRequired: true,
+    firstBeat: 'anchor_meme',
+    confidence: 0.88,
+    attack: { decision: 'none', target: 'none', angle: 'none', intensity: 0, timing: 'none', reason: '' },
+    search: {
+      factNeeded: true,
+      cultureNeeded: false,
+      freshness: 'current',
+      factQueries: ['PHP2Shell CVE-2025-12345'],
+      cultureQueries: [],
+    },
+    meme: { anchor: 'PHP2Shell 未认证 RCE', claim: '', mechanism: '反差', informationKind: 'news' },
+  };
+  const { service } = createService({
+    replyTurnPlanner: {
+      enabled: true,
+      async plan(input) {
+        plannerInputs.push(input);
+        return turnPlan;
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        return 'PHP2Shell 是未认证 RCE，这事不是段子。';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'planner-once',
+    message_type: 'private',
+    user_id: 'planner-user',
+    text: '昨天的 PHP 漏洞到底怎么回事',
+  });
+  assert.ok(result.messages?.length);
+  assert.equal(plannerInputs.length, 1);
+  assert.match(plannerInputs[0].content, /PHP 漏洞/);
+  assert.ok(calls.some((options) => /mode=explanation/.test(options.additionalSystemPrompt)));
+  assert.ok(calls.some((options) => /PHP2Shell 未认证 RCE/.test(options.additionalSystemPrompt)));
+});
+
+test('纯角色图跳过评价时不调用回合规划器', async () => {
+  const png = (await createPng()).toString('base64');
+  let plannerCalls = 0;
+  const { service } = createService({
+    replyTurnPlanner: {
+      enabled: true,
+      async plan() {
+        plannerCalls += 1;
+        return null;
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        if (options.usageSource === 'image-understanding') {
+          return JSON.stringify({
+            description: '视觉小说游戏 CG，蓝发长翼女性角色',
+            subject_kind: 'game_character',
+            information_kind: 'unknown',
+            visible_text: ['水星号'],
+            keywords: ['游戏角色', 'CG'],
+          });
+        }
+        return '不应该走到这里。';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'character-planner-skip',
+    message_type: 'private',
+    user_id: 'character-planner-user',
+    text: '评价一下这张图',
+    image_base64: png,
+  });
+  assert.equal(result.mode, 'character-image-skip');
+  assert.equal(plannerCalls, 0);
+});
+
+test('纯游戏角色图问身份时仍允许识别', async () => {
+  const png = (await createPng()).toString('base64');
+  const calls = [];
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        if (options.usageSource === 'image-understanding') {
+          return JSON.stringify({
+            description: '视觉小说游戏 CG，蓝发长翼女性角色，画面有对话框',
+            subject_kind: 'game_character',
+            information_kind: 'unknown',
+            visible_text: ['水星号'],
+          });
+        }
+        return '这是水星号，别把角色名当新闻标题。';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'pure-character-identify',
+    message_type: 'private',
+    user_id: 'character-id-user',
+    text: '这是谁',
+    image_base64: png,
+  });
+  assert.equal(result.mode, 'model');
+  assert.match(result.messages[0].text, /水星号/);
+  assert.equal(calls.filter((options) => options.usageSource === 'conversation-reply').length, 1);
+});
+
+test('被动热聊遇到纯游戏角色图不主动接话', async () => {
+  const png = (await createPng()).toString('base64');
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        assert.equal(options.usageSource, 'active-image-triage');
+        return JSON.stringify({
+          candidate: 'yes',
+          summary: '游戏 CG 中的蓝发角色',
+          description: '视觉小说游戏 CG，蓝发长翼女性角色',
+          subject_kind: 'game_character',
+          information_kind: 'unknown',
+          visible_text: ['水星号', '这些箭吗？嗯……让我想想该怎么解释。'],
+        });
+      },
+    },
+  });
+  const payload = normalizeQqPayload({
+    message_id: 'pure-character-passive',
+    message_type: 'group',
+    group_id: 'character-group',
+    user_id: 'character-poster',
+    bot_user_id: 'bot',
+    has_image: true,
+    image_base64: png,
+  });
+  const result = await service.preparePassiveImage(payload, {
+    allowVisualTriage: true,
+    question: '',
+  });
+  assert.equal(result.reason, 'passive-image-character-skip');
+  assert.equal(result.text, undefined);
+});
+
+test('会话只存用户原话和短图片摘要，不再存整段视觉提示输入', async () => {
+  const png = (await createPng()).toString('base64');
+  const conversationStore = new ConversationStore();
+  const { service } = createService({
+    conversationStore,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        if (options.usageSource === 'image-understanding') {
+          return JSON.stringify({
+            description: '一张包含新闻标题和正文的截图',
+            visible_text: ['某公司发布新版产品，价格调整。'],
+            keywords: ['新闻'],
+            scene: '公告截图',
+          });
+        }
+        return '这条是新产品公告，价格确实动了。';
+      },
+    },
+  });
+  await service.handleMessage({
+    message_id: 'stored-user-summary',
+    message_type: 'private',
+    user_id: 'stored-user',
+    text: '解释一下',
+    image_base64: png,
+  });
+  const history = conversationStore.get('single:stored-user');
+  const stored = history.find((entry) => entry.role === 'user')?.content ?? '';
+  assert.match(stored, /解释一下/);
+  assert.match(stored, /当时图片摘要/);
+  assert.doesNotMatch(stored, /图片角色边界|data:image|当前消息：/);
 });

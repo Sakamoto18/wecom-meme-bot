@@ -32,6 +32,7 @@ import { CultureCache } from './culture-cache.js';
 import { MemeKnowledgeStore } from './meme-knowledge.js';
 import { JevAtmosphereGate, JevRuntimeState } from './jev-atmosphere-gate.js';
 import { JevResponseModeMemory } from './jev-response-mode.js';
+import { ReplyTurnPlanner } from './reply-turn-planner.js';
 
 // DeepSeek Vision's inline request limit is 48 MiB. Keep the bridge/API
 // aligned with that limit so multi-image payloads are not rejected locally.
@@ -444,6 +445,12 @@ export async function createQqRuntime() {
       process.env.QQ_MEMORY_SUMMARY_TRIGGER_MESSAGES,
     ),
     summaryKeepMessages: parsePositiveInteger(process.env.QQ_MEMORY_SUMMARY_KEEP_MESSAGES),
+    privateSummaryTriggerMessages: parsePositiveInteger(
+      process.env.QQ_PRIVATE_SUMMARY_TRIGGER_MESSAGES,
+    ),
+    privateSummaryKeepMessages: parsePositiveInteger(
+      process.env.QQ_PRIVATE_SUMMARY_KEEP_MESSAGES,
+    ),
     maxSummaryCharacters: parsePositiveInteger(
       process.env.QQ_MEMORY_SUMMARY_MAX_CHARACTERS,
     ),
@@ -690,6 +697,17 @@ export async function createQqRuntime() {
     model: process.env.LLM_MODEL || 'deepseek-chat',
     systemPrompt,
   }));
+  // A cheap, text-only tactical planner runs before each real generation
+  // turn. It restores attack/search/meme routing without re-enabling Jev.
+  const replyTurnPlanner = parseBoolean(
+    process.env.QQ_REPLY_PLANNER_ENABLED,
+    true,
+  ) ? new ReplyTurnPlanner({
+    chatClient,
+    timeoutMs: parsePositiveInteger(process.env.QQ_REPLY_PLANNER_TIMEOUT_MS) ?? 8_000,
+    maxTokens: parsePositiveInteger(process.env.QQ_REPLY_PLANNER_MAX_TOKENS) ?? 400,
+    logger: console,
+  }) : null;
   const groupTopicGroups = parseIdentifierSet(
     process.env.QQ_TOPIC_MEMORY_GROUPS,
   );
@@ -731,6 +749,14 @@ export async function createQqRuntime() {
     logger: console,
   });
   const jevEnabled = parseBoolean(process.env.LONGTU_QQ_JEV_ENABLED, false);
+  // Jev used to inject semantic points and culture routing into the final
+  // reply.  Keep the implementation available for explicit experiments, but
+  // do not let it shape production replies unless this separate output switch
+  // is deliberately enabled.
+  const jevOutputEnabled = parseBoolean(
+    process.env.LONGTU_QQ_JEV_OUTPUT_ENABLED,
+    false,
+  );
   const jevRuntime = new JevRuntimeState({
     filePath: path.resolve(
       projectRoot,
@@ -767,10 +793,13 @@ export async function createQqRuntime() {
     ttlMs: (parsePositiveNumber(process.env.LONGTU_QQ_JEV_MODE_TTL_SECONDS) ?? 900) * 1000,
     logger: console,
   });
-  console.log(`QQ Jev 决策模型：${jevGate.model}（统一用于插话、文化和模式路由）`);
+  console.log(
+    `QQ Jev 决策模型：${jevGate.model}（输出路由：${jevOutputEnabled ? '开启' : '关闭'}）`,
+  );
   const activeReplyDecider = new ActiveReplyDecider({
     chatClient,
     jevGate,
+    jevOutputEnabled,
     jevResponseModeMemory,
     jevSemanticEnabled: parseBoolean(
       process.env.LONGTU_QQ_JEV_SEMANTIC_ENABLED,
@@ -921,6 +950,7 @@ export async function createQqRuntime() {
   });
   const service = new QqBotService({
     chatClient,
+    replyTurnPlanner,
     // 使用公开文案库只提取结构样本，默认指向一个可审计的 GitHub 原始文件；
     // 设置为空即可关闭外网检索，不影响模型和本地兜底。
     crazyThursdayStyleSourceUrl: process.env.QQ_CRAZY_THURSDAY_STYLE_URL?.trim()
@@ -983,6 +1013,7 @@ export async function createQqRuntime() {
     passiveImageCooldownMs: parseNonnegativeInteger(process.env.QQ_PASSIVE_IMAGE_COOLDOWN_SECONDS, 60) * 1000,
     activeReplyDecider,
     jevGate,
+    jevOutputEnabled,
     jevResponseModeMemory,
     jevResponseRoutingEnabled: parseBoolean(
       process.env.LONGTU_QQ_JEV_RESPONSE_ROUTING_ENABLED,

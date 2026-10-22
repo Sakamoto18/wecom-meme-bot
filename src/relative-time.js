@@ -136,6 +136,53 @@ export function extractRelativeDateFacts(now = Date.now(), text = '') {
   return facts;
 }
 
+export function shanghaiDateString(now = Date.now()) {
+  const date = new Date(Number(now));
+  if (!Number.isFinite(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+// “昨天/前天/刚刚”这类近期时间词不参与未来日期计算，但检索前必须换算成
+// 绝对日期，否则搜索结果很容易拿旧新闻冒充最近发生的事。
+export function recentRelativeDateHint(now = Date.now(), text = '') {
+  const match = String(text ?? '').match(/(前天|昨天|昨日|今天|今日|刚刚|刚才)/u);
+  if (!match) return '';
+  const offset = match[1] === '前天' ? -2 : (/(?:昨天|昨日)/u.test(match[1]) ? -1 : 0);
+  const date = new Date(Number(now) + offset * 86_400_000);
+  if (!Number.isFinite(date.getTime())) return '';
+  return `${shanghaiDateString(date.getTime())} 北京时间`;
+}
+
+// “这两天/最近/本周”没有单一日期的精确含义，但对于新闻检索仍然需要
+// 一个可核实的绝对时间窗。它只用于组装检索词，不能拿要求证据逐字命中
+// 某个日期；因此和上面的 exact hint 分开，避免把近几天报道误判成旧闻。
+export function recentSearchWindowHint(now = Date.now(), text = '') {
+  const normalized = String(text ?? '');
+  const exact = recentRelativeDateHint(now, normalized);
+  if (exact) return exact;
+
+  let startOffset = null;
+  if (/(?:这两天|这几天|最近|近期)/u.test(normalized)) startOffset = -2;
+  else if (/(?:这周|本周)/u.test(normalized)) startOffset = -6;
+  else if (/最新/u.test(normalized)) startOffset = 0;
+  if (startOffset === null) return '';
+
+  const timestamp = Number(now);
+  if (!Number.isFinite(timestamp)) return '';
+  const end = shanghaiDateString(timestamp);
+  if (!end) return '';
+  if (startOffset === 0) return `${end} 北京时间`;
+  const start = shanghaiDateString(timestamp + startOffset * 86_400_000);
+  return start && start !== end
+    ? `${start} ${end} 北京时间`
+    : `${end} 北京时间`;
+}
+
 function formatFact(fact) {
   const monthText = `${fact.targetYear} 年 ${fact.targetMonth} 月`;
   return `${fact.phrase}对应 ${fact.targetDate}（${monthText}）`;

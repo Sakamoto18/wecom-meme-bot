@@ -113,3 +113,72 @@ test('相对天数追问即使承接低信息图片也必须打开事实检索',
   assert.equal(policy.verificationRequested, true);
   assert.equal(policy.reason, 'explicit-low-information-image');
 });
+
+test('带日期或有现实锚点的群聊梗必须打开事实检索', () => {
+  const php = classifySearchPolicy({
+    content: '昨天的php漏洞是个什么情况没看懂什么意思',
+  });
+  assert.equal(php.textFactEligible, true);
+  assert.equal(php.factEligible, true);
+  assert.equal(php.cultureEligible, false);
+
+  const linked = classifySearchPolicy({
+    content: '这个漏洞和图中的梗有什么关系',
+  });
+  assert.equal(linked.textFactEligible, true);
+  assert.equal(linked.factEligible, true);
+
+  const privateKey = classifySearchPolicy({
+    content: '不是，你不能解释一下为什么这个4就是完整密钥了啊？？？',
+  });
+  assert.equal(privateKey.textFactEligible, true);
+  assert.equal(privateKey.factEligible, true);
+});
+
+test('普通时间词和普通数字不会单独触发事实检索', () => {
+  for (const content of ['昨天的晚饭真好吃', '我今天打了四把游戏', '这图挺有意思']) {
+    const policy = classifySearchPolicy({ content });
+    assert.equal(policy.textFactEligible, false, content);
+    assert.equal(policy.factEligible, false, content);
+  }
+});
+
+test('技术主体加近期时间也会打开事实检索，即使没说漏洞二字', () => {
+  const php = classifySearchPolicy({
+    content: '不是最近php的事情你不知道吗？影响最大的是日本it你不知道吗',
+  });
+  assert.equal(php.textFactEligible, true);
+  assert.equal(php.recentEventRequested, true);
+  assert.equal(php.factEligible, true);
+
+  const ordinary = classifySearchPolicy({ content: '最近我在学 PHP' });
+  assert.equal(ordinary.factEligible, false);
+});
+
+test('低信息截图承接明确文字锚点时仍允许事实检索', () => {
+  const php = classifySearchPolicy({
+    content: '昨天的php漏洞是个什么情况没看懂什么意思',
+    imageSearch: true,
+    hasImageContext: true,
+    imageInformationLevel: 'low_information',
+  });
+  assert.equal(php.factEligible, true);
+  assert.equal(php.reason, 'concrete-text-fact');
+
+  const key = classifySearchPolicy({
+    content: '为什么这个4就是完整密钥',
+    imageSearch: true,
+    hasImageContext: true,
+    imageInformationLevel: 'low_information',
+  });
+  assert.equal(key.factEligible, true);
+
+  const generic = classifySearchPolicy({
+    content: '这张图怎么回事',
+    imageSearch: true,
+    hasImageContext: true,
+    imageInformationLevel: 'low_information',
+  });
+  assert.equal(generic.factEligible, false);
+  assert.equal(generic.reason, 'low-information-image');
+});

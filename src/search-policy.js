@@ -7,7 +7,22 @@ import {
 // Do not match the substring “联网” inside ordinary style words such as
 // “互联网语气”.  A search request is handled by the explicit web-search
 // pattern; this rail is only for a concrete factual claim.
-const EXPLICIT_FACT_PATTERN = /(?:发生了什么|怎么回事|是否属实|真的吗|核实|事实|证据|原帖|原文|官方|公开信息|数据|统计|哪年|何时|时间线|是谁|哪位|价格|版本|政策|新闻|报道|资料|来源|出处|上网|查一下|搜索一下|查询一下)/u;
+const EXPLICIT_FACT_PATTERN = /(?:发生了什么|什么情况|怎么回事|咋回事|没看懂|看不懂|是否属实|真的吗|核实|事实|证据|原帖|原文|官方|公开信息|数据|统计|哪年|何时|时间线|是谁|哪位|价格|版本|政策|新闻|报道|资料|来源|出处|上网|查一下|搜索一下|查询一下)/u;
+// 时效性事件不能只靠“新闻/最新/最近”这几个词。群友经常说“昨天的
+// PHP 漏洞”“刚才那个事故”，时间词和事件词分开出现，但指的就是一条
+// 需要外部核实的现实信息。
+const RECENT_TIME_PATTERN = /(?:昨天|昨日|前天|今天|今日|刚刚|刚才|这两天|这几天|这周|本周|上周|最近|近期|最新)/iu;
+const PUBLIC_EVENT_PATTERN = /(?:漏洞|CVE-\d{4}-\d+|RCE|0day|零日|补丁|安全事件|数据泄露|泄露|事故|通报|公告|发布会|判决|处罚|政策|热搜|报道|新闻|赛果|比分|票房|股价|汇率)/iu;
+// 群友经常把“漏洞”省掉，只说“最近 PHP 的事情”“这两天日本 IT 出事”。
+// 只要时间词和明确的技术/产品主体同时出现，并带有影响或异常语境，就不能
+// 因为缺少一个“漏洞”二字把整轮降成闲聊。
+const NAMED_TECH_TOPIC_PATTERN = /(?:PHP2Shell|PHP|WordPress|Drupal|Joomla|OpenSSL|Log4j|Spring|Tomcat|Nginx|Apache|MySQL|PostgreSQL|Redis|Linux|Windows|macOS|Android|iOS|Java|JavaScript|Node(?:\.js)?|Python|Ruby|Rust|Docker|Kubernetes|K8s|GitLab|Jenkins|Exchange|Chrome|Firefox|Safari|AWS|Azure|Cloudflare|OpenAI|DeepSeek|Qwen)/iu;
+const RECENT_NAMED_EVENT_CONTEXT_PATTERN = /(?:事情|大事|新闻|报道|影响(?:最大)?|出事|崩|挂|宕机|故障|维护|攻击|漏洞|补丁|安全|不知道|没听说|怎么回事|什么情况|进展|动态)/iu;
+// “这个漏洞和图中的梗有什么关系”同时包含现实事件和梗。它既不是纯
+// 文化查询，也不是泛泛的“什么意思”，事实链必须一起打开。
+const MEME_EVENT_LINK_PATTERN = /(?:漏洞|CVE-\d{4}-\d+|RCE|0day|零日|补丁|安全事件|数据泄露|事故|通报|公告|发布会|判决|处罚|政策|热搜|报道|新闻).{0,24}(?:梗|图|图片|截图|段子)|(?:梗|图|图片|截图|段子).{0,24}(?:漏洞|CVE-\d{4}-\d+|RCE|0day|零日|补丁|安全事件|数据泄露|事故|通报|公告|发布会|判决|处罚|政策|热搜|报道|新闻)/iu;
+const TECHNICAL_RULE_PATTERN = /(?:私钥|密钥|助记词|钱包|算法|协议|编码|哈希|签名|校验|合法|取值范围|格式|定义)/iu;
+const TECHNICAL_RULE_INTENT_PATTERN = /(?:为什么|怎么|是不是|能不能|可不可以|合法|范围|完整|格式|定义|原理|意思|算不算|对不对)/iu;
 // A verification request is stronger than a generic culture lookup. It must
 // survive the low-information-image gate so “谁家的 logo”“真的假的” can
 // reach fact retrieval even when OCR found little text.
@@ -46,8 +61,18 @@ export function classifySearchPolicy(options = {}) {
   const memeTopic = shouldSearchMemeKnowledge(content);
   const currentFacts = shouldSearchCurrentInformation(content);
   const explicitFacts = EXPLICIT_FACT_PATTERN.test(content);
+  const recentPublicEvent = RECENT_TIME_PATTERN.test(content)
+    && PUBLIC_EVENT_PATTERN.test(content);
+  const recentNamedEvent = RECENT_TIME_PATTERN.test(content)
+    && NAMED_TECH_TOPIC_PATTERN.test(content)
+    && RECENT_NAMED_EVENT_CONTEXT_PATTERN.test(content);
+  const memeEventLink = MEME_EVENT_LINK_PATTERN.test(content);
+  const technicalRuleRequested = TECHNICAL_RULE_PATTERN.test(content)
+    && TECHNICAL_RULE_INTENT_PATTERN.test(content);
   const verificationRequested = EXPLICIT_VERIFICATION_PATTERN.test(content)
     || options.verificationRequested === true;
+  const concreteTextFact = recentPublicEvent || recentNamedEvent || memeEventLink || technicalRuleRequested;
+  const recentEventRequested = recentPublicEvent || recentNamedEvent;
   const highConfidenceCulture = HIGH_CONFIDENCE_CULTURE_PATTERN.test(content);
   const jevCultureEligible = !imageSearch && jevCultureLookupNeeded >= 0.4;
   const cultureEligible = !imageSearch
@@ -56,9 +81,13 @@ export function classifySearchPolicy(options = {}) {
   // verification request. Keep the two rails independent so one does not
   // silently suppress the other. JEV's own fact/time signals join the union so
   // a plain “现在最新版本是多少” does not depend on the lexical regex alone.
-  const factEligible = !imageSearch && (
+  const textFactEligible = (
     currentFacts
     || explicitFacts
+    || recentPublicEvent
+    || recentNamedEvent
+    || memeEventLink
+    || technicalRuleRequested
     || verificationRequested
     || jevFactLookupNeeded >= 0.45
     || jevTimeSensitive >= 0.5
@@ -67,6 +96,7 @@ export function classifySearchPolicy(options = {}) {
     // wiki/culture rail rather than launching a second generic fact search.
     || (unknownConcept && jevCultureLookupNeeded < 0.4 && jevLongtuLookupNeeded < 0.4)
   );
+  const factEligible = !imageSearch && textFactEligible;
 
   if (attackStyle) {
     return {
@@ -74,29 +104,49 @@ export function classifySearchPolicy(options = {}) {
       cultureEligible: false,
       confidence: factEligible ? 'medium' : 'none',
       lowInformationImage,
+      textFactEligible,
+      recentEventRequested,
       reason: 'attack-turn-fact-only',
     };
   }
   if (lowInformationImage && !explicitImageSearch && !verificationRequested) {
+    if (concreteTextFact) {
+      return {
+        factEligible: true,
+        cultureEligible: false,
+        confidence: 'medium',
+        lowInformationImage: true,
+        textFactEligible,
+        recentEventRequested,
+        reason: 'concrete-text-fact',
+      };
+    }
     return {
       factEligible: false,
       cultureEligible: false,
       confidence: 'none',
       lowInformationImage: true,
+      textFactEligible,
+      recentEventRequested,
       reason: 'low-information-image',
     };
   }
 
   if (imageSearch) {
     return {
-      factEligible: !lowInformationImage || explicitImageSearch || verificationRequested,
+      factEligible: !lowInformationImage
+        || explicitImageSearch
+        || verificationRequested
+        || concreteTextFact,
+      textFactEligible,
+      recentEventRequested,
       cultureEligible: false,
       confidence: 'medium',
       lowInformationImage,
       explicitImageSearch,
       verificationRequested,
       reason: lowInformationImage
-        ? (explicitImageSearch || verificationRequested
+        ? (explicitImageSearch || verificationRequested || concreteTextFact
           ? 'explicit-low-information-image'
           : 'low-information-image')
         : 'explicit-image-clues',
@@ -108,6 +158,8 @@ export function classifySearchPolicy(options = {}) {
     : (highConfidenceCulture ? 'high' : (factEligible ? 'medium' : 'none'));
   return {
     factEligible,
+    textFactEligible,
+    recentEventRequested,
     cultureEligible,
     confidence,
     lowInformationImage,

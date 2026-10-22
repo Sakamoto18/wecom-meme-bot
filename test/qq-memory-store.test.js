@@ -156,6 +156,31 @@ test('滚动摘要后模型只读取近期原文且 SQLite 仍保留被摘要原
   });
 });
 
+test('私聊使用独立的低摘要门槛，群聊仍沿用原门槛', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = new QqMemoryStore({
+      databaseFilePath: path.join(directory, 'qq-memory.sqlite'),
+      summaryTriggerMessages: 40,
+      summaryKeepMessages: 20,
+      privateSummaryTriggerMessages: 4,
+      privateSummaryKeepMessages: 1,
+    });
+    await store.load();
+    for (let index = 1; index <= 2; index += 1) {
+      store.appendExchange('single:u1', `私聊问题 ${index}`, `私聊回答 ${index}`);
+      store.appendExchange('group:g1', `群聊问题 ${index}`, `群聊回答 ${index}`);
+    }
+
+    const privateSnapshot = store.getSummarySnapshot('single:u1');
+    assert.ok(privateSnapshot);
+    assert.deepEqual(privateSnapshot.messages.map((message) => message.content), [
+      '私聊问题 1', '私聊回答 1', '私聊问题 2',
+    ]);
+    assert.equal(store.getSummarySnapshot('group:g1'), null);
+    store.close();
+  });
+});
+
 test('普通群消息可连续观察，并持久记录成员昵称变化', async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = new QqMemoryStore({

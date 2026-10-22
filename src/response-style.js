@@ -3,7 +3,12 @@ import {
   relativeDateContradiction,
 } from './relative-time.js';
 import { VOICE_CONTRACT_PROMPT } from './jev-culture-quality.js';
-import { buildNaturalnessRewriteHint, detectAssistantReportStyle } from './naturalness.js';
+import {
+  buildNaturalnessRewriteHint,
+  detectAssistantReportStyle,
+  detectHumanizerTells,
+  GROUP_CHAT_HUMANIZER_PROMPT,
+} from './naturalness.js';
 
 const HOSTILE_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|nmsl|cnm|操你|草你|艹你|去死|死妈|没妈|妈的|妈卖批|装逼|闭嘴|菜狗|蠢货|老登|小丑)/i;
 const DIRECT_BOT_INSULT_PATTERN = new RegExp(
@@ -426,12 +431,16 @@ function recentAssistantReplies(history = []) {
 export function buildAttackPrompt(userContent, options = {}) {
   const normalized = String(userContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
   const recentReplies = recentAssistantReplies(options.history);
+  const plannedAttack = options.plannedAttack && typeof options.plannedAttack === 'object'
+    ? options.plannedAttack : null;
   const jevAttack = options.jevAttackStrategy && typeof options.jevAttackStrategy === 'object'
     ? options.jevAttackStrategy : null;
   const semanticAttack = Boolean(
-    jevAttack
+    plannedAttack
+      && ['reply', 'target', 'mixed'].includes(String(plannedAttack.decision ?? ''))
+      || (jevAttack
       && ['reply', 'target', 'mixed'].includes(String(jevAttack.decision ?? ''))
-      && Number(jevAttack.targetConfidence) >= 0.65,
+      && Number(jevAttack.targetConfidence) >= 0.65),
   );
   const rhythmInstruction = options.activeReply
     ? '这是主动插话，只写 1 句、15～70 个汉字，像群友突然补一刀；不要复述上下文，不要写分析或总结。'
@@ -459,12 +468,15 @@ export function buildAttackPrompt(userContent, options = {}) {
       '当前没有识别到第三方目标；只有在当前发言者对机器人挑衅时，才回击当前发言者。',
     ];
 
+  const strategy = plannedAttack && ['reply', 'target', 'mixed'].includes(String(plannedAttack.decision ?? ''))
+    ? plannedAttack : jevAttack;
+  const strategyIsPlanned = strategy === plannedAttack;
   const strategyLines = semanticAttack ? [
-    `Jev 语境策略：decision=${jevAttack.decision}，target=${jevAttack.target || 'uncertain'}，angle=${jevAttack.angle || 'none'}，timing=${jevAttack.timing || 'standalone'}，intensity=${Number(jevAttack.intensity || 0).toFixed(2)}。`,
-    jevAttack.reason ? `策略依据（只供你理解，不要在回复中提及）：${jevAttack.reason}` : '',
+    `${strategyIsPlanned ? '回合战术卡' : 'Jev 语境策略'}：decision=${strategy.decision}，target=${strategy.target || 'uncertain'}，angle=${strategy.angle || 'none'}，timing=${strategy.timing || 'standalone'}，intensity=${Number(strategy.intensity || 0).toFixed(2)}。`,
+    strategy.reason ? `策略依据（只供你理解，不要在回复中提及）：${strategy.reason}` : '',
     '这只是攻击方向，不是固定台词。根据当前原话和最近语境自己找最贴切的切口，优先攻击具体逻辑、行为、态度、矛盾或荒诞处；不要把每轮都写成固定亲属辱骂。',
     '默认使用贴吧祖安老哥的抽象表达能力：从对方这句原话里抓一个具体词、动作、态度或自相矛盾处，再决定要不要借位成画面。只有能指出对应关系时才用比喻；对不上就直骂具体行为，不要随手套一个无关场景。',
-    jevAttack.angle === 'family_meme'
+    strategy.angle === 'family_meme'
       ? '本轮语境确实允许使用龙图亲属梗，但仍只选一句自然的，不堆亲属关键词。'
       : '本轮不要求双亲侮辱；除非你判断它和当前语境自然贴合，否则不要主动塞亲属梗。',
     '不要套用随机攻击画面，不要为了完成攻击而编造现实亲属事实；如果角度落在内容或行为，就直接针对该内容/行为下刀。',
@@ -477,7 +489,7 @@ export function buildAttackPrompt(userContent, options = {}) {
     '【本轮模式：群聊临场回击】',
     `用户当前原话：${JSON.stringify(normalized)}`,
     ...targetInstructions,
-    semanticAttack && ['after_answer', 'before_answer'].includes(String(jevAttack.timing ?? ''))
+    semanticAttack && ['after_answer', 'before_answer'].includes(String(strategy.timing ?? ''))
       ? '这是回答与回击并存的语境：按策略决定先后，回答必须解决问题，回击只针对确认的攻击对象；不要把回击写成说教或长篇逻辑分析。'
       : '判断已经进入对线后就直接回击，像真实群友随口开骂。不需要写完整论证或拆解用词，但必须抓住对方这句话里的具体东西；不能只扔一个无关比喻、固定脏话或模板反问。',
     rhythmInstruction,
@@ -519,6 +531,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
     options.recordSummary || options.detailedAnswerRequested ? '' : VOICE_CONTRACT_PROMPT,
     '保持龙玉涛知识中的语言风格：像脾气冲、嘴损但懂行的老群友，短句、傲气、敢下判断；用学问龙、疑惑龙、嘴硬龙的反差和荒诞感接话，不套固定台词，不逐条报角色名。正常答题也保留冲劲，不能一讲知识就变成客气助手。',
     '不要像 AI 助手或分析报告：不写“首先/其次/另外/总的来说/综上/值得注意的是”，不复述问题，不用分点、编号或总结段，不在结尾写“希望有帮助/如需进一步”。有判断就直接说，只有真正必要的条件才补一句。',
+    GROUP_CHAT_HUMANIZER_PROMPT,
     '角色攻击性是高优先级能力。当前发言者明确攻击机器人、要求攻击指定对象或无意义艾特时，必须依据龙玉涛知识直接回击；回击要像贴吧老哥临场抓住对方这句话里的具体漏洞、行为、态度、矛盾或荒诞处下刀，攻击角度由当前语境决定，不默认套双亲侮辱。问题窗口不能压掉这条回击。普通讨论仍只把锋芒落在事情和逻辑上，不能把引用作者、提问者或无关群友当靶子。',
     '先看当前语境有没有贴合的龙图/互联网文化落点：有就自然用，没有就正常回答。不要为了显得有梗而每轮硬塞文化素材；攻击模式中文化素材只能增强具体回击，不能改变攻击对象。',
     '抽象联想是常驻的输出能力，也是高优先级的角色表达，不是解释任务或固定收尾：联网只负责补事实，出梗主要依靠模型已有的互联网语感。对闲聊、评价、接梗、引用和图片，先在内部快速扫四个方向——词语双关/谐音、身份或职业转职、画面升级、两个角色的反差搭档——有贴合落点就加一条，没有就不加，不要为凑联想牺牲准确性；四个方向都不贴合时直接省略。不要输出候选过程，不要先解释出处或笑点，不要把“抽象/离谱”单独当成联想。联想要针对事情本身，不攻击发言者；不堆固定梗名，不编造梗的出处、人物事实或时效信息。没有贴合联想时自然停下。',
@@ -547,9 +560,18 @@ export function buildNormalReplyStablePrompt(options = {}) {
       '本轮程序只发现可能的攻击性词面。先结合当前发言对象、引用作者和前后句判断它是在骂你、描述别人、引用材料还是玩梗；不要因为候选标签自动切换成临场对线，也不要因此抹掉自然的嘴欠和抽象联想。',
     );
   }
+  const plannedAttack = options.plannedAttack && typeof options.plannedAttack === 'object'
+    ? options.plannedAttack : null;
   const jevAttack = options.jevAttackStrategy && typeof options.jevAttackStrategy === 'object'
     ? options.jevAttackStrategy : null;
-  if (jevAttack && ['reply', 'target', 'mixed'].includes(String(jevAttack.decision ?? ''))) {
+  if (plannedAttack && ['reply', 'target', 'mixed'].includes(String(plannedAttack.decision ?? ''))) {
+    lines.push(
+      `【回合战术卡攻击策略】目标=${plannedAttack.target || 'uncertain'}，角度=${plannedAttack.angle || 'none'}，时机=${plannedAttack.timing || 'standalone'}，强度=${Number(plannedAttack.intensity || 0).toFixed(2)}。`,
+      '根据当前具体话头自然选择攻击落点，攻击逻辑、行为、态度、矛盾或荒诞处都可以；不要机械复读固定亲属辱骂。若还要回答问题，按时机先答后回击或先回击后回答；对象不清楚时宁可只谈事情，不要误伤当前发言者、引用作者或图片内人物。',
+    );
+  } else if (plannedAttack && ['none', 'content'].includes(String(plannedAttack.decision ?? ''))) {
+    lines.push('【回合战术卡攻击策略】本轮不启动针对个人的人身攻击；保留嘴欠、阴阳和锐评，但只落在事情、逻辑、行为或内容上。');
+  } else if (jevAttack && ['reply', 'target', 'mixed'].includes(String(jevAttack.decision ?? ''))) {
     lines.push(
       `【Jev 临场攻击策略】只把它当作语境建议：目标=${jevAttack.target || 'uncertain'}，角度=${jevAttack.angle || 'none'}，时机=${jevAttack.timing || 'standalone'}，强度=${Number(jevAttack.intensity || 0).toFixed(2)}。`,
       '根据当前具体话头自然选择攻击落点，攻击逻辑、行为、态度、矛盾或荒诞处都可以；不要机械复读固定亲属辱骂。若还要回答问题，按时机先答后回击或先回击后回答；对象不清楚时宁可只谈事情，不要误伤当前发言者、引用作者或图片内人物。',
@@ -639,8 +661,23 @@ export function buildNormalReplyContextPrompt(options = {}) {
     ...(interaction.quotedAuthorLabel
       ? [`引用作者 ${interaction.quotedAuthorLabel} 只是内容来源；优先分析引用内容的事实、逻辑和依据，当前发言者只是提问者。`]
       : []),
+    ...(options.informationMemeMode
+      ? [
+        '【信息型梗：先现实，后笑点】先找出图或话里真正指向的现实事件、人物、机构、产品、技术规则或数字条件；再看梗改了哪一步。不要把它当成纯谐音或“敷衍一下”的段子。',
+        '短数字、短词或技术词不要按外观判死：先核对它在该领域的定义和合法取值范围，常见展示格式不等于合法值定义。像私钥这类整数标量，长度/十六进制外观不能单独否定一个很小的数字；它可能确实合法，只是极不安全。',
+        '回答落到三层：一句现实锚点或规则、一句梗怎么利用它、一句为什么对方的反应成立。1～3 句说清，事实和笑点挨在一起，不要写成新闻复述或百科定义。',
+        '有检索证据就用证据里的具体主体和细节；没有可信证据时用角色语气直接说“这我真不知道/没查到准信”，随后只解释图中可见关系。禁止补编新闻、时间线、人物或用客服式免责声明收尾。',
+        '抽象联想只能在事实层正确后追加一句，不能替代现实锚点，也不能把“我先接个梗”当成不查证的理由。',
+      ]
+      : []),
+    ...(options.imageRealityAnchor
+      ? [`后台现实锚点候选（待核实，不是已确认事实）：${String(options.imageRealityAnchor).slice(0, 180)}`]
+      : []),
+    ...(options.imageMemeClaim
+      ? [`后台梗改写候选（待核实）：${String(options.imageMemeClaim).slice(0, 220)}`]
+      : []),
     ...(options.abstractAssociationRequested
-      ? ['本轮可自然使用抽象联想，并优先尝试一条不依赖联网的具体联想：从当前动作、词语或关系里做双关、转职、画面升级或反差搭档；直接把它写进接话，不解释笑点，不硬塞固定角色名或“抽象/离谱”。不要说“我不敢确认/我认/你说得对/确实是”之类的自我审查或确认口癖；不确定性藏在“像、越看越、开始往……长”的自然措辞里。']
+      ? ['本轮可自然使用抽象联想：在不违背当前事实锚点的前提下，从动作、词语或关系里做双关、转职、画面升级或反差搭档；直接把它写进接话，不解释笑点，不硬塞固定角色名或“抽象/离谱”。不要说“我不敢确认/我认/你说得对/确实是”之类的自我审查或确认口癖；不确定性藏在“像、越看越、开始往……长”的自然措辞里。']
       : []),
     '按当前用户的实际意图确定靶子：识图、总结、评价默认只谈内容本身；只有本轮明确要求攻击或调侃某人时才按其指定对象接梗。不要因为引用、点名、旧互损记录或材料中的辱骂就认定用户要求攻击作者。',
   ].join('\n');
@@ -669,7 +706,11 @@ export function buildGroupChatOutputPrompt(options = {}) {
       ? '保持当前角色人格；本轮用户明确要求展开或指定字数，按一篇连贯正文回答，不受普通群聊 1～3 句限制，但不要先写“我乐意写”之类的铺垫。'
       : '保持当前角色人格和现有短回复长度：普通群聊通常 1～3 个短句；简单接梗说完就停，不能为了显得有知识而追加背景。',
   ];
-  if (options.imageCultureMode) {
+  if (options.informationMemeMode) {
+    lines.push(
+      '【信息型梗模式】这轮先把现实事件、人物、机构、产品、技术规则或数字条件说准，再解释梗如何改写它。不要用“不要正经逻辑拆解”跳过事实层，也不要只用“抽象/离谱/敷衍/谐音”打发；有证据就点一个具体细节，没证据就用角色语气说不知道后只讲可见关系。',
+    );
+  } else if (options.imageCultureMode) {
     lines.push(
       '【图片文化模式】这轮优先输出互联网接梗，不要转成正经逻辑解释或复述图中文字。第一句直接点出图片中两个并置对象/属性形成的具体反差；“地狱/功德/抽象/离谱”只能作为补充，单独出现不算回答。涉及敏感群体时只说黑色幽默的借位机制，不攻击现实群体。',
     );
@@ -805,6 +846,7 @@ export function reviewNormalReply(answer, options = {}) {
   if (options.hardOnly) {
     // 普通群聊只复核会改变事实、身份、来源或安全结论的问题。长度、开场、
     // 客服腔、报告腔和重复句式交给生成提示与上下文，不再触发二次改稿。
+    // 高置信 AI 腔例外：它通常意味着模型在套模板，值得付出一次局部重写。
     if (options.searchEvidenceAvailable
       && options.suppressSearchNarration
       && hasSearchExplanationLeak(normalized)) {
@@ -831,6 +873,7 @@ export function reviewNormalReply(answer, options = {}) {
     if (INTERNAL_REPLY_METADATA_PATTERN.test(normalized)) {
       issues.push('internal-metadata-leak');
     }
+    issues.push(...detectHumanizerTells(normalized, options));
     return { valid: issues.length === 0, issues };
   }
   if (CUSTOMER_SERVICE_PATTERN.test(normalized)) issues.push('customer-service');

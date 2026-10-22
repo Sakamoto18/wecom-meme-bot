@@ -61,6 +61,9 @@ export function buildAbstractAssociationEntry(input = {}) {
     target,
     mechanism,
     register: text(input.register || input.culturalRegister || '', 120),
+    realityAnchor: text(input.realityAnchor || input.reality_anchor || '', 240),
+    memeClaim: text(input.memeClaim || input.meme_claim || '', 240),
+    informationKind: text(input.informationKind || input.information_kind || '', 40).toLowerCase(),
     usage: list(input.usage || input.examples || [], 6),
     aliases: list(input.aliases || [], 8),
     confidence: normalizedConfidence(input.associationConfidence || input.confidence),
@@ -79,6 +82,9 @@ export function abstractAssociationPrompt(entries = [], source = 'memory') {
       `联想对象：${text(entry.target, MAX_TERM)}`,
       `机制：${text(entry.mechanism, 240)}`,
       entry.register ? `文化语气：${text(entry.register, 120)}` : '',
+      entry.realityAnchor ? `现实锚点：${text(entry.realityAnchor, 240)}` : '',
+      entry.memeClaim ? `梗的改写：${text(entry.memeClaim, 240)}` : '',
+      entry.informationKind ? `信息类型：${text(entry.informationKind, 40)}` : '',
       entry.usage?.length ? `常见接法：${list(entry.usage, 3).join('；')}` : '',
     ].filter(Boolean).join('；'));
   if (!rows.length) return '';
@@ -154,6 +160,9 @@ export class MemeKnowledgeStore {
         target TEXT NOT NULL,
         mechanism TEXT NOT NULL,
         register_text TEXT NOT NULL,
+        reality_anchor TEXT NOT NULL DEFAULT '',
+        meme_claim TEXT NOT NULL DEFAULT '',
+        information_kind TEXT NOT NULL DEFAULT '',
         usage_json TEXT NOT NULL,
         aliases_json TEXT NOT NULL,
         confidence TEXT NOT NULL,
@@ -168,6 +177,19 @@ export class MemeKnowledgeStore {
       );
       CREATE INDEX IF NOT EXISTS meme_association_target ON meme_association(target);
     `);
+    const associationColumns = new Set(
+      this.database.prepare('PRAGMA table_info(meme_association)').all()
+        .map((row) => String(row.name)),
+    );
+    for (const [name, definition] of [
+      ['reality_anchor', "TEXT NOT NULL DEFAULT ''"],
+      ['meme_claim', "TEXT NOT NULL DEFAULT ''"],
+      ['information_kind', "TEXT NOT NULL DEFAULT ''"],
+    ]) {
+      if (!associationColumns.has(name)) {
+        this.database.exec(`ALTER TABLE meme_association ADD COLUMN ${name} ${definition}`);
+      }
+    }
     return this.database;
   }
 
@@ -248,19 +270,23 @@ export class MemeKnowledgeStore {
     const db = this.ensureOpen();
     db.prepare(`
       INSERT INTO meme_association(
-        association_key, trigger_text, target, mechanism, register_text, usage_json,
+        association_key, trigger_text, target, mechanism, register_text,
+        reality_anchor, meme_claim, information_kind, usage_json,
         aliases_json, confidence, fact_confidence, source_domains_json, source_urls_json,
         positive_count, negative_count, created_at, updated_at, last_used_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
       ON CONFLICT(association_key) DO UPDATE SET
         trigger_text=excluded.trigger_text, target=excluded.target, mechanism=excluded.mechanism,
-        register_text=excluded.register_text, usage_json=excluded.usage_json,
+        register_text=excluded.register_text, reality_anchor=excluded.reality_anchor,
+        meme_claim=excluded.meme_claim, information_kind=excluded.information_kind,
+        usage_json=excluded.usage_json,
         aliases_json=excluded.aliases_json, confidence=excluded.confidence,
         fact_confidence=excluded.fact_confidence, source_domains_json=excluded.source_domains_json,
         source_urls_json=excluded.source_urls_json, updated_at=excluded.updated_at,
         last_used_at=excluded.last_used_at
     `).run(
       key, normalized.trigger, normalized.target, normalized.mechanism, normalized.register,
+      normalized.realityAnchor, normalized.memeClaim, normalized.informationKind,
       JSON.stringify(normalized.usage), JSON.stringify(normalized.aliases), normalized.confidence,
       normalized.factConfidence, JSON.stringify(normalized.sourceDomains), JSON.stringify(normalized.sourceUrls),
       now, now, now,
@@ -304,6 +330,9 @@ export class MemeKnowledgeStore {
       target: row.target,
       mechanism: row.mechanism,
       register: row.register_text,
+      realityAnchor: row.reality_anchor,
+      memeClaim: row.meme_claim,
+      informationKind: row.information_kind,
       usage: read(row.usage_json),
       aliases: read(row.aliases_json),
       confidence: row.confidence,

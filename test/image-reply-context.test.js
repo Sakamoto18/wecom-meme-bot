@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildImageSearchPlan,
   buildImageSearchQueries,
   classifyImageAnalysis,
   classifyImageInformation,
+  IMAGE_MEANING_PROMPT,
   isArtAppraisalIntent,
   isImageEvaluationIntent,
   isExplicitImageInterpretationIntent,
+  isPureCharacterImage,
+  shouldSkipCharacterEvaluation,
 } from '../src/image-reply-context.js';
 import { generateConversationReply } from '../src/reply-engine.js';
 import { QqBotService, normalizeQqPayload } from '../src/qq-service.js';
@@ -335,4 +339,81 @@ test('低信息图的九天后追问会带日期线索进入事实核验', async
   assert.equal(result.factSearchAttempted, true);
   assert.match(queries[0], /2026-10-31/);
   assert.match(result.answer, /旧倒计时/);
+});
+
+test('纯二次元/游戏角色图不评价，但身份和出处问题仍放行', () => {
+  const character = { items: [{
+    subjectKind: 'game_character',
+    description: '游戏 CG 里的蓝发长翼女性角色，画面是角色立绘和对话框',
+    scene: '视觉小说游戏界面',
+    visibleText: ['隐藏', '自动', '跳过', '水星号', '这些箭吗？嗯……让我想想该怎么解释。'],
+    informationKind: 'unknown',
+    textClaims: ['这些箭吗？嗯……让我想想该怎么解释。'],
+    keywords: ['游戏角色', 'CG'],
+  }] };
+  assert.equal(isPureCharacterImage(character), true);
+  assert.equal(shouldSkipCharacterEvaluation(character, '评价一下这张图'), true);
+  assert.equal(shouldSkipCharacterEvaluation(character, '好看吗'), true);
+  assert.equal(shouldSkipCharacterEvaluation(character, '这是谁'), false);
+  assert.equal(shouldSkipCharacterEvaluation(character, '这是哪款游戏的角色'), false);
+  assert.equal(shouldSkipCharacterEvaluation(character, '这个角色叫什么'), false);
+
+  const newsCharacter = {
+    items: [{
+      ...character.items[0],
+      realityAnchor: '某游戏厂商发布角色停服公告',
+      informationKind: 'news',
+    }],
+  };
+  assert.equal(shouldSkipCharacterEvaluation(newsCharacter, '评价一下'), false);
+
+  const memeCharacter = {
+    items: [{ ...character.items[0], memeClaim: '把角色立绘改成了某条现实新闻的配图' }],
+  };
+  assert.equal(shouldSkipCharacterEvaluation(memeCharacter, '评价一下'), false);
+});
+
+test('动漫头像的聊天截图不会被误判成纯角色图', () => {
+  const chat = { items: [{
+    description: '群聊截图，头像和发言都是二次元角色相关',
+    visibleText: ['甲：这个角色是谁', '乙：我也不知道'],
+    keywords: ['动漫角色', '聊天截图'],
+  }] };
+  assert.equal(isPureCharacterImage(chat), false);
+});
+
+test('图片回答提示保留纯角色图不评价的兜底规则', () => {
+  assert.match(IMAGE_MEANING_PROMPT, /纯二次元或游戏角色图/);
+  assert.match(IMAGE_MEANING_PROMPT, /不评价颜值、身材、可爱程度或角色魅力/);
+  assert.match(IMAGE_MEANING_PROMPT, /身份、作品或出处/);
+});
+
+test('现实新闻与私钥规则会生成优先的公网检索线索', () => {
+  const phpPlan = buildImageSearchPlan({
+    items: [{
+      realityAnchor: 'PHP2Shell 漏洞',
+      informationKind: 'news',
+    }],
+  }, '昨天的php漏洞是个什么情况没看懂什么意思');
+  assert.match(phpPlan[0].query, /PHP2Shell/);
+  assert.match(phpPlan[0].query, /昨天的php漏洞/);
+  assert.match(phpPlan[0].query, /新闻|事件|原因|背景/);
+
+  const keyPlan = buildImageSearchPlan({
+    items: [{
+      realityAnchor: 'ECDSA 私钥',
+      informationKind: 'technical_rule',
+    }],
+  }, '不是，你不能解释一下为什么这个4就是完整密钥了啊？？？');
+  assert.match(keyPlan[0].query, /4/);
+  assert.match(keyPlan[0].query, /完整密钥|私钥|规则|合法范围/);
+
+  const ocrNoise = '这是一整段很长的 OCR 噪声文字，不应该被原样拼进检索查询。'.repeat(20);
+  const noisyPlan = buildImageSearchPlan({
+    items: [{
+      realityAnchor: 'PHP2Shell 漏洞',
+      visibleText: [ocrNoise],
+    }],
+  }, '昨天的php漏洞是怎么回事');
+  assert.doesNotMatch(noisyPlan[0].query, /OCR 噪声文字/);
 });

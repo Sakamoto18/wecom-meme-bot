@@ -159,6 +159,12 @@ sudo docker compose --env-file .env.qq -f docker-compose.server.yml up -d qq-bot
 LONGTU_QQ_ACTIVE_REPLY_ENABLED=true
 # 可选 Jev/TypeSafe 软门控：默认关闭；只影响可选插话和表达风格，不替换现有角色/回复引擎。
 LONGTU_QQ_JEV_ENABLED=false
+# 独立输出开关：默认关闭；关闭时 Jev 不参与插话判定、检索或最终回复提示词。
+LONGTU_QQ_JEV_OUTPUT_ENABLED=false
+# 每轮真实模型生成前先做一次轻量战术规划：分层攻击、按需检索、现实锚点接梗。
+QQ_REPLY_PLANNER_ENABLED=true
+QQ_REPLY_PLANNER_TIMEOUT_MS=8000
+QQ_REPLY_PLANNER_MAX_TOKENS=400
 LONGTU_QQ_JEV_MODE=off
 LONGTU_QQ_JEV_STATE_FILE=data/qq-jev-runtime.json
 LONGTU_QQ_JEV_TIMEOUT_MS=30000
@@ -231,7 +237,7 @@ LONGTU_QQ_PEER_BOT_MAX_CONSECUTIVE_REPLIES=2
 LONGTU_QQ_PEER_BOT_LOOP_WINDOW_SECONDS=300
 ```
 
-Jev 需要 `TYPESAFE_API_KEY` 才会实际请求上游；`LONGTU_QQ_JEV_ENABLED=false` 或模式 `off` 时完全沿用原有链路。Jev 的所有插话、文化、图片语义和模式路由统一使用 `LONGTU_QQ_JEV_MODEL=qwen3.7-plus` 的 Chat 接口；最终角色回复仍由 DeepSeek 生成。非严肃问题默认进入文化优先模式，用户明确要求认真或连续纠正一次后切换正经模式两轮，随后自动恢复文化模式。Jev 还会在高价值图片场景输出“像素事实、文字主张、主体关系、语用观点、梗机制和最多两个联想候选”；这些是后台证据卡，不会改写 DeepSeek 的角色人格。`LONGTU_QQ_JEV_RAW_IMAGE_MODE=high_value` 时，仅在视觉摘要低置信、存在视觉双关/密集文字、或用户明确询问梗义/出处等情况下给 Jev 发送最多一张原图；低信息图、Bot 自己的分享卡和普通图片不会二次发送。Jev 会根据候选平台用 Exa 做公开域名限定检索，平台不确定时再做全网交叉检索。管理员可直接发送 `/jev on`、`/jev off`、`/jev auto`、`/jev shadow` 或 `/jev status`，无需重启；`shadow` 只记录判定、不改变回复。Jev 超时、鉴权失败、429、额度耗尽或多模态不支持时会自动熔断并回退原有 DeepSeek 判定与角色回复，运行状态保存到 `LONGTU_QQ_JEV_STATE_FILE`。这些命令只允许 `LONGTU_QQ_ADMIN_USERS` 中的超级管理员，命令本身不会进入模型上下文。
+Jev 需要 `TYPESAFE_API_KEY` 才会实际请求上游；`LONGTU_QQ_JEV_ENABLED=false`、模式 `off` 或 `LONGTU_QQ_JEV_OUTPUT_ENABLED=false` 时不参与回复链路，完全沿用本地插话判定、图片信息分级、检索和 DeepSeek 角色回复。只有同时显式打开 `LONGTU_QQ_JEV_ENABLED` 与 `LONGTU_QQ_JEV_OUTPUT_ENABLED`，Jev 才使用 `LONGTU_QQ_JEV_MODEL=qwen3.7-plus` 做插话、文化、图片语义和模式路由；最终角色回复仍由 DeepSeek 生成。输出开关默认关闭，避免语义点和文化路由把有现实锚点的梗带偏。`LONGTU_QQ_JEV_RAW_IMAGE_MODE=high_value` 时，仅在视觉摘要低置信、存在视觉双关/密集文字、或用户明确询问梗义/出处等情况下给 Jev 发送最多一张原图；低信息图、Bot 自己的分享卡和普通图片不会二次发送。管理员可直接发送 `/jev on`、`/jev off`、`/jev auto`、`/jev shadow` 或 `/jev status`，但输出开关关闭时这些命令不会改变最终回复。Jev 超时、鉴权失败、429、额度耗尽或多模态不支持时会自动熔断并回退原有 DeepSeek 判定与角色回复，运行状态保存到 `LONGTU_QQ_JEV_STATE_FILE`。这些命令只允许 `LONGTU_QQ_ADMIN_USERS` 中的超级管理员，命令本身不会进入模型上下文。
 
 复读检测不调用大模型：同一群连续由至少两位不同群友发送相同文字时，机器人会在第二位群友发言后主动原样复读一次。机器人自己的这次复读不会结束轮次；第三条及后续相同消息只旁观，不再触发复读或主动回复判定。连续同文不因时间间隔重新计数，换内容后才开启新轮次；机器人其他类型的回复会中断原轮次。图片、合并转发、引用、斜杠命令和 @ 他人的消息不参与检测。可将 `LONGTU_QQ_REPEAT_ENABLED` 设为 `false` 关闭。
 
@@ -387,7 +393,7 @@ LONGTU_QQ_USAGE_REPORT_USERS=第一个QQ号,第二个QQ号
 
 QQ 后端按 QQ 号生成稳定的匿名成员编号，同时记录当前昵称、历史昵称、发言次数和最近出现时间。成员本人发言后才会确认身份与昵称；别人 `@` 某人时只登记目标 QQ 号为待确认成员，不会替目标确认别名。已确认且在当前群唯一的历史昵称可在纯文字里锁定第三方目标，重名、短昵称冲突或未确认昵称不会猜测。模型输入和成员画像观察都会分别标明当前发言人、被 `@` 的成员、纯文字命中的已确认成员和引用消息作者；机器人回复写入历史时也会记录当轮回复对象，避免群聊换人后继承上一人的称呼或头衔。
 
-会话数据库默认每个会话保留 50000 条原文，但普通回答只读取最近 80 条和滚动摘要，避免上下文成本随数据库增长。出现“之前、上次、说过、原话”等历史意图时，后端会按相关成员的稳定编号从完整 SQLite 原文中额外检索最多 12 条命中记录。每个成员另有一份独立持久画像：每累计 12 条本人发言，就把其中较早 8 条合并为最多 1500 字的稳定画像，保留 4 条供下一轮衔接；画像只接受本人自述、稳定偏好、反复出现的关系和共同梗，不把他人的单次评价、辱骂或转发内容写成事实。成员画像不受会话原文清理、30 天会话 TTL 或近期 80 条模型窗口影响。昵称变化不会导致成员串号，内部匿名编号也会在发送回复前统一删除。
+会话数据库默认每个会话保留 50000 条原文，但普通回答只读取最近 80 条和滚动摘要，避免上下文成本随数据库增长。群聊默认累计 40 条未摘要消息才触发滚动摘要；私聊默认降到 16 条，并保留最近 8 条原文，避免一对一聊天很久仍没有长期摘要。两项门槛可分别用 `QQ_MEMORY_SUMMARY_TRIGGER_MESSAGES` / `QQ_MEMORY_SUMMARY_KEEP_MESSAGES` 和 `QQ_PRIVATE_SUMMARY_TRIGGER_MESSAGES` / `QQ_PRIVATE_SUMMARY_KEEP_MESSAGES` 调整。出现“之前、上次、说过、原话”等历史意图时，后端会按相关成员的稳定编号从完整 SQLite 原文中额外检索最多 12 条命中记录。每个成员另有一份独立持久画像：每累计 12 条本人发言，就把其中较早 8 条合并为最多 1500 字的稳定画像，保留 4 条供下一轮衔接；画像只接受本人自述、稳定偏好、反复出现的关系和共同梗，不把他人的单次评价、辱骂或转发内容写成事实。成员画像不受会话原文清理、30 天会话 TTL 或近期 80 条模型窗口影响。昵称变化不会导致成员串号，内部匿名编号也会在发送回复前统一删除。
 
 会话记忆默认最多保留 50 个会话（群聊和私聊合计），通过服务器 `.env.qq` 中的 `CONVERSATION_MEMORY_CONVERSATIONS=50` 配置。超过上限时淘汰最久未更新会话的原文和摘要，独立保存的成员画像和人格训练数据不受影响。这是会话记忆容量，不是 QQ 加群或接收消息的数量限制，也不会预先分配 50 份资源；实际会话不足 50 个时，从 300 下调不会直接降低当前模型调用量或明显释放内存。已有部署需要修改真实 `.env.qq` 并重建容器，仅更新模板不会覆盖线上配置。
 

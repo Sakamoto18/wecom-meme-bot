@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   buildRelativeDatePrompt,
   extractRelativeDateFacts,
+  recentRelativeDateHint,
+  recentSearchWindowHint,
   relativeDateContradiction,
   repairRelativeDateAnswer,
 } from '../src/relative-time.js';
@@ -23,6 +25,29 @@ test('相对时间按北京时间计算月末截断并输出目标年份', () =>
   }]);
   assert.match(buildRelativeDatePrompt(NOW, QUESTION), /2027-01-21/);
   assert.match(buildRelativeDatePrompt(NOW, QUESTION), /目标年份是 2027/);
+});
+
+test('近期时间词换算成北京时间绝对日期', () => {
+  assert.equal(recentRelativeDateHint(NOW, '昨天的 PHP 漏洞'), '2026-10-20 北京时间');
+  assert.equal(recentRelativeDateHint(NOW, '前天的新闻'), '2026-10-19 北京时间');
+  assert.equal(recentRelativeDateHint(NOW, '刚刚发的'), '2026-10-21 北京时间');
+  assert.equal(recentRelativeDateHint(NOW, '普通闲聊'), '');
+});
+
+test('这两天和最近会生成可检索的绝对时间窗', () => {
+  assert.equal(
+    recentSearchWindowHint(NOW, '这两天的 PHP 漏洞'),
+    '2026-10-19 2026-10-21 北京时间',
+  );
+  assert.equal(
+    recentSearchWindowHint(NOW, '最近 PHP 出了什么事'),
+    '2026-10-19 2026-10-21 北京时间',
+  );
+  assert.equal(
+    recentSearchWindowHint(NOW, '昨天的 PHP 漏洞'),
+    '2026-10-20 北京时间',
+  );
+  assert.equal(recentSearchWindowHint(NOW, '普通闲聊'), '');
 });
 
 test('错误年份和“差着俩月”会被识别并本地修复', () => {

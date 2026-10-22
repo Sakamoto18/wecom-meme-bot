@@ -85,3 +85,27 @@ test('抽象联想按触发印象持久化、召回并记录反馈', () => {
   assert.equal(ranked[1].negativeCount, 1);
   store.close();
 });
+
+test('新闻型抽象联想会保存现实锚点、梗改写和信息类型', () => {
+  const store = new MemeKnowledgeStore({ databaseFilePath: tempDatabase('meme-association-news') });
+  const entry = buildAbstractAssociationEntry({
+    trigger: '完整私钥被拿来当恋爱门槛，最后只回4',
+    target: 'PHP2Shell 重大漏洞梗',
+    mechanism: '用弱私钥/补丁门槛的反差抽象化近期 PHP 漏洞',
+    register: '技术新闻抽象梗',
+    realityAnchor: '2026-10-21 PHP2Shell，CVE-2026-109618/109619，未授权 RCE',
+    memeClaim: '把补丁和密钥强度的现实门槛改写成恋爱门槛',
+    informationKind: 'news',
+    confidence: 'high',
+  });
+  assert.equal(store.putAssociation(entry), true);
+  const [hit] = store.lookupAssociations('完整私钥 PHP2Shell 漏洞', { limit: 1 });
+  assert.equal(hit.realityAnchor, entry.realityAnchor);
+  assert.equal(hit.memeClaim, entry.memeClaim);
+  assert.equal(hit.informationKind, 'news');
+  const prompt = abstractAssociationPrompt([hit]);
+  assert.match(prompt, /现实锚点：2026-10-21 PHP2Shell/);
+  assert.match(prompt, /梗的改写：/);
+  assert.match(prompt, /信息类型：news/);
+  store.close();
+});

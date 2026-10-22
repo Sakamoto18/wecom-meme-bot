@@ -71,9 +71,12 @@ import {
 import {
   buildRelativeDatePrompt,
   extractRelativeDateFacts,
+  recentRelativeDateHint,
+  recentSearchWindowHint,
   repairRelativeDateAnswer,
 } from './relative-time.js';
 import { buildStyleAnchorPrompt, selectStyleAnchors } from './style-anchors.js';
+import { buildTurnPlanPrompt } from './reply-turn-planner.js';
 
 const PURE_MENTION_FALLBACK = '叫我有事？';
 const WEB_SEARCH_TOOL = {
@@ -233,6 +236,50 @@ function protectPersonaAttackDirection(answer, content, personaContext, attackSt
   return stripUnauthorizedFamilyAttack(answer) || buildNormalReplyFallback();
 }
 
+const NEWS_SCOPE_SECTORS = [
+  '银行', '通信', '运营商', '电信', '医院', '医疗', '学校', '政府',
+  '航空', '铁路', '电力', '电网', '金融', '券商', '支付', '保险',
+  '电商', '物流', '交通', '云服务',
+];
+const NEWS_SCOPE_SECTOR_PATTERN = new RegExp(`(?:${NEWS_SCOPE_SECTORS.join('|')})`, 'u');
+const NEWS_SCOPE_IMPACT_PATTERN = /(?:停|崩|挂|宕机|故障|受影响|中招|攻击|瘫痪|断网|关停|维护)/u;
+const NEWS_SCOPE_NEGATION_PATTERN = new RegExp(
+  `(?:没|没有|未|并非|不会).{0,8}(?:${NEWS_SCOPE_SECTORS.join('|')})`
+  + `|(?:${NEWS_SCOPE_SECTORS.join('|')}).{0,8}(?:没|没有|未|并非|不会)`,
+  'u',
+);
+const NEWS_SCOPE_CLAIM_PATTERN = new RegExp(
+  `(?:${NEWS_SCOPE_SECTORS.join('|')})`
+  + `(?:\\s*[、,，/和与及]\\s*(?:${NEWS_SCOPE_SECTORS.join('|')}))*`
+  + '(?:等)?(?:网站|平台|系统|服务|企业|行业|机构)?'
+  + '(?=(?:都|也|全|全部)?(?:停|崩|挂|宕机|故障|受|中招|攻击|瘫|断|关停|维护))',
+  'gu',
+);
+
+export function repairUnsupportedNewsScope(answer, options = {}) {
+  const evidence = String(options.evidence ?? '').normalize('NFKC');
+  const question = String(options.question ?? '').normalize('NFKC');
+  const text = String(answer ?? '');
+  if (!evidence || !text || !NEWS_SCOPE_SECTOR_PATTERN.test(text)) return text;
+  return text.split(/(?<=[。！？!?；;\n])/u).map((sentence) => {
+    if (!NEWS_SCOPE_SECTOR_PATTERN.test(sentence)
+      || !NEWS_SCOPE_IMPACT_PATTERN.test(sentence)
+      || NEWS_SCOPE_NEGATION_PATTERN.test(sentence)) {
+      return sentence;
+    }
+    return sentence.replace(NEWS_SCOPE_CLAIM_PATTERN, (matched) => {
+      const sectors = matched.match(new RegExp(`(?:${NEWS_SCOPE_SECTORS.join('|')})`, 'gu')) ?? [];
+      // Never keep a mixed industry list just because one item is supported.
+      // That silently attaches the unsupported sectors to the same event.
+      if (sectors.length > 0
+        && sectors.every((sector) => evidence.includes(sector) || question.includes(sector))) {
+        return matched;
+      }
+      return '不少网站';
+    });
+  }).join('');
+}
+
 function emptySearchResult() {
   return {
     context: '',
@@ -241,6 +288,166 @@ function emptySearchResult() {
     results: [],
     fromCache: false,
   };
+}
+
+const FACT_TOPIC_CANONICAL = new Map([
+  ['php2shell', 'PHP2Shell'],
+  ['wordpress', 'WordPress'],
+  ['openssl', 'OpenSSL'],
+  ['log4j', 'Log4j'],
+  ['nginx', 'Nginx'],
+  ['apache', 'Apache'],
+  ['mysql', 'MySQL'],
+  ['postgresql', 'PostgreSQL'],
+  ['redis', 'Redis'],
+  ['linux', 'Linux'],
+  ['windows', 'Windows'],
+  ['android', 'Android'],
+  ['javascript', 'JavaScript'],
+  ['java', 'Java'],
+  ['docker', 'Docker'],
+  ['kubernetes', 'Kubernetes'],
+  ['openai', 'OpenAI'],
+  ['deepseek', 'DeepSeek'],
+  ['qwen', 'Qwen'],
+  ['php', 'PHP'],
+  ['it', 'IT'],
+]);
+const FACT_TOPIC_PATTERN = new RegExp(
+  `(?<![A-Za-z0-9])(?:${[...FACT_TOPIC_CANONICAL.keys()]
+    .sort((left, right) => right.length - left.length)
+    .map((term) => term.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'))
+    .join('|')})(?![A-Za-z0-9])`,
+  'giu',
+);
+const FACT_EVENT_PATTERN = /(?:漏洞|CVE-\d{4}-\d+|RCE|0day|零日|补丁|安全事件|数据泄露|事故|宕机|故障|通报|公告|发布会|判决|处罚|政策|热搜|报道|新闻|赛果|比分|票房|股价|汇率)/iu;
+const FACT_SECURITY_IMPACT_PATTERN = /(?:影响|重大|出事|崩|挂|宕机|故障|维护|攻击|严重|紧急)/u;
+const FACT_NEWS_HINT_PATTERN = /(?:新闻|报道|大事|动态|进展|消息|发生)/u;
+function sanitizeFactQueryText(content) {
+  return String(content ?? '')
+    .normalize('NFKC')
+    .replace(/成员-[a-f0-9]{6,12}/giu, ' ')
+    .replace(/(?:我)?(?:已经)?(?:明确)?(?:说过|说了|讲过|讲了|说|讲)(?:过|了)?/gu, ' ')
+    .replace(/(?:难道)?不是/gu, ' ')
+    .replace(/(?:你|您)?(?:还)?不知道(?:吗|么)?/gu, ' ')
+    .replace(/(?:到底|究竟)?(?:是)?(?:个)?(?:什么情况|怎么回事|咋回事|什么意思|没看懂|看不懂|有什么大事|有什么新闻)/gu, ' ')
+    .replace(/(?:你|您)|懂没懂|懂不懂|明白没明白|听懂了吗|知道吗|当然了/u, ' ')
+    .replace(/(?:^|\s)懂(?:了)?(?=\s|$)/gu, ' ')
+    .replace(/(?:影响最大的是|影响最大|最主要的是|关键是)/gu, ' ')
+    .replace(/(?:你|您|给我|帮我|帮忙)?(?:去|先)?(?:联网|上网)?(?:查|搜|搜索|查询)(?:一下|下)?/gu, ' ')
+    .replace(/(?:的)?(?:昨天|昨日|前天|今天|今日|刚刚|刚才|这两天|这几天|这周|本周|上周|最近|近期|最新|目前|现在)/gu, ' ')
+    .replace(/(?:这个|那个|这(?!两天|几天|周|次)|那(?!两天|几天|周|次))(?:是|就是)?/gu, ' ')
+    .replace(/(?:的?事情|的事儿|这件事|那件事|事儿)/gu, ' ')
+    .replace(/(?:请问|麻烦|帮我|帮忙|说说|讲讲|解释(?:一下)?|关于)/gu, ' ')
+    .replace(/(?:图中|图里|图片|截图|梗)/gu, ' ')
+    .replace(/(?:了啊|了吗|了捏|了吧|呢|吧|捏|啊|呀|哦|噢|嘛|吗)(?=\s|$)/gu, ' ')
+    .replace(/[？?！!，,。；;：:、]/gu, ' ')
+    .replace(/^[的\s]+|[的\s]+$/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function canonicalizeFactQuery(text) {
+  return String(text ?? '')
+    .replace(FACT_TOPIC_PATTERN, (term) => (
+      FACT_TOPIC_CANONICAL.get(term.toLowerCase()) ?? term
+    ))
+    .replace(/([A-Za-z0-9])(?=[\p{Script=Han}])/gu, '$1 ')
+    .replace(/([\p{Script=Han}])(?=[A-Za-z0-9])/gu, '$1 ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function namedHistoryAnchor(history = []) {
+  const recent = (Array.isArray(history) ? history : [])
+    .slice(-8)
+    .map((entry) => String(entry?.content ?? ''))
+    .join('\n');
+  return recent.match(/(?:PHP2Shell|CVE-\d{4}-\d{5,})/iu)?.[0]
+    || recent.match(/([A-Za-z][A-Za-z0-9._+-]{1,30})\s*(?:漏洞|事件|新闻)/iu)?.[1]
+    || '';
+}
+
+function buildTextFactQueries(content, dateHint, history = []) {
+  const original = String(content ?? '');
+  let text = sanitizeFactQueryText(original);
+  const generic = !text || /^(?:漏洞|事件|新闻|事故|这个|那个|它|事情|问题|这|安全事件)$/u.test(text);
+  if (generic) {
+    const named = namedHistoryAnchor(history);
+    if (!named) return [];
+    text = `${named} ${/漏洞/u.test(original) ? '漏洞' : (/新闻/u.test(original) ? '新闻' : '事件')}`;
+  }
+
+  const canonical = canonicalizeFactQuery(text);
+  const hasNamedAnchor = /CVE-\d{4}-\d+|PHP2Shell|[A-Za-z]{2,}/u.test(canonical);
+  if (!hasNamedAnchor) return [];
+
+  const hasEvent = FACT_EVENT_PATTERN.test(canonical) || FACT_EVENT_PATTERN.test(original);
+  const impact = FACT_SECURITY_IMPACT_PATTERN.test(original);
+  const newsHint = FACT_NEWS_HINT_PATTERN.test(original);
+  const eventHints = hasEvent
+    ? []
+    : (impact ? ['漏洞 安全事件', '新闻'] : (newsHint ? ['新闻'] : []));
+  const queries = (eventHints.length > 0 ? eventHints : ['']).map((eventHint) => (
+    [canonical, eventHint, dateHint].filter(Boolean).join(' ').slice(0, 300)
+  ));
+  return [...new Set(queries.filter(Boolean))].slice(0, 2);
+}
+
+function imageQueriesCoverTextQuery(imageQueries, textQuery) {
+  const normalized = String(textQuery ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+  if (!normalized) return true;
+  const terms = String(textQuery ?? '')
+    .match(/[A-Za-z]{2,}|\d{2,}|[\p{Script=Han}]{2,}/gu) ?? [];
+  return imageQueries.some((query) => {
+    const candidate = String(query ?? '')
+      .normalize('NFKC')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, '');
+    if (candidate.includes(normalized)) return true;
+    return terms.length > 0 && terms.every((term) => candidate.includes(term.toLowerCase()));
+  });
+}
+
+function textQueryAddsConcreteAnchor(textQuery, imageQueries, content = '') {
+  if (!Array.isArray(imageQueries) || imageQueries.length === 0) return true;
+  // A date-bearing “昨天/刚刚” question deserves its own current-events lookup
+  // even if the image plan already contains the same subject. This is the case
+  // that previously searched only the image OCR and missed the actual news.
+  if (/(?:昨天|昨日|前天|今天|今日|刚刚|刚才|这两天|这几天|这周|本周|最近|近期|最新)/u.test(String(content ?? ''))) {
+    return true;
+  }
+  const withoutDateHint = String(textQuery ?? '')
+    .replace(/\b\d{4}-\d{2}-\d{2}\b[\s\S]*$/u, ' ')
+    .replace(/\b\d{4}\b/gu, ' ');
+  const tokens = withoutDateHint.match(/[A-Za-z][A-Za-z0-9._+-]{1,}|CVE-\d{4}-\d+|\b\d{1,3}\b/gu) ?? [];
+  if (tokens.length === 0) return false;
+  const combined = imageQueries
+    .map((query) => String(query ?? '').normalize('NFKC').toLowerCase())
+    .join(' ');
+  return tokens.some((token) => !combined.includes(String(token).normalize('NFKC').toLowerCase()));
+}
+
+function evidenceMentionsRecentDate(context, recentDateHint) {
+  // The retrieval header repeats the query, including the absolute date we
+  // appended. Ignore those header lines so only returned evidence is checked.
+  const source = String(context ?? '').replace(/^【[^\n]*】\s*$/gmu, ' ');
+  const iso = String(recentDateHint ?? '').match(/\d{4}-\d{2}-\d{2}/u)?.[0];
+  if (!source || !iso) return true;
+  const [year, month, day] = iso.split('-');
+  const monthNumber = String(Number(month));
+  const dayNumber = String(Number(day));
+  return [
+    iso,
+    iso.replace(/-/gu, '/'),
+    `${year}年${monthNumber}月${dayNumber}日`,
+    `${monthNumber}月${dayNumber}日`,
+    `${month}-${day}`,
+    `${monthNumber}-${dayNumber}`,
+  ].some((variant) => source.includes(variant));
 }
 
 function normalizedJevCulture(style = {}) {
@@ -499,6 +706,10 @@ export async function generateConversationReply(options) {
     explicitImageSearch = false,
     imageInformationPolicy = null,
     imageInformationPrompt = '',
+    imageRealityAnchor: inputImageRealityAnchor = '',
+    imageInformationKind: inputImageInformationKind = '',
+    imageMemeClaim: inputImageMemeClaim = '',
+    groundingQueryHint: inputGroundingQueryHint = '',
     recordSummary = false,
     videoBlocks = [],
     cultureCache = null,
@@ -512,15 +723,44 @@ export async function generateConversationReply(options) {
     imageSemanticFrame = '',
     groupTopicPrompt = '',
     groupStyleProvider = null,
+    turnPlan = null,
   } = options;
+
+  // The runtime planner is a second opinion, not a replacement for the image
+  // analysis. Prefer concrete vision fields and only fill blanks with its card.
+  const plannedMemeTrusted = Number(turnPlan?.confidence ?? 0.5) >= 0.35;
+  const plannedMeme = plannedMemeTrusted
+    && turnPlan?.meme && typeof turnPlan.meme === 'object'
+    ? turnPlan.meme : {};
+  const imageRealityAnchor = String(
+    inputImageRealityAnchor || plannedMeme.anchor || '',
+  ).trim();
+  const imageInformationKind = String(
+    inputImageInformationKind
+      || (plannedMeme.informationKind && plannedMeme.informationKind !== 'unknown'
+        ? plannedMeme.informationKind : '')
+      || '',
+  ).trim();
+  const imageMemeClaim = String(
+    inputImageMemeClaim || plannedMeme.claim || '',
+  ).trim();
+  const groundingQueryHint = [
+    inputGroundingQueryHint,
+    plannedMeme.anchor,
+    plannedMeme.claim,
+  ].filter(Boolean).join(' ').slice(0, 240);
 
   const turnNow = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
   const userContent = buildMultimodalUserContent(modelInput, imageBlocks, videoBlocks);
   const relativeDateText = [content, currentQuestion, modelInput]
     .filter(Boolean).join('\n');
   const relativeDateFacts = extractRelativeDateFacts(turnNow, relativeDateText);
+  const recentText = [content, currentQuestion].filter(Boolean).join('\n');
+  const recentDateHint = recentRelativeDateHint(turnNow, recentText);
+  const recentSearchHint = recentSearchWindowHint(turnNow, recentText);
   const relativeDateSearchHint = relativeDateFacts
     .map((fact) => `${fact.targetDate} ${fact.targetYear}年${fact.targetMonth}月`)
+    .concat(recentSearchHint ? [recentSearchHint] : [])
     .join(' ')
     .slice(0, 120);
   // 图片只在首轮生成时上传一次；重写、质量复核和思考降级使用已经注入的
@@ -545,7 +785,12 @@ export async function generateConversationReply(options) {
     ].join('\n')
     : '';
   const abstractSignalEntries = (Array.isArray(imageAbstractAssociations) ? imageAbstractAssociations : [])
-    .map((entry) => buildAbstractAssociationEntry(entry))
+    .map((entry) => buildAbstractAssociationEntry({
+      ...entry,
+      realityAnchor: entry?.realityAnchor || entry?.reality_anchor || imageRealityAnchor,
+      memeClaim: entry?.memeClaim || entry?.meme_claim || imageMemeClaim,
+      informationKind: entry?.informationKind || entry?.information_kind || imageInformationKind,
+    }))
     .filter(Boolean)
     .slice(0, 6);
   const abstractImpressionText = String(imageAbstractImpression ?? '').trim().slice(0, 900);
@@ -555,6 +800,11 @@ export async function generateConversationReply(options) {
   // persona contract is appended after history below; duplicating it here
   // made the model arbitrate between two near-identical rule lists and often
   // left only the “explain/keep short” fragments active.
+  const turnSignals = getReplyStyleSignals(content, {
+    ...interactionContext,
+    hasImageContext,
+    hasQuotedContent,
+  });
   const lexicalAttackStyle = !recordSummary && shouldUseAttackStyle(content, history, {
     ...interactionContext,
     activeReply,
@@ -562,6 +812,51 @@ export async function generateConversationReply(options) {
     hasQuotedContent,
   });
   const jevAttackStrategy = normalizedJevAttackStrategy(jevStyle ?? {});
+  const plannedAttackCard = turnPlan?.attack && typeof turnPlan.attack === 'object'
+    ? {
+      decision: ['none', 'content', 'reply', 'target', 'mixed'].includes(String(turnPlan.attack.decision))
+        ? String(turnPlan.attack.decision) : 'none',
+      target: String(turnPlan.attack.target ?? 'none'),
+      angle: String(turnPlan.attack.angle ?? 'none'),
+      timing: String(turnPlan.attack.timing ?? 'none'),
+      intensity: Math.max(0, Math.min(1, Number(turnPlan.attack.intensity) || 0)),
+      reason: String(turnPlan.attack.reason ?? '').trim().slice(0, 240),
+    }
+    : null;
+  const explicitDirectAttack = isDirectBotAttack(content);
+  const explicitThirdPartyAttack = isExplicitThirdPartyAttackRequest(
+    content,
+    interactionContext,
+  );
+  const plannedTargetAllowed = plannedAttackCard?.target === 'current_speaker'
+    ? explicitDirectAttack && !interactionContext.hasThirdPartyTarget
+    : (plannedAttackCard?.target === 'mentioned_member'
+      ? explicitThirdPartyAttack && interactionContext.targetLabels?.length > 0
+      : (plannedAttackCard?.target === 'quoted_author'
+        ? explicitThirdPartyAttack && Boolean(interactionContext.quotedAuthorLabel)
+        : false));
+  const plannedPersonalAttack = Boolean(
+    plannedAttackCard
+    && !recordSummary
+    && !turnSignals.deescalationRequested
+    && !turnSignals.sensitiveSupport
+    && ['reply', 'target', 'mixed'].includes(plannedAttackCard.decision)
+    && plannedTargetAllowed,
+  );
+  // A planner can recognize attitude or hostility in content, but a personal
+  // target still needs an explicit current-turn authorization. Otherwise the
+  // card is degraded to content-level snark instead of quietly enabling abuse.
+  const plannedAttack = plannedAttackCard && !plannedPersonalAttack
+    ? {
+      ...plannedAttackCard,
+      decision: plannedAttackCard.decision === 'none' ? 'none' : 'content',
+      target: 'content',
+      timing: plannedAttackCard.decision === 'none' ? 'none' : 'after_answer',
+    }
+    : plannedAttackCard;
+  const effectiveTurnPlan = turnPlan && typeof turnPlan === 'object'
+    ? { ...turnPlan, attack: plannedAttack || turnPlan.attack }
+    : turnPlan;
   // Keep the existing relation-aware lexical route as the hard signal. A
   // direct insult in a quote authored by someone else must not be promoted
   // merely because the text itself starts with “你这个傻逼”.
@@ -577,6 +872,7 @@ export async function generateConversationReply(options) {
     explicitStrongAttack
     || (lexicalAttackStyle && !jevRejectsWeakAttack)
     || jevSemanticAttackEnabled(jevAttackStrategy, { interactionContext })
+    || plannedPersonalAttack
   );
   const personaContextForAttack = attackPersonaContext(personaContext);
   const cachePrefixSystemPrompt = [
@@ -584,11 +880,7 @@ export async function generateConversationReply(options) {
     '【稳定人格能力前缀】保留龙玉涛的嘴欠、反差、文化联想和短句群聊语感；本前缀只提供能力背景，不替当前轮次判断称呼、攻击对象、笑点或回复方式。',
     attackStyle ? personaContextForAttack : personaContext,
   ].filter(Boolean).join('\n\n');
-  const styleSignals = getReplyStyleSignals(content, {
-    ...interactionContext,
-    hasImageContext,
-    hasQuotedContent,
-  });
+  const styleSignals = turnSignals;
   const cultureRecall = buildCultureRecallContext({
     content,
     currentQuestion,
@@ -692,11 +984,14 @@ export async function generateConversationReply(options) {
   // A standalone attack remains a dedicated short attack turn. Once the
   // message also belongs to an active question/engagement window, it uses the
   // unified answer-plus-rebuttal path below.
+  const plannedAnswerRequired = turnPlan?.answerRequired === true;
   const pureThirdPartyAttack = attackStyle && !activeReply
-    && isExplicitThirdPartyAttackRequest(content, interactionContext);
+    && isExplicitThirdPartyAttackRequest(content, interactionContext)
+    && !plannedAnswerRequired;
   const pureDirectBotAttack = attackStyle
     && isDirectBotAttack(content)
-    && !hasAnswerRequest(content);
+    && !hasAnswerRequest(content)
+    && !plannedAnswerRequired;
   const pureAttack = pureThirdPartyAttack || pureDirectBotAttack;
   const webSearchToolsAvailable = Boolean(webSearchEnabled && webSearch);
   const runWebSearchTool = async ({ name, arguments: toolArgs = {} } = {}) => {
@@ -770,11 +1065,13 @@ export async function generateConversationReply(options) {
         memoryContext,
         personaContextForAttack,
         cultureRecall.prompt,
+        buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
         buildAttackPrompt(content, {
           history,
           interactionContext,
           activeReply,
           jevAttackStrategy,
+          plannedAttack,
         }),
       ].filter(Boolean).join('\n\n'),
       maxTokens: activeReply ? 160 : 220,
@@ -790,6 +1087,7 @@ export async function generateConversationReply(options) {
       targetLabels: interactionContext.targetLabels,
       interactionContext,
       userContent: content,
+      plannedAttack,
       jevAttackStrategy: jevSemanticAttackEnabled(jevAttackStrategy, { interactionContext })
         ? jevAttackStrategy : null,
     };
@@ -809,6 +1107,7 @@ export async function generateConversationReply(options) {
           memoryContext,
           personaContextForAttack,
           cultureRecall.prompt,
+          buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
           buildAttackRetryPrompt(
             content,
             firstDraft,
@@ -818,6 +1117,7 @@ export async function generateConversationReply(options) {
               interactionContext,
               activeReply,
               jevAttackStrategy,
+              plannedAttack,
             },
           ),
         ].filter(Boolean).join('\n\n'),
@@ -895,7 +1195,42 @@ export async function generateConversationReply(options) {
     timeSensitive: jevCulture.timeSensitive,
     unknownConcept: jevCulture.unknownConcept,
   });
-  const factSearchMode = imageSearch ? 'general' : (useCurrentInformation ? 'current' : 'general');
+  const plannedFactQueries = (Array.isArray(turnPlan?.search?.factQueries)
+    ? turnPlan.search.factQueries : [])
+    .map((query) => String(query ?? '').trim().slice(0, 180))
+    .filter(Boolean)
+    .slice(0, 3);
+  const plannedCultureQueries = (Array.isArray(turnPlan?.search?.cultureQueries)
+    ? turnPlan.search.cultureQueries : [])
+    .map((query) => String(query ?? '').trim().slice(0, 180))
+    .filter(Boolean)
+    .slice(0, 3);
+  const plannedFactSearchRequested = turnPlan?.search?.factNeeded === true
+    && plannedFactQueries.length > 0;
+  const plannedCultureSearchRequested = turnPlan?.search?.cultureNeeded === true
+    && plannedCultureQueries.length > 0;
+  // A low-information image keeps its hard gate unless the turn has a concrete
+  // visual/text anchor or an explicit verification request. A concrete planner
+  // query alone is not enough to turn a reaction image into a news lookup.
+  const plannedFactImageGateOpen = !hasImageContext
+    || imageInformationPolicy?.level !== 'low_information'
+    || explicitImageSearch
+    || retrievalPolicy.verificationRequested === true
+    || Boolean(imageRealityAnchor || groundingQueryHint);
+  const plannedFactEligible = plannedFactSearchRequested && plannedFactImageGateOpen;
+  const plannedCultureEligible = plannedCultureSearchRequested && !attackStyle;
+  const textFactQueries = (retrievalPolicy.textFactEligible
+    ? buildTextFactQueries(content, recentSearchHint, history)
+    : [])
+    .filter((candidate) => !imageSearch || (
+      !imageQueriesCoverTextQuery(queries, candidate)
+      && textQueryAddsConcreteAnchor(candidate, queries, recentText)
+    ));
+  const textFactQuery = textFactQueries[0] ?? '';
+  const factSearchMode = imageSearch
+    ? (textFactQuery && (relativeDateFacts.length > 0 || recentSearchHint) ? 'current' : 'general')
+    : (useCurrentInformation || retrievalPolicy.recentEventRequested || recentSearchHint
+      ? 'current' : 'general');
   const cultureSearchMode = useLongtuKnowledge ? 'longtu' : 'meme';
   const unknownConcept = jevCulture.unknownConcept === true;
   // Ordinary banter should not carry a search tool at all. Giving every turn a
@@ -907,18 +1242,25 @@ export async function generateConversationReply(options) {
   const turnWebSearchTools = webSearchToolsAvailable && (
     retrievalPolicy.factEligible
     || retrievalPolicy.cultureEligible
+    || plannedFactEligible
+    || plannedCultureEligible
   ) ? [
     WEB_SEARCH_TOOL,
     ...(memeKnowledgeToolsAvailable ? [MEME_KNOWLEDGE_TOOL] : []),
   ] : undefined;
-  const cultureTerms = (jevCulture.terms.join(' ') || String(currentQuestion || content || '').trim()).slice(0, 120);
+  const cultureTerms = (
+    [...jevCulture.terms, ...plannedCultureQueries].join(' ')
+    || String(currentQuestion || content || '').trim()
+  ).slice(0, 120);
   const cultureLookupQuery = (unknownConcept ? `wiki ${cultureTerms}` : cultureTerms).slice(0, 120);
-  const cultureQuery = unknownConcept
+  const cultureQuery = plannedCultureQueries.length > 0
+    ? plannedCultureQueries.join(' ').slice(0, 240)
+    : (unknownConcept
     ? cultureLookupQuery
     : [
       jevCulture.terms.join(' '),
       String(currentQuestion || content || '').trim(),
-    ].filter(Boolean).join(' ').slice(0, 240);
+    ].filter(Boolean).join(' ').slice(0, 240));
   const unknownConceptScope = {
     candidates: [],
     includeDomains: ['baike.baidu.com', 'zh.moegirl.org.cn', 'zh.wikipedia.org', 'en.wikipedia.org'],
@@ -976,7 +1318,7 @@ export async function generateConversationReply(options) {
   const abstractAssociationContext = abstractAssociationEntries.length > 0
     ? abstractAssociationPrompt(abstractAssociationEntries, abstractAssociationMemoryHit ? 'memory' : 'fresh-vision')
     : '';
-  if (retrievalPolicy.cultureEligible && cultureCache && cultureLookupQuery) {
+  if ((retrievalPolicy.cultureEligible || plannedCultureEligible) && cultureCache && cultureLookupQuery) {
     try {
       cultureCard = cultureCache.lookup(cultureLookupQuery, {
         domain: useLongtuKnowledge ? 'longtu' : (jevCulture.domain !== 'none' ? jevCulture.domain : undefined),
@@ -987,14 +1329,21 @@ export async function generateConversationReply(options) {
     }
   }
 
-  const factSearchEligible = imageSearch
-    ? retrievalPolicy.factEligible && !imageEvaluationRequest && queries.length > 0
-    : retrievalPolicy.factEligible;
-  const cultureSearchEligible = retrievalPolicy.cultureEligible
+  const factSearchEligible = plannedFactEligible
+    ? !imageEvaluationRequest
+    : (imageSearch
+      ? retrievalPolicy.factEligible && !imageEvaluationRequest
+        && (queries.length > 0 || textFactQueries.length > 0)
+      : retrievalPolicy.factEligible);
+  const cultureSearchEligible = (retrievalPolicy.cultureEligible
     && !cultureCacheHit
-    && Boolean(cultureQuery);
+    && Boolean(cultureQuery)) || plannedCultureEligible;
+  const attackAllowsFactSearch = !attackStyle
+    || plannedAnswerRequired
+    || hasAnswerRequest(currentQuestion)
+    || retrievalPolicy.verificationRequested === true;
   const factSearchAttempted = Boolean(
-    !attackStyle && webSearchEnabled && webSearch && factSearchEligible,
+    attackAllowsFactSearch && webSearchEnabled && webSearch && factSearchEligible,
   );
   const cultureSearchAttempted = Boolean(
     !attackStyle && webSearchEnabled && webSearch && cultureSearchEligible,
@@ -1009,33 +1358,99 @@ export async function generateConversationReply(options) {
     if (imageSearch) {
       // At most three focused lookups; a failed topic must not discard the
       // evidence returned for the others or prevent the picture explanation.
-      const outcomes = await Promise.allSettled(queries.map((query, index) => searchWithSourceScope(
+      const tasks = [];
+      textFactQueries.forEach((query) => {
+        if (tasks.length >= 3) return;
+        tasks.push({
+          query,
+          mode: relativeDateFacts.length > 0 || recentSearchHint ? 'current' : 'general',
+          usageSource: 'web-search-image-text-fact',
+          kind: '文字事实',
+        });
+      });
+      queries.forEach((query, index) => {
+        if (tasks.length >= 3) return;
+        tasks.push({
+          query: [query, relativeDateSearchHint].filter(Boolean).join(' ').slice(0, 300),
+          mode: imageSearch ? 'general' : factSearchMode,
+          usageSource: 'web-search-image',
+          scope: imageSearchPlan?.[index],
+          kind: '图片线索',
+        });
+      });
+      const taskQueries = new Set(tasks.map((task) => task.query));
+      plannedFactQueries.forEach((query) => {
+        if (tasks.length >= 3 || taskQueries.has(query)) return;
+        tasks.push({
+          query,
+          mode: turnPlan?.search?.freshness === 'current' ? 'current' : 'general',
+          usageSource: 'web-search-planner-fact',
+          kind: '回合事实',
+        });
+        taskQueries.add(query);
+      });
+      const outcomes = await Promise.allSettled(tasks.map((task) => searchWithSourceScope(
         webSearch,
-        [query, relativeDateSearchHint].filter(Boolean).join(' ').slice(0, 300),
-        { mode: factSearchMode, usageSource: 'web-search-image' },
-        imageSearchPlan?.[index],
+        task.query,
+        { mode: task.mode, usageSource: task.usageSource },
+        task.scope,
       )));
       const successes = outcomes.flatMap((outcome, index) => outcome.status === 'fulfilled'
-        ? [{ ...outcome.value, clue: queries[index] }] : []);
+        ? [{ ...outcome.value, clue: tasks[index].query, kind: tasks[index].kind }] : []);
       factSearchError = outcomes.find(outcome => outcome.status === 'rejected')?.reason ?? null;
       factSearchResult = {
         ...emptySearchResult(),
-        query: queries.join(' | '),
+        query: tasks.map((task) => task.query).join(' | '),
         context: successes.filter(result => result.context).map(result =>
-          `【图片检索线索（待核实）：${result.clue}】\n${result.context}`).join('\n\n'),
+          `【${result.kind}检索（待核实）：${result.clue}】\n${result.context}`).join('\n\n'),
         resultCount: successes.reduce((sum, result) => sum + (result.resultCount || 0), 0),
         results: successes.flatMap(result => result.results || []),
         endpoint: successes.find(result => result.endpoint)?.endpoint || '',
-        fromCache: successes.length === queries.length && successes.every(result => result.fromCache),
+        fromCache: successes.length === tasks.length && successes.every(result => result.fromCache),
       };
-      if (factSearchResult.context && successes.length < queries.length) {
-        factSearchResult.context += '\n另有图片线索检索失败，不要将以上证据套用到未核实的其他图片。';
+      if (factSearchResult.context && successes.length < tasks.length) {
+        factSearchResult.context += '\n另有检索失败，未取回的证据不可视为已确认。';
       }
       return factSearchResult;
     }
+    if (plannedFactQueries.length > 0 || textFactQueries.length > 0) {
+      // The planner may see “昨天/刚刚” without knowing the wall clock. Add
+      // the program-computed absolute date before searching so an unrelated
+      // old article cannot be rewritten as yesterday's news.
+      const scheduledQueries = [...textFactQueries, ...plannedFactQueries].map((query) => (
+        recentSearchHint && !query.includes(recentSearchHint.slice(0, 10))
+          ? `${query} ${recentSearchHint}`.slice(0, 300)
+          : query
+      )).filter((query, index, all) => all.indexOf(query) === index).slice(0, 3);
+      const outcomes = await Promise.allSettled(scheduledQueries.map((query) => {
+        const scope = sourceScopeFromText(query);
+        const searchOptions = {
+          mode: turnPlan?.search?.freshness === 'current' || recentSearchHint ? 'current' : factSearchMode,
+          usageSource: 'web-search-planner-fact',
+        };
+        return scope.includeDomains.length
+          ? searchWithSourceScope(webSearch, query, searchOptions, scope)
+          : webSearch.search(query, searchOptions);
+      }));
+      const successes = outcomes.flatMap((outcome, index) => outcome.status === 'fulfilled'
+        ? [{ ...outcome.value, clue: scheduledQueries[index] }] : []);
+      factSearchError = outcomes.find((outcome) => outcome.status === 'rejected')?.reason ?? null;
+      return {
+        ...emptySearchResult(),
+        query: scheduledQueries.join(' | '),
+        context: successes.filter((result) => result.context).map((result) => (
+          `【回合事实检索（待核实）：${result.clue}】\n${result.context}`
+        )).join('\n\n'),
+        resultCount: successes.reduce((sum, result) => sum + (result.resultCount || 0), 0),
+        results: successes.flatMap((result) => result.results || []),
+        endpoint: successes.find((result) => result.endpoint)?.endpoint || '',
+        fromCache: successes.length === outcomes.length
+          && successes.every((result) => result.fromCache),
+      };
+    }
     const scope = sourceScopeFromText(content);
     const searchOptions = { mode: factSearchMode, usageSource: `web-search-${factSearchMode}` };
-    const factualQuery = [content, relativeDateSearchHint].filter(Boolean).join(' ').slice(0, 300);
+    const factualQuery = [content, recentSearchHint].filter(Boolean).join(' ').slice(0, 300);
     return scope.includeDomains.length
       ? searchWithSourceScope(webSearch, factualQuery, searchOptions, scope)
       : webSearch.search(factualQuery, searchOptions);
@@ -1090,6 +1505,14 @@ export async function generateConversationReply(options) {
       }
     });
   }
+  if (recentDateHint && factSearchResult.context
+    && !evidenceMentionsRecentDate(factSearchResult.context, recentDateHint)) {
+    factSearchResult.context += [
+      '',
+      `【时间核对】检索资料没有出现 ${recentDateHint} 这个日期。`,
+      '不能把资料里的旧事件写成昨天或刚刚发生；只能明确说没找到对应那天的消息，或改用资料中写明的真实日期。',
+    ].join('\n');
+  }
 
   if (!cultureCard && (cultureSearchResult.resultCount > 0 || cultureSearchResult.context)) {
     cultureCard = buildCultureCard(cultureLookupQuery || cultureQuery, cultureSearchResult, {
@@ -1136,13 +1559,36 @@ export async function generateConversationReply(options) {
     || (!passiveImageComment && !compactActiveReply && shouldRequestDetailedAnswer(currentQuestion));
   const imageDescriptionRequested = hasImageContext
     && EXPLICIT_IMAGE_DESCRIPTION_PATTERN.test(String(currentQuestion ?? ''));
-  const verificationRequested = retrievalPolicy.verificationRequested === true;
+  const verificationRequested = retrievalPolicy.verificationRequested === true
+    || turnPlan?.firstBeat === 'verdict';
+  const knowledgeMemeContext = hasImageContext
+    || /(?:梗|图|图片|截图|段子|表情包)/u.test(String(content ?? ''))
+    || Boolean(plannedMeme.anchor);
+  const informationMemeMode = Boolean(
+    !recordSummary
+    && !attackStyle
+    && knowledgeMemeContext
+    && (
+      String(imageRealityAnchor ?? '').trim()
+      || ['news', 'public_event', 'public_figure', 'technical_rule'].includes(
+        String(imageInformationKind ?? '').trim().toLowerCase(),
+      )
+      || retrievalPolicy.textFactEligible
+      || String(groundingQueryHint ?? '').trim()
+      || plannedMeme.anchor
+      || turnPlan?.firstBeat === 'anchor_meme'
+      || (Array.isArray(imageSearchQueries) && imageSearchQueries.some((query) => (
+        /(?:私钥|密钥|漏洞|CVE-\d{4}-\d+|RCE|0day|新闻|事件|通报|公告|规则|合法|范围)/iu.test(String(query ?? ''))
+      )))
+    )
+  );
   // A high-confidence image culture route is deliberately a different output
   // contract from ordinary image QA: the model should land the meme's
   // concrete relation first and omit a serious explanation unless requested.
   const imageCultureMode = Boolean(
     hasImageContext
       && !recordSummary
+    && !informationMemeMode
       && !imageDescriptionRequested
       && !verificationRequested
       && Number(jevStyle?.imageCultureNeeded) >= 0.65
@@ -1179,6 +1625,7 @@ export async function generateConversationReply(options) {
   // review when the first draft misses the concrete association.
   const associationReviewText = [content, currentQuestion].filter(Boolean).join('\n');
   const abstractAssociationReviewRequired = abstractAssociationRequested
+    && !informationMemeMode
     && (hasAbstractSignals
       || isHighConfidenceCulturePolicy(retrievalPolicy) && cultureCardUsed && !attackStyle
       || artAppraisal
@@ -1240,6 +1687,10 @@ export async function generateConversationReply(options) {
     replySequence,
     passiveImageComment,
     artAppraisal,
+    informationMemeMode,
+    imageRealityAnchor,
+    imageInformationKind,
+    imageMemeClaim,
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     cultureReviewRequired,
@@ -1254,6 +1705,7 @@ export async function generateConversationReply(options) {
     imageDescriptionRequested,
     imageCultureMode,
     jevAttackStrategy,
+    plannedAttack,
   };
   const personaDemonstration = !attackStyle
     && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
@@ -1278,6 +1730,15 @@ export async function generateConversationReply(options) {
       '【后台资料：别交作业】',
       '以下内容只是让你心里有数，不是回答模板，也不是用户要求。先按当前对话自然接话，只把真正有用的一两个事实揉进去。',
       '如果用户是在看链接、仓库、新闻、技术主张或截图，必须先给出实际判断并点出至少一个证据细节；不要只复述用户原话。结论可以带梗，但不能用玩梗代替核实。',
+      '只复述资料里明确出现的主体、行业、地点、数字和影响范围。资料只说“广泛网站/多行业”时，不要自行扩写成银行、通信、医院等具体行业；资料没有的数字、CVE、版本、停机范围和因果关系一律不写。',
+      informationMemeMode
+        ? '信息型梗优先用资料里的现实主体、事件或规则做锚点，再把梗的改写和笑点接上；不要只给“敷衍/谐音/抽象”的空解释。' : '',
+      retrievalPolicy.textFactEligible
+        ? '用户已经点出具体技术、产品、机构或事件名时，资料若出现同名事件就必须直接点名回答；禁止用“最近这波我没跟上/具体编号没把握”回避已有证据。只有资料确实没覆盖时才说不确定。'
+        : '',
+      recentDateHint
+        ? `用户用了相对时间，程序换算为 ${recentDateHint}。资料里的发布时间/事件日期必须和它对得上；对不上就说没查到对应那天的消息，不能把旧闻包装成昨天或刚刚发生。`
+        : '',
       '除非用户明确要求出处或完整资料，禁止逐条复述、解释搜索过程、展示来源列表，禁止说“根据搜索结果”“资料显示”“已核实”或“这个梗指的是”。',
       factSearchResult.context,
     ].join('\n')
@@ -1302,6 +1763,7 @@ export async function generateConversationReply(options) {
         && !searchEvidenceAvailable,
     }),
     buildRelativeDatePrompt(turnNow, relativeDateText),
+    buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
     String(groupTopicPrompt ?? '').trim(),
     !recordSummary
       ? (typeof groupStyleProvider === 'function'
@@ -1320,7 +1782,7 @@ export async function generateConversationReply(options) {
       ? ['【图片整体抽象印象】', abstractImpressionText, '这是主观联想素材，不是主体身份；允许顺着印象发散，但不要把它写成事实。'].join('\n')
       : '',
     abstractAssociationContext,
-    imageSearch && queries.length === 0
+    imageSearch && queries.length === 0 && textFactQueries.length === 0
       ? '本轮没有合适的公开检索线索或用户要求不联网，未进行图片联网查询；按可见证据回答当前问题，不要声称已搜索，也不必为了说明没搜索而另起一段。' : '',
     protectedIdentityContext,
     memoryContext,
@@ -1343,6 +1805,9 @@ export async function generateConversationReply(options) {
       activeReplyPriority,
       sourceDisplayRequested,
       imageCultureMode,
+      informationMemeMode,
+      imageRealityAnchor,
+      imageMemeClaim,
       verificationRequested,
     }),
     styleSignals.attackCandidate && !attackStyle
@@ -1506,6 +1971,7 @@ export async function generateConversationReply(options) {
               relativeDateFacts,
               history,
               searchEvidenceQuality: searchResult?.evidenceQuality ?? 'none',
+              plannedAttack,
             }),
           maxTokens: responseMaxTokens,
           ...(passiveImageComment ? { temperature: 0.2 } : {}),
@@ -1675,6 +2141,15 @@ export async function generateConversationReply(options) {
     && searchResult?.evidenceQuality !== 'exact-source') {
     answer = repairUnsupportedProvenance(answer);
   }
+  if (factEvidenceAvailable) {
+    // Search summaries often support only a broad “many websites” claim. Do
+    // not let the model upgrade that into named industries such as banking or
+    // telecom unless the evidence or the user's own wording contains them.
+    answer = repairUnsupportedNewsScope(answer, {
+      evidence: factSearchResult.context,
+      question: currentQuestion,
+    });
+  }
   if (!attackStyle && !requiredIdentityRole) {
     // QQ already shows the reply target. A model-added leading @mention is
     // usually a copied prompt fragment and makes a short group reply feel
@@ -1740,11 +2215,13 @@ export async function generateConversationReply(options) {
             protectedIdentityContext,
             memoryContext,
             personaContextForAttack,
+            buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
             buildAttackPrompt(content, {
               history,
               interactionContext,
               activeReply: true,
               jevAttackStrategy,
+              plannedAttack,
             }),
           ].filter(Boolean).join('\n\n'),
           revisionSystemPrompt: [
@@ -1821,6 +2298,11 @@ export async function generateConversationReply(options) {
     detailedAnswerRequested,
     compactResponse: !detailedAnswerRequested && !recordSummary && !passiveImageComment,
     artAppraisal,
+    informationMemeMode,
+    imageRealityAnchor,
+    imageInformationKind,
+    imageMemeClaim,
+    groundingQueries: [...textFactQueries, ...queries].filter(Boolean),
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     abstractAssociations: abstractAssociationEntries,

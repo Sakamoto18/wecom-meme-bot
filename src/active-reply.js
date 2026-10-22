@@ -173,7 +173,8 @@ function recentTranscript(history, limit) {
 export class ActiveReplyDecider {
   constructor(options) {
     this.chatClient = options.chatClient;
-    this.jevGate = options.jevGate ?? null;
+    this.jevOutputEnabled = options.jevOutputEnabled === true;
+    this.jevGate = this.jevOutputEnabled ? (options.jevGate ?? null) : null;
     this.jevResponseModeMemory = options.jevResponseModeMemory ?? null;
     this.enabled = options.enabled ?? false;
     this.candidateProbability = Math.min(

@@ -68,7 +68,7 @@ test('Jev skip 会静默可选插话，但不拦截明确点名', async () => {
   };
   const decider = new ActiveReplyDecider({
     chatClient: { isConfigured: true, async complete() { return 'may'; } },
-    jevGate: gate, enabled: true, candidateProbability: 1, random: () => 0,
+    jevGate: gate, jevOutputEnabled: true, enabled: true, candidateProbability: 1, random: () => 0,
   });
   const skipped = await decider.shouldReply({ payload: groupPayload(), history: [] });
   assert.equal(skipped.reply, false);
@@ -87,11 +87,29 @@ test('Jev 故障回退旧主动回复判定并透传风格', async () => {
   };
   const decider = new ActiveReplyDecider({
     chatClient: { isConfigured: true, async complete() { return 'must'; } },
-    jevGate: gate, enabled: true, now: () => 10_000,
+    jevGate: gate, jevOutputEnabled: true, enabled: true, now: () => 10_000,
   });
   const result = await decider.shouldReply({ payload: groupPayload(), history: [] });
   assert.equal(result.reply, true);
   assert.equal(result.reason, 'ai-must');
+});
+
+test('Jev 输出路由默认不挂载，故障或 skip 都不能影响本地插话判定', async () => {
+  let gateCalls = 0;
+  const decider = new ActiveReplyDecider({
+    chatClient: { isConfigured: true, async complete() { return 'must'; } },
+    jevGate: {
+      getStatus() { gateCalls += 1; return { effectiveMode: 'on', mode: 'on' }; },
+      async evaluate() { gateCalls += 1; return { decision: 'skip' }; },
+    },
+    enabled: true,
+    candidateProbability: 1,
+    random: () => 0,
+  });
+  const result = await decider.shouldReply({ payload: groupPayload(), history: [] });
+  assert.equal(result.reply, true);
+  assert.equal(result.reason, 'ai-must');
+  assert.equal(gateCalls, 0);
 });
 
 test('主动回复判定使用中立规则和近期群聊，AI 返回 must 时放行', async () => {

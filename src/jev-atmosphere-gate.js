@@ -22,6 +22,10 @@ const ATTACK_ANGLES = new Set([
 const ATTACK_TIMINGS = new Set(['before_answer', 'after_answer', 'standalone', 'none']);
 const PROTOCOLS = new Set(['systemone', 'chat']);
 const STANCES = new Set(['ironic', 'sarcastic', 'self_deprecating', 'absurd', 'serious', 'neutral', 'unknown']);
+const INFORMATION_KINDS = new Set([
+  'news', 'public_event', 'public_figure', 'technical_rule',
+  'private_chat', 'reaction', 'unknown',
+]);
 
 function clamp(value, fallback = 0) {
   const number = Number(value);
@@ -651,6 +655,10 @@ const CHAT_GATE_SYSTEM_PROMPT = [
     image_fact_check_needed: 'number: 当前图片是否需要联网核实公开事实、出处或原帖',
     image_complete_read_needed: 'number: 是否需要 DeepSeek 重新读取原图/全部切片，而不是只依赖 OCR 摘要',
     image_query_terms: '最多 4 个从图片可见内容中提取的具体文化/事实核验短词',
+    grounding_needed: 'number: 回答必须依赖现实新闻、公开事件、真实人物/产品、技术规则或数字合法性，仅凭常识可能答错的概率',
+    reality_anchor_hint: '一句话写图片/对话指向的现实事件、主体或规则；纯表情/反应图/无公共锚点则空字符串',
+    grounding_query_terms: '最多 4 个把当前用户提示和现实锚点合起来的事实检索短词；没有具体锚点则为空数组',
+    information_kind: 'news|public_event|public_figure|technical_rule|private_chat|reaction|unknown',
     visual_facts: '最多 6 条只由图片像素确认的事实',
     text_claims: '最多 6 条图片文字提出的主张，不等于事实',
     semantic_relation: '一句话说明主体/事件之间正在发生什么关系',
@@ -687,6 +695,9 @@ function normalizeCultureAnswers(answers, context = {}) {
   const contextImageIndexes = indexList(answers?.context_image_indexes)
     .filter((index) => availableImageIndexes.has(index));
   const imageQueryTerms = listValue(answers?.image_query_terms, 4, 140);
+  const groundingQueryTerms = listValue(answers?.grounding_query_terms, 4, 140);
+  const realityAnchorHint = textValue(answers?.reality_anchor_hint, 220);
+  const informationKind = choice(answers?.information_kind, INFORMATION_KINDS, 'unknown');
   const pragmatic = answers?.pragmatic && typeof answers.pragmatic === 'object'
     ? answers.pragmatic : {};
   const culture = answers?.culture && typeof answers.culture === 'object'
@@ -759,6 +770,10 @@ function normalizeCultureAnswers(answers, context = {}) {
     imageFactCheckNeeded: answerNumber(answers, 'image_fact_check_needed'),
     imageCompleteReadingNeeded: answerNumber(answers, 'image_complete_read_needed'),
     imageQueryTerms,
+    groundingNeeded: answerNumber(answers, 'grounding_needed'),
+    realityAnchorHint,
+    groundingQueryTerms,
+    informationKind,
     visualFacts: listValue(answers?.visual_facts ?? pragmatic.visual_facts, 6, 180),
     textClaims: listValue(answers?.text_claims ?? pragmatic.text_claims, 6, 180),
     semanticRelation,
@@ -1043,6 +1058,10 @@ export class JevAtmosphereGate {
       image_fact_check_needed: QUESTIONS.image_fact_check_needed,
       image_complete_read_needed: QUESTIONS.image_complete_read_needed,
       image_query_terms: QUESTIONS.image_query_terms,
+      grounding_needed: QUESTIONS.grounding_needed,
+      reality_anchor_hint: QUESTIONS.reality_anchor_hint,
+      grounding_query_terms: QUESTIONS.grounding_query_terms,
+      information_kind: QUESTIONS.information_kind,
       visual_facts: QUESTIONS.visual_facts,
       text_claims: QUESTIONS.text_claims,
       semantic_relation: QUESTIONS.semantic_relation,

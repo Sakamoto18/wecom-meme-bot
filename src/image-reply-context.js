@@ -25,6 +25,18 @@ const IMAGE_CULTURE_REQUEST_PATTERN = /(?:调侃|接梗|联想|玩梗|地狱笑�
 const IMAGE_INFORMATION_PATTERN = /(?:长文|文章|公告|新闻|论坛|帖子|评论区|聊天记录|对话|多格|漫画|表格|数据|图表|教程|报错|故障|说明书|规则|通知|投票|调查|对比|时间线)/u;
 const IMAGE_QUESTION_OR_CLAIM_PATTERN = /[?？]|(?:什么|哪个|哪种|谁|哪里|为何|为什么|怎么(?:样|办|回事)?|是否|是不是|能不能|可不可以|出处|来源|原帖|真假|真的|假的|原因|办法|建议|价格|时间|多少)/u;
 const UI_NOISE_PATTERN = /(?:点赞|评论|转发|收藏|播放|浏览|粉丝|关注|分享|登录|注册|首页|搜索|推荐|热门|账号|用户名|用户名称|up主|作者|发布于|在线|分钟前|小时前|昨天|第\s*\d+楼)/iu;
+const GROUNDING_TERM_PATTERN = /(?:私钥|密钥|助记词|钱包|漏洞|CVE-\d{4}-\d+|RCE|0day|零日|补丁|安全事件|数据泄露|泄露|事故|通报|公告|发布会|判决|处罚|政策|热搜|报道|新闻|票房|比分|赛果|股价|汇率|版本|价格)/iu;
+const TECHNICAL_GROUNDING_PATTERN = /(?:私钥|密钥|助记词|钱包|算法|协议|编码|哈希|签名|合法|取值范围|格式|定义)/iu;
+const RECENT_GROUNDING_PATTERN = /(?:昨天|昨日|前天|今天|今日|刚刚|刚才|这两天|这几天|这周|本周|上周|最近|近期|最新)/iu;
+const CHARACTER_SUBJECT_KIND_PATTERN = /^(?:anime_character|game_character)$/iu;
+const CHARACTER_VISUAL_PATTERN = /(?:二次元|动漫|动画角色|游戏角色|角色立绘|立绘|纸片人|虚拟主播|vtuber|galgame|原画|人物插画|角色插画)/iu;
+const NON_CHARACTER_SCREENSHOT_PATTERN = /(?:聊天截图|聊天记录|私聊|群聊|评论区|论坛|帖子|新闻截图|公告截图|网页截图|公众号|文章截图)/iu;
+const CHARACTER_IDENTIFICATION_PATTERN = /(?:这是谁|谁啊|哪个角色|什么角色|哪个作品|哪部作品|什么作品|哪部|哪款游戏|什么游戏|游戏名|动漫名|出处|来源|叫什么|识别一下|认一下|认不认识)/iu;
+const PUBLIC_INFORMATION_KINDS = new Set([
+  'news', 'public_event', 'public_figure', 'technical_rule',
+]);
+const PUBLIC_INFORMATION_CLAIM_PATTERN = /(?:新闻|报道|公告|通报|政策|事故|漏洞|CVE-\d{4}-\d+|数据|统计|研究|发布|上线|涨价|降价|判决|处罚|官方|股价|汇率|票房|比分|赛果|\d{4}年|\d+月\d+日|https?:\/\/)/iu;
+const GENERIC_GROUNDING_TERM_PATTERN = /^(?:(?:这个|那个|这|那|图中|图里|图片|截图|梗|漏洞|新闻|事件|事故|公告|通报|政策|报道|背景|内容|关系|什么|为什么|怎么|有|是|的|和|与|并|先|再|然后|联网|上网|核实|验证|查|搜|解释|说说|看看|读图|看图)\s*)+$/u;
 
 const CURRENT_FILE = fileURLToPath(import.meta.url);
 const PROJECT_ROOT = path.resolve(path.dirname(CURRENT_FILE), '..');
@@ -292,6 +304,157 @@ export function isImageSearchEligible(item, subject) {
   return hasUsefulImageClue(subject, item);
 }
 
+function imageAnalysisItems(analysis) {
+  return analysis?.items?.length ? analysis.items : (analysis ? [analysis] : []);
+}
+
+/** Vision's best public-event/rule candidate. It is evidence to verify, not a fact. */
+export function primaryImageRealityAnchor(analysis) {
+  return imageAnalysisItems(analysis)
+    .map((item) => compactText(item?.realityAnchor ?? item?.reality_anchor).slice(0, 180))
+    .find(Boolean) ?? '';
+}
+
+export function primaryImageInformationKind(analysis) {
+  const kinds = new Set([
+    'news', 'public_event', 'public_figure', 'technical_rule',
+    'private_chat', 'reaction', 'unknown',
+  ]);
+  return imageAnalysisItems(analysis)
+    .map((item) => compactText(item?.informationKind ?? item?.information_kind).toLowerCase())
+    .find((kind) => kinds.has(kind)) ?? '';
+}
+
+export function primaryImageMemeClaim(analysis) {
+  return imageAnalysisItems(analysis)
+    .map((item) => compactText(item?.memeClaim ?? item?.meme_claim).slice(0, 220))
+    .find(Boolean) ?? '';
+}
+
+/**
+ * Anime/game character art is not a discussion item for this bot unless it is
+ * carrying real-world news, a meme claim, or the user asks to identify it.
+ * In-game dialogue and UI labels do not turn a character illustration into a
+ * public-information image.
+ */
+export function isPureCharacterImage(analysis, content = '') {
+  const items = imageAnalysisItems(analysis);
+  if (items.length === 0) return false;
+  const explicitCharacterSubject = items.some((item) => (
+    CHARACTER_SUBJECT_KIND_PATTERN.test(compactText(item?.subjectKind ?? item?.subject_kind))
+  ));
+  const characterSubject = explicitCharacterSubject || items.some((item) => {
+    const kind = compactText(item?.subjectKind ?? item?.subject_kind);
+    if (CHARACTER_SUBJECT_KIND_PATTERN.test(kind)) return true;
+    const visualContext = [
+      item?.description,
+      item?.scene,
+      item?.visualSubject,
+      ...(Array.isArray(item?.keywords) ? item.keywords : []),
+    ].filter(Boolean).join(' ');
+    return CHARACTER_VISUAL_PATTERN.test(visualContext)
+      && !NON_CHARACTER_SCREENSHOT_PATTERN.test(visualContext);
+  });
+  if (!characterSubject) return false;
+  const substantiveText = items
+    .flatMap((item) => (Array.isArray(item?.visibleText) ? item.visibleText : []))
+    .map((line) => compactText(line))
+    .filter((line) => !UI_NOISE_PATTERN.test(line))
+    .join(' ')
+    .replace(/\s+/gu, '');
+  const hasPublicInformation = items.some((item) => (
+    String(item?.realityAnchor ?? '').trim()
+    || String(item?.memeClaim ?? '').trim()
+    || PUBLIC_INFORMATION_KINDS.has(
+      compactText(item?.informationKind ?? item?.information_kind).toLowerCase(),
+    )
+    || (Array.isArray(item?.textClaims) && item.textClaims.some((claim) => (
+      PUBLIC_INFORMATION_CLAIM_PATTERN.test(String(claim ?? ''))
+        || meaningfulCharacters(claim) >= 80
+    )))
+  ));
+  if (hasPublicInformation) return false;
+  // With an explicit subject_kind from vision, dialogue/UI text is irrelevant:
+  // a visual-novel line such as “让我想想该怎么解释” is still pure character
+  // art. The OCR-only fallback keeps a bounded text check to avoid swallowing
+  // a long news screenshot that merely contains an anime avatar.
+  return explicitCharacterSubject || meaningfulCharacters(substantiveText) < 40;
+}
+
+export function shouldSkipCharacterEvaluation(analysis, content = '') {
+  const text = compactText(content);
+  if (CHARACTER_IDENTIFICATION_PATTERN.test(text)) return false;
+  return isPureCharacterImage(analysis, text);
+}
+
+function cleanGroundingPhrase(value) {
+  return compactText(value)
+    .replace(/^(?:先|再|然后|帮我|帮忙|给我|你|我|联网|上网|核实|验证|查|搜|搜索|查询|解释|说说|讲讲|看看|读图|看图)+/gu, ' ')
+    .replace(/^(?:不是|那|这个|那个|这|该|为什么|怎么|能不能|可不可以|你|我|他|她|它|解释一下|解释|说说|讲讲|结合|关于|就是|是)+/u, ' ')
+    .replace(/(?:这个|那个|就是|为什么|怎么|不能|可以|解释|一下)/gu, ' ')
+    .replace(/(?:是个?什么情况|怎么回事|咋回事|没看懂|看不懂|什么意思|什么梗|为啥|如何).*$/gu, ' ')
+    .replace(/(?:这是|什么|新闻|事件|事故|公告|通报|政策|报道|背景|内容|图片|截图|图里|图中|中的|这个|那个|梗|关系|并|和|与|有|是|的)+$/gu, ' ')
+    .replace(/(?:了|啊|呢|吧|吗|呀|嘛)+$/u, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function groundingHintTerms(content) {
+  const text = compactText(content);
+  if (!GROUNDING_TERM_PATTERN.test(text)) return [];
+  const terms = [];
+  for (const match of text.matchAll(/[“"']([^”"']{2,80})[”"']/gu)) {
+    const value = cleanGroundingPhrase(match[1]);
+    if (value) terms.push(value);
+  }
+  for (const match of text.matchAll(/([\p{Script=Han}A-Za-z0-9._+-]{0,12}(?:私钥|密钥|助记词|钱包|漏洞|CVE-\d{4}-\d+|RCE|0day|零日|补丁|安全事件|数据泄露|泄露|事故|通报|公告|发布会|判决|处罚|政策|热搜|报道|新闻|票房|比分|赛果|股价|汇率|版本|价格)[\p{Script=Han}A-Za-z0-9._+-]{0,8})/gu)) {
+    const value = cleanGroundingPhrase(match[1]);
+    if (value) terms.push(value);
+  }
+  for (const match of text.matchAll(/\b[A-Za-z][A-Za-z0-9._+-]{1,30}\b/gu)) {
+    terms.push(match[0]);
+  }
+  // A bare number only becomes an anchor when the same question also names a
+  // concrete technical/event noun. This is how “为什么这个 4 是完整密钥”
+  // reaches the rule lookup without turning ordinary numbers into searches.
+  for (const match of text.matchAll(/\b\d{1,6}\b/gu)) {
+    terms.push(match[0]);
+  }
+  const unique = [...new Set(terms
+    .map((term) => cleanGroundingPhrase(term).slice(0, 60))
+    .filter(Boolean))]
+    .filter((term) => !GENERIC_GROUNDING_TERM_PATTERN.test(term))
+    // A generic word such as “新闻” is not a query anchor. Keep quoted and
+    // concrete terms (Latin, number, CVE, or a multi-character named subject).
+    .filter((term) => /[A-Za-z0-9]/u.test(term) || meaningfulCharacters(term) >= 4);
+  return unique
+    .filter((term, index) => !unique.some((other, otherIndex) => (
+      otherIndex !== index && other.length > term.length && other.includes(term)
+    )))
+    .sort((left, right) => right.length - left.length)
+    .slice(0, 4);
+}
+
+function buildGroundingSearchPlan(analysis, content) {
+  const anchor = primaryImageRealityAnchor(analysis);
+  const claim = primaryImageMemeClaim(analysis);
+  const hintTerms = groundingHintTerms(content);
+  if (!anchor && hintTerms.length === 0) return null;
+  const technical = TECHNICAL_GROUNDING_PATTERN.test(`${anchor} ${claim} ${content}`);
+  const recent = RECENT_GROUNDING_PATTERN.test(content);
+  const subject = [anchor, claim, ...hintTerms]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 170);
+  if (!subject) return null;
+  const intent = technical
+    ? '规则 定义 合法 范围 背景'
+    : (recent ? '新闻 事件 原因 背景' : '新闻 事件 背景');
+  return { query: `${subject} ${intent}`.slice(0, 220) };
+}
+
 // Vision output remains evidence for the normal persona, not a user-facing report.
 export const FORWARD_SUMMARY_PROMPT = [
   '【本轮任务：总结用户提供的聊天记录】',
@@ -304,6 +467,7 @@ export const IMAGE_MEANING_PROMPT = [
   '【本轮图片回答方式】',
   '保留龙玉涛知识里的嘴欠、反差和接梗语感，评论图中内容与事情本身；识图和总结不等于邀请攻击发图者、引用作者或提问者，除非当前用户明确要求，否则不顺带损这些人。',
   '视觉核对优先于截图文字：图片里的标题、评论、字幕和提问可能只是别人提出的猜测或错误答案。先看原图主体，再回答文字问题；如果两者冲突，明确保留“文字声称什么”和“画面实际像什么”的区别，不要顺着文字硬认角色或出处。',
+  '纯二次元或游戏角色图，例如角色立绘、CG、没有现实新闻锚点或梗改写的角色截图，不评价颜值、身材、可爱程度或角色魅力；只有用户明确询问角色身份、作品或出处时才识别，否则一句“这类角色图我不评”就停，不要硬找笑点或抽象联想。',
   '遇到大字被人物、物件或阴影遮住的海报/截图，要额外检查遮挡后形成的错字、拆字、谐音、黑白幻视和视觉文字双关；把“原字”“遮挡后像什么”与“这层反差如何服务笑点”分开记录，不能只做 OCR 直读。尤其要检查只露半边字、负形、黑白反转后是否变成另一个字；例如像“尊”只露一半、配合黑白幻视看成“奠”时，应记录为“尊→奠（半字遮挡+黑白幻视）”，但没有像素依据就不要硬套这个例子。',
   '如果后台识别结果提供了“视觉文字双关/错视”，先回到原图核对这个字形关系；确认成立时，这层反差就是当前图片回答的主线，必须优先说出原字与视觉变体，不要退化成“车很亮/有人挡住字”这种只报物体的平面描述。',
   '对拼贴图、讽刺截图、漫画和表情包，先做一层面向回复的语义压缩：提取 scene_relation（谁和谁/什么元素发生什么关系）、implied_point（图片真正想表达的观点或反差）、comic_mechanism（错位、双关、夸张、反转或荒诞机制）、speaker_intent（当前用户要评价、配文、解释、识别还是查证）和 reply_hook（可以直接接出的一个具体落点）。这些字段必须绑定原图证据，不要把物体清单换个说法；没有把握就留空。',
@@ -348,7 +512,7 @@ export function buildImageSearchPlan(analysis, content = '') {
   const verificationIntent = /(?:真的假的|真假|是否属实|核实|验证|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志|(?:\d+|[一二两三四五六七八九十几]+)\s*(?:天|日)后|过几天|下周|本周末|月底|下个月|几个月后|三个月后|跨年)/iu.test(content);
   if (isImageEvaluationIntent(content) && !explicitIntent && !verificationIntent) return [];
   const cultureIntent = IMAGE_CULTURE_REQUEST_PATTERN.test(compactText(content));
-  const maxQueries = explicitIntent
+  const baseMaxQueries = explicitIntent
     ? IMAGE_SEARCH_EXPLICIT_MAX_QUERIES
     : IMAGE_SEARCH_DEFAULT_MAX_QUERIES;
   const intent = /真假|真的假的|核实|验证|辟谣|谣言|真实吗|是否属实|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志/u.test(content)
@@ -356,6 +520,13 @@ export function buildImageSearchPlan(analysis, content = '') {
     : (/出处|来源|什么梗/u.test(content) ? '来源 含义' : '含义 背景');
   const queries = [];
   const seen = new Set();
+  const groundingPlan = buildGroundingSearchPlan(analysis, content);
+  const maxQueries = Math.min(3, baseMaxQueries + (groundingPlan ? 1 : 0));
+  if (groundingPlan) {
+    const fingerprint = groundingPlan.query.normalize('NFKC').toLowerCase();
+    seen.add(`:${fingerprint}`);
+    queries.push(groundingPlan);
+  }
   for (const item of items) {
     const itemPolicy = classifyImageInformation(item);
     // Low-information images stay local unless the user explicitly asks for a

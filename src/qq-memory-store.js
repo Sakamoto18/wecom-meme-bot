@@ -15,6 +15,8 @@ const DEFAULT_RAW_MESSAGE_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_SUMMARY_TRIGGER_MESSAGES = 40;
 const DEFAULT_SUMMARY_KEEP_MESSAGES = 20;
+const DEFAULT_PRIVATE_SUMMARY_TRIGGER_MESSAGES = 16;
+const DEFAULT_PRIVATE_SUMMARY_KEEP_MESSAGES = 8;
 const DEFAULT_MAX_SUMMARY_CHARACTERS = 3_000;
 const DEFAULT_SUMMARY_INPUT_CHARACTERS = 30_000;
 const DEFAULT_MEMBER_SUMMARY_TRIGGER_MESSAGES = 12;
@@ -112,6 +114,19 @@ export class QqMemoryStore {
         1,
       ),
       this.summaryTriggerMessages - 1,
+    );
+    this.privateSummaryTriggerMessages = normalizedPositiveInteger(
+      options.privateSummaryTriggerMessages,
+      DEFAULT_PRIVATE_SUMMARY_TRIGGER_MESSAGES,
+      2,
+    );
+    this.privateSummaryKeepMessages = Math.min(
+      normalizedPositiveInteger(
+        options.privateSummaryKeepMessages,
+        DEFAULT_PRIVATE_SUMMARY_KEEP_MESSAGES,
+        1,
+      ),
+      this.privateSummaryTriggerMessages - 1,
     );
     this.maxSummaryCharacters = options.maxSummaryCharacters
       ?? DEFAULT_MAX_SUMMARY_CHARACTERS;
@@ -892,6 +907,11 @@ export class QqMemoryStore {
 
   getSummarySnapshot(conversationId) {
     const database = this.ensureOpen();
+    const privateConversation = /^(?:single|private):/u.test(String(conversationId ?? ''));
+    const summaryTriggerMessages = privateConversation
+      ? this.privateSummaryTriggerMessages : this.summaryTriggerMessages;
+    const summaryKeepMessages = privateConversation
+      ? this.privateSummaryKeepMessages : this.summaryKeepMessages;
     const conversation = database.prepare(`
       SELECT summary, summary_through_id
       FROM qq_conversations
@@ -904,11 +924,11 @@ export class QqMemoryStore {
       FROM qq_messages
       WHERE conversation_id = ? AND id > ?
     `).get(conversationId, Number(conversation.summary_through_id)).count);
-    if (unsummarizedCount < this.summaryTriggerMessages) return null;
+    if (unsummarizedCount < summaryTriggerMessages) return null;
 
     let summarizeCount = Math.min(
-      unsummarizedCount - this.summaryKeepMessages,
-      this.summaryTriggerMessages - this.summaryKeepMessages,
+      unsummarizedCount - summaryKeepMessages,
+      summaryTriggerMessages - summaryKeepMessages,
     );
     if (summarizeCount < 1) return null;
     const rows = database.prepare(`
