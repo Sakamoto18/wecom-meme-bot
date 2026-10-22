@@ -77,6 +77,33 @@ test('JEV 判定需要核实事实或时效时，不依赖关键词也进入事�
   assert.equal(calls.length, 1);
 });
 
+test('JEV 判定陌生名词时定向搜索 B 站梗百科', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '这个词我没见过，帮我接一下',
+    currentQuestion: '这个词我没见过，帮我接一下',
+    modelInput: '这个词我没见过，帮我接一下',
+    jevStyle: {
+      unknownConcept: true,
+      queryTerms: ['赛博道士'],
+      retrievalNeeded: 0.8,
+    },
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        calls.push({ query, options });
+        return { context: 'B站梗百科：赛博道士是网络语境中的调侃说法。', resultCount: 1 };
+      },
+    },
+    chatClient: { isConfigured: true, async complete() { return '先查清楚再开腔，这词原来是把修仙和电子设备焊一块。'; } },
+  });
+  assert.equal(result.factSearchAttempted, false);
+  assert.equal(result.cultureSearchAttempted, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].query, '梗百科 赛博道士');
+  assert.deepEqual(calls[0].options.includeDomains, ['bilibili.com']);
+});
+
 test('用户要求查看公开仓库链接时进入事实检索并把证据交给回复模型', async () => {
   const calls = [];
   let prompt = '';

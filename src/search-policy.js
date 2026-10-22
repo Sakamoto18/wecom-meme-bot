@@ -40,6 +40,7 @@ export function classifySearchPolicy(options = {}) {
   const jevLongtuLookupNeeded = Number(options.longtuLookupNeeded) || 0;
   const jevFactLookupNeeded = Number(options.factLookupNeeded) || 0;
   const jevTimeSensitive = Number(options.timeSensitive) || 0;
+  const unknownConcept = options.unknownConcept === true;
 
   const longtuTopic = shouldSearchLongtuKnowledge(content);
   const memeTopic = shouldSearchMemeKnowledge(content);
@@ -50,7 +51,7 @@ export function classifySearchPolicy(options = {}) {
   const highConfidenceCulture = HIGH_CONFIDENCE_CULTURE_PATTERN.test(content);
   const jevCultureEligible = !imageSearch && jevCultureLookupNeeded >= 0.4;
   const cultureEligible = !imageSearch
-    && (longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible);
+    && (longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible || unknownConcept);
   // Asking for a meme's source/原帖 is both a cultural lookup and a factual
   // verification request. Keep the two rails independent so one does not
   // silently suppress the other. JEV's own fact/time signals join the union so
@@ -61,7 +62,6 @@ export function classifySearchPolicy(options = {}) {
     || verificationRequested
     || jevFactLookupNeeded >= 0.45
     || jevTimeSensitive >= 0.5
-    || options.unknownConcept === true
   );
 
   if (attackStyle) {
@@ -99,7 +99,7 @@ export function classifySearchPolicy(options = {}) {
     };
   }
 
-  const confidence = longtuTopic || memeTopic || jevLongtuLookupNeeded >= 0.7
+  const confidence = longtuTopic || memeTopic || jevLongtuLookupNeeded >= 0.7 || unknownConcept
     ? 'high'
     : (highConfidenceCulture ? 'high' : (factEligible ? 'medium' : 'none'));
   return {
