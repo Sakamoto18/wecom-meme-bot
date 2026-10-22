@@ -590,6 +590,29 @@ test('纯直接攻击不联网，恢复龙图临场对线生成', async () => {
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
 });
 
+test('攻击回合不把已保存口癖当固定开场', async () => {
+  const calls = [];
+  const savedPhrase = '敢这么跟我说话，你的🐎是批发的？';
+  const result = await generateConversationReply({
+    content: '你这个傻逼',
+    modelInput: '你这个傻逼',
+    personaContext: `偏好口癖：${savedPhrase}`,
+    chatClient: {
+      isConfigured: true,
+      complete: async (history, input, options) => {
+        calls.push(options);
+        return '你这张嘴像坏掉的弹幕机，除了乱喷什么都不会？';
+      },
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.equal(result.mode, 'generated-attack');
+  assert.equal(result.attempts, 1);
+  assert.doesNotMatch(calls[0].additionalSystemPrompt, new RegExp(savedPhrase));
+  assert.match(calls[0].additionalSystemPrompt, /不要调用已保存的攻击性口癖/);
+});
+
 test('@机器人后直接接“臭傻逼你妈死了”仍走临场对线，不退回说教式回答', async () => {
   const calls = [];
   const result = await generateConversationReply({

@@ -151,6 +151,18 @@ function personaPhrasesFromContext(personaContext) {
     .filter(Boolean);
 }
 
+function attackPersonaContext(personaContext) {
+  // Saved phrases are useful in ordinary chat, but feeding them into a
+  // dedicated comeback turns a character habit into a fixed attack macro.
+  // Keep rules and avoid-patterns available while withholding all preferred
+  // phrases from attack prompts so every comeback is written from the turn.
+  return String(personaContext ?? '')
+    .split('\n')
+    .filter((line) => !/^\s*偏好口癖：/u.test(line))
+    .join('\n')
+    .trim();
+}
+
 function hasUnauthorizedFamilyAttack(value) {
   return reviewNormalReply(value, { attackDuringAnswer: false, hardOnly: true })
     .issues.includes('family-attack-in-normal-mode');
@@ -498,12 +510,6 @@ export async function generateConversationReply(options) {
   // persona contract is appended after history below; duplicating it here
   // made the model arbitrate between two near-identical rule lists and often
   // left only the “explain/keep short” fragments active.
-  const cachePrefixSystemPrompt = [
-    knowledgeContext,
-    '【稳定人格能力前缀】保留龙玉涛的嘴欠、反差、文化联想和短句群聊语感；本前缀只提供能力背景，不替当前轮次判断称呼、攻击对象、笑点或回复方式。',
-    personaContext,
-  ].filter(Boolean).join('\n\n');
-
   const lexicalAttackStyle = !recordSummary && shouldUseAttackStyle(content, history, {
     ...interactionContext,
     activeReply,
@@ -527,6 +533,12 @@ export async function generateConversationReply(options) {
     || (lexicalAttackStyle && !jevRejectsWeakAttack)
     || jevSemanticAttackEnabled(jevAttackStrategy, { interactionContext })
   );
+  const personaContextForAttack = attackPersonaContext(personaContext);
+  const cachePrefixSystemPrompt = [
+    knowledgeContext,
+    '【稳定人格能力前缀】保留龙玉涛的嘴欠、反差、文化联想和短句群聊语感；本前缀只提供能力背景，不替当前轮次判断称呼、攻击对象、笑点或回复方式。',
+    attackStyle ? personaContextForAttack : personaContext,
+  ].filter(Boolean).join('\n\n');
   const styleSignals = getReplyStyleSignals(content, {
     ...interactionContext,
     hasImageContext,
@@ -684,7 +696,7 @@ export async function generateConversationReply(options) {
         knowledgeContext,
         protectedIdentityContext,
         memoryContext,
-        personaContext,
+        personaContextForAttack,
         cultureRecall.prompt,
         buildAttackPrompt(content, {
           history,
@@ -723,7 +735,7 @@ export async function generateConversationReply(options) {
           knowledgeContext,
           protectedIdentityContext,
           memoryContext,
-          personaContext,
+          personaContextForAttack,
           cultureRecall.prompt,
           buildAttackRetryPrompt(
             content,
@@ -1546,7 +1558,7 @@ export async function generateConversationReply(options) {
             imageSafetyPrompt,
             protectedIdentityContext,
             memoryContext,
-            personaContext,
+            personaContextForAttack,
             buildAttackPrompt(content, {
               history,
               interactionContext,
