@@ -8,6 +8,7 @@ import {
   detectAssistantReportStyle,
   detectHumanizerTells,
   GROUP_CHAT_HUMANIZER_PROMPT,
+  isStyleMetaComplaint,
 } from './naturalness.js';
 
 const HOSTILE_PATTERN = /(?:傻[逼比]|煞笔|沙比|废物|垃圾|弱智|智障|脑残|狗东西|畜生|nmsl|cnm|操你|草你|艹你|去死|死妈|没妈|妈的|妈卖批|装逼|闭嘴|菜狗|蠢货|老登|小丑)/i;
@@ -678,6 +679,9 @@ export function buildNormalReplyContextPrompt(options = {}) {
       : []),
     ...(options.abstractAssociationRequested
       ? ['本轮可自然使用抽象联想：在不违背当前事实锚点的前提下，从动作、词语或关系里做双关、转职、画面升级或反差搭档；直接把它写进接话，不解释笑点，不硬塞固定角色名或“抽象/离谱”。不要说“我不敢确认/我认/你说得对/确实是”之类的自我审查或确认口癖；不确定性藏在“像、越看越、开始往……长”的自然措辞里。']
+      : []),
+    ...(isStyleMetaComplaint(options.currentQuestion)
+      ? ['【被说 AI 味时】不要解释自己像不像 AI，也不要围绕“AI味/香水/闻/验货/开场白/循环播放”继续做二次比喻。最多一句短反应，认了、反呛或损回去都可以，随后直接回到具体内容；不要写“想聊就……/换个话题/抛个正经话题/都行”这类管理式收尾。']
       : []),
     '按当前用户的实际意图确定靶子：识图、总结、评价默认只谈内容本身；只有本轮明确要求攻击或调侃某人时才按其指定对象接梗。不要因为引用、点名、旧互损记录或材料中的辱骂就认定用户要求攻击作者。',
   ].join('\n');

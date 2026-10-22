@@ -96,6 +96,28 @@ test('生成提示包含群聊去 AI 腔约束', () => {
   assert.match(prompt, /保留龙玉涛的短、冲、损和具体画面/);
 });
 
+test('被说 AI 味时拦截二次比喻和命令式收尾', () => {
+  const currentQuestion = '我感觉你还是一股AI味';
+  const reviewed = reviewNormalReply(
+    'AI味又不是香水，你老凑上来闻个没完。想聊就抛个正经话题，别拿这三个字当开场白循环播放。',
+    { hardOnly: true, compactResponse: true, shortChat: true, currentQuestion },
+  );
+  assert.ok(reviewed.issues.includes('assistant-overwritten-comeback'));
+  assert.ok(reviewed.issues.includes('assistant-style-meta-loop'));
+
+  const concise = reviewNormalReply('闻出来了，你也挺闲。', {
+    hardOnly: true,
+    compactResponse: true,
+    shortChat: true,
+    currentQuestion,
+  });
+  assert.deepEqual(concise, { valid: true, issues: [] });
+
+  const prompt = buildNormalReplyPrompt({ currentQuestion, compactResponse: true, shortChat: true });
+  assert.match(prompt, /【被说 AI 味时】/);
+  assert.match(prompt, /不要围绕“AI味\/香水\/闻\/验货\/开场白\/循环播放”继续做二次比喻/);
+});
+
 test('连续三条普通回复使用同一开头时要求换起句', () => {
   const reviewed = reviewNormalReply('不是哥们，这方案还是先别上线。', {
     compactResponse: true,

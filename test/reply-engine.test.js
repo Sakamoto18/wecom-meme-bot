@@ -670,6 +670,28 @@ test('普通群聊的硬复核遇到假对比和拔高时会触发一次去 AI �
   assert.equal(result.answer, '就是能少点两下，别吹成效率革命。');
 });
 
+test('被说 AI 味时不会继续解释香水比喻和指挥换话题', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '我感觉你还是一股AI味',
+    currentQuestion: '我感觉你还是一股AI味',
+    modelInput: '我感觉你还是一股AI味',
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options.usageSource);
+        return calls.length === 1
+          ? 'AI味又不是香水，你老凑上来闻个没完。想聊就抛个正经话题，别拿这三个字当开场白循环播放。'
+          : '闻出来了，你也挺闲。';
+      },
+    },
+  });
+
+  assert.deepEqual(calls, ['conversation-reply', 'conversation-reply-review']);
+  assert.equal(result.answer, '闻出来了，你也挺闲。');
+});
+
 test('普通聊天不再因第三人称客服开头二次改稿', async () => {
   const calls = [];
   const draft = '黄胖子问的是闲鱼接单具体接啥，说白了就几类：做PPT、剪视频、修图。';

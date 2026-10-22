@@ -1678,6 +1678,7 @@ export async function generateConversationReply(options) {
     ? memeKnowledgePrompt(memeKnowledgeEntry, memeKnowledgeCacheHit ? 'cache' : 'fresh-search')
     : '';
   const normalPromptOptions = {
+    currentQuestion,
     thinkingEnabled,
     detailedAnswerRequested,
     recordSummary,

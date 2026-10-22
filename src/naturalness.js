@@ -13,11 +13,15 @@ const EMPTY_TRIAD_PATTERN = new RegExp(
   'u',
 );
 const DASH_OVERLOAD_PATTERN = /(?:——[^。！？!?\n]{0,40}){2,}/u;
+const STYLE_META_COMPLAINT_PATTERN = /(?:AI\s*味|机器味|人机味|机器人味|模板味|套路味|像\s*AI|AI\s*感|一股\s*AI|太\s*AI|味儿太冲)/iu;
+const OVEREXPLAINED_COMEBACK_PATTERN = /(?:又不是[^。！？!?\n]{1,40}[。！？!?]\s*(?:想|要)[^。！？!?\n]{1,24}(?:就|还是)[^。！？!?\n]{0,28}[，,]\s*别[^。！？!?\n]{1,40}|(?:想|要)[^。！？!?\n]{1,20}(?:还是|或者)[^。！？!?\n]{1,20}[，,]?\s*都行[，,]\s*别)/u;
 
 export const GROUP_CHAT_HUMANIZER_PROMPT = [
   '【群聊去 AI 腔】直接说具体对象、动作、数字或判断；不要用“不只是X，更是Y”“真正重要的是”“这背后是”“这意味着”给普通结论抬重量。',
   '少用“赋能/闭环/抓手/底层逻辑/认知升级/范式/重塑/彰显/未来可期”这类大词，除非它们就是准确术语。',
   '不写“随着……的发展”“在……时代背景下”“值得一提的是”，也不要为了节奏凑“创新、突破和无限可能”这类抽象排比。',
+  '比喻扔出去就停，不接着解释它、追加命令式收尾，也不把同一个意思换词再说一遍。',
+  '被说“AI味/像AI/机器味”时，最多一句承认或反呛就停；不要围绕这个标签继续做“香水/闻/验货”之类的二次比喻，也不要指挥对方换个正经话题。',
   '去 AI 味不是变礼貌、变完整或加免责声明；保留龙玉涛的短、冲、损和具体画面。',
 ].join('\n');
 
@@ -49,7 +53,22 @@ export function detectHumanizerTells(value, options = {}) {
   }
   if (EMPTY_TRIAD_PATTERN.test(normalized)) issues.push('assistant-empty-triad');
   if (DASH_OVERLOAD_PATTERN.test(normalized)) issues.push('assistant-dash-overload');
+  if (OVEREXPLAINED_COMEBACK_PATTERN.test(normalized)) {
+    issues.push('assistant-overwritten-comeback');
+  }
+  if (isStyleMetaComplaint(options.currentQuestion)) {
+    const repeatedMeta = (normalized.match(/AI\s*味|机器味|像\s*AI|开场白|这三个字/giu) ?? []).length >= 2;
+    const metaPivot = /(?:香水|验货|循环播放|换个话题|抛个正经话题|正经话题|都行)/u.test(normalized);
+    if ((repeatedMeta && normalized.length >= 28)
+      || (metaPivot && normalized.length >= 34)) {
+      issues.push('assistant-style-meta-loop');
+    }
+  }
   return [...new Set(issues)];
+}
+
+export function isStyleMetaComplaint(value) {
+  return STYLE_META_COMPLAINT_PATTERN.test(String(value ?? ''));
 }
 
 /**
@@ -101,6 +120,8 @@ export function buildNaturalnessRewriteHint(issues = []) {
     'assistant-hype-jargon',
     'assistant-empty-triad',
     'assistant-dash-overload',
+    'assistant-overwritten-comeback',
+    'assistant-style-meta-loop',
   ].some((issue) => set.has(issue));
   if (!needsRewrite) return '';
   const targetedHints = [
@@ -118,6 +139,12 @@ export function buildNaturalnessRewriteHint(issues = []) {
       : '',
     set.has('assistant-dash-overload')
       ? '减少连续破折号制造的假悬念，直接用正常句子说清关系。'
+      : '',
+    set.has('assistant-overwritten-comeback')
+      ? '比喻或反呛扔出去就停，不要再补“想聊就……，别……”式的命令收尾，也不要把同一句换词重复。'
+      : '',
+    set.has('assistant-style-meta-loop')
+      ? '别解释自己像不像 AI，也不要继续香水、闻、验货、开场白这些二次比喻；一句短反应后直接回到具体内容，不指挥对方换话题。'
       : '',
   ].filter(Boolean);
   return [
