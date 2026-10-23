@@ -500,6 +500,97 @@ test('战术卡的具体事实查询能补足攻击轮里被正则漏掉的检�
   assert.ok(prompts.some((prompt) => /【时间核对】检索资料没有出现 2026-10-21 北京时间/.test(prompt)));
 });
 
+test('攻击前遇到陌生梗会定向查询 wiki，并把结果只作为内部落点', async () => {
+  const calls = [];
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '你这个傻逼，拿赛博道士来糊弄人',
+    currentQuestion: '你这个傻逼，拿赛博道士来糊弄人',
+    modelInput: '你这个傻逼，拿赛博道士来糊弄人',
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        calls.push({ query, options });
+        return {
+          context: 'wiki 摘要：赛博道士是把修仙话术和电子设备混在一起的网络调侃。',
+          resultCount: 1,
+          results: [{
+            title: '赛博道士',
+            description: '把修仙话术和电子设备混在一起的网络调侃',
+            url: 'https://zh.wikipedia.org/wiki/example',
+          }],
+        };
+      },
+    },
+    turnPlan: {
+      mode: 'attack',
+      answerRequired: false,
+      attack: {
+        decision: 'reply', target: 'current_speaker', angle: 'behavior',
+        intensity: 0.9, timing: 'standalone', reason: '当前发言者明确辱骂机器人',
+      },
+      search: {
+        factNeeded: false, cultureNeeded: true, factQueries: [],
+        cultureQueries: ['赛博道士'],
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '你这点词汇量也敢拿赛博道士糊墙，嘴上装道士，脑子还在新手村。';
+      },
+    },
+  });
+  assert.equal(result.mode, 'generated-attack');
+  assert.equal(result.attackKnowledgeSearchAttempted, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].query, 'wiki 赛博道士');
+  assert.match(prompt, /【攻击前对象知识；只供内部理解】/);
+  assert.match(prompt, /把修仙话术和电子设备混在一起的网络调侃/);
+  assert.doesNotMatch(result.answer, /检索|wiki|梗库/);
+});
+
+test('攻击前本地梗库命中时不联网', async () => {
+  let searchCalls = 0;
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '你这个傻逼，别拿赛博道士糊弄我',
+    currentQuestion: '你这个傻逼，别拿赛博道士糊弄我',
+    modelInput: '你这个傻逼，别拿赛博道士糊弄我',
+    webSearchEnabled: true,
+    webSearch: { async search() { searchCalls += 1; return { context: '', resultCount: 0 }; } },
+    memeKnowledge: {
+      lookup(term) {
+        assert.equal(term, '赛博道士');
+        return {
+          term: '赛博道士',
+          meaning: '把修仙话术和电子设备混在一起的网络调侃',
+          usage: ['用来形容科技味很重的玄学说法'],
+          confidence: 'high',
+          sourceDomains: ['zh.wikipedia.org'],
+          sourceUrls: ['https://zh.wikipedia.org/wiki/example'],
+        };
+      },
+    },
+    turnPlan: {
+      mode: 'attack', answerRequired: false,
+      attack: { decision: 'reply', target: 'current_speaker', intensity: 0.9 },
+      search: { cultureNeeded: true, cultureQueries: ['赛博道士'] },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '赛博道士都比你会把话说完整。';
+      },
+    },
+  });
+  assert.equal(result.attackKnowledgeSearchAttempted, false);
+  assert.equal(searchCalls, 0);
+  assert.match(prompt, /本地高置信梗库/);
+});
+
 test('战术卡判定明确求证时先给真假，再接现实锚点梗', async () => {
   let prompt = '';
   const result = await generateConversationReply({

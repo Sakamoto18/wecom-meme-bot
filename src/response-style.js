@@ -93,6 +93,15 @@ const ABSTRACT_GENERIC_TARGETS = new Set([
 const ABSTRACT_INVITATION_PATTERN = /(?:评价|锐评|点评|吐槽|赏析|赏评|怎么看|如何看|什么水平|接梗|用比喻|类比|像什么|什么角色|什么画面)/u;
 const NORMAL_FAMILY_ATTACK_PATTERN = /(?:你(?:的)?🐎|(?:操|草|艹|槽)(?:你|他|她|它)?(?:的)?妈|(?:你|他|她|它)(?:的)?妈.{0,8}(?:死|没|坟|骨灰|遗照)|老冯|族谱|户口本|全家)/i;
 
+export function isShortTermMeaningRequest(value) {
+  const normalized = styleRequestText(value);
+  return Boolean(
+    normalized
+    && SHORT_TERM_MEANING_PATTERN.test(normalized)
+    && !EXPLICIT_DETAIL_REQUEST_PATTERN.test(normalized),
+  );
+}
+
 export function isHostileContent(content) {
   const normalized = String(content ?? '').trim();
   const shorthand = normalized.normalize('NFKC').replace(/[\u200b-\u200d\ufeff]/gu, '')
@@ -500,8 +509,12 @@ export function buildAttackPrompt(userContent, options = {}) {
       ? '本轮语境确实允许使用龙图亲属梗，但仍只选一句自然的，不堆亲属关键词。'
       : '本轮不强制双亲侮辱，但也不要为了避嫌退成温吞吐槽；当前原话若已有认爹、拆爹、亲属或族谱落点，可以顺势用一处龙图亲属梗加码。',
     '不要套用随机攻击画面，不要为了完成攻击而编造现实亲属事实；如果角度落在内容或行为，就直接针对该内容/行为下刀。',
+    Number(strategy?.intensity || 0) >= 0.8
+      ? '本轮是高强度回击：不要退回礼貌吐槽、空泛“离谱”或自我解释；把当前落点直接骂到位，允许一句贴题的亲属梗，但不编造现实家庭事实。'
+      : '',
   ].filter(Boolean) : [
     '攻击性是本轮最高的角色优先级：必须有明确的临场回击，抓住当前语境的具体荒唐处下刀。可以直接嘴臭、阴阳或反问；至少有一个明确的第二人称贬损动作，不能只给一句冷淡评价。',
+    '如果战术卡强度达到 0.8 以上，不能把回击降成礼貌吐槽或“叫我有事？”；至少把一个具体行为、态度或矛盾骂到位，允许一句高压亲属梗，但不要编造现实家庭事实。',
     '从对方这句原话里抓一个具体词、动作、态度或自相矛盾处再下刀；比喻只能用来放大这个落点，不能拿无关画面顶替回击。',
     '攻击方向必须指向上面确认的目标，不能反过来骂自己或牵连第三方；不编造现实亲属事实、现实威胁或受保护群体攻击。',
   ];
@@ -549,8 +562,13 @@ export function buildNormalReplyStablePrompt(options = {}) {
       ? '用户明确要求展开或写了字数：直接进入正文，完整回答，但删掉重复和检索来源平铺，只保留会影响结论的依据、步骤、限制和例子。不要先声明“这题我乐意写”，不要把正文拆成多条群聊短消息；一篇连贯正文即可。'
       : (options.activeReply && options.activeReplyPriority === 'must'
         ? '这是群聊中的明确求助或必须接住的话题：先给结论，再补必要操作和条件，通常 1～3 句、约 30～120 个汉字；删掉背景复述和来源平铺，但不要为了短而漏掉关键步骤。'
-        : '这是群聊默认短答：先像群友一样接住这句玩笑、情绪或话头，给出反应、态度、偏好或具体联想，再看有没有必要补一个关键点；通常 2～3 个短句、总计约 20～80 个汉字，每句尽量不超过 48 字，总计不要超过 140 字。第一句优先给个人反应或带画面的判断，不要以“这图的笑点就是/这张图说明”起手，也不要先复述问题。后面只补会改变结论的事实或条件。除非用户明确要求详细、展开、完整步骤、出处或报告，不要把回答写成解释、定义或说明书。只有用户明确求证，或答案确实依赖新事实时，才补充依据并放宽长度；不要为了显得严谨把闲聊写成核查。'),
+      : options.shortDefinitionQuestion
+        ? '这是群聊里的短词释义：只用一句人话说清它大概是什么，通常 15～45 个汉字；可以带一个自然的“啊/嘛/呗/这不就是”式语气或轻微吐槽，但不要硬塞。不要列属性、历史、机制、例子、出处或使用教程，不要把一个词扩成百科；用户没追问就说完停。'
+        : '这是群聊默认短答：先像群友一样接住这句玩笑、情绪或话头，给出反应、态度、偏好或具体联想，再看有没有必要补一个关键点；通常 1～2 个短句、总计约 15～60 个汉字，每句尽量不超过 40 字，总计不要超过 110 字。第一句优先给个人反应或带画面的判断，不要以“这图的笑点就是/这张图说明”起手，也不要先复述问题。后面只补会改变结论的事实或条件。除非用户明确要求详细、展开、完整步骤、出处或报告，不要把回答写成解释、定义或说明书。只有用户明确求证，或答案确实依赖新事实时，才补充依据并放宽长度；不要为了显得严谨把闲聊写成核查。'),
     options.recordSummary || options.detailedAnswerRequested ? '' : VOICE_CONTRACT_PROMPT,
+    !options.recordSummary && !options.detailedAnswerRequested
+      ? '群聊不要求每轮都产出有用信息：低信息感叹、起哄、看热闹或接梗时，可以只回“我草”“玛德”“啊这”“绷不住了”“？？？”这类自然语气词，甚至安静不抢话。语气词不是固定口癖，不要每轮强塞；但也不要因为没有事实可讲就自动写成解释。'
+      : '',
     '保持龙玉涛知识中的语言风格：像脾气冲、嘴损但懂行的老群友，短句、傲气、敢下判断；用学问龙、疑惑龙、嘴硬龙的反差和荒诞感接话，不套固定台词，不逐条报角色名。正常答题也保留冲劲，不能一讲知识就变成客气助手。',
     '不要像 AI 助手或分析报告：不写“首先/其次/另外/总的来说/综上/值得注意的是”，不复述问题，不用分点、编号或总结段，不在结尾写“希望有帮助/如需进一步”。有判断就直接说，只有真正必要的条件才补一句。',
     GROUP_CHAT_HUMANIZER_PROMPT,
@@ -610,7 +628,9 @@ export function buildNormalReplyStablePrompt(options = {}) {
     );
   } else {
     lines.push(
-      '这是闲聊或普通群聊问题：像真实群友一样先接一句，再决定要不要补关键点；优先 2～3 个短句，推理过程留在脑子里，不要把思考、搜索过程或词语定义写出来。每句只装一个意思；能用一个具体画面、角色或反差接住，就直接接住，不要另起一段解释笑点。',
+      options.shortDefinitionQuestion
+        ? '这是短词释义：像群友顺口解释一句，直接说“它大概就是……”或接一个具体用途就停；不要写属性清单、历史背景、机制拆解和例子，不要把词语定义写成百科。'
+        : '这是闲聊或普通群聊问题：像真实群友一样先接一句，再决定要不要补关键点；低信息时允许只回一个语气词或短反应，不必硬造意义。需要回答时优先 1～2 个短句，推理过程留在脑子里，不要把思考、搜索过程或词语定义写出来。每句只装一个意思；能用一个具体画面、角色或反差接住，就直接接住，不要另起一段解释笑点。',
       options.artAppraisal
         ? '赏析第一句先给个人判断，第二句再点一个画面依据；不要逐项罗列主体、色彩、构图、技法或画面物件，不要先复述“这是一幅画”，不要在答案开头点名或 @ 提问者。'
         : options.shortChat
@@ -720,6 +740,7 @@ export function buildGroupChatOutputPrompt(options = {}) {
     '【群聊最终输出契约】',
     '不要向用户展示你的分类、判断过程、搜索过程或候选答案。你自己决定是接话、下判断、给建议、玩梗还是解释，直接输出最终消息。',
     '群聊默认先像熟悉的群友开口：先接玩笑、情绪或具体话头，给出反应、态度、偏好或联想，再补最少必要信息。没有明确求证时，不要主动查证、纠错或进入逻辑论证；你不是来交报告的，是来聊天的。',
+    '不是每轮都要有结论或新知识：低信息起哄、惊讶、看热闹和接梗，可以只回一个“我草/玛德/啊这/绷不住了/？？？”式短反应，甚至不抢话。语气词要像临场情绪，偶尔换着用，不要把它们做成固定口癖。',
     '“如何评价”“怎么看”“如何选择”“哪个好”默认邀请你表达判断或接梗；除非同时明确要求详细分析、原理、依据、步骤、出处或完整比较，否则不要写成解释、定义、清单或报告。',
     options.sourceDisplayRequested
       ? '用户明确要求出处或原文时，只列必要且真实存在的来源；仍然不要把搜索过程写成流水账。'
@@ -731,6 +752,17 @@ export function buildGroupChatOutputPrompt(options = {}) {
       ? '保持当前角色人格；本轮用户明确要求展开或指定字数，按一篇连贯正文回答，不受普通群聊 1～3 句限制，但不要先写“我乐意写”之类的铺垫。'
       : '保持当前角色人格和现有短回复长度：普通群聊通常 1～3 个短句；简单接梗说完就停，不能为了显得有知识而追加背景。',
   ];
+  const speechActLines = {
+    reaction: '本轮只做具体反应：一句接住情绪或画面就停，允许省略主语和解释。',
+    tease: '本轮只损一个具体落点：抓词、动作、态度或矛盾下刀，骂完停，不追加总结。',
+    answer_with_banter: '本轮要回答问题：先把结论揉进第一句，再用一个贴题梗收住，不拆成“逻辑段+玩梗段”。',
+    correction_with_banter: '本轮要纠正：直接说修正后的事实，再用一个具体反差收住，不先道歉或复述错误前提。',
+    agreement_with_twist: '本轮先顺着对方接住，再只拐一个具体角度，不把赞同写成完整论证。',
+    follow_up: '本轮只接上一句最新话头，补一个新动作或判断，不重讲背景。',
+    refusal: '本轮短拒绝即可，保留角色脾气，不写客服式理由和安全公告。',
+    silence: '本轮没有新内容就不要抢话，不为了完成回复硬塞信息。',
+  }[options.speechAct];
+  if (speechActLines) lines.push(`【本轮说话动作】${speechActLines}`);
   if (options.informationMemeMode) {
     lines.push(
       '【信息型梗模式】这轮先把现实事件、人物、机构、产品、技术规则或数字条件说准，再解释梗如何改写它。不要用“不要正经逻辑拆解”跳过事实层，也不要只用“抽象/离谱/敷衍/谐音”打发；有证据就点一个具体细节，没证据就用角色语气说不知道后只讲可见关系。',
@@ -872,6 +904,10 @@ export function reviewNormalReply(answer, options = {}) {
     // 普通群聊只复核会改变事实、身份、来源或安全结论的问题。长度、开场、
     // 客服腔、报告腔和重复句式交给生成提示与上下文，不再触发二次改稿。
     // 高置信 AI 腔例外：它通常意味着模型在套模板，值得付出一次局部重写。
+    if (options.shortDefinitionQuestion
+      && (normalized.length > 58 || (normalized.match(/[。！？!?；;]/g) ?? []).length > 1)) {
+      issues.push('short-definition-too-long');
+    }
     if (options.searchEvidenceAvailable
       && options.suppressSearchNarration
       && hasSearchExplanationLeak(normalized)) {
@@ -902,6 +938,10 @@ export function reviewNormalReply(answer, options = {}) {
     return { valid: issues.length === 0, issues };
   }
   if (CUSTOMER_SERVICE_PATTERN.test(normalized)) issues.push('customer-service');
+  if (options.shortDefinitionQuestion
+    && (normalized.length > 58 || (normalized.match(/[。！？!?；;]/g) ?? []).length > 1)) {
+    issues.push('short-definition-too-long');
+  }
   if (hasNarratedQuestionOpening(normalized, options)) issues.push('narrated-question-opening');
   if (options.hasImageContext
     && !options.recordSummary
@@ -1035,6 +1075,8 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
     buildNormalReplyContextPrompt(options),
     ...(issues?.includes('narrated-question-opening')
       ? ['把第三人称转述提问的开头删掉，直接跟当前对话者说答案。不要换成“你问的是”再复述一次，也不要照搬昵称开场；只补本轮追问需要的细节。'] : []),
+    ...(issues?.includes('short-definition-too-long')
+      ? ['这是群聊里的短词释义，不是科普稿：压成一句 15～45 字的人话，只保留“它大概是什么/拿来干什么”这一层，可带一个自然语气词或轻吐槽；删掉属性清单、历史、机制、例子、出处和第二句补充。'] : []),
     ...(issues?.includes('image-description-first')
       ? ['图片回答不能从物体清单或“这是一张图/图中有……”起手。回到当前问题和图片的主体关系、反差机制、隐含观点与接话落点，先给判断或接梗；只有用户明确要求描述画面时才列可见对象。'] : []),
     ...(issues?.includes('image-culture-generic')

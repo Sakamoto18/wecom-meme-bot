@@ -32,7 +32,41 @@ import {
   shouldUseAttackStyle,
   shouldRequestDetailedAnswer,
   shouldRequestAbstractAssociation,
+  isShortTermMeaningRequest,
 } from '../src/response-style.js';
+
+test('短词释义识别为一句话群聊问题，详细请求不走短答', () => {
+  assert.equal(isShortTermMeaningRequest('异色是什么意思'), true);
+  assert.equal(isShortTermMeaningRequest('异色啥意思？'), true);
+  assert.equal(isShortTermMeaningRequest('详细解释异色是什么意思'), false);
+  assert.equal(isShortTermMeaningRequest('异色是什么意思，举三个例子'), false);
+});
+
+test('短词释义和低信息群聊提示允许短反应，不强迫解释', () => {
+  const prompt = buildNormalReplyPrompt({
+    compactResponse: true,
+    shortChat: true,
+    shortDefinitionQuestion: true,
+  });
+  assert.match(prompt, /只用一句人话说清/);
+  assert.match(prompt, /低信息.*可以只回/);
+  assert.match(prompt, /不要求每轮都产出有用信息/);
+  const outputPrompt = buildGroupChatOutputPrompt({ shortDefinitionQuestion: true });
+  assert.match(outputPrompt, /甚至不抢话/);
+});
+
+test('短词释义过长会进入压缩复核', () => {
+  const longDraft = '异色是指和普通颜色不同的颜色表现，通常用于描述色彩、视觉风格、角色设定以及一些特殊效果，在不同语境里也可能有别的意思。';
+  const reviewed = reviewNormalReply(longDraft, {
+    hardOnly: true,
+    shortDefinitionQuestion: true,
+  });
+  assert.ok(reviewed.issues.includes('short-definition-too-long'));
+  const retry = buildNormalReplyRetryPrompt('异色是什么意思', longDraft, reviewed.issues, {
+    shortDefinitionQuestion: true,
+  });
+  assert.match(retry, /压成一句 15～45 字/);
+});
 
 test('发送回复前隐藏内部群成员编号', () => {
   assert.equal(

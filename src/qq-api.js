@@ -750,51 +750,56 @@ export async function createQqRuntime() {
   });
   const jevEnabled = parseBoolean(process.env.LONGTU_QQ_JEV_ENABLED, false);
   // Jev used to inject semantic points and culture routing into the final
-  // reply.  Keep the implementation available for explicit experiments, but
-  // do not let it shape production replies unless this separate output switch
-  // is deliberately enabled.
+  // reply.  It must be completely absent from the production graph when
+  // either switch is off: merely passing `jevOutputEnabled=false` used to
+  // leave the gate and its usage callback alive, which made an old runtime
+  // mode look like a live dependency and made shutdowns hard to audit.
   const jevOutputEnabled = parseBoolean(
     process.env.LONGTU_QQ_JEV_OUTPUT_ENABLED,
     false,
   );
-  const jevRuntime = new JevRuntimeState({
-    filePath: path.resolve(
-      projectRoot,
-      process.env.LONGTU_QQ_JEV_STATE_FILE?.trim() || 'data/qq-jev-runtime.json',
-    ),
-    defaultMode: jevEnabled
-      ? (process.env.LONGTU_QQ_JEV_MODE?.trim() || 'auto')
-      : 'off',
-    cooldownMs: (parsePositiveNumber(process.env.LONGTU_QQ_JEV_CIRCUIT_COOLDOWN_SECONDS) ?? 3600) * 1000,
-    failureThreshold: parsePositiveInteger(
-      process.env.LONGTU_QQ_JEV_CIRCUIT_FAILURE_THRESHOLD,
-    ) ?? 6,
-    logger: console,
-  });
-  await jevRuntime.load();
-  const jevGate = new JevAtmosphereGate({
-    apiKey: jevConfig.apiKey,
-    baseUrl: jevConfig.baseUrl,
-    model: jevConfig.model,
-    protocol: process.env.LONGTU_QQ_JEV_PROTOCOL?.trim() || 'chat',
-    chatMaxTokens: parsePositiveInteger(process.env.LONGTU_QQ_JEV_CHAT_MAX_TOKENS) ?? 1_800,
-    timeoutMs: parsePositiveInteger(
-      process.env.LONGTU_QQ_JEV_SEMANTIC_TIMEOUT_MS
-        ?? process.env.LONGTU_QQ_JEV_TIMEOUT_MS,
-    ) ?? 30_000,
-    allowThreshold: parseProbability(process.env.LONGTU_QQ_JEV_ALLOW_THRESHOLD, 0.72),
-    skipThreshold: parseProbability(process.env.LONGTU_QQ_JEV_SKIP_THRESHOLD, 0.28),
-    runtime: jevRuntime,
-    logger: console,
-    onUsage: (event) => usageTracker.recordJevUsage(event),
-  });
-  const jevResponseModeMemory = new JevResponseModeMemory({
-    ttlTurns: parsePositiveInteger(process.env.LONGTU_QQ_JEV_MODE_TTL_TURNS) ?? 2,
-    ttlMs: (parsePositiveNumber(process.env.LONGTU_QQ_JEV_MODE_TTL_SECONDS) ?? 900) * 1000,
-    logger: console,
-  });
+  const jevActive = jevEnabled && jevOutputEnabled;
+  let jevRuntime = null;
+  let jevGate = null;
+  let jevResponseModeMemory = null;
+  if (jevActive) {
+    jevRuntime = new JevRuntimeState({
+      filePath: path.resolve(
+        projectRoot,
+        process.env.LONGTU_QQ_JEV_STATE_FILE?.trim() || 'data/qq-jev-runtime.json',
+      ),
+      defaultMode: process.env.LONGTU_QQ_JEV_MODE?.trim() || 'auto',
+      cooldownMs: (parsePositiveNumber(process.env.LONGTU_QQ_JEV_CIRCUIT_COOLDOWN_SECONDS) ?? 3600) * 1000,
+      failureThreshold: parsePositiveInteger(
+        process.env.LONGTU_QQ_JEV_CIRCUIT_FAILURE_THRESHOLD,
+      ) ?? 6,
+      logger: console,
+    });
+    await jevRuntime.load();
+    jevGate = new JevAtmosphereGate({
+      apiKey: jevConfig.apiKey,
+      baseUrl: jevConfig.baseUrl,
+      model: jevConfig.model,
+      protocol: process.env.LONGTU_QQ_JEV_PROTOCOL?.trim() || 'chat',
+      chatMaxTokens: parsePositiveInteger(process.env.LONGTU_QQ_JEV_CHAT_MAX_TOKENS) ?? 1_800,
+      timeoutMs: parsePositiveInteger(
+        process.env.LONGTU_QQ_JEV_SEMANTIC_TIMEOUT_MS
+          ?? process.env.LONGTU_QQ_JEV_TIMEOUT_MS,
+      ) ?? 30_000,
+      allowThreshold: parseProbability(process.env.LONGTU_QQ_JEV_ALLOW_THRESHOLD, 0.72),
+      skipThreshold: parseProbability(process.env.LONGTU_QQ_JEV_SKIP_THRESHOLD, 0.28),
+      runtime: jevRuntime,
+      logger: console,
+      onUsage: (event) => usageTracker.recordJevUsage(event),
+    });
+    jevResponseModeMemory = new JevResponseModeMemory({
+      ttlTurns: parsePositiveInteger(process.env.LONGTU_QQ_JEV_MODE_TTL_TURNS) ?? 2,
+      ttlMs: (parsePositiveNumber(process.env.LONGTU_QQ_JEV_MODE_TTL_SECONDS) ?? 900) * 1000,
+      logger: console,
+    });
+  }
   console.log(
-    `QQ Jev 决策模型：${jevGate.model}（输出路由：${jevOutputEnabled ? '开启' : '关闭'}）`,
+    `QQ Jev 决策模型：${jevConfig.model}（输出路由：${jevActive ? '开启' : '关闭'}）`,
   );
   const activeReplyDecider = new ActiveReplyDecider({
     chatClient,

@@ -32,6 +32,7 @@ import {
   shouldRequestDetailedAnswer,
   shouldUseThinking,
   shouldUseAttackStyle,
+  isShortTermMeaningRequest,
   isAttackFrameChallenge,
   getReplyStyleSignals,
   isExplicitThirdPartyAttackRequest,
@@ -77,7 +78,7 @@ import {
   repairRelativeDateAnswer,
 } from './relative-time.js';
 import { buildStyleAnchorPrompt, selectStyleAnchors } from './style-anchors.js';
-import { buildTurnPlanPrompt } from './reply-turn-planner.js';
+import { buildTurnPlanPrompt, isConcretePlannerQuery } from './reply-turn-planner.js';
 
 const PURE_MENTION_FALLBACK = '叫我有事？';
 const WEB_SEARCH_TOOL = {
@@ -812,6 +813,10 @@ export async function generateConversationReply(options) {
     hasImageContext,
     hasQuotedContent,
   });
+  // Keep the culture signal available before the dedicated attack branch. Jev
+  // is no longer allowed to write the answer, but its explicit unknown-term
+  // signal can still tell the attack turn that it needs a cheap wiki lookup.
+  const jevCulture = normalizedJevCulture(jevStyle ?? {});
   const jevAttackStrategy = normalizedJevAttackStrategy(jevStyle ?? {});
   const plannedAttackCard = turnPlan?.attack && typeof turnPlan.attack === 'object'
     ? {
@@ -854,7 +859,9 @@ export async function generateConversationReply(options) {
       target: 'content',
       timing: plannedAttackCard.decision === 'none' ? 'none' : 'after_answer',
     }
-    : plannedAttackCard;
+    : (plannedPersonalAttack
+      ? { ...plannedAttackCard, intensity: Math.max(plannedAttackCard.intensity, 0.82) }
+      : plannedAttackCard);
   const effectiveTurnPlan = turnPlan && typeof turnPlan === 'object'
     ? { ...turnPlan, attack: plannedAttack || turnPlan.attack }
     : turnPlan;
@@ -1055,6 +1062,72 @@ export async function generateConversationReply(options) {
   const runTool = async (call = {}) => call.name === 'meme_knowledge_lookup'
     ? runMemeKnowledgeTool(call)
     : runWebSearchTool(call);
+  // A dedicated attack turn used to disable every tool, which meant an
+  // unfamiliar meme or named target was attacked from guesswork. Keep the
+  // cheap path tool-free, but allow one bounded wiki lookup when the planner
+  // explicitly marks the attack as culture-dependent. The result is private
+  // context for the generator; it is never narrated as a search step.
+  let attackKnowledgePrompt = '';
+  let attackKnowledgeSearchAttempted = false;
+  let attackKnowledgeSearchError = null;
+  const plannedAttackCultureQueries = (
+    turnPlan?.search?.cultureNeeded === true
+      ? (Array.isArray(turnPlan.search.cultureQueries) ? turnPlan.search.cultureQueries : [])
+      : []
+  ).map((query) => String(query ?? '').replace(/\s+/gu, ' ').trim().slice(0, 180))
+    .filter(Boolean)
+    .slice(0, 2);
+  const jevAttackCultureQueries = jevCulture.unknownConcept
+    ? jevCulture.terms
+    : [];
+  const attackKnowledgeQueries = [...new Set([
+    ...plannedAttackCultureQueries,
+    ...jevAttackCultureQueries,
+  ].map((query) => String(query ?? '').replace(/\s+/gu, ' ').trim().slice(0, 180)))]
+    .filter((query) => isConcretePlannerQuery(query))
+    .slice(0, 2);
+  if (attackStyle && attackKnowledgeQueries.length > 0) {
+    const knowledgeParts = [];
+    for (const query of attackKnowledgeQueries) {
+      let entry = null;
+      if (memeKnowledge) {
+        try { entry = memeKnowledge.lookup(query); } catch { /* best effort */ }
+      }
+      if (entry) {
+        knowledgeParts.push(memeKnowledgePrompt(entry, 'cache'));
+        continue;
+      }
+      if (!webSearchToolsAvailable) continue;
+      attackKnowledgeSearchAttempted = true;
+      try {
+        const result = await searchWithSourceScope(
+          webSearch,
+          `wiki ${query}`.slice(0, 240),
+          { mode: 'meme', usageSource: 'web-search-attack-knowledge' },
+          { includeDomains: MEME_WIKI_DOMAINS, candidates: [], crossCheck: false },
+        );
+        entry = buildMemeKnowledgeEntry(query, result, {
+          confidence: result?.results?.length >= 2 ? 'high' : 'medium',
+          lookupSource: 'wiki',
+        });
+        if (entry) {
+          if (entry.confidence === 'high' && memeKnowledge) {
+            try { memeKnowledge.put(entry); } catch { /* best effort */ }
+          }
+          knowledgeParts.push(memeKnowledgePrompt(entry, 'fresh-search'));
+        }
+      } catch (error) {
+        attackKnowledgeSearchError = error;
+      }
+    }
+    if (knowledgeParts.length > 0) {
+      attackKnowledgePrompt = [
+        '【攻击前对象知识；只供内部理解】',
+        ...knowledgeParts,
+        '只用其中与当前原话贴合的对象、语义或具体事实找攻击落点；不要提检索、wiki、梗库、来源，也不要把知识摘要复述成百科解释。',
+      ].join('\n');
+    }
+  }
   if (pureAttack) {
     const attackStyleAnchors = buildStyleAnchorPrompt(
       selectStyleAnchors(history, { currentContent: content, maxAnchors: 2 }),
@@ -1071,6 +1144,7 @@ export async function generateConversationReply(options) {
         memoryContext,
         personaContextForAttack,
         cultureRecall.prompt,
+        attackKnowledgePrompt,
         buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
         buildAttackPrompt(content, {
           history,
@@ -1113,6 +1187,7 @@ export async function generateConversationReply(options) {
           memoryContext,
           personaContextForAttack,
           cultureRecall.prompt,
+          attackKnowledgePrompt,
           buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
           buildAttackRetryPrompt(
             content,
@@ -1158,15 +1233,16 @@ export async function generateConversationReply(options) {
       review,
       attempts,
       searchResult: emptySearchResult(),
-      searchError: null,
-      searchAttempted: false,
-      searchMode: '',
+      searchError: attackKnowledgeSearchError,
+      searchAttempted: attackKnowledgeSearchAttempted,
+      searchMode: attackKnowledgeSearchAttempted ? 'meme' : '',
+      attackKnowledgeSearchAttempted,
+      attackKnowledgeSearchError,
       cultureRecallUsed: cultureRecall.used,
       usedModel: true,
     };
   }
 
-  const jevCulture = normalizedJevCulture(jevStyle ?? {});
   const useLongtuKnowledge = !attackStyle && (
     shouldSearchLongtuKnowledge(content)
     || (longtuRetrievalEnabled && jevCulture.longtu && jevCulture.retrievalNeeded >= 0.55)
@@ -1354,7 +1430,7 @@ export async function generateConversationReply(options) {
   const cultureSearchAttempted = Boolean(
     !attackStyle && webSearchEnabled && webSearch && cultureSearchEligible,
   );
-  const searchAttempted = factSearchAttempted || cultureSearchAttempted;
+  const searchAttempted = factSearchAttempted || cultureSearchAttempted || attackKnowledgeSearchAttempted;
   let factSearchResult = emptySearchResult();
   let cultureSearchResult = emptySearchResult();
   let factSearchError = null;
@@ -1553,10 +1629,12 @@ export async function generateConversationReply(options) {
   const searchResult = factSearchAttempted || factSearchResult.resultCount > 0
     ? factSearchResult
     : cultureSearchResult;
-  const searchError = factSearchError || cultureSearchError;
+  const searchError = factSearchError || cultureSearchError || attackKnowledgeSearchError;
   const searchMode = factSearchAttempted || factSearchResult.resultCount > 0
     ? factSearchMode
-    : (cultureSearchAttempted || cultureCardUsed ? cultureSearchMode : '');
+    : (cultureSearchAttempted || cultureCardUsed
+      ? cultureSearchMode
+      : (attackKnowledgeSearchAttempted ? 'meme' : ''));
 
   const compactActiveReply = activeReply && activeReplyPriority !== 'must';
   const thinkingEnabled = !passiveImageComment && !compactActiveReply
@@ -1606,6 +1684,12 @@ export async function generateConversationReply(options) {
     && !detailedAnswerRequested;
   const compactResponse = !detailedAnswerRequested;
   const shortChat = compactResponse && !passiveImageComment && !recordSummary;
+  // `currentQuestion` defaults to `content`; joining both would duplicate a
+  // short question and make the anchored detector miss it. Check each user
+  // field independently so OCR/context text cannot disable the compact path.
+  const shortDefinitionQuestion = shortChat && [currentQuestion, content]
+    .filter(Boolean)
+    .some((value) => isShortTermMeaningRequest(value));
   const factEvidenceAvailable = Boolean(factSearchResult.context);
   const searchEvidenceAvailable = factEvidenceAvailable || cultureCardUsed;
   const hasAbstractSignals = Boolean(abstractImpressionText || abstractAssociationEntries.length > 0);
@@ -1661,11 +1745,13 @@ export async function generateConversationReply(options) {
         ? 280
         : (detailedAnswerRequested
           ? 8_000
-          : (searchEvidenceAvailable
-            || retrievalPolicy.factEligible
-            || Number(jevCulture.timeSensitive) >= 0.5
-            ? 1_800
-            : 700))));
+          : (shortDefinitionQuestion
+            ? 240
+            : (searchEvidenceAvailable
+              || retrievalPolicy.factEligible
+              || Number(jevCulture.timeSensitive) >= 0.5
+              ? 1_800
+              : 700)))));
   const webSearchStatus = buildWebSearchStatus({
     requested: factSearchAttempted,
     mode: factSearchMode,
@@ -1708,11 +1794,13 @@ export async function generateConversationReply(options) {
     longtuSearchResultCount: useLongtuKnowledge ? cultureSearchResult.resultCount : 0,
     styleSignals,
     shortChat: compactResponse && !passiveImageComment && !recordSummary,
+    shortDefinitionQuestion,
     attackDuringAnswer: attackStyle && !pureAttack,
     imageDescriptionRequested,
     imageCultureMode,
     jevAttackStrategy,
     plannedAttack,
+    speechAct: turnPlan?.speechAct || '',
   };
   const personaDemonstration = !attackStyle
     && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
@@ -1794,6 +1882,7 @@ export async function generateConversationReply(options) {
     protectedIdentityContext,
     memoryContext,
     cultureRecall.prompt,
+    attackKnowledgePrompt,
     culturePrompt,
     memeKnowledgeContext,
     buildNormalReplyContextPrompt(normalPromptOptions),
@@ -1807,6 +1896,8 @@ export async function generateConversationReply(options) {
     sourceDisplayPrompt(currentQuestion),
     buildGroupChatOutputPrompt({
       detailedAnswerRequested,
+      shortDefinitionQuestion,
+      speechAct: turnPlan?.speechAct || '',
       recordSummary,
       activeReply,
       activeReplyPriority,
@@ -1917,6 +2008,7 @@ export async function generateConversationReply(options) {
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     cultureReviewRequired,
+    shortDefinitionQuestion,
     shortChat,
     searchEvidenceAvailable,
     suppressSearchNarration,
@@ -1967,6 +2059,7 @@ export async function generateConversationReply(options) {
               abstractAssociationRequested,
               abstractAssociationReviewRequired,
               cultureReviewRequired,
+              shortDefinitionQuestion,
               styleSignals,
               shortChat,
               searchEvidenceAvailable,
@@ -1999,6 +2092,7 @@ export async function generateConversationReply(options) {
           abstractAssociationRequested,
           abstractAssociationReviewRequired,
           cultureReviewRequired,
+          shortDefinitionQuestion,
           shortChat,
           searchEvidenceAvailable,
           suppressSearchNarration,
@@ -2046,6 +2140,7 @@ export async function generateConversationReply(options) {
       abstractAssociationRequested,
       abstractAssociationReviewRequired,
       cultureReviewRequired,
+      shortDefinitionQuestion,
       shortChat,
       hardOnly: true,
       attackDuringAnswer: attackStyle && !pureAttack,
@@ -2177,6 +2272,7 @@ export async function generateConversationReply(options) {
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     cultureReviewRequired,
+    shortDefinitionQuestion,
     shortChat,
     searchEvidenceAvailable,
     suppressSearchNarration,
@@ -2288,6 +2384,8 @@ export async function generateConversationReply(options) {
     searchMode,
     factSearchAttempted,
     cultureSearchAttempted,
+    attackKnowledgeSearchAttempted,
+    attackKnowledgeSearchError,
     cultureCacheHit,
     cultureCardUsed,
     memeKnowledgeUsed: Boolean(memeKnowledgeEntry),

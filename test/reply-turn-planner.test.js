@@ -47,6 +47,16 @@ test('解析合法战术卡并保留具体检索词', () => {
   assert.match(buildTurnPlanPrompt(plan), /首句必须把具体现实主体\/规则和接梗判断放在同一句/);
 });
 
+test('战术卡保留群聊说话动作并在非法值时回落', () => {
+  const plan = normalizeTurnPlan({
+    mode: 'explanation',
+    speech_act: 'correction_with_banter',
+  });
+  assert.equal(plan.speechAct, 'correction_with_banter');
+  assert.match(buildTurnPlanPrompt(plan), /本轮说话动作：直接给修正后的事实/);
+  assert.equal(normalizeTurnPlan({ speech_act: 'essay' }).speechAct, 'reaction');
+});
+
 test('非法枚举回落到安全默认值', () => {
   const plan = normalizeTurnPlan({
     mode: 'unsupported-mode',
