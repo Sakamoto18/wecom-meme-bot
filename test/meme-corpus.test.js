@@ -13,6 +13,7 @@ function fixture() {
   });
   store.replaceCorpus('memewiki', [
     { id: 1, text: '【词条】尊嘟假嘟\n【用法】用来撒娇式质疑，意思是“真的假的”。' },
+    { id: 2, text: '【词条】管人痴\n【用法】指过度沉迷虚拟主播的人。' },
   ], { sourceUrl: 'https://example.com/memewiki', license: 'MIT' });
   store.replaceCorpus('cheer_terms', [
     { id: 1, text: '【词条】半场开香槟\n【释义】指比赛还没结束就提前庆祝，最后被翻盘。' },
@@ -23,6 +24,7 @@ function fixture() {
   ], { sourceUrl: 'https://example.com/style' });
   store.replaceCorpus('vbar', [
     { id: 1, text: '【词条】V吧黑话\n【用法】只在虚拟主播话题里使用。' },
+    { id: 2, text: '【词条】管人\n【用法】虚拟主播的观众称呼。' },
   ]);
   store.replaceCorpus('hell', [
     { id: 1, text: '地狱笑话：越周到越像在办黑活。' },
@@ -57,6 +59,26 @@ test('默认不召回 V吧和地狱笑话，显式指定后才参与', () => {
     assert.equal(store.search('V吧黑话', { corpora: ['vbar'] }).some((row) => row.corpus === 'vbar'), true);
     assert.equal(store.search('办黑活').some((row) => row.corpus === 'hell'), false);
     assert.equal(store.search('办黑活', { includeSensitive: true }).some((row) => row.corpus === 'hell'), true);
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('短中文词走词条回退，显式 V吧语料优先于通用梗库', () => {
+  const { store, directory } = fixture();
+  try {
+    const vbarOnly = store.search('管人', { corpora: ['vbar'] });
+    assert.equal(vbarOnly[0].corpus, 'vbar');
+    assert.match(vbarOnly[0].terms, /管人/);
+
+    const mixed = store.search('V吧黑话 管人', { corpora: ['memewiki', 'meme_style', 'vbar'] });
+    assert.equal(mixed[0].corpus, 'vbar');
+    const prompt = store.buildPrompt('V吧黑话 管人', {
+      corpora: ['memewiki', 'meme_style', 'vbar'],
+    });
+    assert.match(prompt, /V吧黑话/);
+    assert.doesNotMatch(prompt, /管人痴/);
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
