@@ -74,6 +74,20 @@ test('调侃电竞截图时优先用可见正文构造精确背景查询', () =>
   assert.match(queries[0], /替父从军/);
 });
 
+test('没有固定梗名时用场景关系和笑点机制构造一次语境查询', () => {
+  const queries = buildImageSearchQueries({ items: [{
+    visibleText: [],
+    sceneRelation: '正经服务和荒诞装扮被并置',
+    impliedPoint: '越周到越像在办黑活',
+    comicMechanism: '身份错位与反差',
+    replyHook: '服务员突然转职暗号交易员',
+    keywords: ['服务', '暗号'],
+  }] }, '笑点解析');
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /暗号/);
+  assert.match(queries[0], /语境|含义|背景/);
+});
+
 test('视觉明确没有公开线索、识别失败或用户不允许联网时，不发空泛查询', () => {
   assert.deepEqual(buildImageSearchQueries({ items: [{ keywords: ['私聊'], searchQueries: [] }] }), []);
   assert.deepEqual(buildImageSearchQueries(null, '这是什么'), []);

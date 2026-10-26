@@ -304,6 +304,24 @@ export function isImageSearchEligible(item, subject) {
   return hasUsefulImageClue(subject, item);
 }
 
+function semanticImageClue(item = {}) {
+  return [
+    item.sceneRelation ?? item.scene_relation,
+    item.impliedPoint ?? item.implied_point,
+    item.comicMechanism ?? item.comic_mechanism,
+    item.replyHook ?? item.reply_hook,
+    item.abstractImpression ?? item.abstract_impression,
+  ].map(compactText).filter((value) => value && !GENERIC_IMAGE_TERMS.has(value)).join(' ').slice(0, 180);
+}
+
+function buildSemanticImageQuery(item = {}) {
+  const scene = semanticImageClue(item);
+  if (!scene) return '';
+  const visible = explicitVisibleTextClue(item, 4);
+  const keywords = normalizedTextList(item.keywords).slice(0, 5).join(' ');
+  return [visible, scene, keywords].filter(Boolean).join(' ').replace(/\s+/gu, ' ').trim().slice(0, 180);
+}
+
 function imageAnalysisItems(analysis) {
   return analysis?.items?.length ? analysis.items : (analysis ? [analysis] : []);
 }
@@ -510,8 +528,14 @@ export function buildImageSearchPlan(analysis, content = '') {
   const items = analysis?.items?.length ? analysis.items : (analysis ? [analysis] : []);
   const explicitIntent = hasExplicitImageSearchIntent(content);
   const verificationIntent = /(?:真的假的|真假|是否属实|核实|验证|谁家的|哪家的?|什么品牌|哪个品牌|logo|标志|(?:\d+|[一二两三四五六七八九十几]+)\s*(?:天|日)后|过几天|下周|本周末|月底|下个月|几个月后|三个月后|跨年)/iu.test(content);
-  if (isImageEvaluationIntent(content) && !explicitIntent && !verificationIntent) return [];
-  const cultureIntent = IMAGE_CULTURE_REQUEST_PATTERN.test(compactText(content));
+  const semanticIntent = isExplicitImageInterpretationIntent(content)
+    || IMAGE_CULTURE_REQUEST_PATTERN.test(compactText(content));
+  const semanticItems = items.filter((item) => Boolean(semanticImageClue(item)));
+  // 评价/笑点解析不是“免搜”信号：有结构化语义线索时先用场景和机制
+  // 做一次公开语境核对；只有完全没有语义或文字线索时才保持本地回答。
+  if (isImageEvaluationIntent(content) && !explicitIntent && !verificationIntent
+    && !semanticIntent && semanticItems.length === 0) return [];
+  const cultureIntent = semanticIntent || IMAGE_CULTURE_REQUEST_PATTERN.test(compactText(content));
   const baseMaxQueries = explicitIntent
     ? IMAGE_SEARCH_EXPLICIT_MAX_QUERIES
     : IMAGE_SEARCH_DEFAULT_MAX_QUERIES;
@@ -532,14 +556,17 @@ export function buildImageSearchPlan(analysis, content = '') {
     // Low-information images stay local unless the user explicitly asks for a
     // source, identity, meme or verification. Even then, only a concrete clue
     // from vision/OCR may be sent upstream; the generic question is not a clue.
+    const semanticLowInformationSearch = itemPolicy.level === 'low_information'
+      && semanticIntent
+      && Boolean(semanticImageClue(item));
     const explicitLowInformationSearch = itemPolicy.level === 'low_information'
-      && (explicitIntent || verificationIntent);
+      && (explicitIntent || verificationIntent || semanticLowInformationSearch);
     if (itemPolicy.level === 'low_information' && !explicitLowInformationSearch) continue;
     // A culture request can make an informative screenshot worth one focused
     // lookup even when it is shorter than the general “search eligible”
     // threshold. It still cannot open the gate for low-information memes.
     if (!itemPolicy.searchEligible
-      && !(cultureIntent && itemPolicy.level === 'informative_clue')
+      && !(cultureIntent && (itemPolicy.level === 'informative_clue' || semanticLowInformationSearch))
       && !explicitIntent) continue;
     // An explicit empty array means vision found no suitable public search
     // clue (for example a private chat screenshot); don't send its OCR online.
@@ -550,11 +577,20 @@ export function buildImageSearchPlan(analysis, content = '') {
     const highConfidenceSource = (Array.isArray(item.sourceCandidates) ? item.sourceCandidates : [])
       .find((candidate) => String(candidate?.confidence ?? '').toLowerCase() === 'high')
       ?.platform ?? '';
+    const proposedSearchQueries = Array.isArray(item.searchQueries) ? item.searchQueries : [];
+    const semanticQuery = buildSemanticImageQuery(item);
+    const cultureFallback = semanticQuery || proposedSearchQueries.length > 0
+      ? ''
+      : (explicitVisibleTextClue(item) || highConfidenceSource
+        || (item.keywords?.length ? item.keywords.slice(0, 5).join(' ') : ''));
     const proposed = cultureIntent
-      // 对“调侃/接梗/地狱笑话”优先使用截图中最长且最具体的可见正文。
-      // 视觉模型生成的 search_queries 可能漏掉实体关系，精确 OCR 线索
-      // 更容易命中 369、Bin、替父从军等公开背景；仍受同一信息密度门控。
-      ? [explicitVisibleTextClue(item), ...(Array.isArray(item.searchQueries) ? item.searchQueries : [])]
+      // 有语义字段时先搜“场景+机制”；没有时优先使用视觉模型给出的
+      // 具体查询，其次才用 OCR 正文，避免把整段私聊/界面噪声直接送出。
+      ? [
+        semanticQuery,
+        ...proposedSearchQueries,
+        cultureFallback,
+      ]
       : Array.isArray(item.searchQueries) && item.searchQueries.length > 0
         ? item.searchQueries
       : (explicitIntent
@@ -571,10 +607,10 @@ export function buildImageSearchPlan(analysis, content = '') {
       // Without an explicit lookup request, a textless picture is usually a
       // reaction/meme image. Do not spend an upstream call just because vision
       // guessed a template name; explicit “出处/什么梗” can still opt in.
-      if (!explicitIntent && meaningfulCharacters(item.visibleText?.join(' ')) === 0) continue;
+      if (!explicitIntent && !semanticIntent && meaningfulCharacters(item.visibleText?.join(' ')) === 0) continue;
       if (explicitLowInformationSearch
-        ? !hasExplicitConcreteImageClue(subject, item)
-        : !isImageSearchEligible(item, subject)) continue;
+        ? !semanticLowInformationSearch && !hasExplicitConcreteImageClue(subject, item)
+        : !isImageSearchEligible(item, subject) && !(semanticIntent && semanticImageClue(item))) continue;
       const fingerprint = subject.normalize('NFKC').toLowerCase();
       const scope = buildSourceScope(item.sourceCandidates);
       const key = `${scope.includeDomains.join(',')}:${fingerprint}`;

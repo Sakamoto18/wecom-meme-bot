@@ -517,6 +517,20 @@ test('图片文化回复只有情绪标签且未命中 JEV 落点时判为泛化
   assert.equal(reviewNormalReply('太抽象了。', { imageCultureMode: true }).issues.includes('image-culture-generic'), false);
 });
 
+test('图片回答拦截连续画面播报，即使末尾贴了笑点标签', () => {
+  const draft = '正经服务被拍成手势对照表，一排 0 到 9 摆出来，跟点菜报暗号似的。再配上后面那位耳机一戴、魂已下车的表情，笑点就是服务很周到、人已经放空。';
+  const reviewed = reviewNormalReply(draft, {
+    hasImageContext: true,
+    imageDescriptionRequested: false,
+  });
+  assert.ok(reviewed.issues.includes('image-description-heavy'));
+  const semantic = reviewNormalReply('这图把正经服务硬套成暗号交易，反差就在“越周到越像在办黑活”。', {
+    hasImageContext: true,
+    imageDescriptionRequested: false,
+  });
+  assert.equal(semantic.issues.includes('image-description-heavy'), false);
+});
+
 test('普通回复质量复核要求角色钩子但不把角色钩子等同于骂人', () => {
   assert.ok(reviewNormalReply('这个方案目前可以落地，但要先备份数据。', {
     requireRoleVoice: true,
