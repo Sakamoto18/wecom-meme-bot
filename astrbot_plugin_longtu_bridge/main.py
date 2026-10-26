@@ -9,6 +9,7 @@ import re
 import time
 from zoneinfo import ZoneInfo
 from .video_card import render_video_card
+from .usage_report_card import render_usage_report
 from .video_delivery_cache import VideoDeliveryCache, VideoForwardRejected
 from .qq_sticker import QqSticker
 from .crazy_thursday import generate_crazy_thursday_copy, nearby_holiday_context
@@ -620,7 +621,7 @@ class LongtuQqBridge(Star):
             raise RuntimeError("插件缺少 api_token / LONGTU_QQ_API_TOKEN")
         async with self.session.get(
             self._usage_api_url(),
-            params={"start_at": start_at, "end_at": end_at, "limit": 100},
+            params={"start_at": start_at, "end_at": end_at, "all_groups": "true"},
             headers={"Authorization": f"Bearer {token}"},
         ) as response:
             if response.status != 200:
@@ -772,6 +773,7 @@ class LongtuQqBridge(Star):
         )
         deepseek_cost = float(pricing.get("estimatedCostCny") or 0)
         jev_total_cost = float(jev_pricing.get("jevEstimatedCostCny") or 0)
+        search_pricing = pricing.get("search") or {}
         llm_calls = int(totals.get("llmCalls") or 0)
         primary_reply_calls = int(totals.get("primaryReplyCalls") or 0)
         secondary_review_calls = int(totals.get("secondaryReviewCalls") or 0)
@@ -799,6 +801,11 @@ class LongtuQqBridge(Star):
                 f"（结果缓存 {search_cache_rate:.1f}%）"
             ),
         ]
+        lines.append(
+            f"Exa 搜索约 {self._money(search_pricing.get('searchEstimatedCostCny'))}｜"
+            f"搜索未计价 {int(search_pricing.get('searchUnpricedCalls') or 0)} 次｜"
+            f"扣费待确认 {int(search_pricing.get('searchUnknownCalls') or 0)} 次"
+        )
         jev_calls = int(jev_pricing.get("jevCalls") or 0)
         jev_input_tokens = int(jev_pricing.get("jevInputTokens") or 0)
         jev_output_tokens = int(jev_pricing.get("jevOutputTokens") or 0)
@@ -856,7 +863,7 @@ class LongtuQqBridge(Star):
                 "费用：未缓存输入 "
                 f"{self._money(pricing.get('uncachedInputCostCny'))}｜缓存输入 "
                 f"{self._money(pricing.get('cachedInputCostCny'))}｜输出 "
-                f"{self._money(pricing.get('outputCostCny'))}（搜索费另计）",
+                f"{self._money(pricing.get('outputCostCny'))}（搜索费见上方）",
             )
             if int(pricing.get("unpricedCalls") or 0) > 0:
                 lines.append(
@@ -991,7 +998,7 @@ class LongtuQqBridge(Star):
         if not recipients:
             logger.warning("每日用量日报未发送：LONGTU_QQ_USAGE_REPORT_USERS 为空")
             return 0
-        return await self._send_usage_report_text(report_text, recipients)
+        return await self._send_usage_report(body, report_text, recipients)
 
     async def _prepare_usage_report(
         self,
@@ -1028,6 +1035,44 @@ class LongtuQqBridge(Star):
         )
         return body, report_text
 
+    async def _send_usage_report(self, body: dict, report_text: str, recipients: list[str]) -> int:
+        platform = self._qq_platform()
+        if not platform:
+            raise RuntimeError("未找到已启用的 aiocqhttp 平台")
+        try:
+            report = body["report"]
+            names = await self._group_catalog()
+            missing = [str(row["groupId"]) for row in report.get("groups", [])
+                       if str(row["groupId"]) not in names]
+            names = {**names, **(await self._group_names(missing))}
+            pngs = await asyncio.to_thread(render_usage_report, report, names)
+            if not pngs:
+                raise RuntimeError("日报未生成图片")
+            images = [base64.b64encode(png).decode("ascii") for png in pngs]
+        except Exception as error:
+            logger.warning(f"日报图片生成失败，回退文字：{error}")
+            return await self._send_usage_report_text(report_text, recipients)
+        delivered = 0
+        for recipient in recipients:
+            try:
+                complete = True
+                for encoded in images:
+                    sent = await self.context.send_message(
+                        f"{platform.meta().id}:FriendMessage:{recipient}",
+                        MessageChain(chain=[Comp.Image.fromBase64(encoded)]),
+                    )
+                    if not sent:
+                        complete = False
+                        break
+                if complete:
+                    delivered += 1
+                else:
+                    logger.warning(f"日报图片未全部送达：{recipient}")
+            except Exception as error:
+                logger.warning(f"日报图片发送失败：{recipient}：{error}")
+        logger.info(f"图片日报已推送给 {delivered}/{len(recipients)} 个收件账号")
+        return delivered
+
     async def _send_usage_report_text(
         self,
         report_text: str,
@@ -1054,16 +1099,15 @@ class LongtuQqBridge(Star):
         *,
         end_at: datetime | None = None,
     ) -> int:
-        _body, report_text = await self._prepare_usage_report(
+        body, report_text = await self._prepare_usage_report(
             report_date,
             end_at=end_at,
             requested_by=requested_by,
         )
         # 指定日期的回捞只发给发令超管，不把群用量和费用暴露给当前群成员，
         # 也不依赖日报收件人列表是否配置。
-        return await self._send_usage_report_text(
-            report_text,
-            [str(requested_by).strip()],
+        return await self._send_usage_report(
+            body, report_text, [str(requested_by).strip()],
         )
 
     async def _send_current_usage_report(self, requested_by: str) -> int:

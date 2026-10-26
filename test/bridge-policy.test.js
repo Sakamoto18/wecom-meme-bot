@@ -49,7 +49,7 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(source, /report\.get\("dataAvailableFrom"\)/);
   assert.match(source, /龙玉涛 Bot 日报/);
   assert.match(source, /费用：未缓存输入/);
-  assert.match(source, /搜索费另计/);
+  assert.match(source, /搜索费见上方/);
   assert.match(source, /节流跳过复核/);
   assert.match(source, /estimatedSavedCostCny/);
   assert.match(source, /privateUsage/);

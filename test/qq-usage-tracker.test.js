@@ -737,3 +737,66 @@ test('图片联网搜索额外按群做分钟级限流，普通文字搜索不�
     fixture.close();
   }
 });
+
+test('Exa list pricing, reported cost, caches, free fallbacks and unknown charges reconcile by group', async () => {
+  const f = createTracker({ searchUsdToCny: 7.2 });
+  try {
+    const record = (groupId, info, result = {}) => f.tracker.runWithContext({ groupId }, () => {
+      const id = f.tracker.startSearchCall(info);
+      f.tracker.finishSearchCall(id, { succeeded: true, resultCount: 1, ...result });
+    });
+    record('a', { provider: 'exa', searchType: 'auto', requestedResults: 4 });
+    record('a', { provider: 'exa', searchType: 'auto', requestedResults: 20 });
+    record('b', { provider: 'exa', searchType: 'neural', requestedResults: 4 }, { costDollars: { total: 0.002 } });
+    record('', { provider: 'exa', searchType: 'auto', requestedResults: 4 }, { costDollars: 0.001 });
+    record('b', { provider: 'web' });
+    record('b', { provider: 'exa', searchType: 'auto', requestedResults: 4 }, { succeeded: false });
+    record('b', {}); // Old events cannot be assigned an Exa price.
+    record('b', { provider: 'exa', searchType: 'neural', requestedResults: 4 });
+    f.tracker.runWithContext({ groupId: 'a' }, () => f.tracker.recordSearchCacheHit({ resultCount: 4 }));
+    const report = f.tracker.getReport({ allGroups: true });
+    assert.equal(report.pricing.search.searchEstimatedCostUsd, 0.027);
+    assert.equal(report.pricing.search.searchEstimatedCostCny, 0.1944);
+    assert.equal(report.pricing.search.searchEstimatedCalls, 2);
+    assert.equal(report.pricing.search.searchUnpricedCalls, 2);
+    assert.equal(report.pricing.search.searchUnknownCalls, 1);
+    assert.equal(report.pricing.search.searchFreeCalls, 1);
+    assert.equal(report.pricing.combined.estimatedCostCny, 0.1944);
+    assert.equal(report.groups[0].groupId, 'a');
+    assert.equal(report.groups[0].combinedEstimatedCostCny, 0.1728);
+    assert.equal(report.privateUsage.searchEstimatedCostCny, 0.0072);
+    assert.equal(report.totals.searchCacheHits, 1);
+    f.tracker.searchUsdToCny = 8;
+    assert.equal(f.tracker.getReport().pricing.search.searchEstimatedCostCny, 0.1944);
+    assert.deepEqual(report.pricing.search.searchExchangeRates, [7.2]);
+  } finally { f.close(); }
+});
+
+test('real Exa wrapper preserves reported charges even when local filtering discards results', async () => {
+  const f = createTracker();
+  try {
+    const client = new LongtuWebSearch({ provider: 'exa', exaApiKey: 'test', maxResults: 4,
+      fetchImpl: async () => Response.json({ costDollars: { total: 0.012 }, results: [
+        { title: 'Example', url: 'https://unrelated.example/a', text: 'body' },
+      ] }) });
+    // Exercise the exact upstream hooks installed by the tracker without search query fallback heuristics.
+    const proxy = { enabled: true, provider: 'exa',
+      search: (_content, options) => client.fetchResults('https://api.exa.ai/search', 'example', { ...options, includeDomains: ['wanted.example'] }) };
+    await f.tracker.runWithContext({ groupId: 'a' }, () => f.tracker.wrapWebSearch(proxy).search('example'));
+    const report = f.tracker.getReport();
+    assert.equal(report.pricing.search.searchEstimatedCostUsd, 0.012);
+    assert.equal(report.pricing.search.searchEstimatedCalls, 0);
+    assert.equal(report.totals.searchCalls, 1);
+  } finally { f.close(); }
+});
+
+test('image reports can request all groups while ordinary report queries retain their limit', () => {
+  const f = createTracker();
+  try {
+    for (let i = 0; i < 105; i++) f.tracker.runWithContext({ groupId: `g-${i}` }, () => {
+      f.tracker.recordSearchCacheHit({ resultCount: 1 });
+    });
+    assert.equal(f.tracker.getReport({ limit: 100 }).groups.length, 100);
+    assert.equal(f.tracker.getReport({ allGroups: true }).groups.length, 105);
+  } finally { f.close(); }
+});

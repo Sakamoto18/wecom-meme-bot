@@ -487,6 +487,7 @@ export class LongtuWebSearch {
     let succeeded = false;
     let resultCount = 0;
     let upstreamStarted = false;
+    let costDollars;
     try {
       if (usesExa && !this.exaApiKey) {
         throw new Error('Exa API Key 尚未配置');
@@ -494,6 +495,8 @@ export class LongtuWebSearch {
       options.onBeforeUpstreamRequest?.({
         endpoint,
         provider: usesExa ? 'exa' : 'web',
+        searchType: usesExa ? this.exaSearchType : '',
+        requestedResults: this.maxResults,
         query,
       });
       upstreamStarted = true;
@@ -530,9 +533,11 @@ export class LongtuWebSearch {
       }
 
       const responseBody = await response.text();
+      const exaPayload = usesExa ? JSON.parse(responseBody) : null;
+      costDollars = exaPayload?.costDollars;
       const parseStats = { rawResultCount: 0 };
       const parsedResults = usesExa
-        ? parseExaSearchJson(JSON.parse(responseBody), this.maxResults, {
+        ? parseExaSearchJson(exaPayload, this.maxResults, {
           ...options,
           stats: parseStats,
           maxContentCharacters: this.exaMaxContentCharacters,
@@ -561,6 +566,9 @@ export class LongtuWebSearch {
         options.onUpstreamRequest?.({
           endpoint,
           provider: usesExa ? 'exa' : 'web',
+          searchType: usesExa ? this.exaSearchType : '',
+          requestedResults: this.maxResults,
+          costDollars,
           query,
           resultCount,
           succeeded,
