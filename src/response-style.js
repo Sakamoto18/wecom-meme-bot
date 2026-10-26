@@ -730,13 +730,11 @@ export function buildNormalReplyContextPrompt(options = {}) {
     ...(interaction.quotedAuthorLabel
       ? [`引用作者 ${interaction.quotedAuthorLabel} 只是内容来源；优先分析引用内容的事实、逻辑和依据，当前发言者只是提问者。`]
       : []),
-    ...(options.informationMemeMode
+    ...(options.informationMemeMode || options.searchEvidenceAvailable || options.cultureGroundingRequired
       ? [
-        '【信息型梗：先现实，后笑点】先找出图或话里真正指向的现实事件、人物、机构、产品、技术规则或数字条件；再看梗改了哪一步。不要把它当成纯谐音或“敷衍一下”的段子。',
-        '短数字、短词或技术词不要按外观判死：先核对它在该领域的定义和合法取值范围，常见展示格式不等于合法值定义。像私钥这类整数标量，长度/十六进制外观不能单独否定一个很小的数字；它可能确实合法，只是极不安全。',
-        '回答落到三层：一句现实锚点或规则、一句梗怎么利用它、一句为什么对方的反应成立。1～3 句说清，事实和笑点挨在一起，不要写成新闻复述或百科定义。',
-        '有检索证据就用证据里的具体主体和细节；没有可信证据时用角色语气直接说“这我真不知道/没查到准信”，随后只解释图中可见关系。禁止补编新闻、时间线、人物或用客服式免责声明收尾。',
-        '抽象联想只能在事实层正确后追加一句，不能替代现实锚点，也不能把“我先接个梗”当成不查证的理由。',
+        '【事实与群友表达并行】检索只负责把现实主体、时间、规则和数字说准，不会切换人格或语气。先把本轮真正需要的事实揉进第一句，再用一个贴题的态度、反差、比喻或群梗接住；不要拆成“知识回答 + 额外玩梗”两套模式。',
+        '短数字、短词或技术词先按证据核对定义和合法范围；检索没有精确支持的实体、时间线、作者、播放量和传播范围不能补编。没有可信证据时，用角色语气直接说没查到准信，再回答当前能确认的部分。',
+        '事实正确不等于必须写成新闻复述或百科定义。默认 1～3 个短句，逻辑是骨架，群友语气、具体反差和抽象联想是表达；找不到贴题联想就自然停，不要硬塞。',
       ]
       : []),
     ...(options.imageRealityAnchor
@@ -790,9 +788,9 @@ export function buildGroupChatOutputPrompt(options = {}) {
     silence: '本轮没有新内容就不要抢话，不为了完成回复硬塞信息。',
   }[options.speechAct];
   if (speechActLines) lines.push(`【本轮说话动作】${speechActLines}`);
-  if (options.informationMemeMode) {
+  if (options.informationMemeMode || options.searchEvidenceAvailable || options.cultureGroundingRequired) {
     lines.push(
-      '【信息型梗模式】这轮先把现实事件、人物、机构、产品、技术规则或数字条件说准，再解释梗如何改写它。不要用“不要正经逻辑拆解”跳过事实层，也不要只用“抽象/离谱/敷衍/谐音”打发；有证据就点一个具体细节，没证据就用角色语气说不知道后只讲可见关系。',
+      '【事实与语感统一】这轮先把现实事件、人物、机构、产品、技术规则或数字条件说准，同时保持群友式短句、态度和贴题联想。不要把事实回答写成知识库，也不要只用“抽象/离谱/敷衍/谐音”打发；有证据就点一个具体细节，没证据就用角色语气说不知道后只讲能确认的关系。',
     );
   } else if (options.imageCultureMode) {
     lines.push(
@@ -965,7 +963,10 @@ export function reviewNormalReply(answer, options = {}) {
     if (INTERNAL_REPLY_METADATA_PATTERN.test(normalized)) {
       issues.push('internal-metadata-leak');
     }
-    issues.push(...detectHumanizerTells(normalized, options));
+    // The local humanizer chain remains active for ordinary grounded replies:
+    // report-shaped prose and the narrower GitHub-derived tells need the same
+    // single rewrite pass as culture and fact issues.
+    issues.push(...detectAssistantReportStyle(normalized, options));
     return { valid: issues.length === 0, issues };
   }
   if (options.checkRepeatedAnswer && isRepeatedAssistantReply(normalized, recentReplies, 0.84)) {

@@ -130,6 +130,73 @@ test('具体名梗先做梗义核对，再保留角色语气和抽象联想', as
   assert.match(result.answer, /陀螺/);
 });
 
+test('规划器给出具体梗名时跳过模糊缓存，相关标题不能建立文化短卡', async () => {
+  let cacheLookups = 0;
+  let searchCalls = 0;
+  const result = await generateConversationReply({
+    content: '突然的陀螺是什么意思',
+    currentQuestion: '突然的陀螺是什么意思',
+    modelInput: '突然的陀螺是什么意思',
+    webSearchEnabled: true,
+    cultureCache: {
+      lookup() { cacheLookups += 1; return { normalizedTopic: '突然的自我' }; },
+      put() { return true; },
+    },
+    webSearch: {
+      async search() {
+        searchCalls += 1;
+        return {
+          context: '搜索到相似词“突然的自我”，没有出现用户点名的词组。',
+          resultCount: 1,
+          results: [{ title: '突然的自我', description: '相似网络语境。', url: 'https://example.com/related' }],
+        };
+      },
+    },
+    turnPlan: {
+      mode: 'banter',
+      answerRequired: true,
+      search: { factNeeded: false, cultureNeeded: true, factQueries: [], cultureQueries: ['突然的陀螺'] },
+      attack: { decision: 'none', target: 'none' },
+    },
+    chatClient: { isConfigured: true, async complete() { return '这个词没查到准信，别拿相似标题硬套。'; } },
+  });
+  assert.equal(cacheLookups, 0);
+  assert.equal(searchCalls, 1);
+  assert.equal(result.cultureCardUsed, false);
+  assert.equal(result.cultureEvidenceQuality, 'related-only');
+});
+
+test('规划器给出的具体梗名有精确结果时建立文化短卡', async () => {
+  const result = await generateConversationReply({
+    content: '突然的陀螺是什么意思',
+    currentQuestion: '突然的陀螺是什么意思',
+    modelInput: '突然的陀螺是什么意思',
+    webSearchEnabled: true,
+    webSearch: {
+      async search() {
+        return {
+          context: '贴吧语境：突然的陀螺指话题突然转向。',
+          resultCount: 1,
+          results: [{
+            title: '突然的陀螺是什么梗',
+            description: '指话题突然转向。',
+            url: 'https://tieba.baidu.com/p/example',
+          }],
+        };
+      },
+    },
+    turnPlan: {
+      mode: 'banter',
+      answerRequired: true,
+      search: { factNeeded: false, cultureNeeded: true, factQueries: [], cultureQueries: ['突然的陀螺'] },
+      attack: { decision: 'none', target: 'none' },
+    },
+    chatClient: { isConfigured: true, async complete() { return '这词就是话题突然拐弯，像方向盘被人顺走了。'; } },
+  });
+  assert.equal(result.cultureCardUsed, true);
+  assert.equal(result.cultureEvidenceQuality, 'exact-source');
+});
+
 test('JEV 判定需要核实事实或时效时，不依赖关键词也进入事实检索', async () => {
   const calls = [];
   const result = await generateConversationReply({
@@ -2016,7 +2083,7 @@ test('当前时间注入可变提示层，不污染 prompt 缓存前缀', async 
   assert.doesNotMatch(String(first.stableSystemPrompt ?? ''), /【当前时间】/);
 });
 
-test('图中的现实新闻追问会先查文字事实，再按信息型梗回答', async () => {
+test('图中的现实新闻追问会先查文字事实，再把事实和群友语感统一回答', async () => {
   const searches = [];
   let prompt = '';
   const result = await generateConversationReply({
@@ -2058,10 +2125,10 @@ test('图中的现实新闻追问会先查文字事实，再按信息型梗回�
     && /PHP 漏洞/u.test(query)
     && /2026-10-21/u.test(query)
   )));
-  assert.match(prompt, /【信息型梗：先现实，后笑点】/);
-  assert.match(prompt, /【信息型梗模式】/);
-  assert.match(prompt, /短数字、短词或技术词不要按外观判死/);
-  assert.match(prompt, /私钥这类整数标量/);
+  assert.match(prompt, /【事实与群友表达并行】/);
+  assert.match(prompt, /【事实与语感统一】/);
+  assert.doesNotMatch(prompt, /【信息型梗模式】/);
+  assert.match(prompt, /短数字、短词或技术词先按证据核对/);
   assert.match(prompt, /PHP2Shell/);
 });
 

@@ -49,6 +49,46 @@ function hostOf(url) {
   }
 }
 
+function normalizeEvidenceText(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[“”"'‘’《》〈〉「」『』【】\[\]()（）]/gu, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/**
+ * Search providers often return a semantically related title instead of the
+ * named meme the user asked about. Keep that material as a candidate, but do
+ * not promote it to a culture fact unless the requested phrase is present in
+ * the returned title or excerpt.
+ */
+export function evaluateCultureEvidence(query, searchResult) {
+  const requested = normalizeEvidenceText(query);
+  const rows = Array.isArray(searchResult?.results) ? searchResult.results : [];
+  const matches = rows.filter((row) => {
+    const title = normalizeEvidenceText(row?.title);
+    const description = normalizeEvidenceText(row?.description);
+    return Boolean(requested && (title.includes(requested) || description.includes(requested)));
+  });
+  const normalizedContext = normalizeEvidenceText(searchResult?.context);
+  const exactMatch = Boolean(
+    requested
+      && (matches.length > 0 || normalizedContext.includes(requested)),
+  );
+  const sourceDomains = uniqueStrings(matches.map((row) => hostOf(row?.url)), MAX_SOURCE_DOMAINS, 120);
+  return {
+    requested: String(query ?? '').trim(),
+    exactMatch,
+    matchCount: matches.length,
+    sourceDomains,
+    evidenceQuality: exactMatch
+      ? (matches.some((row) => /(?:bilibili\.com|b23\.tv|tieba\.baidu\.com)/iu.test(String(row?.url ?? '')))
+        ? 'exact-source' : 'exact-match')
+      : (rows.length > 0 || searchResult?.context ? 'related-only' : 'none'),
+  };
+}
+
 function descriptorCandidates(text) {
   const source = normalized(text, 1_600);
   if (!source) return [];
@@ -80,6 +120,8 @@ export function buildCultureCard(query, searchResult, options = {}) {
       ? [{ title: normalizedQuery, description: normalized(searchResult.context, 1_600), url: '' }]
       : []);
   if (!normalizedQuery || rows.length === 0) return null;
+  const evidenceMatch = evaluateCultureEvidence(options.exactQuery || normalizedQuery, searchResult);
+  if (options.requireExactMatch && !evidenceMatch.exactMatch) return null;
   const evidence = rows.map((row) => [row?.title, row?.description].filter(Boolean).join('：'))
     .filter(Boolean).join('；');
   const terms = uniqueStrings([
@@ -102,6 +144,8 @@ export function buildCultureCard(query, searchResult, options = {}) {
       '不攻击提问者、引用作者或无关第三方',
     ],
     sourceDomains,
+    exactMatch: evidenceMatch.exactMatch,
+    evidenceQuality: evidenceMatch.evidenceQuality,
   };
 }
 
@@ -114,6 +158,7 @@ export function cultureCardPrompt(card, source = 'cache') {
     `文化领域：${CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general'}`,
     `接梗线索：${uniqueStrings(card.descriptors, MAX_DESCRIPTORS, MAX_DESCRIPTOR_LENGTH).join('；')}`,
     `检索来源状态：${source === 'cache' ? '本地缓存短卡' : '本轮公开检索后提炼'}${card.lookupSource === 'tieba' ? '（公开贴吧语境证据）' : ''}`,
+    `证据匹配：${card.exactMatch === false ? '仅相似结果，不足以确认' : (card.evidenceQuality || '已匹配')}`,
     '只把这些线索融入当前回复，不复述来源、网页正文或检索过程；没有短卡也可以按当前语境自然接梗，不贴合就不用，不强塞固定梗。',
     `边界：${uniqueStrings(card.forbiddenTargets, 4, 120).join('；')}`,
   ].join('\n');

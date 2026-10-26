@@ -56,6 +56,7 @@ import {
 import {
   buildCultureCard,
   cultureCardPrompt,
+  evaluateCultureEvidence,
 } from './culture-cache.js';
 import {
   buildMemeKnowledgeEntry,
@@ -1424,7 +1425,13 @@ export async function generateConversationReply(options) {
   const abstractAssociationContext = abstractAssociationEntries.length > 0
     ? abstractAssociationPrompt(abstractAssociationEntries, abstractAssociationMemoryHit ? 'memory' : 'fresh-vision')
     : '';
-  if ((retrievalPolicy.cultureEligible || plannedCultureEligible) && cultureCache && cultureLookupQuery) {
+  // A concrete planner query must be freshly matched against the returned
+  // title/excerpt. Fuzzy cache recall is useful for ordinary culture context,
+  // but it can turn a similarly named meme into false certainty.
+  if ((retrievalPolicy.cultureEligible || plannedCultureEligible)
+    && cultureCache
+    && cultureLookupQuery
+    && !plannedCultureSearchRequested) {
     try {
       cultureCard = cultureCache.lookup(cultureLookupQuery, {
         domain: useLongtuKnowledge ? 'longtu' : (jevCulture.domain !== 'none' ? jevCulture.domain : undefined),
@@ -1643,11 +1650,20 @@ export async function generateConversationReply(options) {
     ].join('\n');
   }
 
+  const exactCultureQuery = plannedCultureQueries.length === 1
+    ? plannedCultureQueries[0]
+    : '';
+  const cultureEvidence = evaluateCultureEvidence(
+    exactCultureQuery || cultureLookupQuery || cultureQuery,
+    cultureSearchResult,
+  );
   if (!cultureCard && (cultureSearchResult.resultCount > 0 || cultureSearchResult.context)) {
     cultureCard = buildCultureCard(cultureLookupQuery || cultureQuery, cultureSearchResult, {
       confidence: retrievalPolicy.confidence,
       domain: useLongtuKnowledge ? 'longtu' : (jevCulture.domain === 'none' ? 'general' : jevCulture.domain),
       lookupSource: useLongtuKnowledge && longtuRetrievalEnabled && longtuTiebaSearchEnabled ? 'tieba' : 'web',
+      exactQuery: exactCultureQuery || cultureLookupQuery || cultureQuery,
+      requireExactMatch: plannedCultureSearchRequested,
     });
     if (cultureCard && cultureCache) {
       try {
@@ -1673,6 +1689,8 @@ export async function generateConversationReply(options) {
     }
   }
   const cultureCardUsed = Boolean(cultureCard);
+  const cultureEvidenceQuality = cultureCard?.evidenceQuality
+    || (cultureCardUsed ? 'cached' : cultureEvidence.evidenceQuality);
   const cultureGroundingRequired = Boolean(
     plannedCultureSearchRequested
       || unknownConcept
@@ -1687,7 +1705,6 @@ export async function generateConversationReply(options) {
     : (cultureSearchAttempted || cultureCardUsed
       ? cultureSearchMode
       : (attackKnowledgeSearchAttempted ? 'meme' : ''));
-
   const compactActiveReply = activeReply && activeReplyPriority !== 'must';
   const thinkingEnabled = !passiveImageComment && !compactActiveReply
     && (shouldUseThinking(content, { pureAttack })
@@ -1749,6 +1766,16 @@ export async function generateConversationReply(options) {
     .some((value) => isShortTermMeaningRequest(value));
   const factEvidenceAvailable = Boolean(factSearchResult.context);
   const searchEvidenceAvailable = factEvidenceAvailable || cultureCardUsed;
+  // A grounded answer in a style-enabled group must retain one natural voice
+  // hook. This is a preservation check, not a demand to add a fixed catchphrase
+  // to every message.
+  const groundedReplyRequiresVoice = Boolean(
+    typeof groupStyleProvider === 'function'
+      && !attackStyle
+      && !recordSummary
+      && !passiveImageComment
+      && (searchEvidenceAvailable || cultureGroundingRequired),
+  );
   const hasAbstractSignals = Boolean(abstractImpressionText || abstractAssociationEntries.length > 0);
   const abstractAssociationRequested = hasAbstractSignals || cultureGroundingRequired || (!factEvidenceAvailable && shouldInviteNaturalAssociation(content, {
     currentQuestion,
@@ -1865,6 +1892,7 @@ export async function generateConversationReply(options) {
     jevAttackStrategy,
     plannedAttack,
     speechAct: turnPlan?.speechAct || '',
+    requireRoleVoice: groundedReplyRequiresVoice,
   };
   const personaDemonstration = !attackStyle
     && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
@@ -1880,7 +1908,13 @@ export async function generateConversationReply(options) {
     imageSemanticPoint: String(jevStyle?.semanticPoint ?? ''),
     quotedPersonaPhrases: personaDemonstration ? personaPhrasesFromContext(personaContext) : [],
     relativeDateFacts,
-    searchEvidenceQuality: searchResult?.evidenceQuality ?? 'none',
+    searchEvidenceQuality: searchResult?.evidenceQuality
+      ?? cultureEvidenceQuality
+      ?? 'none',
+    cultureEvidenceQuality,
+    cultureGroundingRequired,
+    cultureEvidenceAvailable: Boolean(cultureCardUsed || cultureSearchResult.context || memeKnowledgeEntry),
+    requireRoleVoice: groundedReplyRequiresVoice,
   };
   // Put the invariant persona and knowledge before the live mode/history suffix.
   // DeepSeek can reuse this prefix across ordinary replies, active replies and
@@ -2144,7 +2178,10 @@ export async function generateConversationReply(options) {
               imageCultureMode,
               relativeDateFacts,
               history,
-              searchEvidenceQuality: searchResult?.evidenceQuality ?? 'none',
+              searchEvidenceQuality: searchResult?.evidenceQuality
+                ?? cultureEvidenceQuality
+                ?? 'none',
+              requireRoleVoice: groundedReplyRequiresVoice,
               plannedAttack,
             }),
           maxTokens: responseMaxTokens,
@@ -2175,6 +2212,7 @@ export async function generateConversationReply(options) {
           hasImageContext,
           imageDescriptionRequested,
           imageCultureMode,
+          requireRoleVoice: groundedReplyRequiresVoice,
           hardOnly: hardOnlyReview,
         });
         if (memeKnowledgeEntry && !memeKnowledgeCacheHit && !attackStyle) {
@@ -2359,6 +2397,7 @@ export async function generateConversationReply(options) {
     hasImageContext,
     imageDescriptionRequested,
     imageCultureMode,
+    requireRoleVoice: groundedReplyRequiresVoice,
     hardOnly: hardOnlyReview,
   });
   if (memeKnowledgeEntry && !memeKnowledgeCacheHit && !attackStyle) {
@@ -2471,6 +2510,15 @@ export async function generateConversationReply(options) {
     memeKnowledgeCacheHit,
     memeKnowledgeReview: Boolean(memeKnowledgeEntry && !memeKnowledgeCacheHit),
     cultureReviewRequired,
+    cultureEvidenceQuality,
+    groundingType: factEvidenceAvailable || factSearchAttempted
+      ? 'fact'
+      : (cultureCardUsed || cultureSearchAttempted ? 'culture' : 'none'),
+    evidenceQuality: searchResult?.evidenceQuality ?? cultureEvidenceQuality ?? 'none',
+    exactMatch: Boolean(cultureCard?.exactMatch || cultureEvidence.exactMatch),
+    styleProfile: typeof groupStyleProvider === 'function' ? 'group' : 'default',
+    naturalnessIssues: (review?.issues ?? []).filter((issue) => String(issue).startsWith('assistant-') || String(issue).startsWith('report-')),
+    rewriteUsed: Boolean(qualityRewriteUsed || normalPersonaRewritten),
     cultureDomain: jevCulture.domain,
     longtuLookupNeeded: jevCulture.longtu ? jevCulture.retrievalNeeded : 0,
     longtuSearchAttempted: Boolean(cultureSearchAttempted && useLongtuKnowledge && longtuRetrievalEnabled && longtuTiebaSearchEnabled),

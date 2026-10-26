@@ -554,23 +554,33 @@ test('正常事实回答和内容吐槽直接通过，不因缺少骂人词而�
   assert.ok(reviewNormalReply('能记住，你🐎的族谱我都刻盘里了。').issues.includes('family-attack-in-normal-mode'));
 });
 
-test('普通群聊硬边界不因普通风格问题改写，只额外拦截高置信 AI 腔', () => {
+test('普通群聊硬复核保留事实边界，同时继续拦截高置信 AI 腔', () => {
   const styleVariants = [
     '您好，这个方案目前可以落地，但上线前记得先备份数据。',
     '首先说结论：能落地。其次建议先备份，最后再逐步放量，希望有帮助。',
     '说白了，这个方案不是不能上，是步骤排得太急；我建议先备份，再灰度，别一把梭。',
   ];
-  for (const answer of styleVariants) {
-    assert.deepEqual(
-      reviewNormalReply(answer, {
-        hardOnly: true,
-        compactResponse: true,
-        activeReply: true,
-      }),
-      { valid: true, issues: [] },
-      answer,
-    );
-  }
+  assert.deepEqual(
+    reviewNormalReply(styleVariants[0], {
+      hardOnly: true,
+      compactResponse: true,
+      activeReply: true,
+    }),
+    { valid: true, issues: [] },
+  );
+  assert.ok(reviewNormalReply(styleVariants[1], {
+    hardOnly: true,
+    compactResponse: true,
+    activeReply: true,
+  }).issues.includes('assistant-report-opening'));
+  assert.deepEqual(
+    reviewNormalReply(styleVariants[2], {
+      hardOnly: true,
+      compactResponse: true,
+      activeReply: true,
+    }),
+    { valid: true, issues: [] },
+  );
 
   assert.ok(reviewNormalReply('成员-abcdef 说这个方案能上。', { hardOnly: true })
     .issues.includes('internal-metadata-leak'));

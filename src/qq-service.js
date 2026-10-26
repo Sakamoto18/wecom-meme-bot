@@ -4230,6 +4230,12 @@ export class QqBotService {
         + `，attempts=${generated.attempts ?? 1}`
         + `，info_meme=${generated.informationMemeMode ? 'on' : 'off'}`
         + `，grounding_queries=${generated.groundingQueries?.length ?? 0}`
+        + `，grounding_type=${generated.groundingType || 'none'}`
+        + `，evidence_quality=${generated.evidenceQuality || 'none'}`
+        + `，exact_match=${generated.exactMatch ? 'yes' : 'no'}`
+        + `，style_profile=${generated.styleProfile || 'default'}`
+        + `，naturalness_issues=${generated.naturalnessIssues?.join('|') || 'none'}`
+        + `，rewrite_used=${generated.rewriteUsed ? 'yes' : 'no'}`
         + `，identity=${generated.protectedRoleRewritten
           ? 'rewritten'
           : (generated.protectedRoleSanitized ? 'sanitized' : 'ok')}`
