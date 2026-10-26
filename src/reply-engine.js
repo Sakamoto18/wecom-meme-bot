@@ -1140,6 +1140,12 @@ export async function generateConversationReply(options) {
         ...knowledgeParts,
         '只用其中与当前原话贴合的对象、语义或具体事实找攻击落点；不要提检索、wiki、梗库、来源，也不要把知识摘要复述成百科解释。',
       ].join('\n');
+    } else {
+      attackKnowledgePrompt = [
+        '【攻击前梗义核对失败】',
+        `本轮出现了具体但未找到可靠解释的词组：${attackKnowledgeQueries.join('、')}`,
+        '不要把词面硬拆成自创比喻，也不要装作知道它的固定含义；可以保留角色攻击性，但只针对当前明确的行为或说法，必要时直接说没查到准信。',
+      ].join('\n');
     }
   }
   if (pureAttack) {
@@ -1305,6 +1311,7 @@ export async function generateConversationReply(options) {
     && plannedFactQueries.length > 0;
   const plannedCultureSearchRequested = turnPlan?.search?.cultureNeeded === true
     && plannedCultureQueries.length > 0;
+  const cultureGroundingSignal = plannedCultureSearchRequested || jevCulture.unknownConcept === true;
   // A low-information image keeps its hard gate unless the turn has a concrete
   // visual/text anchor or an explicit verification request. A concrete planner
   // query alone is not enough to turn a reaction image into a news lookup.
@@ -1314,7 +1321,10 @@ export async function generateConversationReply(options) {
     || retrievalPolicy.verificationRequested === true
     || Boolean(imageRealityAnchor || groundingQueryHint);
   const plannedFactEligible = plannedFactSearchRequested && plannedFactImageGateOpen;
-  const plannedCultureEligible = plannedCultureSearchRequested && !attackStyle;
+  // Culture grounding is evidence work, not a competing persona mode. An
+  // attack or banter turn may still need to identify an unfamiliar named meme
+  // before it chooses the sharper wording.
+  const plannedCultureEligible = plannedCultureSearchRequested;
   const textFactQueries = (retrievalPolicy.textFactEligible
     ? buildTextFactQueries(content, recentSearchHint, history)
     : [])
@@ -1442,7 +1452,7 @@ export async function generateConversationReply(options) {
     attackAllowsFactSearch && webSearchEnabled && webSearch && factSearchEligible,
   );
   const cultureSearchAttempted = Boolean(
-    !attackStyle && webSearchEnabled && webSearch && cultureSearchEligible,
+    webSearchEnabled && webSearch && cultureSearchEligible,
   );
   const searchAttempted = factSearchAttempted || cultureSearchAttempted || attackKnowledgeSearchAttempted;
   let factSearchResult = emptySearchResult();
@@ -1579,9 +1589,32 @@ export async function generateConversationReply(options) {
       mode: cultureSearchMode,
       usageSource: `web-search-culture-${cultureSearchMode}`,
     };
-    return scope.includeDomains.length
+    const primary = scope.includeDomains.length
       ? searchWithSourceScope(webSearch, cultureQuery, searchOptions, scope)
       : webSearch.search(cultureQuery, searchOptions);
+    const primaryResult = await primary;
+    // Planner supplied a concrete named phrase, but the general meme rail
+    // returned nothing. Give the configured Longtu/Tieba rail one bounded
+    // fallback so a known group meme is not reduced to a literal metaphor.
+    if (plannedCultureSearchRequested
+      && !useLongtuKnowledge
+      && longtuRetrievalEnabled
+      && longtuTiebaSearchEnabled
+      && !(primaryResult?.context || primaryResult?.resultCount)) {
+      try {
+        const fallback = await webSearch.search(cultureQuery, {
+          mode: 'longtu',
+          query: `site:tieba.baidu.com ${cultureQuery} 龙图 语境 含义`.slice(0, 180),
+          includeDomains: ['tieba.baidu.com'],
+          usageSource: 'web-search-culture-longtu-fallback',
+        });
+        if (fallback?.context || fallback?.resultCount) return fallback;
+      } catch {
+        // Keep the empty primary result and let the output contract say it is
+        // unconfirmed; a second search must never block the reply.
+      }
+    }
+    return primaryResult;
   };
 
   const searchTasks = [];
@@ -1640,6 +1673,11 @@ export async function generateConversationReply(options) {
     }
   }
   const cultureCardUsed = Boolean(cultureCard);
+  const cultureGroundingRequired = Boolean(
+    plannedCultureSearchRequested
+      || unknownConcept
+      || (cultureSearchAttempted && Boolean(cultureQuery)),
+  );
   const searchResult = factSearchAttempted || factSearchResult.resultCount > 0
     ? factSearchResult
     : cultureSearchResult;
@@ -1652,7 +1690,8 @@ export async function generateConversationReply(options) {
 
   const compactActiveReply = activeReply && activeReplyPriority !== 'must';
   const thinkingEnabled = !passiveImageComment && !compactActiveReply
-    && shouldUseThinking(content, { pureAttack });
+    && (shouldUseThinking(content, { pureAttack })
+      || (cultureGroundingSignal && !pureAttack));
   const detailedAnswerRequested = recordSummary
     || (!passiveImageComment && !compactActiveReply && shouldRequestDetailedAnswer(currentQuestion));
   const imageDescriptionRequested = hasImageContext
@@ -1662,19 +1701,23 @@ export async function generateConversationReply(options) {
   const knowledgeMemeContext = hasImageContext
     || /(?:梗|图|图片|截图|段子|表情包)/u.test(String(content ?? ''))
     || Boolean(plannedMeme.anchor);
+  const plannedMemeInformationKind = String(plannedMeme.informationKind ?? '').trim().toLowerCase();
+  const plannedMemeIsFactual = ['news', 'public_event', 'public_figure', 'technical_rule']
+    .includes(plannedMemeInformationKind);
+  const groundedImageAnchor = hasImageContext && String(imageRealityAnchor ?? '').trim();
   const informationMemeMode = Boolean(
     !recordSummary
     && !attackStyle
     && knowledgeMemeContext
     && (
-      String(imageRealityAnchor ?? '').trim()
+      groundedImageAnchor
       || ['news', 'public_event', 'public_figure', 'technical_rule'].includes(
         String(imageInformationKind ?? '').trim().toLowerCase(),
       )
       || retrievalPolicy.textFactEligible
-      || String(groundingQueryHint ?? '').trim()
-      || plannedMeme.anchor
-      || turnPlan?.firstBeat === 'anchor_meme'
+      || String(groundingQueryHint ?? '').trim() && plannedMemeIsFactual
+      || plannedMemeIsFactual
+      || turnPlan?.firstBeat === 'anchor_meme' && plannedMemeIsFactual
       || (Array.isArray(imageSearchQueries) && imageSearchQueries.some((query) => (
         /(?:私钥|密钥|漏洞|CVE-\d{4}-\d+|RCE|0day|新闻|事件|通报|公告|规则|合法|范围)/iu.test(String(query ?? ''))
       )))
@@ -1707,7 +1750,7 @@ export async function generateConversationReply(options) {
   const factEvidenceAvailable = Boolean(factSearchResult.context);
   const searchEvidenceAvailable = factEvidenceAvailable || cultureCardUsed;
   const hasAbstractSignals = Boolean(abstractImpressionText || abstractAssociationEntries.length > 0);
-  const abstractAssociationRequested = hasAbstractSignals || (!factEvidenceAvailable && shouldInviteNaturalAssociation(content, {
+  const abstractAssociationRequested = hasAbstractSignals || cultureGroundingRequired || (!factEvidenceAvailable && shouldInviteNaturalAssociation(content, {
     currentQuestion,
     activeReply,
     activeReplyPriority,
@@ -1736,10 +1779,15 @@ export async function generateConversationReply(options) {
       || ((hasImageContext || hasQuotedContent)
         && /(?:评价|锐评|赏析|赏评|怎么看|如何看|为什么|为何|什么梗|啥意思|接梗|像什么|什么水平)/u.test(associationReviewText))
     );
-  const cultureReviewRequired = isHighConfidenceCulturePolicy(retrievalPolicy)
-    && cultureCardUsed
-    && abstractAssociationRequested
-    && !attackStyle;
+  const cultureReviewRequired = Boolean(
+    !attackStyle
+      && abstractAssociationRequested
+      && (
+        isHighConfidenceCulturePolicy(retrievalPolicy) && cultureCardUsed
+        || plannedCultureSearchRequested
+        || unknownConcept
+      ),
+  );
   // Ordinary group chat only gets a hard fact/identity/security review. Length,
   // customer-service tone, openings and report-shaped prose stay with the model
   // instead of triggering a second rewrite. Media and proactive paths are
@@ -1801,6 +1849,8 @@ export async function generateConversationReply(options) {
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     cultureReviewRequired,
+    cultureGroundingRequired,
+    cultureEvidenceAvailable: Boolean(cultureCardUsed || cultureSearchResult.context || memeKnowledgeEntry),
     searchEvidenceAvailable,
     cultureDomain: jevCulture.domain,
     longtuLookupNeeded: jevCulture.longtu ? jevCulture.retrievalNeeded : 0,
@@ -2029,6 +2079,7 @@ export async function generateConversationReply(options) {
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     cultureReviewRequired,
+    cultureGroundingRequired,
     shortDefinitionQuestion,
     shortChat,
     searchEvidenceAvailable,
@@ -2080,6 +2131,8 @@ export async function generateConversationReply(options) {
               abstractAssociationRequested,
               abstractAssociationReviewRequired,
               cultureReviewRequired,
+              cultureGroundingRequired,
+              cultureEvidenceAvailable: Boolean(cultureCardUsed || cultureSearchResult.context || memeKnowledgeEntry),
               shortDefinitionQuestion,
               styleSignals,
               shortChat,
@@ -2113,6 +2166,7 @@ export async function generateConversationReply(options) {
           abstractAssociationRequested,
           abstractAssociationReviewRequired,
           cultureReviewRequired,
+          cultureGroundingRequired,
           shortDefinitionQuestion,
           shortChat,
           searchEvidenceAvailable,

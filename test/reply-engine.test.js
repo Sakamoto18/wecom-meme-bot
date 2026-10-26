@@ -72,6 +72,64 @@ test('普通闲聊不默认搜索，文化问题只走文化轨', async () => {
   assert.equal(searchCalls, 1);
 });
 
+test('具体名梗先做梗义核对，再保留角色语气和抽象联想', async () => {
+  const searches = [];
+  const prompts = [];
+  const result = await generateConversationReply({
+    content: '突然的陀螺你现在知道没有',
+    currentQuestion: '突然的陀螺你现在知道没有',
+    modelInput: '当前消息：突然的陀螺你现在知道没有',
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        searches.push({ query, options });
+        return {
+          context: '贴吧语境：突然的陀螺是固定说法，指话题突然转向、说话没有落点。',
+          resultCount: 1,
+          results: [{
+            title: '突然的陀螺',
+            description: '固定说法，指话题突然转向、说话没有落点',
+            url: 'https://tieba.baidu.com/p/example',
+          }],
+        };
+      },
+    },
+    turnPlan: {
+      mode: 'banter',
+      answerRequired: true,
+      firstBeat: 'plain_meme',
+      attack: { decision: 'content', target: 'content', angle: 'absurdity', intensity: 0.35, timing: 'after_answer' },
+      search: {
+        factNeeded: false,
+        cultureNeeded: true,
+        factQueries: [],
+        cultureQueries: ['突然的陀螺'],
+      },
+      meme: {
+        anchor: '突然的陀螺',
+        claim: '话题突然转向',
+        mechanism: '反差',
+        informationKind: 'reaction',
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompts.push({ ...options, allPrompt: [options.stableSystemPrompt, options.additionalSystemPrompt].filter(Boolean).join('\n') });
+        return '知道，突然的陀螺就是话题转得飞起，落点还在半空。';
+      },
+    },
+  });
+  assert.equal(result.cultureSearchAttempted, true);
+  assert.equal(result.thinkingEnabled, true);
+  assert.equal(result.informationMemeMode, false);
+  assert.equal(result.cultureReviewRequired, true);
+  assert.equal(searches.some(({ query }) => query.includes('突然的陀螺')), true);
+  assert.match(prompts[0].allPrompt, /陌生梗义先核对/);
+  assert.match(prompts[0].allPrompt, /话题突然转向/);
+  assert.match(result.answer, /陀螺/);
+});
+
 test('JEV 判定需要核实事实或时效时，不依赖关键词也进入事实检索', async () => {
   const calls = [];
   const result = await generateConversationReply({
