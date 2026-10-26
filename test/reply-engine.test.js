@@ -830,7 +830,7 @@ test('普通聊天不再因第三人称客服开头二次改稿', async () => {
   assert.equal(result.review.valid, true);
 });
 
-test('全局人格作为最后一层系统提示传入每次回复', async () => {
+test('全局人格作为最高人格层系统提示传入每次回复', async () => {
   const calls = [];
   await generateConversationReply({
     content: '今天吃什么',

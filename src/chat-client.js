@@ -9,6 +9,12 @@ export function buildMessages(history = [], userContent, options = {}) {
     ...(options.cachePrefixSystemPrompt
       ? [{ role: 'system', content: options.cachePrefixSystemPrompt }]
       : []),
+    // The global persona is the highest personality layer, but current-turn
+    // task rules must still be able to specify image facts, requested format,
+    // safety handling and tool evidence after it.
+    ...(options.prioritySystemPrompt
+      ? [{ role: 'system', content: options.prioritySystemPrompt }]
+      : []),
     ...(options.sharedContext
       ? [
         {
@@ -37,9 +43,6 @@ export function buildMessages(history = [], userContent, options = {}) {
       : []),
     ...(options.revisionSystemPrompt
       ? [{ role: 'system', content: options.revisionSystemPrompt }]
-      : []),
-    ...(options.prioritySystemPrompt
-      ? [{ role: 'system', content: options.prioritySystemPrompt }]
       : []),
     { role: 'user', content: userContent },
   ];
