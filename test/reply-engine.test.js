@@ -19,7 +19,7 @@ test('清理固定认错开场但保留事实修正', () => {
 
 test('带图默认只输出判断或接梗，不复述图片文字', async () => {
   let prompt = '';
-  await generateConversationReply({
+  const withCorpus = await generateConversationReply({
     content: '这怎么评价',
     currentQuestion: '这怎么评价',
     modelInput: '当前消息：这怎么评价',
@@ -70,6 +70,44 @@ test('普通闲聊不默认搜索，文化问题只走文化轨', async () => {
   assert.equal(culture.factSearchAttempted, false);
   assert.equal(culture.cultureSearchAttempted, true);
   assert.equal(searchCalls, 1);
+});
+
+test('中文互联网语料只在梗/图片语义轮注入，普通闲聊不查', async () => {
+  const corpusCalls = [];
+  const memeCorpus = {
+    buildPrompt(query, options) {
+      corpusCalls.push({ query, options });
+      return '【中文互联网语料；只作语境和语感参考，不是事实】\n释义参考：尊嘟假嘟是“真的假的”的谐音。';
+    },
+  };
+  let prompt = '';
+  const withCorpus = await generateConversationReply({
+    content: '尊嘟假嘟是什么梗',
+    currentQuestion: '尊嘟假嘟是什么梗',
+    modelInput: '当前消息：尊嘟假嘟是什么梗',
+    memeCorpus,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '这波是尊嘟假嘟，先别急着信。';
+      },
+    },
+  });
+  assert.equal(corpusCalls.length, 1);
+  assert.match(prompt, /中文互联网语料/);
+  assert.match(prompt, /尊嘟假嘟/);
+  assert.equal(withCorpus.memeCorpusUsed, true);
+
+  const withoutCorpus = await generateConversationReply({
+    content: '你好',
+    currentQuestion: '你好',
+    modelInput: '你好',
+    memeCorpus,
+    chatClient: { isConfigured: true, async complete() { return '在。'; } },
+  });
+  assert.equal(corpusCalls.length, 1);
+  assert.equal(withoutCorpus.memeCorpusUsed, false);
 });
 
 test('具体名梗先做梗义核对，再保留角色语气和抽象联想', async () => {

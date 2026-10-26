@@ -719,6 +719,7 @@ export async function generateConversationReply(options) {
     videoBlocks = [],
     cultureCache = null,
     memeKnowledge = null,
+    memeCorpus = null,
     longtuRetrievalEnabled = true,
     longtuTiebaSearchEnabled = true,
     longtuRetrievalMaxQueries = 2,
@@ -1893,6 +1894,43 @@ export async function generateConversationReply(options) {
   const memeKnowledgeContext = memeKnowledgeEntry
     ? memeKnowledgePrompt(memeKnowledgeEntry, memeKnowledgeCacheHit ? 'cache' : 'fresh-search')
     : '';
+  const memeCorpusQuery = [
+    currentQuestion,
+    content,
+    imageMemeClaim,
+    imageSemanticFrame,
+    cultureTerms,
+  ].filter(Boolean).join(' ').replace(/\s+/gu, ' ').trim().slice(0, 1_000);
+  const explicitMemeCorpusQuery = /(?:什么梗|啥梗|梗的?意思|梗的?出处|这个梗|网络用语|黑话|谐音梗|怎么接|怎么用)/u
+    .test(memeCorpusQuery);
+  const memeCorpusRequested = Boolean(
+    memeCorpus
+    && memeCorpusQuery
+    && (
+      semanticImageSearch
+      || cultureSearchAttempted
+      || cultureCardUsed
+      || memeKnowledgeEntry
+      || unknownConcept
+      || imageMemeAnchorPriority
+      || explicitMemeCorpusQuery
+    ),
+  );
+  const memeCorpusNames = [
+    'memewiki',
+    'cheer_terms',
+    'meme_style',
+    'ruozhiba',
+    ...(/(?:v吧|v圈|虚拟主播|vtb|vup|管人)/iu.test(memeCorpusQuery) ? ['vbar'] : []),
+    ...(/(?:地狱笑话|黑色幽默|地狱梗|缺德笑话)/u.test(memeCorpusQuery) ? ['hell'] : []),
+  ];
+  const memeCorpusContext = memeCorpusRequested
+    ? String(memeCorpus.buildPrompt(memeCorpusQuery, {
+      corpora: memeCorpusNames,
+      includeSensitive: memeCorpusNames.includes('hell'),
+      limit: 8,
+    }) || '')
+    : '';
   const normalPromptOptions = {
     currentQuestion,
     thinkingEnabled,
@@ -2032,6 +2070,7 @@ export async function generateConversationReply(options) {
     attackKnowledgePrompt,
     culturePrompt,
     memeKnowledgeContext,
+    memeCorpusContext,
     buildNormalReplyContextPrompt(normalPromptOptions),
     buildJevSemanticPrompt(jevStyle),
     buildJevStylePrompt(jevStyle),
@@ -2558,6 +2597,8 @@ export async function generateConversationReply(options) {
     memeKnowledgeUsed: Boolean(memeKnowledgeEntry),
     memeKnowledgeCacheHit,
     memeKnowledgeReview: Boolean(memeKnowledgeEntry && !memeKnowledgeCacheHit),
+    memeCorpusUsed: Boolean(memeCorpusContext),
+    memeCorpusCharacters: memeCorpusContext.length,
     cultureReviewRequired,
     cultureEvidenceQuality,
     groundingType: factEvidenceAvailable || factSearchAttempted
