@@ -1,3 +1,4 @@
+import { searchCharge, calculateSearchCosts, emptySearchCosts, EXA_PRICE_SOURCE, EXA_PRICE_VERSION } from './search-pricing.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -498,6 +499,7 @@ export class UsageTrackedWebSearch {
         }
         reservations.push(this.tracker.startSearchCall({
           source: options.usageSource,
+          ...info,
         }));
         if (typeof originalOnBeforeUpstreamRequest === 'function') {
           originalOnBeforeUpstreamRequest(info);
@@ -506,8 +508,7 @@ export class UsageTrackedWebSearch {
       onUpstreamRequest: (info = {}) => {
         upstreamRequests += 1;
         this.tracker.finishSearchCall(reservations.shift(), {
-          resultCount: info.resultCount,
-          succeeded: info.succeeded,
+          ...info,
         });
         if (typeof originalOnUpstreamRequest === 'function') {
           originalOnUpstreamRequest(info);
@@ -612,6 +613,7 @@ export class QqUsageTracker {
       ? new Map(options.groupSearchLimits)
       : new Map();
     this.jevPricing = normalizeJevPricing(options.jevPricing);
+    this.searchUsdToCny = positivePrice(options.searchUsdToCny, 7.2) || 7.2;
     this.retentionMs = positiveInteger(options.retentionMs, DEFAULT_RETENTION_MS)
       || DEFAULT_RETENTION_MS;
     this.now = options.now ?? Date.now;
@@ -722,6 +724,14 @@ export class QqUsageTracker {
       this.database.exec(
         'ALTER TABLE qq_usage_events ADD COLUMN error_status INTEGER NOT NULL DEFAULT 0',
       );
+    }
+    for (const [name, definition] of Object.entries({
+      search_type: "TEXT NOT NULL DEFAULT ''",
+      search_requested_results: 'INTEGER NOT NULL DEFAULT 0',
+      search_billing_status: "TEXT NOT NULL DEFAULT ''",
+      search_price_version: "TEXT NOT NULL DEFAULT ''",
+    })) {
+      if (!columns.has(name)) this.database.exec(`ALTER TABLE qq_usage_events ADD COLUMN ${name} ${definition}`);
     }
     return this.database;
   }
@@ -1240,7 +1250,7 @@ export class QqUsageTracker {
     this.prune();
   }
 
-  startSearchCall({ source } = {}) {
+  startSearchCall({ source, provider = '', searchType = '', requestedResults = 0 } = {}) {
     const context = this.currentContext();
     const now = this.now();
     const database = this.ensureOpen();
@@ -1289,16 +1299,25 @@ export class QqUsageTracker {
       String(source || context.source || 'search'),
       context.largeGroup ? 1 : 0,
     );
+    database.prepare(`UPDATE qq_usage_events SET provider = ?, search_type = ?,
+      search_requested_results = ?, usd_to_cny = ?, search_billing_status = 'pending',
+      search_price_version = ? WHERE id = ?`).run(provider, searchType,
+      usageNumber(requestedResults), this.searchUsdToCny, EXA_PRICE_VERSION, result.lastInsertRowid);
     return Number(result.lastInsertRowid);
   }
 
-  finishSearchCall(reservationId, { resultCount, succeeded = true } = {}) {
+  finishSearchCall(reservationId, { resultCount, succeeded = true, costDollars } = {}) {
     if (!reservationId) return;
-    this.ensureOpen().prepare(`
-      UPDATE qq_usage_events
-      SET succeeded = ?, search_results = ?
-      WHERE id = ? AND kind = 'search'
-    `).run(succeeded ? 1 : 0, usageNumber(resultCount), reservationId);
+    const database = this.ensureOpen();
+    const row = database.prepare(`SELECT provider, search_type AS searchType,
+      search_requested_results AS requestedResults, usd_to_cny AS usdToCny
+      FROM qq_usage_events WHERE id = ? AND kind = 'search'`).get(reservationId);
+    if (!row) return;
+    const charge = searchCharge({ ...row, succeeded, costDollars }, row.usdToCny);
+    database.prepare(`UPDATE qq_usage_events SET succeeded = ?, search_results = ?,
+      estimated_cost_usd = ?, estimated_cost_cny = ?, search_billing_status = ?
+      WHERE id = ? AND kind = 'search'`).run(succeeded ? 1 : 0, usageNumber(resultCount),
+      charge.usd, charge.cny, charge.status, reservationId);
   }
 
   recordSearchCacheHit({ source, resultCount } = {}) {
@@ -1365,11 +1384,11 @@ export class QqUsageTracker {
     };
   }
 
-  getReport({ startAt, endAt, limit = 20 } = {}) {
+  getReport({ startAt, endAt, limit = 20, allGroups = false } = {}) {
     const now = this.now();
     const start = Number.isFinite(Number(startAt)) ? Number(startAt) : now - 24 * HOUR_MS;
     const end = Number.isFinite(Number(endAt)) ? Number(endAt) : now + 1;
-    const rowLimit = Math.min(100, Math.max(1, positiveInteger(limit, 20)));
+    const rowLimit = allGroups ? Infinity : Math.min(100, Math.max(1, positiveInteger(limit, 20)));
     const database = this.ensureOpen();
     this.prune(now);
     const availability = database.prepare(`
@@ -1389,6 +1408,11 @@ export class QqUsageTracker {
         AND created_at >= ? AND created_at < ?
     `).all(start, end);
     const costs = calculateDeepSeekCosts(costRows);
+    const searchCosts = calculateSearchCosts(database.prepare(`SELECT group_id AS groupId,
+      estimated_cost_usd AS estimatedCostUsd, estimated_cost_cny AS estimatedCostCny,
+      usd_to_cny AS usdToCny, search_billing_status AS searchBillingStatus
+      FROM qq_usage_events WHERE kind = 'search' AND allowed = 1 AND search_cache = 0
+      AND created_at >= ? AND created_at < ?`).all(start, end));
     const jevRows = database.prepare(`
       SELECT
         group_id AS groupId,
@@ -1454,6 +1478,7 @@ export class QqUsageTracker {
     );
     const privateUsage = {
       ...privateCost,
+      ...(searchCosts.byGroup.get('') ?? emptySearchCosts()),
       ...(jevCosts.byGroup.get('') ?? serializeJevCostSummary(emptyJevCostSummary())),
       estimatedSavedCostCny: savingCosts.byGroup.get('')?.estimatedCostCny ?? 0,
       requests: Number(privateUsageRow.requests || 0),
@@ -1519,7 +1544,9 @@ export class QqUsageTracker {
         ...groupContext,
         ...cost,
         ...jevCost,
-        combinedEstimatedCostCny: cost.estimatedCostCny + jevCost.jevEstimatedCostCny,
+        ...(searchCosts.byGroup.get(row.groupId) ?? emptySearchCosts()),
+        combinedEstimatedCostCny: cost.estimatedCostCny + jevCost.jevEstimatedCostCny
+          + (searchCosts.byGroup.get(row.groupId)?.searchEstimatedCostCny ?? 0),
         estimatedSavedCostCny: savingCost.estimatedCostCny,
         activityTier: activity.tier,
         activityLimitPercent: activity.limitPercent,
@@ -1640,11 +1667,17 @@ export class QqUsageTracker {
           checkedAt: this.jevPricing.checkedAt,
           ...jevTotals,
         },
+        search: {
+          ...searchCosts.total, priceSourceUrl: EXA_PRICE_SOURCE,
+          checkedAt: EXA_PRICE_VERSION, configuredUsdToCny: this.searchUsdToCny,
+        },
         combined: {
           currency: 'CNY',
           deepseekEstimatedCostCny: costs.total.estimatedCostCny,
           jevEstimatedCostCny: jevTotals.jevEstimatedCostCny,
-          estimatedCostCny: costs.total.estimatedCostCny + jevTotals.jevEstimatedCostCny,
+          searchEstimatedCostCny: searchCosts.total.searchEstimatedCostCny,
+          estimatedCostCny: costs.total.estimatedCostCny + jevTotals.jevEstimatedCostCny
+            + searchCosts.total.searchEstimatedCostCny,
         },
       },
       adaptiveLimitsEnabled: this.adaptiveLimitsEnabled,

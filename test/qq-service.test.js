@@ -4022,7 +4022,12 @@ test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
       report_user_ids: ['recipient-1', 'recipient-2'],
       report: { totals: { totalTokens: 12 }, groups: [] },
     });
-    assert.deepEqual(usageRequests, [{ startAt: 10, endAt: 20, limit: 5 }]);
+    assert.deepEqual(usageRequests, [{ allGroups: false, startAt: 10, endAt: 20, limit: 5 }]);
+    const allGroups = await fetch(`${baseUrl}/v1/qq/usage?all_groups=true`, {
+      headers: { Authorization: 'Bearer test-token' },
+    });
+    assert.equal(allGroups.status, 200);
+    assert.equal(usageRequests[1].allGroups, true);
 
     const authorized = await fetch(`${baseUrl}/v1/qq/message`, {
       method: 'POST',

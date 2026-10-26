@@ -291,6 +291,7 @@ export function createQqApiServer(options) {
           admin_user_ids: [...adminUsers],
           report_user_ids: [...usageReportUsers],
           report: usageTracker.getReport({
+            allGroups: url.searchParams.get('all_groups') === 'true',
             startAt: Number.isFinite(startAt) && startAt > 0 ? startAt : undefined,
             endAt: Number.isFinite(endAt) && endAt > 0 ? endAt : undefined,
             limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
@@ -565,6 +566,7 @@ export async function createQqRuntime() {
     groupSearchLimits: parseIdentifierNumberMap(
       process.env.QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS,
     ),
+    searchUsdToCny: parsePositiveNumber(process.env.QQ_USAGE_USD_TO_CNY) ?? 7.2,
     jevPricing: {
       model: jevConfig.model,
       region: process.env.LONGTU_QQ_JEV_PRICING_REGION?.trim() || '华北2（北京）',
