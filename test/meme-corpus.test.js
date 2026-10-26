@@ -14,6 +14,7 @@ function fixture() {
   store.replaceCorpus('memewiki', [
     { id: 1, text: '【词条】尊嘟假嘟\n【用法】用来撒娇式质疑，意思是“真的假的”。' },
     { id: 2, text: '【词条】管人痴\n【用法】指过度沉迷虚拟主播的人。' },
+    { id: 3, text: '【词条】头顶尖尖的\n【用法】“脑袋尖尖的”可用来调侃逻辑怪异、言论难懂。' },
   ], { sourceUrl: 'https://example.com/memewiki', license: 'MIT' });
   store.replaceCorpus('cheer_terms', [
     { id: 1, text: '【词条】半场开香槟\n【释义】指比赛还没结束就提前庆祝，最后被翻盘。' },
@@ -45,7 +46,15 @@ test('中文互联网语料按释义和风格分层检索', () => {
     const prompt = store.buildPrompt('老板周末加班怎么回');
     assert.match(prompt, /释义参考|接法示例/);
     assert.match(prompt, /记小本本/);
+    assert.match(prompt, /人格与安全规则 > 信息检索得到的事实 > 本语料语感/);
     assert.ok(prompt.length <= 1_000);
+
+    const styleOnly = store.buildPrompt('老板周末加班怎么回', { styleOnly: true });
+    assert.doesNotMatch(styleOnly, /释义参考/);
+    assert.match(styleOnly, /接法示例/);
+    const definitionQueryWithoutDefinitions = store.buildPrompt('尊嘟假嘟是什么梗', { styleOnly: true });
+    assert.doesNotMatch(definitionQueryWithoutDefinitions, /释义参考/);
+    assert.match(definitionQueryWithoutDefinitions, /通用接法|接法示例/);
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
@@ -105,6 +114,55 @@ test('空语料库不生成提示词', () => {
   const store = new MemeCorpusStore({ databaseFilePath: path.join(directory, 'empty.sqlite') });
   try {
     assert.equal(store.buildPrompt('尊嘟假嘟'), '');
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('普通闲聊没有贴题命中时仍提供通用短句语感锚点', () => {
+  const { store, directory } = fixture();
+  try {
+    const prompt = store.buildPrompt('你好', { styleOnly: true });
+    assert.match(prompt, /中文互联网语料语感主控/);
+    assert.match(prompt, /通用接法/);
+    assert.match(prompt, /只当通用群聊节奏锚点/);
+    assert.match(prompt, /表达方式以本语料为主控/);
+    assert.doesNotMatch(prompt, /释义参考/);
+
+    assert.equal(store.buildPrompt('你好', {
+      styleOnly: true,
+      allowStyleFallback: false,
+    }), '');
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('普通聊天按短语重合命中梗的近似说法，不要求逐字相同', () => {
+  const { store, directory } = fixture();
+  try {
+    for (const query of ['你脑袋怎么尖尖的啊', '为什么你的脑袋是尖尖的']) {
+      const prompt = store.buildPrompt(query, {
+        styleOnly: true,
+        autoDefinition: true,
+      });
+      assert.match(prompt, /释义参考/, query);
+      assert.match(prompt, /头顶尖尖的/, query);
+    }
+
+    for (const query of ['尖尖的东西怎么画', '老板周末加班怎么回']) {
+      const prompt = store.buildPrompt(query, {
+        styleOnly: true,
+        autoDefinition: true,
+      });
+      assert.doesNotMatch(prompt, /释义参考/, query);
+    }
+
+    assert.doesNotMatch(store.buildPrompt('你脑袋怎么尖尖的啊', {
+      styleOnly: true,
+    }), /释义参考/);
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });

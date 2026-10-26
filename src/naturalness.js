@@ -14,6 +14,11 @@ const EMPTY_TRIAD_PATTERN = new RegExp(
 );
 const DASH_OVERLOAD_PATTERN = /(?:——[^。！？!?\n]{0,40}){2,}/u;
 const STYLE_META_COMPLAINT_PATTERN = /(?:AI\s*味|机器味|人机味|机器人味|模板味|套路味|像\s*AI|AI\s*感|一股\s*AI|太\s*AI|味儿太冲)/iu;
+// 图片轮最容易暴露“模型在解释自己”的话术：像素、提示词、识别过程、
+// 3D 打印机和“脑补截肢”。这不是观点，也不是图片内容，必须触发一次改写。
+// 只在措辞确实指向模型自身时命中，避免误伤“提示词怎么写”这类正常问答。
+const AGENT_SELF_META_PATTERN = /(?:我的(?:系统)?提示词|提示词.{0,12}(?:读像素|读图|看图|塞进|打不出|打印机|3D|识别)|(?:塞进|写进).{0,8}提示词|读像素|我只负责(?:读|看)|我只能(?:读|看)|(?:只看|我的)识别结果|(?:我的|这个)视觉模型)/iu;
+const AGENT_IMAGE_META_PATTERN = /(?:3D打印机|视觉模型|识别结果|脑补.{0,12}(?:截肢|断手|剧情|细节)|(?:图里(?:可)?没写|图里没有).{0,16}(?:脑补|截肢|断手))/u;
 const OVEREXPLAINED_COMEBACK_PATTERN = /(?:又不是[^。！？!?\n]{1,40}[。！？!?]\s*(?:想|要)[^。！？!?\n]{1,24}(?:就|还是)[^。！？!?\n]{0,28}[，,]\s*别[^。！？!?\n]{1,40}|(?:想|要)[^。！？!?\n]{1,20}(?:还是|或者)[^。！？!?\n]{1,20}[，,]?\s*都行[，,]\s*别)/u;
 const COMMANDING_COMEBACK_PATTERN = /(?:要|想)[^。！？!?\n]{1,24}(?:就|还是)[^。！？!?\n]{1,28}[，,]\s*别/u;
 const RHETORICAL_ESCALATION_PATTERN = /[^。！？!?\n]{4,60}[。！？!?]\s*(?:这|那)[^。！？!?\n]{0,28}(?:再|要是|继续)[^。！？!?\n]{0,24}[，,]\s*(?:该|是不是|要不要|先)[^。！？!?\n]{0,32}(?:还是|或者)[^。！？!?\n]{0,32}[？?]/u;
@@ -25,6 +30,7 @@ export const GROUP_CHAT_HUMANIZER_PROMPT = [
   '比喻扔出去就停，不接着解释它、追加命令式收尾，也不把同一个意思换词再说一遍。',
   '一个回复最多用一个核心比喻，不要把“方向”继续拧成方向盘、导航、拖车；也别用“这……再……，该先……还是……？”的反问收尾来显得机灵。',
   '被说“AI味/像AI/机器味”时，最多一句承认或反呛就停；不要围绕这个标签继续做“香水/闻/验货”之类的二次比喻，也不要指挥对方换个正经话题。',
+  '不要解释模型、提示词、像素、识别过程或读图能力，也不要用“图里没写、你得脑补、我只负责读像素”来防守。被纠正时最多认一句，直接回到图片里能确定的关系或短接一句。',
   '去 AI 味不是变礼貌、变完整或加免责声明；保留龙玉涛的短、冲、损和具体画面。',
 ].join('\n');
 
@@ -40,12 +46,16 @@ function normalizedAnswer(value) {
  */
 export function detectHumanizerTells(value, options = {}) {
   const normalized = normalizedAnswer(value);
-  if (!normalized
-    || options.attackDuringAnswer
+  if (!normalized) return [];
+  const agentMeta = AGENT_SELF_META_PATTERN.test(normalized)
+    || (options.hasImageContext === true && AGENT_IMAGE_META_PATTERN.test(normalized));
+  if (options.attackDuringAnswer
     || options.recordSummary
     || options.detailedAnswerRequested
-    || options.compactResponse === false
-    || options.passiveImageComment) return [];
+    || options.compactResponse === false) return [];
+  if (options.passiveImageComment) {
+    return agentMeta ? ['assistant-agent-meta'] : [];
+  }
 
   const issues = [];
   if (FALSE_CONTRAST_PATTERN.test(normalized)) issues.push('assistant-false-contrast');
@@ -62,6 +72,9 @@ export function detectHumanizerTells(value, options = {}) {
   }
   if (RHETORICAL_ESCALATION_PATTERN.test(normalized)) {
     issues.push('assistant-rhetorical-escalation');
+  }
+  if (agentMeta) {
+    issues.push('assistant-agent-meta');
   }
   if (isStyleMetaComplaint(options.currentQuestion)) {
     const repeatedMeta = (normalized.match(/AI\s*味|机器味|像\s*AI|开场白|这三个字/giu) ?? []).length >= 2;
@@ -89,8 +102,12 @@ export function detectAssistantReportStyle(value, options = {}) {
   if (!normalized
     || options.recordSummary
     || options.detailedAnswerRequested
-    || options.compactResponse === false
-    || options.passiveImageComment) return [];
+    || options.compactResponse === false) return [];
+  if (options.passiveImageComment) {
+    const agentMeta = AGENT_SELF_META_PATTERN.test(normalized)
+      || (options.hasImageContext === true && AGENT_IMAGE_META_PATTERN.test(normalized));
+    return agentMeta ? ['assistant-agent-meta'] : [];
+  }
 
   const issues = [];
   const connectives = normalized.match(REPORT_CONNECTIVE_PATTERN) ?? [];
@@ -129,6 +146,7 @@ export function buildNaturalnessRewriteHint(issues = []) {
     'assistant-dash-overload',
     'assistant-overwritten-comeback',
     'assistant-style-meta-loop',
+    'assistant-agent-meta',
     'assistant-rhetorical-escalation',
   ].some((issue) => set.has(issue));
   if (!needsRewrite) return '';
@@ -153,6 +171,9 @@ export function buildNaturalnessRewriteHint(issues = []) {
       : '',
     set.has('assistant-style-meta-loop')
       ? '别解释自己像不像 AI，也不要继续香水、闻、验货、开场白这些二次比喻；一句短反应后直接回到具体内容，不指挥对方换话题。'
+      : '',
+    set.has('assistant-agent-meta')
+      ? '删掉提示词、像素、识别过程、读图能力、3D 打印机和脑补这类自我说明。只保留一句能确定的内容判断或直接接梗，不解释你为什么看得到或看不到。'
       : '',
     set.has('assistant-rhetorical-escalation')
       ? '删掉“这……再……，该先……还是……？”的反问收尾，也不要继续把上一句的比喻往外延伸；一句直接回击或判断就停。'

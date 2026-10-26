@@ -118,6 +118,40 @@ test('被说 AI 味时拦截二次比喻和命令式收尾', () => {
   assert.match(prompt, /不要围绕“AI味\/香水\/闻\/验货\/开场白\/循环播放”继续做二次比喻/);
 });
 
+test('拦截图片轮解释提示词、像素和脑补的元话术', () => {
+  const drafts = [
+    '这层我认，司机听不见、乘客没手比，需求直接撞死才叫地狱。你骂白痴也改不了这笑点得靠脑补截肢，图里可没写。',
+    '提示词又不是3D打印机，塞进去也打不出图里没有的断手，截肢这层得你脑补，我只负责读像素。',
+  ];
+  for (const draft of drafts) {
+    assert.ok(
+      detectAssistantReportStyle(draft, { compactResponse: true, hasImageContext: true })
+        .includes('assistant-agent-meta'),
+      draft,
+    );
+  }
+
+  assert.deepEqual(
+    detectAssistantReportStyle('图里没写日期，但右下角有版本号。', {
+      compactResponse: true,
+      hasImageContext: true,
+    }),
+    [],
+  );
+  assert.deepEqual(
+    detectAssistantReportStyle('提示词怎么写更清楚？', { compactResponse: true }),
+    [],
+  );
+  assert.ok(
+    detectAssistantReportStyle('提示词又不是3D打印机，图里没有的断手还得你脑补。', {
+      compactResponse: true,
+      passiveImageComment: true,
+      hasImageContext: true,
+    }).includes('assistant-agent-meta'),
+  );
+  assert.match(buildNaturalnessRewriteHint(['assistant-agent-meta']), /提示词、像素、识别过程/);
+});
+
 test('拦截同一比喻连续加码和反问式抖机灵收尾', () => {
   const first = '辈分牌刚打完转头就骂没爹没妈，你这自相矛盾得跟寿司郎那套 PHP 一样，半夜自己崩自己。要吵就挑一个方向，别一边认爹一边拆爹。';
   assert.ok(detectAssistantReportStyle(first, { compactResponse: true })

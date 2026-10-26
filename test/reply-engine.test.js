@@ -72,8 +72,9 @@ test('普通闲聊不默认搜索，文化问题只走文化轨', async () => {
   assert.equal(searchCalls, 1);
 });
 
-test('中文互联网语料只在梗/图片语义轮注入，普通闲聊不查', async () => {
+test('中文互联网语料默认覆盖普通、梗和图片回复', async () => {
   const corpusCalls = [];
+  let groupStyleCalls = 0;
   const memeCorpus = {
     buildPrompt(query, options) {
       corpusCalls.push({ query, options });
@@ -95,19 +96,73 @@ test('中文互联网语料只在梗/图片语义轮注入，普通闲聊不查'
     },
   });
   assert.equal(corpusCalls.length, 1);
+  assert.equal(corpusCalls[0].options.styleOnly, false);
+  assert.equal(corpusCalls[0].options.autoDefinition, false);
   assert.match(prompt, /中文互联网语料/);
   assert.match(prompt, /尊嘟假嘟/);
   assert.equal(withCorpus.memeCorpusUsed, true);
 
-  const withoutCorpus = await generateConversationReply({
+  prompt = '';
+  const ordinary = await generateConversationReply({
     content: '你好',
     currentQuestion: '你好',
     modelInput: '你好',
     memeCorpus,
-    chatClient: { isConfigured: true, async complete() { return '在。'; } },
+    groupStyleProvider() {
+      groupStyleCalls += 1;
+      return '【群级语感】这会和互联网语料抢风格。';
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '在。';
+      },
+    },
   });
-  assert.equal(corpusCalls.length, 1);
-  assert.equal(withoutCorpus.memeCorpusUsed, false);
+  assert.equal(corpusCalls.length, 2);
+  assert.equal(corpusCalls[1].options.styleOnly, true);
+  assert.equal(corpusCalls[1].options.autoDefinition, true);
+  assert.match(prompt, /中文互联网语料/);
+  assert.doesNotMatch(prompt, /群级语感/);
+  assert.equal(groupStyleCalls, 0);
+  assert.equal(ordinary.memeCorpusUsed, true);
+
+  await generateConversationReply({
+    content: '地狱笑话解读',
+    currentQuestion: '地狱笑话解读',
+    modelInput: '地狱笑话解读',
+    memeCorpus,
+    chatClient: { isConfigured: true, async complete() { return '这笑话损得很具体。'; } },
+  });
+  assert.equal(corpusCalls.length, 3);
+  assert.equal(corpusCalls[2].options.styleOnly, false);
+  assert.ok(corpusCalls[2].options.corpora.includes('hell'));
+  assert.equal(corpusCalls[2].options.includeSensitive, true);
+});
+
+test('图片回复解释提示词和像素会触发一次去 AI 腔重写', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '这图什么意思',
+    currentQuestion: '这图什么意思',
+    modelInput: '当前消息：这图什么意思',
+    hasImageContext: true,
+    imageBlocks: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }],
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        if (calls.length === 1) {
+          return '提示词又不是3D打印机，塞进去也打不出图里没有的断手，截肢这层得你脑补，我只负责读像素。';
+        }
+        return '图和话对不上，损点就在这层硬拐。';
+      },
+    },
+  });
+  assert.ok(calls.length >= 2);
+  assert.match(calls[1].revisionSystemPrompt, /提示词|像素|脑补/);
+  assert.equal(result.answer, '图和话对不上，损点就在这层硬拐。');
 });
 
 test('具体名梗先做梗义核对，再保留角色语气和抽象联想', async () => {
