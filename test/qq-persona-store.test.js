@@ -88,3 +88,33 @@ test('人格上下文按全局、群、用户范围合并并限制长度', async
     store.close();
   });
 });
+
+test('全局人格可以生成不受普通上下文上限截断的最高优先级提示', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = new QqPersonaStore({
+      databaseFilePath: path.join(directory, 'persona.sqlite'),
+      maxContextCharacters: 500,
+    });
+    await store.load();
+    const pending = store.createPending({
+      scopeType: 'global',
+      scopeId: 'global',
+      actorUserId: 'admin',
+      sourceText: '完整全局人格',
+      profile: {
+        styleRules: [
+          `第一条全局规则：保留短句和互联网口语。${'a'.repeat(150)}`,
+          `第二条全局规则：先回应当前问题，再按语境加入角色化表达。${'b'.repeat(150)}`,
+          `第三条全局规则：不要把上一轮答案当成固定模板。${'c'.repeat(150)}`,
+        ],
+      },
+    });
+    const active = store.approve(pending.id, 'admin');
+    const priority = store.formatPriorityContext(active);
+    assert.match(priority, /全局人格｜最高业务优先级/);
+    assert.match(priority, /优先于普通人格补充、群聊语感、历史记忆/);
+    assert.match(priority, /第三条全局规则/);
+    assert.ok(priority.length > 500);
+    store.close();
+  });
+});

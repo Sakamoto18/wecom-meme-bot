@@ -258,4 +258,9 @@ export class QqPersonaManager {
       groupId: message?.chattype === 'group' ? message?.chatid ?? message?.groupId : '',
     }));
   }
+
+  priorityContextFor(message) {
+    if (!this.enabled) return '';
+    return this.store.formatPriorityContext?.(this.store.getActive('global', 'global')) ?? '';
+  }
 }

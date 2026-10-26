@@ -686,6 +686,7 @@ export async function generateConversationReply(options) {
     knowledgeContext = '',
     memorySummary = '',
     personaContext = '',
+    priorityPersonaContext = '',
     interactionContext = {},
     protectedIdentityContext = '',
     forbiddenProtectedRoleTerms = [],
@@ -905,8 +906,20 @@ export async function generateConversationReply(options) {
     throw new Error('普通对话服务还没配好');
   }
 
+  const completeWithPriority = (historyInput, contentInput, options = {}) => chatClient.complete(
+    historyInput,
+    contentInput,
+    {
+      ...options,
+      prioritySystemPrompt: [
+        options.prioritySystemPrompt,
+        priorityPersonaContext,
+      ].filter(Boolean).join('\n\n'),
+    },
+  );
+
   if (pureBotMention) {
-    const draft = await chatClient.complete(history, userContent, {
+    const draft = await completeWithPriority(history, userContent, {
       cachePrefixSystemPrompt,
       additionalSystemPrompt: [
         buildCurrentTimePrompt(),
@@ -960,7 +973,7 @@ export async function generateConversationReply(options) {
     let mentionReply;
     try {
       mentionIntentAttempts += 1;
-      const decision = await chatClient.complete(history, userContent, {
+      const decision = await completeWithPriority(history, userContent, {
         cachePrefixSystemPrompt,
         additionalSystemPrompt: [
           protectedIdentityContext, memoryContext, MENTION_INTENT_PROMPT,
@@ -1133,7 +1146,7 @@ export async function generateConversationReply(options) {
       selectStyleAnchors(history, { currentContent: content, maxAnchors: 2 }),
       { mode: 'attack' },
     );
-    const firstDraft = await chatClient.complete(history, userContent, {
+      const firstDraft = await completeWithPriority(history, userContent, {
       additionalSystemPrompt: [
         buildCurrentTimePrompt(),
         attackStyleAnchors,
@@ -1177,7 +1190,7 @@ export async function generateConversationReply(options) {
     let attempts = 1;
 
     if (!firstReview.valid) {
-      const secondDraft = await chatClient.complete(history, revisionUserContent, {
+      const secondDraft = await completeWithPriority(history, revisionUserContent, {
         additionalSystemPrompt: [
           buildCurrentTimePrompt(),
           attackStyleAnchors,
@@ -1938,7 +1951,7 @@ export async function generateConversationReply(options) {
     ? 120_000
     : (factEvidenceAvailable ? 75_000 : 60_000);
   try {
-    answer = await chatClient.complete(history, userContent, {
+    answer = await completeWithPriority(history, userContent, {
       stableSystemPrompt,
       cachePrefixSystemPrompt,
       ...cacheLayoutOptions,
@@ -1957,7 +1970,7 @@ export async function generateConversationReply(options) {
     if (!thinkingEnabled || !/空内容/.test(error.message)) throw error;
     thinkingFallback = true;
     attempts += 1;
-    answer = await chatClient.complete(history, revisionUserContent, {
+    answer = await completeWithPriority(history, revisionUserContent, {
       stableSystemPrompt,
       cachePrefixSystemPrompt,
       ...cacheLayoutOptions,
@@ -1976,7 +1989,7 @@ export async function generateConversationReply(options) {
 
   if (detailedAnswerRequested && thinkingEnabled && !thinkingFallback && isThinSeriousReply(answer)) {
     try {
-      const expandedAnswer = await chatClient.complete(history, revisionUserContent, {
+      const expandedAnswer = await completeWithPriority(history, revisionUserContent, {
         stableSystemPrompt,
         cachePrefixSystemPrompt,
         ...cacheLayoutOptions,
@@ -2046,7 +2059,7 @@ export async function generateConversationReply(options) {
       normalPersonaReviewSkipped = true;
     } else {
       try {
-        const rewrittenAnswer = await chatClient.complete(history, revisionUserContent, {
+        const rewrittenAnswer = await completeWithPriority(history, revisionUserContent, {
           stableSystemPrompt,
           cachePrefixSystemPrompt,
           ...cacheLayoutOptions,
@@ -2161,7 +2174,7 @@ export async function generateConversationReply(options) {
 
   if (containsForbiddenProtectedRole(answer, forbiddenProtectedRoleTerms)) {
     try {
-      const correctedAnswer = await chatClient.complete(history, revisionUserContent, {
+      const correctedAnswer = await completeWithPriority(history, revisionUserContent, {
         stableSystemPrompt,
         cachePrefixSystemPrompt,
         ...cacheLayoutOptions,
@@ -2200,7 +2213,7 @@ export async function generateConversationReply(options) {
 
   if (containsForbiddenProtectedRole(answer, speakerForbiddenProtectedRoleTerms)) {
     try {
-      const semanticallyReviewedAnswer = await chatClient.complete(history, revisionUserContent, {
+      const semanticallyReviewedAnswer = await completeWithPriority(history, revisionUserContent, {
         stableSystemPrompt,
         cachePrefixSystemPrompt,
         ...cacheLayoutOptions,
@@ -2316,7 +2329,7 @@ export async function generateConversationReply(options) {
         selectStyleAnchors(history, { currentContent: content, maxAnchors: 2 }),
         { mode: 'attack' },
       );
-      const rebuttalDraft = await chatClient.complete(
+      const rebuttalDraft = await completeWithPriority(
         history,
         '只输出最后一句直接回击，不重复前面的答案。',
         {

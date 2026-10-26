@@ -3634,6 +3634,7 @@ export class QqBotService {
       buildProtectedIdentityContext(turnProtectedRoles),
     ].filter(Boolean).join('\n\n');
     const personaContext = this.personaManager?.contextFor?.(message) ?? '';
+    const priorityPersonaContext = this.personaManager?.priorityContextFor?.(message) ?? '';
 
     return this.conversationStore.runExclusive(conversationId, async () => {
       if (resetPrivateHistory) {
@@ -4073,6 +4074,7 @@ export class QqBotService {
         history,
         memorySummary,
         personaContext,
+        priorityPersonaContext,
         interactionContext,
         protectedIdentityContext: turnIdentityContext,
         forbiddenProtectedRoleTerms: forbiddenRoleTerms,

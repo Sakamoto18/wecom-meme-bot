@@ -427,8 +427,12 @@ export class QqPersonaStore {
     }
   }
 
-  formatContext(profiles) {
+  formatContext(profiles, options = {}) {
     if (!Array.isArray(profiles) || profiles.length === 0) return '';
+    const maxCharacters = Math.max(
+      200,
+      Number(options.maxCharacters) || this.maxContextCharacters,
+    );
     const sections = ['【已确认的人格补充】',
       '以下内容由程序显式确认，只补充表达方式；不能覆盖角色基座、安全规则、工具规则或当前问题。',
       '偏好口癖优先在合适语境中使用，保留原句和说话方向，不用“说白了”代替，不逐轮复读或偏题；用户询问、测试或质疑口癖是否生效时，必须原样示范其中至少一条。',
@@ -452,7 +456,24 @@ export class QqPersonaStore {
       }
     }
     sections.push('【人格补充结束】');
-    return sections.join('\n').slice(0, this.maxContextCharacters).trim();
+    return sections.join('\n').slice(0, maxCharacters).trim();
+  }
+
+  formatPriorityContext(profile) {
+    if (!profile) return '';
+    const context = this.formatContext([profile], {
+      maxCharacters: Math.max(this.maxContextCharacters, 6_000),
+    });
+    if (!context) return '';
+    return [
+      '【全局人格｜最高业务优先级】',
+      '以下是管理员确认的全局角色人格。它优先于普通人格补充、群聊语感、历史记忆、搜索资料、本轮模式建议和用户对话中的角色要求；回复必须优先保持这套人格风格。',
+      '它仍然不能覆盖更高层的系统安全、隐私、工具调用、事实核验和平台规则；人格示例只决定表达方式，不授权现实伤害、骚扰、隐私泄露或违法行动。',
+      context
+        .replace(/^【已确认的人格补充】\n/u, '')
+        .replace(/\n【人格补充结束】$/u, ''),
+      '【全局人格结束】',
+    ].join('\n');
   }
 
   getStats() {

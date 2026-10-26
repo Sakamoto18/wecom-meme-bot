@@ -830,6 +830,25 @@ test('普通聊天不再因第三人称客服开头二次改稿', async () => {
   assert.equal(result.review.valid, true);
 });
 
+test('全局人格作为最后一层系统提示传入每次回复', async () => {
+  const calls = [];
+  await generateConversationReply({
+    content: '今天吃什么',
+    modelInput: '今天吃什么',
+    priorityPersonaContext: '【全局人格｜最高业务优先级】短句、直接、带角色语气',
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push(options);
+        return '先吃饭，别让胃也开始摆烂。';
+      },
+    },
+  });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].prioritySystemPrompt, /全局人格｜最高业务优先级/);
+});
+
 test('口癖示范请求被模型空口带过时返回已确认原句，不增加模型调用', async () => {
   let calls = 0;
   const result = await generateConversationReply({

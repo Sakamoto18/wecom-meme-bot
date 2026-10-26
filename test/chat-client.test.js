@@ -26,6 +26,7 @@ test('OpenAI 兼容客户端携带角色、历史与当前消息', async () => {
     stableSystemPrompt: '稳定回复规则',
     additionalSystemPrompt: '本轮联网摘要',
     revisionSystemPrompt: '根据复核结果重写',
+    prioritySystemPrompt: '全局人格最高业务优先级',
     thinking: { type: 'disabled' },
   });
   const body = JSON.parse(capturedOptions.body);
@@ -36,13 +37,14 @@ test('OpenAI 兼容客户端携带角色、历史与当前消息', async () => {
   assert.equal(body.model, 'test-model');
   assert.deepEqual(body.thinking, { type: 'disabled' });
   assert.deepEqual(body.messages.map((message) => message.role), [
-    'system', 'system', 'user', 'assistant', 'system', 'system', 'user',
+    'system', 'system', 'user', 'assistant', 'system', 'system', 'system', 'user',
   ]);
   assert.equal(body.messages[1].content, '稳定回复规则');
   assert.equal(body.messages[2].content, '上一问');
   assert.equal(body.messages[3].content, '上一答');
   assert.equal(body.messages[4].content, '本轮联网摘要');
-  assert.equal(body.messages.at(-2).content, '根据复核结果重写');
+  assert.equal(body.messages[5].content, '根据复核结果重写');
+  assert.equal(body.messages[6].content, '全局人格最高业务优先级');
   assert.equal(body.messages.at(-1).content, '这一问');
   assert.deepEqual(body.messages, [
     { role: 'system', content: '你是测试角色' },
@@ -51,6 +53,7 @@ test('OpenAI 兼容客户端携带角色、历史与当前消息', async () => {
     { role: 'assistant', content: '上一答' },
     { role: 'system', content: '本轮联网摘要' },
     { role: 'system', content: '根据复核结果重写' },
+    { role: 'system', content: '全局人格最高业务优先级' },
     { role: 'user', content: '这一问' },
   ]);
 });

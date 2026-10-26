@@ -38,6 +38,9 @@ export function buildMessages(history = [], userContent, options = {}) {
     ...(options.revisionSystemPrompt
       ? [{ role: 'system', content: options.revisionSystemPrompt }]
       : []),
+    ...(options.prioritySystemPrompt
+      ? [{ role: 'system', content: options.prioritySystemPrompt }]
+      : []),
     { role: 'user', content: userContent },
   ];
 }
