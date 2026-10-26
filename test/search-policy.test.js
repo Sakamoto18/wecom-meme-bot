@@ -45,6 +45,18 @@ test('低信息图片默认关闭两条搜索轨', () => {
   assert.equal(policy.reason, 'low-information-image');
 });
 
+test('有图片语义场景线索时低信息图开启文化检索，不误开事实检索', () => {
+  const policy = classifySearchPolicy({
+    content: '笑点解析',
+    hasImageContext: true,
+    imageSearch: true,
+    imageInformationLevel: 'low_information',
+    semanticImageSearch: true,
+  });
+  assert.equal(policy.factEligible, false);
+  assert.equal(policy.cultureEligible, true);
+});
+
 test('Jev 的事实与时效信号不依赖正则也能开启事实检索', () => {
   const fact = classifySearchPolicy({ content: '这个说法对吗', factLookupNeeded: 0.8 });
   assert.equal(fact.factEligible, true);

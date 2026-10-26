@@ -1285,6 +1285,15 @@ export async function generateConversationReply(options) {
   const useCurrentInformation = !attackStyle && !useLongtuKnowledge
     && shouldSearchCurrentInformation(content);
   const imageSearch = Array.isArray(imageSearchQueries);
+  const semanticImageSearch = Boolean(
+    imageSearch
+      && imageSearchQueries.length > 0
+      && imageMemeAnchorPriority
+      && !imageRealityAnchor
+      && !['news', 'public_event', 'public_figure', 'technical_rule'].includes(
+        String(imageInformationKind ?? '').trim().toLowerCase(),
+      ),
+  );
   const evaluationQuestion = [content, currentQuestion]
     .filter(Boolean)
     .join('\n');
@@ -1292,7 +1301,8 @@ export async function generateConversationReply(options) {
   // must not fall through to the ordinary paid web-search path. Keep ordinary
   // fact/opinion questions searchable; this guard only applies when the text
   // itself clearly refers to an image-like object.
-  const imageEvaluationRequest = isImageEvaluationIntent(evaluationQuestion)
+  const imageEvaluationRequest = !hasImageContext
+    && isImageEvaluationIntent(evaluationQuestion)
     && /(?:图|图片|截图|照片|表情(?:包)?|画面|封面)/u.test(evaluationQuestion);
   const queries = imageEvaluationRequest
     ? []
@@ -1311,6 +1321,7 @@ export async function generateConversationReply(options) {
     factLookupNeeded: jevCulture.factLookupNeeded,
     timeSensitive: jevCulture.timeSensitive,
     unknownConcept: jevCulture.unknownConcept,
+    semanticImageSearch,
   });
   const plannedFactQueries = (Array.isArray(turnPlan?.search?.factQueries)
     ? turnPlan.search.factQueries : [])
@@ -1334,7 +1345,8 @@ export async function generateConversationReply(options) {
     || imageInformationPolicy?.level !== 'low_information'
     || explicitImageSearch
     || retrievalPolicy.verificationRequested === true
-    || Boolean(imageRealityAnchor || groundingQueryHint);
+    || Boolean(imageRealityAnchor || groundingQueryHint)
+    || semanticImageSearch;
   const plannedFactEligible = plannedFactSearchRequested && plannedFactImageGateOpen;
   // Culture grounding is evidence work, not a competing persona mode. An
   // attack or banter turn may still need to identify an unfamiliar named meme
@@ -1370,13 +1382,13 @@ export async function generateConversationReply(options) {
     ...(memeKnowledgeToolsAvailable ? [MEME_KNOWLEDGE_TOOL] : []),
   ] : undefined;
   const cultureTerms = (
-    [...jevCulture.terms, ...plannedCultureQueries].join(' ')
+    [...(semanticImageSearch ? queries : []), ...jevCulture.terms, ...plannedCultureQueries].join(' ')
     || String(currentQuestion || content || '').trim()
   ).slice(0, 120);
-  const cultureLookupQuery = (unknownConcept ? `wiki ${cultureTerms}` : cultureTerms).slice(0, 120);
+  const cultureLookupQuery = (unknownConcept && !semanticImageSearch ? `wiki ${cultureTerms}` : cultureTerms).slice(0, 120);
   const cultureQuery = plannedCultureQueries.length > 0
     ? plannedCultureQueries.join(' ').slice(0, 240)
-    : (unknownConcept
+    : (unknownConcept || semanticImageSearch
     ? cultureLookupQuery
     : [
       jevCulture.terms.join(' '),
@@ -1384,7 +1396,8 @@ export async function generateConversationReply(options) {
     ].filter(Boolean).join(' ').slice(0, 240));
   const unknownConceptScope = {
     candidates: [],
-    includeDomains: ['baike.baidu.com', 'zh.moegirl.org.cn', 'zh.wikipedia.org', 'en.wikipedia.org'],
+    // 中文梗优先从 B 站公开梗视频/专栏找语境，百科与 Wiki 只作补充。
+    includeDomains: ['bilibili.com', 'b23.tv', 'baike.baidu.com', 'zh.moegirl.org.cn', 'zh.wikipedia.org', 'en.wikipedia.org'],
     crossCheck: false,
   };
   const jevPlatformScope = buildSourceScope(normalizeSourceCandidates(
@@ -1603,7 +1616,7 @@ export async function generateConversationReply(options) {
       return combined;
     }
     const textScope = sourceScopeFromText(cultureQuery);
-    const scope = unknownConcept
+    const scope = (unknownConcept || semanticImageSearch)
       ? unknownConceptScope
       : (textScope.includeDomains.length > 0 ? textScope : jevPlatformScope);
     const searchOptions = {
@@ -1865,6 +1878,9 @@ export async function generateConversationReply(options) {
     suppressNarration: suppressSearchNarration,
   });
   const culturePrompt = [
+    cultureSearchAttempted || cultureCardUsed || memeKnowledgeEntry
+      ? '【梗语境来源优先级】中文互联网梗先参考 B 站公开梗视频/专栏/词条（bilibili.com、b23.tv），再用百度百科和 Wiki 补充定义与背景；多源冲突时只保留相互支持的语境，不把相关标题当成精确命中。'
+      : '',
     cultureCard
       ? cultureCardPrompt(cultureCard, cultureCacheHit ? 'cache' : 'fresh-search')
       : (cultureSearchAttempted

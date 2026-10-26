@@ -56,6 +56,7 @@ export function classifySearchPolicy(options = {}) {
   const jevFactLookupNeeded = Number(options.factLookupNeeded) || 0;
   const jevTimeSensitive = Number(options.timeSensitive) || 0;
   const unknownConcept = options.unknownConcept === true;
+  const semanticImageSearch = options.semanticImageSearch === true;
 
   const longtuTopic = shouldSearchLongtuKnowledge(content);
   const memeTopic = shouldSearchMemeKnowledge(content);
@@ -75,8 +76,9 @@ export function classifySearchPolicy(options = {}) {
   const recentEventRequested = recentPublicEvent || recentNamedEvent;
   const highConfidenceCulture = HIGH_CONFIDENCE_CULTURE_PATTERN.test(content);
   const jevCultureEligible = !imageSearch && jevCultureLookupNeeded >= 0.4;
-  const cultureEligible = !imageSearch
-    && (longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible || unknownConcept);
+  const cultureEligible = semanticImageSearch
+    || (!imageSearch
+      && (longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible || unknownConcept));
   // Asking for a meme's source/原帖 is both a cultural lookup and a factual
   // verification request. Keep the two rails independent so one does not
   // silently suppress the other. JEV's own fact/time signals join the union so
@@ -109,7 +111,7 @@ export function classifySearchPolicy(options = {}) {
       reason: 'attack-turn-fact-only',
     };
   }
-  if (lowInformationImage && !explicitImageSearch && !verificationRequested) {
+  if (lowInformationImage && !explicitImageSearch && !verificationRequested && !semanticImageSearch) {
     if (concreteTextFact) {
       return {
         factEligible: true,
@@ -118,6 +120,7 @@ export function classifySearchPolicy(options = {}) {
         lowInformationImage: true,
         textFactEligible,
         recentEventRequested,
+        semanticImageSearch,
         reason: 'concrete-text-fact',
       };
     }
@@ -128,6 +131,7 @@ export function classifySearchPolicy(options = {}) {
       lowInformationImage: true,
       textFactEligible,
       recentEventRequested,
+      semanticImageSearch,
       reason: 'low-information-image',
     };
   }
@@ -137,16 +141,18 @@ export function classifySearchPolicy(options = {}) {
       factEligible: !lowInformationImage
         || explicitImageSearch
         || verificationRequested
+        || (semanticImageSearch && concreteTextFact)
         || concreteTextFact,
       textFactEligible,
       recentEventRequested,
-      cultureEligible: false,
+      cultureEligible: semanticImageSearch,
       confidence: 'medium',
       lowInformationImage,
       explicitImageSearch,
       verificationRequested,
+      semanticImageSearch,
       reason: lowInformationImage
-        ? (explicitImageSearch || verificationRequested || concreteTextFact
+        ? (explicitImageSearch || verificationRequested || semanticImageSearch || concreteTextFact
           ? 'explicit-low-information-image'
           : 'low-information-image')
         : 'explicit-image-clues',

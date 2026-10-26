@@ -242,7 +242,7 @@ test('JEV 判定陌生名词时定向搜索 wiki 加名词', async () => {
   assert.equal(calls.length, 1);
   assert.equal(calls[0].query, 'wiki 赛博道士');
   assert.deepEqual(calls[0].options.includeDomains, [
-    'baike.baidu.com', 'en.wikipedia.org', 'zh.moegirl.org.cn', 'zh.wikipedia.org',
+    'b23.tv', 'baike.baidu.com', 'bilibili.com', 'en.wikipedia.org', 'zh.moegirl.org.cn', 'zh.wikipedia.org',
   ]);
 });
 

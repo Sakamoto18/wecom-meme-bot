@@ -5,7 +5,10 @@ import { DatabaseSync } from 'node:sqlite';
 const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_TERM = 120;
 const MAX_TEXT = 500;
-const WIKI_DOMAINS = ['baike.baidu.com', 'zh.wikipedia.org', 'en.wikipedia.org', 'zh.moegirl.org.cn'];
+// 中文互联网梗优先看 B 站公开梗视频/专栏与相关词条，再用百科和 Wiki
+// 补定义、别名与背景。搜索结果仍需经过 exact/related 质量门，不能因为
+// 命中 B 站域名就直接把标题当成梗义。
+const WIKI_DOMAINS = ['bilibili.com', 'b23.tv', 'baike.baidu.com', 'zh.moegirl.org.cn', 'zh.wikipedia.org', 'en.wikipedia.org'];
 const ASSOCIATION_CONFIDENCE = ['low', 'medium', 'high'];
 
 function text(value, limit = MAX_TEXT) {
@@ -103,7 +106,7 @@ export function memeKnowledgePrompt(entry, source = 'cache') {
     `词条：${text(entry.term, MAX_TERM)}`,
     `含义：${text(entry.meaning)}`,
     `用法线索：${list(entry.usage, 4).join('；')}`,
-    `证据状态：${source === 'cache' ? '本地高置信梗库' : '本轮定向 wiki 检索'}`,
+    `证据状态：${source === 'cache' ? '本地高置信梗库' : '本轮定向 B 站梗语境/百科检索'}`,
     `可信度：${entry.confidence}`,
     '只把条目作为当前回答的证据，不要编造出处，不要把不确定的搜索摘要写成现实事实。',
   ].join('\n');

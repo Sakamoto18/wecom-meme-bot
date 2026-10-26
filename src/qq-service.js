@@ -3908,11 +3908,10 @@ export class QqBotService {
         : '';
       let imageSearchPlan = recordSummary ? [] : hasImageContext
         ? buildImageSearchPlan(searchImageAnalysis, imageSearchQuestion) : undefined;
-      // Jev 的图片专用路由只负责补充“文化/事实核验是否值得做”的信号，
-      // 不会绕过低信息图片的搜索资格门，也不会把泛泛热词直接送到 Exa。
+      // Jev 的图片专用路由负责把“场景关系/笑点机制”压成一次聚焦检索，
+      // 再由结果质量门判断是精确梗、相关语境还是无命中；不把泛泛热词直接送到 Exa。
       if (Array.isArray(imageSearchPlan)
         && searchImageInformationPolicy?.level !== 'low_information'
-        && !isImageEvaluationIntent(imageSearchQuestion)
         && !/(?:不要|不用|不必|无需|禁止|别).{0,6}(?:联网|上网|搜索|检索)/u.test(imageSearchQuestion)
         && jevStyle
         && Math.max(
