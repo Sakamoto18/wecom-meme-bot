@@ -99,6 +99,11 @@ function possibleNameAfterFarewell(text) {
     ? candidate : '';
 }
 
+// Keep this broader than the strict bot-addressing detector. A group member
+// can correct the previous answer without naming the bot, and that correction
+// still needs to be treated as a fresh instruction by the reply engine.
+const CORRECTION_PATTERN = /(?:我(?:是说|的意思是|指的是|问的是)|不是(?:说|我)|不对(?:吧|啊)?|错了|你(?:理解|听|看)错了|说的是你|指的是你|我让你|重点是)/u;
+
 function escapePattern(value) {
   return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
@@ -109,7 +114,8 @@ function detectBotAddress(text, botNames, explicitlyMentioned = false, explicitB
     .sort((left, right) => right.length - left.length)[0]
     || (explicitlyMentioned ? String(explicitBotName || botNames[0] || '').trim() : '');
   const farewell = /(?:再见|拜拜|bye(?:\s*bye)?|走了|退场|退位|下线|离开|滚蛋|告别)/iu.test(text);
-  const correction = /(?:我(?:是说|的意思是|指的是)|不是(?:说|我)|你(?:要|得|才|这)|说的是你|指的是你|我让你)/u.test(text);
+  const correction = CORRECTION_PATTERN.test(text)
+    || /你(?:要|得|才|这)/u.test(text);
   const questionLike = /(?:怎么|如何|为什么|为何|什么|哪|能不能|是不是|吗[？?]?$)/u.test(text);
   const directNameAddress = Boolean(
     matched
@@ -129,7 +135,7 @@ function detectBotAddress(text, botNames, explicitlyMentioned = false, explicitB
       botAddressCandidate: candidate,
       botAddressCandidateIsUntrusted: Boolean(candidate),
       botAddressCandidateSpeechAct: candidate ? 'farewell' : '',
-      correctionCandidate: /(?:我是说|我的意思是|我指的是|不是(?:说|我)|说的是你|指的是你|我让你)/u.test(text),
+      correctionCandidate: CORRECTION_PATTERN.test(text),
     };
   }
 

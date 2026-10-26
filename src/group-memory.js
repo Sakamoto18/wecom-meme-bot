@@ -25,6 +25,11 @@ const MIN_STYLE_CARD_MESSAGES = 20;
 const TOPIC_MATCH_THRESHOLD = 0.65;
 const TOPIC_ASSIGN_THRESHOLD = 0.45;
 const TOPIC_AMBIGUITY_MARGIN = 0.08;
+// Recency alone is not enough to keep a message in the previous topic. A
+// single shared character or generic bigram is common in Chinese group chat;
+// require a stronger lexical link before attaching an unquoted message.
+const TOPIC_LEXICAL_LINK_THRESHOLD = 0.08;
+const TOPIC_CHARACTER_LINK_THRESHOLD = 0.2;
 const SAME_SENDER_CONTINUATION_MS = 6 * MINUTE_MS;
 const CLOSED_TOPIC_PENALTY = 0.12;
 
@@ -726,8 +731,8 @@ export class QqGroupMemory {
       // Participant and same-sender boosts only strengthen an existing lexical
       // or quote link. They must not merge a completely new subject into the
       // previous topic just because the same person speaks again.
-      const hasLocalLink = lexical > 0
-        || charLexical >= 0.03
+      const hasLocalLink = lexical >= TOPIC_LEXICAL_LINK_THRESHOLD
+        || charLexical >= TOPIC_CHARACTER_LINK_THRESHOLD
         || quotedParticipant > 0;
       const strongLexicalBoost = lexical >= 0.08 || charLexical >= 0.1 ? 0.22 : 0;
       let score = Math.min(0.99,

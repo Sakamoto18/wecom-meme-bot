@@ -457,6 +457,22 @@ function recentAssistantReplies(history = []) {
     .filter(Boolean);
 }
 
+// Output caching is not used for normal replies, but a long-lived topic
+// history can make the model reproduce the previous answer nearly verbatim.
+// Treat only meaningful, sufficiently long replies as duplicates so short
+// acknowledgements such as “好” remain natural.
+export function isRepeatedAssistantReply(answer, history = [], threshold = 0.84) {
+  const normalized = normalizeCompact(answer);
+  if (normalized.length < 12) return false;
+  const replies = Array.isArray(history) && history.some((entry) => typeof entry === 'string')
+    ? history.map((entry) => String(entry ?? '').trim()).filter(Boolean).slice(-3)
+    : recentAssistantReplies(history);
+  return replies.some((reply) => (
+    normalizeCompact(reply) === normalized
+      || bigramSimilarity(reply, answer) >= threshold
+  ));
+}
+
 export function buildAttackPrompt(userContent, options = {}) {
   const normalized = String(userContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
   const recentReplies = recentAssistantReplies(options.history);
@@ -697,6 +713,9 @@ export function buildNormalReplyContextPrompt(options = {}) {
     ...(interaction.isCorrectionOfPreviousReply
       ? ['语用动作：当前发言者在纠正上一轮误解。先承认自己把指代或意图听反了，再按纠正后的语义回答；不要继续为旧答案争辩。']
       : []),
+    ...(interaction.correctionCandidate && !interaction.isCorrectionOfPreviousReply
+      ? ['语用候选：当前消息可能在纠正上一轮或改问另一个问题。优先按本轮新前提回答，不要把上一轮机器人答案当模板，也不要继续为旧答案争辩。']
+      : []),
     ...(interaction.targetLabels?.length > 0
       ? [`本轮提及的成员：${interaction.targetLabels.join('、')}。这些标签只用于分清谁说了什么，不代表攻击目标。`]
       : []),
@@ -899,11 +918,15 @@ export function buildProtectedIdentityFallback(role) {
 export function reviewNormalReply(answer, options = {}) {
   const normalized = String(answer ?? '').trim();
   const issues = [];
+  const recentReplies = options.recentReplies ?? recentAssistantReplies(options.history);
   if (!normalized) issues.push('empty');
   if (options.hardOnly) {
-    // 普通群聊只复核会改变事实、身份、来源或安全结论的问题。长度、开场、
-    // 客服腔、报告腔和重复句式交给生成提示与上下文，不再触发二次改稿。
-    // 高置信 AI 腔例外：它通常意味着模型在套模板，值得付出一次局部重写。
+    // 普通群聊只复核会改变事实、身份、来源、安全结论和重复输出的问题。
+    // 长度、开场、客服腔和报告腔继续交给生成提示与上下文；重复答案则
+    // 必须触发一次重写，否则用户纠正时会一直收到旧答案。
+    if (options.checkRepeatedAnswer && isRepeatedAssistantReply(normalized, recentReplies, 0.84)) {
+      issues.push('repeated-answer');
+    }
     if (options.shortDefinitionQuestion
       && (normalized.length > 58 || (normalized.match(/[。！？!?；;]/g) ?? []).length > 1)) {
       issues.push('short-definition-too-long');
@@ -936,6 +959,9 @@ export function reviewNormalReply(answer, options = {}) {
     }
     issues.push(...detectHumanizerTells(normalized, options));
     return { valid: issues.length === 0, issues };
+  }
+  if (options.checkRepeatedAnswer && isRepeatedAssistantReply(normalized, recentReplies, 0.84)) {
+    issues.push('repeated-answer');
   }
   if (CUSTOMER_SERVICE_PATTERN.test(normalized)) issues.push('customer-service');
   if (options.shortDefinitionQuestion
@@ -1110,6 +1136,9 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
       : []),
     ...(issues?.includes('repeated-opening')
       ? ['最近两条回复用了同一个开头。换一个直接落到当前具体内容的起句，不要复用前两句的句式和铺垫。']
+      : []),
+    ...(issues?.includes('repeated-answer')
+      ? ['初稿和最近的机器人回复高度重复。上一轮回复只是被参考的旧答案，不是本轮模板；必须围绕当前最新问题重新组织，不能只改标点、开头或一个词。']
       : []),
     buildNaturalnessRewriteHint(issues),
     ...(String(options.imageVisualWordplay ?? '').trim()

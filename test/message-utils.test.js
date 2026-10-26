@@ -238,3 +238,18 @@ test('纠正句保留为语用候选，交给上下文判断而不是写死外�
   assert.equal(interaction.correctionCandidate, true);
   assert.match(buildModelInput(message, message.text.content), /可能在纠正上一轮回复/);
 });
+
+test('不对和我问的是会被识别为纠正上一轮回答', () => {
+  for (const content of ['不对，我问的是端口怎么配', '错了，重点是群里那条新问题']) {
+    const message = {
+      msgtype: 'text',
+      chattype: 'group',
+      from: { userid: 'sender' },
+      bot_user_id: 'bot',
+      text: { content },
+    };
+    const interaction = getGroupInteractionContext(message);
+    assert.equal(interaction.correctionCandidate, true);
+    assert.match(buildModelInput(message, content), /可能在纠正上一轮回复/);
+  }
+});

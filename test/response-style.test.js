@@ -809,6 +809,20 @@ test('有检索证据时放宽长度复核，避免把事实答案压缩重写',
   assert.equal(withEvidence.issues.includes('long-sentence-for-chat'), false);
 });
 
+test('普通群聊也拦截与上一答高度重复的输出，并要求回到本轮新问题', () => {
+  const previous = '端口先检查监听地址，再确认防火墙规则，别一直盯着旧日志打转。';
+  const reviewed = reviewNormalReply(previous, {
+    hardOnly: true,
+    checkRepeatedAnswer: true,
+    history: [{ role: 'assistant', content: previous }],
+  });
+  assert.ok(reviewed.issues.includes('repeated-answer'));
+  assert.match(
+    buildNormalReplyRetryPrompt('不对，我问的是新端口怎么配置', previous, reviewed.issues),
+    /围绕当前最新问题重新组织/,
+  );
+});
+
 test('文化模式拦截百科定义、空标签、重复开头和无依据出处', () => {
   assert.ok(reviewNormalReply('这个梗本质上是阶级错位。', {
     cultureMode: true,

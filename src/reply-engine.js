@@ -1806,6 +1806,13 @@ export async function generateConversationReply(options) {
     && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
   const dialogueReviewContext = {
     interactionContext, currentQuestion, recordSummary, history,
+    // Repeating the previous answer is only a hard failure when the user is
+    // correcting the bot. Otherwise short acknowledgements and peer-bot turns
+    // could trigger an unnecessary second model call.
+    checkRepeatedAnswer: Boolean(
+      interactionContext?.isCorrectionOfPreviousReply
+        || interactionContext?.correctionCandidate,
+    ),
     imageSemanticPoint: String(jevStyle?.semanticPoint ?? ''),
     quotedPersonaPhrases: personaDemonstration ? personaPhrasesFromContext(personaContext) : [],
     relativeDateFacts,
@@ -2114,9 +2121,13 @@ export async function generateConversationReply(options) {
         }
         attempts += 1;
         normalPersonaRewritten = !needsSeriousExpansion;
-        // 必须严格更少。问题数相等时保留初稿：两稿都只触发一条风格规则时，
-        // 换掉的那一稿事实上可能是正确的，而重写稿只是以另一种方式不合格。
-        if (rewrittenReview.issues.length < review.issues.length) {
+        // 常规问题必须严格更少。重复答案是例外：只要重写稿摆脱了旧答案，
+        // 即使它仍有同数量的轻微风格问题，也应优先发送新内容，不能继续把
+        // 已被纠正的旧答案原样发回去。
+        const repeatedAnswerFixed = review.issues.includes('repeated-answer')
+          && !rewrittenReview.issues.includes('repeated-answer')
+          && String(rewrittenAnswer ?? '').trim();
+        if (rewrittenReview.issues.length < review.issues.length || repeatedAnswerFixed) {
           answer = rewrittenAnswer;
           review = rewrittenReview;
         }

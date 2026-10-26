@@ -778,6 +778,43 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆，未匹�
   assert.equal(second.messages[0].text, '这是 QQ 回答，别把问题绕复杂了。');
 });
 
+test('用户纠正上一答时，重复草稿会触发一次切题重写', async () => {
+  const conversationStore = new ConversationStore();
+  const previous = '端口先检查监听地址，再确认防火墙规则，别一直盯着旧日志打转。';
+  conversationStore.appendExchange(
+    'group:repeat-correction',
+    '之前的问题',
+    previous,
+  );
+  const calls = [];
+  const { service } = createService({
+    conversationStore,
+    chatClient: {
+      isConfigured: true,
+      async complete(history, input, options) {
+        calls.push({ history, input, options });
+        return options.revisionSystemPrompt?.includes('repeated-answer')
+          ? '按你这次问的端口配置来答：先确认服务监听地址，再检查映射规则。'
+          : previous;
+      },
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'repeat-correction-1',
+    message_type: 'group',
+    group_id: 'repeat-correction',
+    user_id: 'u-correction',
+    sender_name: '群友',
+    text: '不对，我问的是新端口怎么配置',
+  });
+
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].options.revisionSystemPrompt, /围绕当前最新问题重新组织/);
+  assert.match(result.messages[0].text, /端口配置/);
+  assert.notEqual(result.messages[0].text, previous);
+});
+
 test('私聊问候开启新话题时清掉旧方案讨论，不把旧摘要带进接梗', async () => {
   const { service, calls } = createService();
   await service.handleMessage({

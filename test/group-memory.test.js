@@ -141,6 +141,33 @@ test('同一发言者开启无关新话题时不会硬并进上一场讨论', as
   });
 });
 
+test('只有弱词面重合的新问题不会继承上一话题', async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const clock = createMemory(directory);
+    const add = (event) => {
+      clock.advance(1_000);
+      return clock.memory.recordEvent({
+        groupId: 'g1',
+        senderName: event.userId,
+        createdAt: clock.now,
+        ...event,
+      });
+    };
+    const first = add({
+      userId: 'u1', messageId: 'server-1',
+      text: '服务器更新之后一直卡顿，要不要回滚',
+    });
+    const unrelated = add({
+      userId: 'u2', messageId: 'server-wordplay-1',
+      text: '服务员今天几点下班，吃饭吗',
+    });
+
+    assert.notEqual(unrelated.topicId, first.topicId);
+    assert.equal(unrelated.status, 'ambiguous');
+    clock.memory.close();
+  });
+});
+
 test('关闭话题在保留期内仍可用引用续聊，超过保留期后清除', async () => {
   await withTemporaryDirectory(async (directory) => {
     const clock = createMemory(directory, {
