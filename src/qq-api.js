@@ -30,6 +30,7 @@ import { createDouyinProvider } from './douyin-provider.js';
 import { createBilibiliSessionProvider } from './bilibili-session-provider.js';
 import { CultureCache } from './culture-cache.js';
 import { MemeKnowledgeStore } from './meme-knowledge.js';
+import { MemeCorpusStore } from './meme-corpus.js';
 import { JevAtmosphereGate, JevRuntimeState } from './jev-atmosphere-gate.js';
 import { JevResponseModeMemory } from './jev-response-mode.js';
 import { ReplyTurnPlanner } from './reply-turn-planner.js';
@@ -658,6 +659,16 @@ export async function createQqRuntime() {
     ttlMs: (parsePositiveNumber(process.env.QQ_MEME_KNOWLEDGE_TTL_DAYS) ?? 30)
       * 24 * 60 * 60 * 1000,
   });
+  const memeCorpusEnabled = parseBoolean(process.env.QQ_MEME_CORPUS_ENABLED, true);
+  const memeCorpus = memeCorpusEnabled
+    ? new MemeCorpusStore({
+      databaseFilePath: path.resolve(
+        projectRoot,
+        process.env.QQ_MEME_CORPUS_DATABASE_FILE?.trim() || 'data/qq-meme-corpus.sqlite',
+      ),
+      includeSensitive: false,
+    })
+    : null;
 
   const promptPath = path.resolve(
     projectRoot,
@@ -970,6 +981,7 @@ export async function createQqRuntime() {
     webSearchEnabled,
     cultureCache,
     memeKnowledge,
+    memeCorpus,
     groupMemory,
     longtuRetrievalEnabled: parseBoolean(
       process.env.LONGTU_QQ_LONGTU_RETRIEVAL_ENABLED,
@@ -1147,6 +1159,7 @@ export async function createQqRuntime() {
     webSearch,
     cultureCache,
     memeKnowledge,
+    memeCorpus,
     usageTracker,
     mediaUsageTracker,
     mediaResolver,
