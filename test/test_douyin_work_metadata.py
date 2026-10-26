@@ -57,6 +57,14 @@ class WorkMetadataTests(unittest.TestCase):
         self.assertEqual(result['size'], 42)
         self.assertEqual(result['images'], [])
 
+    def test_short_link_video_type_55_uses_confirmed_video_asset(self):
+        result = normalize_work({'aweme_id': '7692422981343593978', 'aweme_type': 55,
+            'desc': 'cicf圣女', 'video': {
+                'play_addr': {'url_list': ['https://cdn.example/cicf.mp4'], 'data_size': 42},
+            }}, '7692422981343593978')
+        self.assertEqual(result['media_type'], 'video')
+        self.assertEqual(result['video_url'], 'https://cdn.example/cicf.mp4')
+
     def test_url_only_supplies_id_never_type(self):
         self.assertEqual(work_id('https://www.douyin.com/note/123'), '123')
         self.assertEqual(work_id('https://www.douyin.com/?modal_id=123'), '123')
