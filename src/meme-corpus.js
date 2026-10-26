@@ -7,8 +7,8 @@ const CORPUS_META = Object.freeze({
   cheer_terms: { label: '网络流行语释义', kind: 'definition', priority: 1 },
   meme_style: { label: '网梗对话风格', kind: 'style', priority: 2 },
   ruozhiba: { label: '弱智吧风格', kind: 'style', priority: 3 },
-  vbar: { label: 'V吧黑话', kind: 'definition', priority: 4 },
-  hell: { label: '地狱笑话', kind: 'style', priority: 5, sensitive: true },
+  vbar: { label: 'V吧黑话', kind: 'definition', priority: -1 },
+  hell: { label: '地狱笑话', kind: 'style', priority: -1, sensitive: true },
 });
 
 const DEFAULT_CORPORA = Object.freeze(['memewiki', 'cheer_terms', 'meme_style', 'ruozhiba']);
@@ -16,6 +16,11 @@ const MAX_CHUNK = 1_800;
 const MAX_DEFINITION = 420;
 const MAX_STYLE = 280;
 const MAX_PROMPT = 1_000;
+const STOP_GRAMS = new Set([
+  '是什么', '什么梗', '啥意思', '什么意思', '么意思', '什么意',
+  '怎么回', '怎么接', '怎么用', '这个梗', '梗是什', '是什么梗',
+  '网络用', '络用语', '黑话', '出处是', '来源是',
+]);
 
 function normalized(value, limit = MAX_CHUNK) {
   return String(value ?? '')
@@ -39,9 +44,15 @@ function tokenCandidates(value) {
   ])].slice(0, 12);
 }
 
+function queryTokens(value) {
+  const candidates = tokenCandidates(value);
+  const preferred = candidates.filter((token) => token.length <= 12);
+  return (preferred.length ? preferred : candidates).slice(0, 6);
+}
+
 function trigramCandidates(value) {
   const source = normalized(value, 800);
-  const tokens = tokenCandidates(source).slice(0, 6);
+  const tokens = queryTokens(source);
   const grams = tokens.flatMap((token) => {
     if (token.length === 3) return [token];
     if (token.length > 3) {
@@ -53,7 +64,10 @@ function trigramCandidates(value) {
     }
     return [];
   });
-  if (grams.length) return [...new Set(grams)].slice(0, 16);
+  if (grams.length) {
+    const meaningful = [...new Set(grams)].filter((gram) => !STOP_GRAMS.has(gram));
+    return (meaningful.length ? meaningful : [...new Set(grams)]).slice(0, 8);
+  }
   return source.length >= 3 ? [source.slice(0, 40)] : [];
 }
 
@@ -73,7 +87,7 @@ function definitionRelevant(row, query) {
   if (!terms) return false;
   const source = normalized(query, 400).toLowerCase();
   if (source.includes(terms)) return true;
-  const tokens = tokenCandidates(source).filter((token) => token.length >= 2);
+  const tokens = queryTokens(source).filter((token) => token.length >= 2);
   return tokens.some((token) => terms.includes(token) || token.includes(terms));
 }
 
@@ -215,16 +229,22 @@ export class MemeCorpusStore {
         // fallback below still keeps short and CJK queries usable.
       }
     }
-    const tokens = tokenCandidates(source).slice(0, 6);
-    if (found.size < limit && tokens.length) {
-      const clauses = tokens.map(() => '(lower(c.text) LIKE ? OR lower(c.terms) LIKE ?)').join(' OR ');
-      const params = tokens.flatMap((token) => [`%${token}%`, `%${token}%`]);
+    const tokens = queryTokens(source);
+    const fallbackCorpora = allowed.filter((corpus) => CORPUS_META[corpus]?.kind === 'definition');
+    if (found.size < limit && tokens.length && fallbackCorpora.length) {
+      // Trigram FTS cannot match one- or two-character Chinese terms. Keep the
+      // fallback narrow: scan the short extracted term/title column instead of
+      // rescanning every full chunk text, which is noticeably slower on the
+      // larger style corpora.
+      const fallbackPlaceholders = fallbackCorpora.map(() => '?').join(', ');
+      const clauses = tokens.map(() => 'lower(c.terms) LIKE ?').join(' OR ');
+      const params = tokens.map((token) => `%${token}%`);
       const rows = db.prepare(`
         SELECT c.id, c.corpus, c.text, c.terms, 0 AS score
         FROM meme_corpus_chunks c
-        WHERE c.corpus IN (${placeholders}) AND (${clauses})
-        ORDER BY c.corpus ASC, c.id ASC LIMIT ?
-      `).all(...allowed, ...params, limit * 3);
+        WHERE c.corpus IN (${fallbackPlaceholders}) AND c.terms <> '' AND (${clauses})
+        ORDER BY c.corpus ASC, length(c.terms) ASC, c.id ASC LIMIT ?
+      `).all(...fallbackCorpora, ...params, limit * 3);
       rows.forEach((row) => {
         if (!found.has(row.id)) found.set(row.id, row);
       });
