@@ -126,6 +126,34 @@ test('抽象联想反馈识别明确认同和纠正，忽略普通追问', () =>
   assert.equal(classifyAbstractAssociationFeedback('这个图是从哪来的'), '');
 });
 
+test('/指令只对超管返回完整斜杠指令清单', async () => {
+  const { service: adminService } = createService({
+    adminUsers: new Set(['admin-help']),
+  });
+  const allowed = await adminService.handleMessage({
+    message_id: 'admin-help-command',
+    message_type: 'private',
+    user_id: 'admin-help',
+    text: '/指令',
+  });
+  assert.equal(allowed.mode, 'command-help');
+  assert.match(allowed.messages[0].text, /\/usage-report/);
+  assert.match(allowed.messages[0].text, /\/crazy-thursday-add/);
+  assert.match(allowed.messages[0].text, /未列出的 \/ 开头内容会被静默拦截/);
+
+  const { service: ordinaryService } = createService({
+    adminUsers: new Set(['another-admin']),
+  });
+  const denied = await ordinaryService.handleMessage({
+    message_id: 'ordinary-help-command',
+    message_type: 'private',
+    user_id: 'ordinary-user',
+    text: '/指令',
+  });
+  assert.equal(denied.mode, 'command-help-denied');
+  assert.equal(denied.messages[0].text, '只有超级管理员可以查看斜杠指令清单。');
+});
+
 test('只把实际写进回复的抽象候选挂起，并用下一条真人反馈回写', () => {
   const feedback = [];
   const { service } = createService({

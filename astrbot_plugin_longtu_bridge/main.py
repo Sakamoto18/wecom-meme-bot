@@ -66,7 +66,7 @@ CRAZY_THURSDAY_SLOTS = (
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
     "/stop", "/usage-report", "/persona", "/jev", "/crazy-thursday", "/crazy-thursday-add",
-    "/crazy-thursday-list", "/crazy-thursday-del",
+    "/crazy-thursday-list", "/crazy-thursday-del", "/指令",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
@@ -1347,6 +1347,8 @@ class LongtuQqBridge(Star):
     @classmethod
     def _is_allowed_bridge_slash_command(cls, event: AstrMessageEvent) -> bool:
         raw_text = (cls._raw_text(event) or event.message_str or "").strip()
+        if raw_text == "/指令":
+            return True
         matched = re.match(r"^/([a-z][a-z0-9_-]*)\b", raw_text, re.IGNORECASE)
         return bool(matched and f"/{matched.group(1).lower()}" in ALLOWED_BRIDGE_SLASH_COMMANDS)
 
