@@ -423,6 +423,33 @@ test('图片文化模式压住正经复述并要求具体并置反差', () => {
   }).issues.includes('image-culture-generic'), false);
 });
 
+test('图片梗主锚点优先于用户短句的原曲联想', () => {
+  const options = {
+    imageMemeAnchorPriority: true,
+    imageMemeClaim: '图片是在接“你说什么我听不见”的屏蔽梗',
+    imageSemanticFrame: '可接话落点：你说什么我听不见；笑点是装聋和屏蔽的反差',
+    currentQuestion: '听见你说~',
+  };
+  const prompt = buildNormalReplyStablePrompt(options);
+  assert.match(prompt, /图片梗主锚点优先/);
+  assert.match(buildGroupChatOutputPrompt(options), /不得自动接原曲/);
+  assert.match(buildNormalReplyRetryPrompt(
+    '听见你说~',
+    '朝阳起又落，晴雨难测。',
+    ['image-anchor-overridden'],
+    options,
+  ), /压过了图片自己的梗/);
+  assert.ok(reviewNormalReply('朝阳起又落，晴雨难测。', options)
+    .issues.includes('image-anchor-overridden'));
+  assert.equal(reviewNormalReply('你说什么我听不见，耳朵直接开静音。', options)
+    .issues.includes('image-anchor-overridden'), false);
+  assert.equal(reviewNormalReply('朝阳起又落，晴雨难测。', {
+    ...options,
+    explicitLyricRequest: true,
+    currentQuestion: '接下一句歌词',
+  }).issues.includes('image-anchor-overridden'), false);
+});
+
 test('统一群聊输出契约要求先接话并隐藏搜索播报', () => {
   const prompt = buildGroupChatOutputPrompt({});
   assert.match(prompt, /先像熟悉的群友开口/);

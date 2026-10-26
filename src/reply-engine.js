@@ -749,6 +749,14 @@ export async function generateConversationReply(options) {
   const imageMemeClaim = String(
     inputImageMemeClaim || plannedMeme.claim || '',
   ).trim();
+  // A concrete vision claim/reply hook is the primary conversational anchor.
+  // Keep it separate from informationMemeMode: a reaction meme can need no
+  // factual lookup and still must not be displaced by a familiar lyric.
+  const imageMemeAnchorPriority = Boolean(
+    hasImageContext && (imageMemeClaim || String(imageSemanticFrame ?? '').trim()),
+  );
+  const explicitLyricRequest = /(?:接(?:下|着)?(?:一句|歌词)|唱(?:歌|下去|原曲)|歌词|原曲|歌曲(?:出处|名字|是哪首))/u
+    .test(String(currentQuestion ?? ''));
   const groundingQueryHint = [
     inputGroundingQueryHint,
     plannedMeme.anchor,
@@ -780,6 +788,12 @@ export async function generateConversationReply(options) {
       '先核对原图和当前问题。候选若成立，优先回答其中的关系、反差和观点；候选若不成立，舍弃，不要照抄。',
     ].join('\n') : '',
     imageInformationPrompt,
+    imageMemeAnchorPriority ? [
+      '【图片梗主锚点（本轮优先级最高）】',
+      imageMemeClaim ? `图片梗主张：${imageMemeClaim.slice(0, 260)}` : '',
+      imageSemanticFrame ? `图片关系与接话落点：${String(imageSemanticFrame).slice(0, 2_400)}` : '',
+      '先围绕图片已经给出的具体反差、动作或接话落点回应。用户短句若像歌词，只能改变语气，不得自动续写原曲；除非用户明确要求接歌词、唱歌或查歌曲出处。相关但不精确的检索材料只能作候选，不能覆盖图片主锚点。',
+    ].filter(Boolean).join('\n') : '',
     recordSummary ? FORWARD_SUMMARY_PROMPT : '',
   ].filter(Boolean).join('\n\n');
   const visualWordplayPrompt = String(imageVisualWordplay ?? '').trim()
@@ -1850,11 +1864,16 @@ export async function generateConversationReply(options) {
     context: factSearchResult.context,
     suppressNarration: suppressSearchNarration,
   });
-  const culturePrompt = cultureCard
-    ? cultureCardPrompt(cultureCard, cultureCacheHit ? 'cache' : 'fresh-search')
-    : (cultureSearchAttempted
-      ? '【本轮互联网梗检索状态】本轮互联网梗检索没有可用外部摘要，也没有形成可用短卡。不得编造来源、梗的出处或现实事实，只按当前已知语境自然接话。'
-      : '');
+  const culturePrompt = [
+    cultureCard
+      ? cultureCardPrompt(cultureCard, cultureCacheHit ? 'cache' : 'fresh-search')
+      : (cultureSearchAttempted
+        ? '【本轮互联网梗检索状态】本轮互联网梗检索没有可用外部摘要，也没有形成可用短卡。不得编造来源、梗的出处或现实事实，只按当前已知语境自然接话。'
+        : ''),
+    imageMemeAnchorPriority && cultureEvidenceQuality === 'related-only'
+      ? '【相关梗检索降权】本轮文化检索只有 related-only 相似结果，没有精确命中。它们只能作为待核对候选，禁止覆盖图片已识别的主梗、接话落点或主体关系，也不能把用户短句续成原曲。'
+      : '',
+  ].filter(Boolean).join('\n\n');
   const memeKnowledgeContext = memeKnowledgeEntry
     ? memeKnowledgePrompt(memeKnowledgeEntry, memeKnowledgeCacheHit ? 'cache' : 'fresh-search')
     : '';
@@ -1873,6 +1892,9 @@ export async function generateConversationReply(options) {
     imageRealityAnchor,
     imageInformationKind,
     imageMemeClaim,
+    imageSemanticFrame,
+    imageMemeAnchorPriority,
+    explicitLyricRequest,
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     cultureReviewRequired,
@@ -1906,6 +1928,10 @@ export async function generateConversationReply(options) {
         || interactionContext?.correctionCandidate,
     ),
     imageSemanticPoint: String(jevStyle?.semanticPoint ?? ''),
+    imageMemeClaim,
+    imageSemanticFrame,
+    imageMemeAnchorPriority,
+    explicitLyricRequest,
     quotedPersonaPhrases: personaDemonstration ? personaPhrasesFromContext(personaContext) : [],
     relativeDateFacts,
     searchEvidenceQuality: searchResult?.evidenceQuality
@@ -2011,6 +2037,9 @@ export async function generateConversationReply(options) {
       informationMemeMode,
       imageRealityAnchor,
       imageMemeClaim,
+      imageSemanticFrame,
+      imageMemeAnchorPriority,
+      explicitLyricRequest,
       verificationRequested,
     }),
     styleSignals.attackCandidate && !attackStyle
@@ -2161,6 +2190,10 @@ export async function generateConversationReply(options) {
               activeReplyPriority,
               passiveImageComment,
               imageVisualWordplay,
+              imageMemeClaim,
+              imageSemanticFrame,
+              imageMemeAnchorPriority,
+              explicitLyricRequest,
               artAppraisal,
               abstractAssociationRequested,
               abstractAssociationReviewRequired,

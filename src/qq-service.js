@@ -3998,6 +3998,8 @@ export class QqBotService {
         + ` information=${searchImageInformationPolicy?.level || 'unknown'}`
         + ` information_kind=${imageInformationKind || 'unknown'}`
         + ` reality_anchor=${imageRealityAnchor ? 'yes' : 'no'}`
+        + ` meme_claim=${imageMemeClaim ? 'yes' : 'no'}`
+        + ` reply_hook=${(imageAnalysis?.replyHook || imageAnalysis?.items?.some((item) => item.replyHook)) ? 'yes' : 'no'}`
         + ` search=${imageSearchQueries?.length ?? 0}`
         + ` raw_reply_image=${mergedReplyImageBlocks.length > 0 ? 'yes' : 'no'}`,
       );

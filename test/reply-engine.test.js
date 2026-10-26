@@ -2132,6 +2132,36 @@ test('图中的现实新闻追问会先查文字事实，再把事实和群友�
   assert.match(prompt, /PHP2Shell/);
 });
 
+test('图片梗主锚点覆盖歌词续写并触发一次定向重写', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '听见你说~',
+    currentQuestion: '听见你说~',
+    modelInput: '图片语义：可接话落点=你说什么我听不见',
+    hasImageContext: true,
+    imageMemeClaim: '接“你说什么我听不见”的屏蔽梗',
+    imageSemanticFrame: '可接话落点：你说什么我听不见；笑点是装聋和屏蔽的反差',
+    imageInformationPolicy: { level: 'low_information' },
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        return calls.length === 1
+          ? '朝阳起又落，晴雨难测。'
+          : '你说什么我听不见，耳朵直接开静音。';
+      },
+    },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.match(String(calls[0].additionalSystemPrompt), /图片梗主锚点/);
+  assert.match(String(calls[0].additionalSystemPrompt), /不得自动续写原曲/);
+  assert.match(String(calls[1].revisionSystemPrompt), /压过了图片自己的梗/);
+  assert.equal(result.answer, '你说什么我听不见，耳朵直接开静音。');
+  assert.equal(result.rewriteUsed, true);
+});
+
 test('信息型梗会关闭缺抽象联想的强制重写', async () => {
   const result = await generateConversationReply({
     content: '为什么这个4就是完整密钥',
