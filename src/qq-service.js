@@ -49,6 +49,7 @@ import {
 } from './image-reply-context.js';
 import { IMAGE_SOURCE_PROMPT, normalizeSourceCandidates } from './search-scope.js';
 import { isDenseImageText, PASSIVE_IMAGE_QUESTION } from './passive-image.js';
+import { formatAdminSlashCommandHelp, isSlashCommandHelp } from './qq-command-help.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -5455,6 +5456,18 @@ export class QqBotService {
     // or LLM handling so it can never produce an authentication/error reply.
     if (String(payload.text ?? '').trim() === '/') {
       return { mode: 'ignored', messages: [] };
+    }
+    if (isSlashCommandHelp(payload.text)) {
+      if (!isLongtuAdministrator(payload.userId, this.adminUsers)) {
+        return {
+          mode: 'command-help-denied',
+          messages: [{ type: 'text', text: '只有超级管理员可以查看斜杠指令清单。' }],
+        };
+      }
+      return {
+        mode: 'command-help',
+        messages: [{ type: 'text', text: formatAdminSlashCommandHelp() }],
+      };
     }
     const jevCommand = parseJevCommand(payload.text);
     if (jevCommand) {
