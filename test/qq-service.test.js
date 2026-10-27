@@ -774,7 +774,8 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆，未匹�
   assert.equal(first.messages[0].text, '这是 QQ 回答，别把问题绕复杂了。');
   assert.match(calls[0].modelInput, /发言人：QQ 小明/);
   assert.equal(calls[1].history.length, 2);
-  assert.equal(calls[1].history[0].content, '你好');
+  assert.match(calls[1].history[0].content, /当前发言人：QQ 小明/);
+  assert.match(calls[1].history[0].content, /当前消息：你好/);
   assert.equal(second.messages[0].text, '这是 QQ 回答，别把问题绕复杂了。');
 });
 

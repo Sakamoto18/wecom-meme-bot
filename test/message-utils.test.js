@@ -75,7 +75,7 @@ test('群聊模型输入包含匿名且稳定的发言人标签', () => {
 
   const firstLabel = first.split('\n')[0];
   const secondLabel = second.split('\n')[0];
-  assert.match(first, /^当前发言人：群成员-[a-f0-9]{6}\n当前消息：当前内容$/);
+  assert.match(first, /^当前发言人：群成员-[a-f0-9]{6}\n【身份归属硬边界】[\s\S]+\n当前消息：当前内容$/);
   assert.equal(firstLabel, secondLabel);
   assert.doesNotMatch(first, /sensitive-user-id/);
 });
@@ -86,14 +86,34 @@ test('人工标注的群成员使用昵称，未标注成员继续匿名', () =>
     from: { userid: 'known-user-id' },
   };
   const speakerId = getAnonymousSpeakerId(message);
-  assert.equal(
+  assert.match(
     buildModelInput(message, '当前内容', { [speakerId]: '玉涛龙大王' }),
-    `当前发言人：玉涛龙大王（成员-${speakerId}）\n当前消息：当前内容`,
+    new RegExp(`^当前发言人：玉涛龙大王（成员-${speakerId}）\\n【身份归属硬边界】[\\s\\S]+\\n当前消息：当前内容$`),
   );
   assert.match(
     buildModelInput({ chattype: 'group', from: { userid: 'unknown-user-id' } }, '你好'),
-    /^当前发言人：群成员-[a-f0-9]{6}\n当前消息：你好$/,
+    /^当前发言人：群成员-[a-f0-9]{6}\n【身份归属硬边界】[\s\S]+\n当前消息：你好$/,
   );
+});
+
+test('群聊当前消息与引用消息的主语和账户归属明确隔离', () => {
+  const input = buildModelInput({
+    chattype: 'group',
+    from: { userid: 'sender', name: '发言者' },
+    bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot', name: '龙玉涛' }],
+    quote: {
+      msgtype: 'text',
+      text: { content: '我的账户还有 82 万' },
+      from: { userid: 'bot', name: '龙玉涛' },
+    },
+  }, '我给不了你完整的一生，这是你的账户，你能自己去赚 82 万吗');
+
+  assert.match(input, /当前消息中的“我\/我们”默认属于当前发言人/);
+  assert.match(input, /“你\/你的”默认指机器人/);
+  assert.match(input, /引用消息是单独的第三方原话/);
+  assert.match(input, /引用消息作者是机器人；引用中的“我\/我的”属于机器人/);
+  assert.match(input, /当前消息：我给不了你完整的一生/);
 });
 
 test('群聊输入区分指令发送者、被 @ 成员和引用作者', () => {
