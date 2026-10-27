@@ -1965,11 +1965,10 @@ export async function generateConversationReply(options) {
     imageSemanticFrame,
     cultureTerms,
   ].filter(Boolean).join(' ').replace(/\s+/gu, ' ').trim().slice(0, 1_000);
-  // The corpus is the voice controller for every normal reply. Topic-matched
-  // chunks win; when small talk has no match the store supplies neutral short
-  // turn-taking anchors instead of silently leaving style to generic prompt
-  // prose. Persona and retrieved facts keep their separate priorities (see
-  // buildPrompt), so this only owns wording and rhythm.
+  // The corpus is an optional voice reference for normal replies. Topic-matched
+  // chunks may contribute wording and rhythm, but an unmatched turn must not
+  // receive a random style sample: that turns the model into a category gate
+  // and makes ordinary answers collapse into a meme/non-meme binary.
   const memeCorpusRequested = Boolean(memeCorpus && memeCorpusQuery);
   const explicitMemeCorpusQuery = /(?:什么梗|啥梗|梗的?意思|梗的?出处|这个梗|网络用语|黑话|谐音梗|怎么接|怎么用|地狱笑话|黑色幽默|地狱梗|缺德笑话)/u
     .test(memeCorpusQuery);
@@ -1989,6 +1988,8 @@ export async function generateConversationReply(options) {
     'cheer_terms',
     'meme_style',
     'ruozhiba',
+    'have_meme',
+    'ptt_style',
     ...(/(?:v吧|v圈|虚拟主播|vtb|vup|管人)/iu.test(memeCorpusQuery) ? ['vbar'] : []),
     ...(/(?:地狱笑话|黑色幽默|地狱梗|缺德笑话)/u.test(memeCorpusQuery) ? ['hell'] : []),
   ];

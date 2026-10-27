@@ -23,6 +23,22 @@ function fixture() {
     { id: 1, text: '对话：\n用户：老板又让周末加班\n回复：包的，不然领导又要记小本本了。' },
     { id: 2, text: '对话：\n用户：同事当面吹领导彩虹屁\n回复：666，舔都不舔了是吗？' },
   ], { sourceUrl: 'https://example.com/style' });
+  store.replaceCorpus('have_meme', [
+    {
+      id: 1,
+      text: '表达参考：知识已经打包，但你的大脑不会握手。',
+      terms: '知识 大脑 握手',
+      metadata: { sourceKind: 'have-meme', kind: 'joke' },
+    },
+  ], { sourceUrl: 'https://example.com/have-meme' });
+  store.replaceCorpus('ptt_style', [
+    {
+      id: 1,
+      text: '对话：\n用户：这工作也太难了吧\n回复：哪份工作不难，你问最不难的比较快。',
+      terms: '工作 太难',
+      metadata: { sourceKind: 'ptt-gossiping' },
+    },
+  ], { sourceUrl: 'https://example.com/ptt' });
   store.replaceCorpus('vbar', [
     { id: 1, text: '【词条】V吧黑话\n【用法】只在虚拟主播话题里使用。' },
     { id: 2, text: '【词条】管人\n【用法】虚拟主播的观众称呼。' },
@@ -46,15 +62,15 @@ test('中文互联网语料按释义和风格分层检索', () => {
     const prompt = store.buildPrompt('老板周末加班怎么回');
     assert.match(prompt, /释义参考|接法示例/);
     assert.match(prompt, /记小本本/);
-    assert.match(prompt, /人格与安全规则 > 信息检索得到的事实 > 本语料语感/);
+    assert.match(prompt, /角色人格与安全规则 > 当前问题与检索事实 > 本语料参考/);
     assert.ok(prompt.length <= 1_000);
 
-    const styleOnly = store.buildPrompt('老板周末加班怎么回', { styleOnly: true });
+    const styleOnly = store.buildPrompt('老板周末加班', { styleOnly: true });
     assert.doesNotMatch(styleOnly, /释义参考/);
     assert.match(styleOnly, /接法示例/);
     const definitionQueryWithoutDefinitions = store.buildPrompt('尊嘟假嘟是什么梗', { styleOnly: true });
     assert.doesNotMatch(definitionQueryWithoutDefinitions, /释义参考/);
-    assert.match(definitionQueryWithoutDefinitions, /通用接法|接法示例/);
+    assert.equal(definitionQueryWithoutDefinitions, '');
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
@@ -68,6 +84,23 @@ test('默认不召回 V吧和地狱笑话，显式指定后才参与', () => {
     assert.equal(store.search('V吧黑话', { corpora: ['vbar'] }).some((row) => row.corpus === 'vbar'), true);
     assert.equal(store.search('办黑活').some((row) => row.corpus === 'hell'), false);
     assert.equal(store.search('办黑活', { includeSensitive: true }).some((row) => row.corpus === 'hell'), true);
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('have-meme 和 PTT 样本保留来源元数据且可按当前内容召回', () => {
+  const { store, directory } = fixture();
+  try {
+    const haveMeme = store.search('知识 大脑 握手', { corpora: ['have_meme'] });
+    assert.equal(haveMeme[0].metadata.sourceKind, 'have-meme');
+    const ptt = store.search('工作 太难', { corpora: ['ptt_style'] });
+    assert.equal(ptt[0].metadata.sourceKind, 'ptt-gossiping');
+    assert.match(store.buildPrompt('工作太难怎么办', {
+      corpora: ['ptt_style'],
+      styleOnly: true,
+    }), /PTT 群聊风格/);
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });
@@ -120,14 +153,18 @@ test('空语料库不生成提示词', () => {
   }
 });
 
-test('普通闲聊没有贴题命中时仍提供通用短句语感锚点', () => {
+test('普通闲聊没有贴题命中时不强行注入随机语感样本', () => {
   const { store, directory } = fixture();
   try {
     const prompt = store.buildPrompt('你好', { styleOnly: true });
-    assert.match(prompt, /中文互联网语料语感主控/);
-    assert.match(prompt, /通用接法/);
-    assert.match(prompt, /只当通用群聊节奏锚点/);
-    assert.match(prompt, /表达方式以本语料为主控/);
+    assert.equal(prompt, '');
+    const explicitFallback = store.buildPrompt('你好', {
+      styleOnly: true,
+      allowStyleFallback: true,
+    });
+    assert.match(explicitFallback, /中文互联网语料语感参考/);
+    assert.match(explicitFallback, /通用接法/);
+    assert.match(explicitFallback, /只当通用群聊节奏锚点/);
     assert.doesNotMatch(prompt, /释义参考/);
 
     assert.equal(store.buildPrompt('你好', {
