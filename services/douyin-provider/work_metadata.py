@@ -46,7 +46,12 @@ def find_work(payload, target_id):
         return None
     if isinstance(payload, dict):
         identity = str(payload.get('aweme_id', payload.get('awemeId', '')))
-        if identity == target_id and ('aweme_type' in payload or 'awemeType' in payload):
+        # Identity is established by aweme_id, while the presence of media
+        # fields prevents an untyped wrapper object from shadowing its detail.
+        # aweme_type is intentionally not required here.
+        if identity == target_id and any(key in payload for key in (
+            'images', 'image_list', 'video', 'video_url', 'videoUrl',
+        )):
             return payload
         for value in payload.values():
             result = find_work(value, target_id)
@@ -71,6 +76,17 @@ def first_url(value):
     return ''
 
 
+def is_real_video_url(url):
+    """Reject audio/thumbnail URLs while accepting signed Douyin video URLs."""
+    low = str(url or '').lower()
+    return low.startswith(('https://', 'http://')) and 'uuu_265.mp4' not in low and any(
+        token in low for token in (
+            '.mp4', '.m3u8', 'playwm', 'play/',
+            'douyinvod.com/', '/video/', 'mime_type=video_',
+        )
+    )
+
+
 def number(value):
     try:
         return max(0, int(value))
@@ -82,8 +98,11 @@ def video_asset(video):
     if not isinstance(video, dict):
         return {}
     addr = video.get('play_addr_h264') or video.get('play_addr') or video.get('playAddr')
+    video_url = first_url(addr)
+    if not is_real_video_url(video_url):
+        return {}
     return {
-        'video_url': first_url(addr),
+        'video_url': video_url,
         'size': number(addr.get('data_size')) if isinstance(addr, dict)
             else number(video.get('playAddrSize') or video.get('dataSize')),
         'cover': first_url(video.get('cover')),
@@ -94,7 +113,6 @@ def video_asset(video):
 def normalize_work(detail, target_id):
     if str(detail.get('aweme_id', detail.get('awemeId', ''))) != target_id:
         return None
-    kind = detail.get('aweme_type', detail.get('awemeType'))
     images = detail.get('images')
     author = detail.get('author') or detail.get('authorInfo') or {}
     common = {
@@ -107,8 +125,11 @@ def normalize_work(detail, target_id):
                  (detail.get('text_extra') or detail.get('textExtra') or [])
                  if isinstance(x, dict) and (x.get('hashtag_name') or x.get('hashtagName'))],
     }
-    if kind == 68:
-        if not isinstance(images, list) or not images:
+    main_asset = video_asset(detail.get('video'))
+    if isinstance(images, list) and images:
+        # Per-image motion assets are allowed, but an independent top-level
+        # play address makes the payload ambiguous and must not be guessed.
+        if main_asset.get('video_url'):
             return None
         urls, animations = [], []
         for item in images[:18]:
@@ -121,12 +142,9 @@ def normalize_work(detail, target_id):
                 animations.append({**asset, 'cover': url, 'image_index': len(urls) - 1})
         return {**common, 'media_type': 'images', 'video_url': '', 'images': urls,
                 'animated_videos': animations, 'cover': urls[0]}
-    # Douyin returns several ordinary shared-video types (0, 55 and 61 are
-    # currently observed on short-link pages). Accept them only when the
-    # payload also contains a real video asset; unfamiliar types must still
-    # never be guessed as video.
-    if kind in (0, 55, 61) and not images:
-        asset = video_asset(detail.get('video'))
-        if asset.get('video_url'):
-            return {**common, **asset, 'media_type': 'video', 'images': []}
+    # The work shape, rather than aweme_type, identifies a normal video. An
+    # unknown enum with a real play address is still safe; a missing address is
+    # never guessed as a video.
+    if main_asset.get('video_url'):
+        return {**common, **main_asset, 'media_type': 'video', 'images': []}
     return None

@@ -22,19 +22,33 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
       throw new Error(message);
     }
     const data = payload.data || payload;
-    const kind = String(data.media_type || '');
-    const gallery = kind === 'images';
     const sourceId = String(data.source_id || '');
-    const requestedId = String(url || '').match(/\/(?:note|video)\/(\d+)(?:[/?#]|$)/u)?.[1];
+    const requestedId = String(url || '').match(/\/(?:note|video)\/(\d+)(?:[/?#]|$)/u)?.[1]
+      || (() => { try {
+        const value = new URL(String(url || '')).searchParams.get('modal_id') || '';
+        return /^\d+$/u.test(value) ? value : '';
+      } catch { return ''; } })();
     if (data.type_verified !== true || !/^\d+$/u.test(sourceId)
-      || (requestedId && requestedId !== sourceId)
-      || !['images', 'video', 'videos'].includes(kind)) {
-      throw new Error('抖音作品类型未确认，请稍后重试');
+      || (requestedId && requestedId !== sourceId)) {
+      throw new Error('抖音作品类型未确认（身份未确认），请稍后重试');
     }
     const rawImages = data.images || data.image_list;
     const images = [...new Set((Array.isArray(rawImages) ? rawImages : [])
       .map((item) => normalizeMediaUrl(typeof item === 'string' ? item : item?.url || item?.url_default))
       .filter(Boolean))].slice(0, 18);
+    const rawAnimatedItems = data.animated_videos || data.animatedVideos || data.gallery_videos;
+    const animatedSourceUrls = new Set((Array.isArray(rawAnimatedItems) ? rawAnimatedItems : [])
+      .map((item) => normalizeMediaUrl(typeof item === 'string'
+        ? item : item?.mediaUrl || item?.video_url || item?.videoUrl || item?.url))
+      .filter(Boolean));
+    const primaryUrl = normalizeMediaUrl(data.mediaUrl || data.video_url || data.videoUrl);
+    // A top-level video alongside a gallery is ambiguous unless it is one of
+    // the per-image motion assets. Never let a stale player turn a note into a
+    // video card.
+    if (images.length && primaryUrl && !animatedSourceUrls.has(primaryUrl)) {
+      throw new Error('抖音作品同时包含图文和主视频，媒体形态未确认，请稍后重试');
+    }
+    const gallery = images.length > 0;
     const rawVideoItems = gallery ? [] : data.videos || data.video_items || data.videoItems
       || data.video_urls || data.videoUrls || data.mediaUrls;
     const mediaItems = [...new Map((Array.isArray(rawVideoItems) ? rawVideoItems : [])
@@ -55,7 +69,6 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
           tags: Array.isArray(typeof item === 'object' ? item?.tags : null) ? item.tags : [],
         }];
       }).filter(Boolean)).values()];
-    const rawAnimatedItems = data.animated_videos || data.animatedVideos || data.gallery_videos;
     const animatedItems = [...new Map((Array.isArray(rawAnimatedItems) ? rawAnimatedItems : [])
       .map((item) => {
         const mediaUrl = normalizeMediaUrl(typeof item === 'string'
@@ -74,8 +87,7 @@ export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
         }];
       }).filter(Boolean)).values()];
     // Playwright returns video_url/cover; MediaResolver requires mediaUrl/coverUrl.
-    const mediaUrl = (gallery || mediaItems.length > 1)
-      ? '' : normalizeMediaUrl(data.mediaUrl || data.video_url || data.videoUrl);
+    const mediaUrl = (gallery || mediaItems.length > 1) ? '' : primaryUrl;
     if (gallery ? !images.length : (!mediaUrl && !mediaItems.length)) {
       throw new Error('抖音 Provider 未返回当前作品的可用资源');
     }
