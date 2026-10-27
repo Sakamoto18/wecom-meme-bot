@@ -68,6 +68,57 @@ export function normalizeDownloadSource(value) {
   return normalizeBilibiliSource(normalized);
 }
 
+const MEDIA_CACHE_SCHEMA = 'v2';
+
+function providerName(candidate) {
+  return String(candidate?.provider || 'unknown').trim().toLowerCase() || 'unknown';
+}
+
+function douyinWorkId(value) {
+  let url;
+  try { url = new URL(String(value || '')); } catch { return ''; }
+  const match = url.pathname.match(/\/(?:note|video)\/(\d+)(?:\/|$)/u);
+  if (match) return match[1];
+  const modalId = url.searchParams.get('modal_id') || '';
+  return /^\d+$/u.test(modalId) ? modalId : '';
+}
+
+function douyinPathKind(value) {
+  let url;
+  try { url = new URL(String(value || '')); } catch { return ''; }
+  if (/\/note\/\d+(?:\/|$)/u.test(url.pathname)) return 'gallery';
+  if (/\/video\/\d+(?:\/|$)/u.test(url.pathname)) return 'video';
+  return '';
+}
+
+function mediaCacheKey(provider, source, sourceId = '') {
+  const suffix = sourceId ? `work:${sourceId}` : `source:${source}`;
+  return `media:${MEDIA_CACHE_SCHEMA}:${provider}:${suffix}`;
+}
+
+function validateDouyinCachedValue(value, source, requestedId = '') {
+  if (!value || !/^\d+$/u.test(String(value.sourceId || ''))) {
+    return 'missing sourceId';
+  }
+  if (requestedId && String(value.sourceId) !== requestedId) {
+    return `sourceId mismatch requested=${requestedId} cached=${value.sourceId}`;
+  }
+  const expectedKind = douyinPathKind(source);
+  if (!['gallery', 'video'].includes(value.contentKind)) return 'missing contentKind';
+  if (expectedKind && expectedKind !== value.contentKind) {
+    return `contentKind mismatch expected=${expectedKind} cached=${value.contentKind}`;
+  }
+  if (value.contentKind === 'gallery') {
+    if (!Array.isArray(value.images) || value.images.length === 0) return 'gallery has no images';
+    if (value.url || (Array.isArray(value.mediaItems) && value.mediaItems.length > 0)) {
+      return 'gallery contains primary video';
+    }
+  } else if (!value.url && !(Array.isArray(value.mediaItems) && value.mediaItems.length > 0)) {
+    return 'video has no playable media';
+  }
+  return '';
+}
+
 function runCommand(command, args, { timeoutMs = 120_000, cwd, label = '命令' } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -420,6 +471,12 @@ export class MediaResolver {
     this.timeoutMs = Math.min(Math.max(1_000, Number(this.timeoutMs) || 120_000), MAX_MEDIA_EXTRACTION_MS);
     this.maxExtractionMs = MAX_MEDIA_EXTRACTION_MS;
     this.cacheTtlMs = Math.max(0, Number(options.cacheTtlMs ?? 10 * 60 * 1000));
+    // A short link does not carry a stable work identity until the Provider
+    // resolves it. Keep its alias cache brief so a changed redirect cannot
+    // replay a ten-minute-old gallery/video result.
+    this.douyinShortLinkCacheTtlMs = Math.max(
+      0, Number(options.douyinShortLinkCacheTtlMs ?? 60 * 1000),
+    );
     this.cacheDirectory = options.cacheDirectory || path.join(os.tmpdir(), 'longtu-media-cache');
     this.maxCacheBytes = Math.max(0, Number(options.maxCacheBytes ?? 512 * 1024 * 1024));
     this.publicBaseUrl = String(options.publicBaseUrl || 'http://qq-bot:8787').replace(/\/+$/u, '');
@@ -665,20 +722,36 @@ export class MediaResolver {
     // Share links carry per-user tracking parameters; normalize before cache
     // lookup so the same media is not resolved once per group/share URL.
     const rawKey = String(candidate?.url || '').trim();
-    const key = normalizeDownloadSource(rawKey) || rawKey;
-    if (!key) throw new Error('媒体地址为空');
+    const sourceUrl = normalizeDownloadSource(rawKey) || rawKey;
+    if (!sourceUrl) throw new Error('媒体地址为空');
+    const provider = providerName(candidate);
+    const requestedId = provider === 'douyin' ? douyinWorkId(sourceUrl) : '';
+    const sourceCacheKey = mediaCacheKey(provider, sourceUrl);
+    const workCacheKey = requestedId ? mediaCacheKey(provider, '', requestedId) : '';
+    const lookupKeys = [workCacheKey, sourceCacheKey].filter(Boolean);
     await this.cleanupExpired();
-    const cached = this.cache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      // Media validity is independent of optional card metadata. Reuse the
-      // parsed video/gallery across groups even when an author/cover is absent.
-      this.logger.info?.(`媒体解析缓存命中：provider=${candidate?.provider || 'unknown'}`);
+    for (const cacheKey of lookupKeys) {
+      const cached = this.cache.get(cacheKey);
+      if (!cached) continue;
+      if (cached.expiresAt <= Date.now()) {
+        this.cache.delete(cacheKey);
+        continue;
+      }
+      const invalidReason = provider === 'douyin'
+        ? validateDouyinCachedValue(cached.value, sourceUrl, requestedId) : '';
+      if (invalidReason) {
+        this.cache.delete(cacheKey);
+        this.logger.warn?.(`媒体解析缓存失效：provider=${provider} reason=${invalidReason}`);
+        continue;
+      }
+      this.logger.info?.(`媒体解析缓存命中：provider=${provider}`
+        + ` sourceId=${cached.value?.sourceId || 'unknown'}`
+        + ` contentKind=${cached.value?.contentKind || 'unknown'}`);
       return cached.value;
     }
-    if (cached) this.cache.delete(key);
-    if (this.inflight.has(key)) {
-      this.logger.info?.(`媒体解析共用任务：provider=${candidate?.provider || 'unknown'}`);
-      return this.inflight.get(key);
+    if (this.inflight.has(sourceCacheKey)) {
+      this.logger.info?.(`媒体解析共用任务：provider=${provider}`);
+      return this.inflight.get(sourceCacheKey);
     }
 
     const task = (async () => {
@@ -690,13 +763,13 @@ export class MediaResolver {
         return Math.min(this.timeoutMs, remaining);
       };
       try {
-        let sourceKey = normalizeDownloadSource(key) || key;
+        let sourceKey = sourceUrl;
         let publicMetadata = {};
         if (this.providerResolver) {
           try {
             const provided = await raceExtraction(this.providerResolver({
-              url: key,
-              platform: candidate?.provider || 'unknown',
+              url: sourceUrl,
+              platform: provider,
             }), remainingTimeout());
             if (Array.isArray(provided?.mediaItems) && provided.mediaItems.length > 1) {
               const registeredItems = [];
@@ -715,14 +788,14 @@ export class MediaResolver {
                   tags: item.tags?.length ? item.tags : (provided.tags || []),
                   duration: positive(item.duration || provided.duration),
                   size: positive(item.size),
-                  provider: candidate?.provider || '',
+                  provider,
                   extractor: 'provider-direct-multi',
                   downloadBytes: 0,
                   outputBytes: 0,
                   direct: true,
                 };
                 await this.rejectIfTooLarge(itemMetadata);
-                if (candidate?.provider === 'douyin') {
+                if (provider === 'douyin') {
                   itemMetadata.requestHeaders = {
                     'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
                     Referer: 'https://www.douyin.com/',
@@ -754,9 +827,9 @@ export class MediaResolver {
               let title = provided.title || '';
               let coverUrl = provided.coverUrl || '';
               let cardMetadata = provided;
-              if ((!title || !coverUrl) && candidate?.provider === 'xiaohongshu') {
+              if ((!title || !coverUrl) && provider === 'xiaohongshu') {
                 try {
-                  const fallback = await resolveSharedUrl(key, { timeoutMs: Math.min(remainingTimeout(), 5_000) });
+                  const fallback = await resolveSharedUrl(sourceUrl, { timeoutMs: Math.min(remainingTimeout(), 5_000) });
                   title ||= fallback.title || '';
                   coverUrl ||= fallback.coverUrl || '';
                   cardMetadata = { ...fallback, ...provided,
@@ -773,7 +846,7 @@ export class MediaResolver {
                 title, coverUrl: coverUrl || (provided.images && provided.images[0]) || '',
                 author: cardMetadata.author || '', avatarUrl: cardMetadata.avatarUrl || '',
                 description: cardMetadata.description || '', tags: cardMetadata.tags || [],
-                images: cardMetadata.images || [], provider: candidate?.provider || '',
+                images: cardMetadata.images || [], provider,
                 duration: positive(provided.duration),
                 size: positive(provided.size),
                 extractor: 'provider-direct',
@@ -786,7 +859,7 @@ export class MediaResolver {
               // metadata, but send Douyin through our authenticated stream
               // proxy so the server fetches it with browser-like headers.
               await this.rejectIfTooLarge(directMedia);
-              if (candidate?.provider === 'douyin') {
+              if (provider === 'douyin') {
                 directMedia.requestHeaders = {
                   'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
                   Referer: 'https://www.douyin.com/',
@@ -815,7 +888,7 @@ export class MediaResolver {
             // 已删除的内容不走这里：那种页面也会残留零碎元数据，降级只会用
             // yt-dlp 的报错盖掉真正的原因。
             if (provided?.metadataOnly && isRemovedError(provided.title || '')) {
-              throw new Error(removedError(candidate?.provider || '源站', String(provided.title)));
+              throw new Error(removedError(provider || '源站', String(provided.title)));
             }
             if (provided?.metadataOnly) {
               publicMetadata = {
@@ -834,18 +907,18 @@ export class MediaResolver {
             }
             if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
             // A failed Douyin type check must never become a guessed video or enter cache.
-            if (candidate?.provider === 'douyin') throw error;
+            if (provider === 'douyin') throw error;
             this.logger.warn(`媒体 Provider 失败，尝试公开页面解析：${error.message}`);
           }
         }
-        if (candidate?.provider === 'douyin') {
+        if (provider === 'douyin') {
           throw new Error('抖音作品类型未确认，请稍后重试');
         }
         let bilibiliSource = null;
         try {
           bilibiliSource = extractBilibiliVideoId(sourceKey);
         } catch { /* sourceKey is validated later by the generic fallback */ }
-        const isBilibili = Boolean(bilibiliSource || candidate?.provider === 'bilibili');
+        const isBilibili = Boolean(bilibiliSource || provider === 'bilibili');
         if (isBilibili) {
           try {
             const bilibili = await resolveBilibiliMedia(sourceKey, {
@@ -882,7 +955,7 @@ export class MediaResolver {
         // point to P1 even on a P2 URL. Only the part-aware extractor may fall back.
         if (this.publicResolverEnabled && !isBilibili) {
           try {
-            publicMetadata = await resolveSharedUrl(key, {
+            publicMetadata = await resolveSharedUrl(sourceUrl, {
               timeoutMs: Math.min(remainingTimeout(), 15_000),
             });
             if (publicMetadata.mediaUrl) {
@@ -910,7 +983,7 @@ export class MediaResolver {
               throw error;
             }
             if (isMediaTooLargeError(error) || isMediaExtractionTimeoutError(error)) throw error;
-            if (candidate?.provider === 'xiaohongshu') {
+            if (provider === 'xiaohongshu') {
               throw new Error(`小红书图文解析失败：公开页面不可访问（${error.message}）`);
             }
             // Other platforms may still use yt-dlp as a fallback.
@@ -920,7 +993,7 @@ export class MediaResolver {
         }
         // 小红书图文笔记没有视频流时，不应再交给 yt-dlp 当视频处理。
         // 没有 Provider 且公开页面没有图片元数据，就明确失败并等待授权 Provider。
-        if (candidate?.provider === 'xiaohongshu'
+        if (provider === 'xiaohongshu'
           && !publicMetadata.mediaUrl
           && !publicMetadata.images?.length) {
           throw new Error('小红书图文详情不可用：Provider 和公开页面均未返回可用媒体，无法确认笔记状态或账号权限');
@@ -948,7 +1021,7 @@ export class MediaResolver {
         }
         // Generic direct-file extractors use the MP4 basename as a title.
         // XHS notes can intentionally have no title: retain their source title.
-        if (candidate?.provider === 'xiaohongshu') downloaded.title = publicMetadata.title || '';
+        if (provider === 'xiaohongshu') downloaded.title = publicMetadata.title || '';
         else downloaded.title ||= publicMetadata.title || '';
         downloaded.coverUrl ||= publicMetadata.coverUrl || '';
         downloaded.author ||= publicMetadata.author || '';
@@ -958,14 +1031,22 @@ export class MediaResolver {
         return this.registerMedia(downloaded);
       } finally {
         this.releaseSlot();
-        this.inflight.delete(key);
+        this.inflight.delete(sourceCacheKey);
       }
     })();
-    this.inflight.set(key, task);
+    this.inflight.set(sourceCacheKey, task);
     const value = await task;
-    if (this.cacheTtlMs > 0 && (candidate?.provider !== 'douyin'
+    const cacheTtlMs = provider === 'douyin' && !requestedId
+      ? Math.min(this.cacheTtlMs, this.douyinShortLinkCacheTtlMs)
+      : this.cacheTtlMs;
+    if (cacheTtlMs > 0 && (provider !== 'douyin'
       || (value.sourceId && ['gallery', 'video'].includes(value.contentKind)))) {
-      this.cache.set(key, { value, expiresAt: Date.now() + this.cacheTtlMs });
+      const cacheKeys = [sourceCacheKey];
+      if (provider === 'douyin' && value.sourceId) {
+        cacheKeys.push(mediaCacheKey(provider, '', String(value.sourceId)));
+      }
+      const expiresAt = Date.now() + cacheTtlMs;
+      for (const cacheKey of cacheKeys) this.cache.set(cacheKey, { value, expiresAt });
       if (this.cache.size > 500) {
         const oldest = this.cache.keys().next().value;
         if (oldest) this.cache.delete(oldest);

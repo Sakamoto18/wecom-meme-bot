@@ -87,6 +87,7 @@ test('抖音 Provider 的图文与视频互斥，且图集去重限长', async (
 
   // 图文：拿到 images，绝不返回 mediaUrl。
   data = galleryPayload().data;
+  data.media_type = 'unknown-enum';
   let resolved = await provider({ platform: 'douyin', url: 'https://v.douyin.com/n/' });
   assert.equal(resolved.mediaUrl, '');
   assert.deepEqual(resolved.images, GALLERY_IMAGES);
@@ -94,10 +95,18 @@ test('抖音 Provider 的图文与视频互斥，且图集去重限长', async (
 
   // 视频：images 必须为空，否则会被当图集发。
   data = { type_verified: true, source_id: '123456789', media_type: 'video', video_url: 'https://cdn.example/v.mp4',
-    cover: 'https://cdn.example/c.jpg', images: GALLERY_IMAGES, title: 't' };
+    cover: 'https://cdn.example/c.jpg', images: [], title: 't' };
   resolved = await provider({ platform: 'douyin', url: 'https://v.douyin.com/v/' });
   assert.equal(resolved.mediaUrl, 'https://cdn.example/v.mp4');
   assert.deepEqual(resolved.images, []);
+
+  // 图片与独立主视频同时出现时不能猜测，避免旧作品资源污染当前作品。
+  data = { type_verified: true, source_id: '123456789', media_type: 'video', video_url: 'https://cdn.example/v.mp4',
+    cover: 'https://cdn.example/c.jpg', images: GALLERY_IMAGES, title: 'ambiguous' };
+  await assert.rejects(
+    provider({ platform: 'douyin', url: 'https://v.douyin.com/mixed/' }),
+    /媒体形态未确认/,
+  );
 
   // 图文页一张图都没提取到时不能假装成功。
   data = { type_verified: true, source_id: '123456789', media_type: 'images', video_url: '', images: [] };
@@ -211,7 +220,7 @@ test('图文与视频交替分享，冷缓存和热缓存均按各自作品输�
           { video_url: 'https://cdn.example/stray-2.mp4' }],
       }).data
       : { type_verified: true, source_id: '200', media_type: 'video',
-        video_url: 'https://cdn.example/video.mp4', size: 5, images: GALLERY_IMAGES },
+        video_url: 'https://cdn.example/video.mp4', size: 5, images: [] },
     }));
   });
   const resolver = new MediaResolver({ enabled: true, cacheDirectory: dir,
@@ -233,6 +242,44 @@ test('图文与视频交替分享，冷缓存和热缓存均按各自作品输�
       }
       assert.deepEqual([...counts.values()], [1, 1]);
     }
+  } finally { resolver.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('抖音缓存命中前校验作品 ID 和媒体形态', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'douyin-cache-validation-'));
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (endpoint, options = {}) => {
+    if (endpoint !== 'http://provider.test/resolve') return new Response('video');
+    calls++;
+    const { url } = JSON.parse(options.body);
+    const isVideo = url.includes('/video/');
+    return new Response(JSON.stringify({ status: 'success', data: isVideo
+      ? { type_verified: true, source_id: '100', media_type: 'video',
+        video_url: 'https://cdn.example/video.mp4', images: [] }
+      : galleryPayload({ source_id: '100' }).data }));
+  });
+  const resolver = new MediaResolver({ enabled: true, cacheDirectory: dir,
+    command: 'must-not-run', publicBaseUrl: 'http://qq-bot:8787',
+    providerResolver: createDouyinProvider({ providerUrl: 'http://provider.test/resolve' }),
+    logger: { info() {}, warn() {} },
+  });
+  try {
+    resolver.cache.set('media:v2:douyin:work:100', {
+      value: { sourceId: '999', contentKind: 'gallery', images: GALLERY_IMAGES },
+      expiresAt: Date.now() + 60_000,
+    });
+    const gallery = await resolver.resolve({ url: 'https://www.douyin.com/note/100', provider: 'douyin' });
+    assert.equal(gallery.sourceId, '100');
+    assert.equal(gallery.contentKind, 'gallery');
+
+    resolver.cache.set('media:v2:douyin:source:https://www.douyin.com/video/100', {
+      value: { sourceId: '100', contentKind: 'gallery', images: GALLERY_IMAGES },
+      expiresAt: Date.now() + 60_000,
+    });
+    const video = await resolver.resolve({ url: 'https://www.douyin.com/video/100', provider: 'douyin' });
+    assert.equal(video.sourceId, '100');
+    assert.equal(video.contentKind, 'video');
+    assert.equal(calls, 2);
   } finally { resolver.close(); await rm(dir, { recursive: true, force: true }); }
 });
 

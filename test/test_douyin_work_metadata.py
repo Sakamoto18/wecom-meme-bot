@@ -32,6 +32,11 @@ class WorkMetadataTests(unittest.TestCase):
         self.assertEqual(find_work({'awemeId': '123', 'children': [other, target]}, '123'), target)
         self.assertIsNone(normalize_work(other, '123'))
 
+    def test_find_work_does_not_require_aweme_type(self):
+        target = {**self.gallery()}
+        target.pop('awemeType')
+        self.assertIs(find_work({'detail': target}, '123'), target)
+
     def test_mixed_gallery_preserves_index_and_never_uses_top_level_video(self):
         result = normalize_work(self.gallery(), '123')
         self.assertEqual(result['media_type'], 'images')
@@ -41,14 +46,23 @@ class WorkMetadataTests(unittest.TestCase):
         self.assertEqual(result['animated_videos'][0]['image_index'], 1)
         self.assertEqual(result['animated_videos'][0]['video_url'], 'https://cdn.example/live.mp4')
 
-    def test_unknown_or_incomplete_never_becomes_video(self):
+    def test_unknown_enum_does_not_override_resource_shape(self):
+        result = normalize_work({**self.gallery(), 'awemeType': 999}, '123')
+        self.assertEqual(result['media_type'], 'images')
+        self.assertIsNone(normalize_work({**self.gallery(), 'images': [], 'awemeType': 0}, '123'))
+
+    def test_incomplete_never_becomes_video(self):
         for detail in [
-            {**self.gallery(), 'images': []},
-            {**self.gallery(), 'awemeType': 999},
-            {**self.gallery(), 'awemeType': 0},
+            {**self.gallery(), 'images': [], 'video': {}},
             {'aweme_id': '123', 'aweme_type': 0, 'video': {}},
         ]:
             self.assertIsNone(normalize_work(detail, '123'))
+
+    def test_independent_top_level_video_makes_gallery_ambiguous(self):
+        detail = {**self.gallery(), 'video': {
+            'playAddr': [{'src': 'https://cdn.example/main.mp4'}], 'dataSize': 300,
+        }}
+        self.assertIsNone(normalize_work(detail, '123'))
 
     def test_api_video_uses_target_stream_and_size(self):
         result = normalize_work({'aweme_id': '123', 'aweme_type': 0, 'images': None,
