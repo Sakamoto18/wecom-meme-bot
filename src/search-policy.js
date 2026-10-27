@@ -57,6 +57,12 @@ export function classifySearchPolicy(options = {}) {
   const jevTimeSensitive = Number(options.timeSensitive) || 0;
   const unknownConcept = options.unknownConcept === true;
   const semanticImageSearch = options.semanticImageSearch === true;
+  const plannerSearch = options.plannerPlan?.search && typeof options.plannerPlan.search === 'object'
+    ? options.plannerPlan.search : {};
+  const plannerFactRequested = plannerSearch.factNeeded === true;
+  const plannerCultureRequested = plannerSearch.cultureNeeded === true;
+  const plannerFreshness = ['current', 'general', 'none'].includes(plannerSearch.freshness)
+    ? plannerSearch.freshness : 'none';
 
   const longtuTopic = shouldSearchLongtuKnowledge(content);
   const memeTopic = shouldSearchMemeKnowledge(content);
@@ -72,19 +78,21 @@ export function classifySearchPolicy(options = {}) {
     && TECHNICAL_RULE_INTENT_PATTERN.test(content);
   const verificationRequested = EXPLICIT_VERIFICATION_PATTERN.test(content)
     || options.verificationRequested === true;
-  const concreteTextFact = recentPublicEvent || recentNamedEvent || memeEventLink || technicalRuleRequested;
+  const concreteTextFact = plannerFactRequested
+    || recentPublicEvent || recentNamedEvent || memeEventLink || technicalRuleRequested;
   const recentEventRequested = recentPublicEvent || recentNamedEvent;
   const highConfidenceCulture = HIGH_CONFIDENCE_CULTURE_PATTERN.test(content);
   const jevCultureEligible = !imageSearch && jevCultureLookupNeeded >= 0.4;
   const cultureEligible = semanticImageSearch
     || (!imageSearch
-      && (longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible || unknownConcept));
+      && (plannerCultureRequested || longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible || unknownConcept));
   // Asking for a meme's source/原帖 is both a cultural lookup and a factual
   // verification request. Keep the two rails independent so one does not
   // silently suppress the other. JEV's own fact/time signals join the union so
   // a plain “现在最新版本是多少” does not depend on the lexical regex alone.
   const textFactEligible = (
     currentFacts
+    || plannerFactRequested
     || explicitFacts
     || recentPublicEvent
     || recentNamedEvent
@@ -108,6 +116,9 @@ export function classifySearchPolicy(options = {}) {
       lowInformationImage,
       textFactEligible,
       recentEventRequested,
+      plannerFactRequested,
+      plannerCultureRequested,
+      plannerFreshness,
       reason: 'attack-turn-fact-only',
     };
   }
@@ -120,6 +131,9 @@ export function classifySearchPolicy(options = {}) {
         lowInformationImage: true,
         textFactEligible,
         recentEventRequested,
+        plannerFactRequested,
+        plannerCultureRequested,
+        plannerFreshness,
         semanticImageSearch,
         reason: 'concrete-text-fact',
       };
@@ -131,6 +145,9 @@ export function classifySearchPolicy(options = {}) {
       lowInformationImage: true,
       textFactEligible,
       recentEventRequested,
+      plannerFactRequested,
+      plannerCultureRequested,
+      plannerFreshness,
       semanticImageSearch,
       reason: 'low-information-image',
     };
@@ -141,11 +158,15 @@ export function classifySearchPolicy(options = {}) {
       factEligible: !lowInformationImage
         || explicitImageSearch
         || verificationRequested
+        || plannerFactRequested
         || (semanticImageSearch && concreteTextFact)
         || concreteTextFact,
       textFactEligible,
       recentEventRequested,
-      cultureEligible: semanticImageSearch,
+      cultureEligible: semanticImageSearch || plannerCultureRequested,
+      plannerFactRequested,
+      plannerCultureRequested,
+      plannerFreshness,
       confidence: 'medium',
       lowInformationImage,
       explicitImageSearch,
@@ -166,6 +187,9 @@ export function classifySearchPolicy(options = {}) {
     factEligible,
     textFactEligible,
     recentEventRequested,
+    plannerFactRequested,
+    plannerCultureRequested,
+    plannerFreshness,
     cultureEligible,
     confidence,
     lowInformationImage,

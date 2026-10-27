@@ -1387,6 +1387,23 @@ test('模型复述群聊历史的内部回复标签时只保留答案正文', as
   assert.doesNotMatch(result.answer, /机器人群聊回复记录|本轮回复对象|机器人回复：/);
 });
 
+test('引用主语消歧后不输出自证式引用说明', async () => {
+  const result = await generateConversationReply({
+    content: '谁问你了',
+    modelInput: '当前消息：谁问你了',
+    hasQuotedContent: true,
+    interactionContext: { quotedAuthorLabel: 'trusted-中老年朋友' },
+    chatClient: {
+      isConfigured: true,
+      complete: async () => '引用里那句是我自己说的，你拿我自己的话反手甩我脸上，这操作跟抢自己红包更嫌少一样。',
+    },
+    webSearchEnabled: false,
+  });
+
+  assert.doesNotMatch(result.answer, /引用里那句是我自己说的/u);
+  assert.match(result.answer, /抢自己红包/u);
+});
+
 test('纯攻击中的孤立 ma 会触发一次模型重写', async () => {
   const drafts = [
     '你🐎的 ma 还在坟头笑呢。',

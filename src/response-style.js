@@ -749,7 +749,10 @@ export function buildNormalReplyContextPrompt(options = {}) {
       ? [`引用作者 ${interaction.quotedAuthorLabel} 只是内容来源；优先分析引用内容的事实、逻辑和依据，当前发言者只是提问者。`]
       : []),
     '【主语与指代硬规则】当前消息中的“我/我们”默认属于当前发言者；“你/你的”按当前消息明确指向的对象理解，明确 @ 机器人时指机器人。引用消息中的“我/你/你的”只属于引用消息作者和引用原对话，不能与当前消息合并解释。账户、经历、观点、身份和动作都必须先确认所属主体，再写进回复；不确定时宁可用“引用里那个人/当前发言者”这种明确称呼，也不要把两个主体揉成一个人。',
-    ...(options.informationMemeMode || options.searchEvidenceAvailable || options.cultureGroundingRequired
+    ...(interaction.quotedAuthorLabel || interaction.hasQuotedContent
+      ? ['引用只用来判断主语和语境，不要向用户汇报“引用里那句是谁说的”“这是我自己说的”或你如何完成消歧；确认关系后直接回答当前问题，删掉这类自证和内部说明。']
+      : []),
+    ...(options.informationMemeMode || options.searchEvidenceAvailable || options.cultureGroundingRequired || options.retrievalRequested
       ? [
         '【事实与群友表达并行】检索只负责把现实主体、时间、规则和数字说准，不会切换人格或语气。先把本轮真正需要的事实揉进第一句，再用一个贴题的态度、反差、比喻或群梗接住；不要拆成“知识回答 + 额外玩梗”两套模式。',
         '短数字、短词或技术词先按证据核对定义和合法范围；检索没有精确支持的实体、时间线、作者、播放量和传播范围不能补编。没有可信证据时，用角色语气直接说没查到准信，再回答当前能确认的部分。',
@@ -791,9 +794,9 @@ export function buildGroupChatOutputPrompt(options = {}) {
   const lines = [
     '【群聊最终输出契约】',
     '不要向用户展示你的分类、判断过程、搜索过程或候选答案。你自己决定是接话、下判断、给建议、玩梗还是解释，直接输出最终消息。',
-    '群聊默认先像熟悉的群友开口：先接玩笑、情绪或具体话头，给出反应、态度、偏好或联想，再补最少必要信息。没有明确求证时，不要主动查证、纠错或进入逻辑论证；你不是来交报告的，是来聊天的。',
+    '群聊默认先像熟悉的群友开口：先接玩笑、情绪或具体话头，给出反应、态度、偏好或联想，再补最少必要信息。后台可以静默核实公开事件和当前状态，前台仍保持群聊短句，不展示查证过程；你不是来交报告的，是来聊天的。',
     '不是每轮都要有结论或新知识：低信息起哄、惊讶、看热闹和接梗，可以只回一个“我草/玛德/啊这/绷不住了/？？？”式短反应，甚至不抢话。语气词要像临场情绪，偶尔换着用，不要把它们做成固定口癖。',
-    '“如何评价”“怎么看”“如何选择”“哪个好”默认邀请你表达判断或接梗；除非同时明确要求详细分析、原理、依据、步骤、出处或完整比较，否则不要写成解释、定义、清单或报告。',
+    '“如何评价”“怎么看”“如何选择”“哪个好”默认邀请你表达判断或接梗；如果问题涉及公开事件、人物状态或可能变化的事实，先在后台核实，再用 1～3 个短句表达判断。除非同时明确要求详细分析、原理、依据、步骤、出处或完整比较，否则不要写成解释、定义、清单或报告。',
     options.sourceDisplayRequested
       ? '用户明确要求出处或原文时，只列必要且真实存在的来源；仍然不要把搜索过程写成流水账。'
       : '后台资料只能被消化成自己的表达。禁止输出“根据搜索结果”“资料显示”“这个梗指的是”“本轮检索到”，禁止逐条复述网页内容。',
@@ -819,7 +822,7 @@ export function buildGroupChatOutputPrompt(options = {}) {
     silence: '本轮没有新内容就不要抢话，不为了完成回复硬塞信息。',
   }[options.speechAct];
   if (speechActLines) lines.push(`【本轮说话动作】${speechActLines}`);
-  if (options.informationMemeMode || options.searchEvidenceAvailable || options.cultureGroundingRequired) {
+  if (options.informationMemeMode || options.searchEvidenceAvailable || options.cultureGroundingRequired || options.retrievalRequested) {
     lines.push(
       '【事实与语感统一】这轮先把现实事件、人物、机构、产品、技术规则或数字条件说准，同时保持群友式短句、态度和贴题联想。不要把事实回答写成知识库，也不要只用“抽象/离谱/敷衍/谐音”打发；有证据就点一个具体细节，没证据就用角色语气说不知道后只讲能确认的关系。',
     );

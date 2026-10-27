@@ -218,6 +218,35 @@ function stripUnauthorizedFamilyAttack(value) {
     .trim();
 }
 
+function stripUnauthorizedPersonaDemonstration(value, allowed = false) {
+  const normalized = String(value ?? '').trim();
+  if (allowed || !normalized) return normalized;
+  const kept = normalized
+    .split(/(?<=[。！？!?；;\n])/u)
+    .filter((sentence) => sentence.trim() || sentence.includes('\n'))
+    .filter((sentence) => !/^口(?:癖|头禅)(?:示范|示例)?\s*[：:]?/u.test(sentence.trim()));
+  return kept.join('').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Quoted history is evidence for resolving the current turn, not a script the
+// bot should read back to the user. Models sometimes prepend a self-attribution
+// such as “引用里那句是我自己说的” after resolving the speaker. Remove that
+// meta sentence at the boundary and keep the actual reaction or answer.
+function stripSelfReferentialAttribution(value, { hasQuotedContent = false } = {}) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized || !hasQuotedContent) return normalized;
+  const selfAttribution = /(?:引用里|引用中|那句|这句|这话|上一句|前面那句|刚才那句)[^。！？!?；;\n]{0,24}(?:是|就是|原来是)?\s*(?:我|咱|我们)(?:自己)?(?:说的|讲的|之前说的|刚才说的|说过)/u;
+  return normalized
+    .split(/(?<=[。！？!?；;\n])/u)
+    .map((sentence) => sentence
+      .replace(selfAttribution, '')
+      .replace(/^[\s，,、:：]+/u, ''))
+    .filter((sentence) => sentence.trim() || sentence.includes('\n'))
+    .join('')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function protectPersonaAttackDirection(answer, content, personaContext, attackStyle) {
   if (attackStyle) return answer;
   // A neutral question about the saved phrase is a demonstration request, not
@@ -1347,8 +1376,7 @@ export async function generateConversationReply(options) {
     shouldSearchLongtuKnowledge(content)
     || (longtuRetrievalEnabled && jevCulture.longtu && jevCulture.retrievalNeeded >= 0.55)
   );
-  const useCurrentInformation = !attackStyle && !useLongtuKnowledge
-    && shouldSearchCurrentInformation(content);
+  const useCurrentInformation = !attackStyle && shouldSearchCurrentInformation(content);
   const imageSearch = Array.isArray(imageSearchQueries);
   const semanticImageSearch = Boolean(
     imageSearch
@@ -1387,6 +1415,7 @@ export async function generateConversationReply(options) {
     timeSensitive: jevCulture.timeSensitive,
     unknownConcept: jevCulture.unknownConcept,
     semanticImageSearch,
+    plannerPlan: turnPlan,
   });
   const plannedFactQueries = (Array.isArray(turnPlan?.search?.factQueries)
     ? turnPlan.search.factQueries : [])
@@ -1398,6 +1427,16 @@ export async function generateConversationReply(options) {
     .map((query) => String(query ?? '').trim().slice(0, 180))
     .filter(Boolean)
     .slice(0, 3);
+  // A planner can correctly request evidence while returning no safe query
+  // (for example, a newly named Chinese team). Use the current user text as a
+  // bounded fallback query instead of letting query-shape regexes cancel the
+  // semantic retrieval decision.
+  if (turnPlan?.search?.factNeeded === true && plannedFactQueries.length === 0) {
+    plannedFactQueries.push(String(currentQuestion || content || '').replace(/\s+/gu, ' ').trim().slice(0, 240));
+  }
+  if (turnPlan?.search?.cultureNeeded === true && plannedCultureQueries.length === 0) {
+    plannedCultureQueries.push(String(currentQuestion || content || '').replace(/\s+/gu, ' ').trim().slice(0, 240));
+  }
   const plannedFactSearchRequested = turnPlan?.search?.factNeeded === true
     && plannedFactQueries.length > 0;
   const plannedCultureSearchRequested = turnPlan?.search?.cultureNeeded === true
@@ -1411,6 +1450,7 @@ export async function generateConversationReply(options) {
     || explicitImageSearch
     || retrievalPolicy.verificationRequested === true
     || Boolean(imageRealityAnchor || groundingQueryHint)
+    || plannedFactSearchRequested
     || semanticImageSearch;
   const plannedFactEligible = plannedFactSearchRequested && plannedFactImageGateOpen;
   // Culture grounding is evidence work, not a competing persona mode. An
@@ -1427,7 +1467,11 @@ export async function generateConversationReply(options) {
   const textFactQuery = textFactQueries[0] ?? '';
   const factSearchMode = imageSearch
     ? (textFactQuery && (relativeDateFacts.length > 0 || recentSearchHint) ? 'current' : 'general')
-    : (useCurrentInformation || retrievalPolicy.recentEventRequested || recentSearchHint
+    : (useCurrentInformation
+      || retrievalPolicy.recentEventRequested
+      || retrievalPolicy.plannerFreshness === 'current'
+      || Number(jevCulture.timeSensitive) >= 0.5
+      || recentSearchHint
       ? 'current' : 'general');
   const cultureSearchMode = useLongtuKnowledge ? 'longtu' : 'meme';
   const unknownConcept = jevCulture.unknownConcept === true;
@@ -1800,7 +1844,8 @@ export async function generateConversationReply(options) {
   const compactActiveReply = activeReply && activeReplyPriority !== 'must';
   const thinkingEnabled = !passiveImageComment && !compactActiveReply
     && (shouldUseThinking(content, { pureAttack })
-      || (cultureGroundingSignal && !pureAttack));
+      || (cultureGroundingSignal && !pureAttack)
+      || turnPlan?.reasoningNeeded === true);
   const detailedAnswerRequested = recordSummary
     || (!passiveImageComment && !compactActiveReply && shouldRequestDetailedAnswer(currentQuestion));
   const imageDescriptionRequested = hasImageContext
@@ -2040,6 +2085,7 @@ export async function generateConversationReply(options) {
     plannedAttack,
     speechAct: turnPlan?.speechAct || '',
     requireRoleVoice: groundedReplyRequiresVoice,
+    retrievalRequested: factSearchAttempted || cultureSearchAttempted,
   };
   const personaDemonstration = !attackStyle
     && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
@@ -2064,6 +2110,7 @@ export async function generateConversationReply(options) {
       ?? 'none',
     cultureEvidenceQuality,
     cultureGroundingRequired,
+    retrievalRequested: factSearchAttempted || cultureSearchAttempted,
     cultureEvidenceAvailable: Boolean(cultureCardUsed || cultureSearchResult.context || memeKnowledgeEntry),
     requireRoleVoice: groundedReplyRequiresVoice,
   };
@@ -2255,6 +2302,8 @@ export async function generateConversationReply(options) {
   if (personaDemonstration) {
     answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle);
   }
+  answer = stripUnauthorizedPersonaDemonstration(answer, personaDemonstration) || buildNormalReplyFallback();
+  answer = stripSelfReferentialAttribution(answer, { hasQuotedContent }) || buildNormalReplyFallback();
   let review = reviewNormalReply(answer, {
     ...dialogueReviewContext,
     thinkingEnabled,
@@ -2535,6 +2584,8 @@ export async function generateConversationReply(options) {
     answer = removeLeadingModelMention(answer) || buildNormalReplyFallback();
   }
   answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle);
+  answer = stripUnauthorizedPersonaDemonstration(answer, personaDemonstration) || buildNormalReplyFallback();
+  answer = stripSelfReferentialAttribution(answer, { hasQuotedContent }) || buildNormalReplyFallback();
   answer = redactSensitivePoliticalNames(answer);
   review = reviewNormalReply(answer, {
     ...dialogueReviewContext,
@@ -2650,7 +2701,7 @@ export async function generateConversationReply(options) {
   return {
     answer: redactSensitivePoliticalNames(
       suppressUnrequestedSourceNotes(
-        removeInternalParticipantIds(finalAnswer),
+        stripSelfReferentialAttribution(removeInternalParticipantIds(finalAnswer), { hasQuotedContent }),
         currentQuestion,
         searchResult,
       ),

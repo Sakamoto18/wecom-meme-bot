@@ -623,7 +623,7 @@ export async function createQqRuntime() {
     ),
     currentCacheTtlMs: parsePositiveInteger(
       process.env.WEB_SEARCH_CURRENT_CACHE_TTL_MS,
-    ) ?? 15 * 60 * 1000,
+    ) ?? 5 * 60 * 1000,
     generalCacheTtlMs: parsePositiveInteger(
       process.env.WEB_SEARCH_GENERAL_CACHE_TTL_MS,
     ) ?? 6 * 60 * 60 * 1000,
