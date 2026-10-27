@@ -34,7 +34,7 @@ bilibili_context_lock = asyncio.Lock()
 xhs_context_lock = asyncio.Lock()
 xhs_resolve_lock = asyncio.Lock()
 QUEUE_TIMEOUT = 22
-RESOLVE_TIMEOUT = 20
+RESOLVE_TIMEOUT = 35
 NAVIGATION_TIMEOUT_MS = 10000
 BILIBILI_NAV_URL = 'https://api.bilibili.com/x/web-interface/nav'
 XHS_NAVIGATION_TIMEOUT_MS = 15000
@@ -44,7 +44,7 @@ XHS_REMOVED_MARKERS = (
     '笔记不存在', '内容不存在', '当前笔记已删除', '该内容已被删除',
     '无法查看该笔记', '页面不见了', '访问的页面不见了',
 )
-DOUYIN_METADATA_WAIT_SECONDS = 11.5
+DOUYIN_METADATA_WAIT_SECONDS = 18
 DOUYIN_DETAIL_PATH = '/aweme/v1/web/aweme/detail'
 
 

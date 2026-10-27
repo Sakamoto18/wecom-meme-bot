@@ -65,6 +65,14 @@ class WorkMetadataTests(unittest.TestCase):
         self.assertEqual(result['media_type'], 'video')
         self.assertEqual(result['video_url'], 'https://cdn.example/cicf.mp4')
 
+    def test_short_link_video_type_61_uses_confirmed_video_asset(self):
+        result = normalize_work({'aweme_id': '7701173132833771121', 'aweme_type': 61,
+            'desc': '短链视频', 'video': {
+                'play_addr': {'url_list': ['https://cdn.example/type-61.mp4'], 'data_size': 42},
+            }}, '7701173132833771121')
+        self.assertEqual(result['media_type'], 'video')
+        self.assertEqual(result['video_url'], 'https://cdn.example/type-61.mp4')
+
     def test_url_only_supplies_id_never_type(self):
         self.assertEqual(work_id('https://www.douyin.com/note/123'), '123')
         self.assertEqual(work_id('https://www.douyin.com/?modal_id=123'), '123')
