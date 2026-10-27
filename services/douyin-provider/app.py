@@ -44,6 +44,8 @@ XHS_REMOVED_MARKERS = (
     '笔记不存在', '内容不存在', '当前笔记已删除', '该内容已被删除',
     '无法查看该笔记', '页面不见了', '访问的页面不见了',
 )
+DOUYIN_METADATA_WAIT_SECONDS = 11.5
+DOUYIN_DETAIL_PATH = '/aweme/v1/web/aweme/detail'
 
 
 def is_real_video_url(url):
@@ -662,8 +664,21 @@ async def read_page(page, url, payloads, state):
         logger.warning('Douyin navigation deadline reached; inspecting work metadata')
     target_id = target_id or work_id(page.url)
     state['stage'] = 'work_metadata'
-    deadline = time.monotonic() + 8
+    # Short-link pages now hydrate the authoritative aweme_detail response
+    # asynchronously.  Waiting on a fixed polling interval used to race the
+    # response-capture task, especially on www-hj.douyin.com.
+    deadline = time.monotonic() + globals().get('DOUYIN_METADATA_WAIT_SECONDS', 8)
+    capture_event = state.get('capture_event')
+    capture_tasks = state.get('capture_tasks') or set()
+
+    async def drain_capture_tasks():
+        for task in list(capture_tasks):
+            with suppress(Exception):
+                remaining = max(0.01, deadline - time.monotonic())
+                await asyncio.wait_for(task, min(0.25, remaining))
+
     while time.monotonic() < deadline:
+        await drain_capture_tasks()
         target_id = target_id or work_id(page.url)
         try:
             snapshot = await page.evaluate(PAGE_DATA_SCRIPT)
@@ -681,7 +696,15 @@ async def read_page(page, url, payloads, state):
                 if data:
                     logger.info('Douyin work verified id=%s kind=%s', target_id, data['media_type'])
                     return {'status': 'success', 'data': data}
-        await page.wait_for_timeout(250)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if capture_event is not None:
+            capture_event.clear()
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(capture_event.wait(), min(0.5, remaining))
+        else:
+            await page.wait_for_timeout(min(250, int(remaining * 1000)))
     marker = removed_marker(await page.evaluate('() => document.body?.innerText || ""'))
     if marker:
         raise ValueError(f'{REMOVED_REASON_PREFIX}: 抖音提示「{marker}」')
@@ -706,9 +729,16 @@ async def resolve(req: Req):
             page = await ctx.new_page()
             payloads = []
             capture_tasks = set()
+            capture_event = asyncio.Event()
 
             async def capture_detail(response):
-                if urlsplit(response.url).path.rstrip('/') != '/aweme/v1/web/aweme/detail':
+                parsed = urlsplit(response.url)
+                host = (parsed.hostname or '').lower().rstrip('.')
+                if not (host == 'douyin.com' or host.endswith('.douyin.com')):
+                    return
+                if parsed.path.rstrip('/') != globals().get(
+                    'DOUYIN_DETAIL_PATH', '/aweme/v1/web/aweme/detail',
+                ):
                     return
                 if response.status != 200:
                     return
@@ -716,12 +746,15 @@ async def resolve(req: Req):
                     payload = await response.json()
                     if len(payloads) < 20:
                         payloads.append(payload)
+                        capture_event.set()
 
             def capture(response):
                 task = asyncio.create_task(capture_detail(response))
                 capture_tasks.add(task)
                 task.add_done_callback(capture_tasks.discard)
 
+            state['capture_tasks'] = capture_tasks
+            state['capture_event'] = capture_event
             page.on('response', capture)
             try:
                 result = await read_page(page, req.url, payloads, state)

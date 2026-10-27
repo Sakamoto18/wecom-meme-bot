@@ -147,6 +147,32 @@ test('主动回复判定使用中立规则和近期群聊，AI 返回 must 时�
   assert.deepEqual(calls[0].options.thinking, { type: 'disabled' });
 });
 
+test('群级语感参考允许贴题接梗进入主动价值复核', async () => {
+  const calls = [];
+  const decider = new ActiveReplyDecider({
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        return options.usageSource === 'active-reply-decision' ? 'may' : 'speak';
+      },
+    },
+    enabled: true,
+    candidateProbability: 1,
+    random: () => 0,
+    now: () => 100_000,
+  });
+  const result = await decider.shouldReply({
+    payload: groupPayload({ text: '这剧情拐得比外卖骑手还快' }),
+    history: [{ role: 'user', content: '群友：刚才还在聊天气' }],
+    socialContext: '【本群真实语感参考】\n接梗机制：把当前内容改写成贴题反差比喻。',
+  });
+  assert.equal(result.reply, true);
+  assert.equal(result.reason, 'ai-social');
+  assert.match(calls[0].sharedContext, /接梗机制/);
+  assert.match(calls[1].sharedContext, /接梗机制/);
+});
+
 test('概率只筛选 AI 判为 may 的可选插话，不再跳过优先级判断', async () => {
   let calls = 0;
   const decider = new ActiveReplyDecider({
