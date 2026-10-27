@@ -572,6 +572,7 @@ const SENSITIVE_POLITICAL_NAME_REPLACEMENTS = [
   ['Deng Xiaoping', '相关历史人物'],
   ['Jiang Zemin', '相关历史人物'],
   ['Hu Jintao', '相关历史人物'],
+  ['Hua Guofeng', '相关历史人物'],
   ['毛泽东', '相关历史人物'],
   ['毛澤東', '相关历史人物'],
   ['邓小平', '相关历史人物'],
