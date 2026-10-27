@@ -121,10 +121,11 @@ def normalize_work(detail, target_id):
                 animations.append({**asset, 'cover': url, 'image_index': len(urls) - 1})
         return {**common, 'media_type': 'images', 'video_url': '', 'images': urls,
                 'animated_videos': animations, 'cover': urls[0]}
-    # Douyin returns aweme_type=55 for some ordinary shared video pages (including
-    # short-link shares). Accept it only when the payload also contains a real
-    # video asset; unfamiliar types must still never be guessed as video.
-    if kind in (0, 55) and not images:
+    # Douyin returns several ordinary shared-video types (0, 55 and 61 are
+    # currently observed on short-link pages). Accept them only when the
+    # payload also contains a real video asset; unfamiliar types must still
+    # never be guessed as video.
+    if kind in (0, 55, 61) and not images:
         asset = video_asset(detail.get('video'))
         if asset.get('video_url'):
             return {**common, **asset, 'media_type': 'video', 'images': []}
