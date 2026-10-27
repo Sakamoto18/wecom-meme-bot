@@ -296,6 +296,25 @@ export function buildModelInput(message, content, memberAliases = {}) {
   } else if (interaction.correctionCandidate) {
     lines.push('语用候选（不确定）：当前消息可能在纠正上一轮回复；结合最近对话判断，不要继续为旧答案争辩。');
   }
+  // A group message can contain several layers of “我/你/你的” (the
+  // sender, the bot, and a quoted member). Labels alone are too weak when a
+  // quote is emotional or long, so keep an explicit ownership boundary in
+  // the live model input.
+  lines.push(
+    '【身份归属硬边界】当前消息中的“我/我们”默认属于当前发言人；'
+      + (interaction.explicitBotMention || interaction.addressedBotByName
+        ? '本条消息已明确对机器人说话，当前消息中的“你/你的”默认指机器人。'
+        : interaction.targetLabels.length > 0
+          ? `本条消息另有提及成员：${interaction.targetLabels.join('、')}；“你/他/她”等代词必须结合当前句法判断，不能把这些成员身份自动借给当前发言人。`
+          : '当前消息没有确认的第三方对象，“你/你的”按当前对话对象理解，不要凭历史把它改指其他群成员。'),
+  );
+  lines.push(
+    '引用消息是单独的第三方原话：引用里的“我/你/你的”只属于引用消息作者及其原对话关系，'
+      + '不能改写成当前发言人的自述，也不能把引用作者的账户、经历、观点或身份转给当前发言人。',
+  );
+  if (interaction.quotedBot) {
+    lines.push('引用消息作者是机器人；引用中的“我/我的”属于机器人，不属于当前发言人。');
+  }
   if (quotedContent) lines.push('引用消息内容：' + quotedContent);
   lines.push('当前消息：' + content);
   return lines.join('\n');

@@ -95,7 +95,7 @@ function isBareImageInspectionRequest(value = '') {
   return /^(?:请|麻烦)?(?:看看|看下|看一下)(?:这(?:张)?|该(?:张)?|这张)?(?:图|图片|截图|照片|封面|画面)[。！？!?，,]*$/u.test(text);
 }
 
-function buildStoredUserTurn(content, imageAnalysis, message) {
+function buildStoredUserTurn(content, imageAnalysis, message, memberAliases = {}) {
   const quote = extractMessageText(message?.quote).replace(/\s+/gu, ' ').trim().slice(0, 300);
   const imageSummary = (imageAnalysis?.items?.length ? imageAnalysis.items : [imageAnalysis])
     .filter(Boolean)
@@ -106,11 +106,35 @@ function buildStoredUserTurn(content, imageAnalysis, message) {
     .filter(Boolean)
     .join('；')
     .slice(0, 420);
-  return [
-    String(content ?? '').trim(),
-    quote ? `【引用】${quote}` : '',
-    imageSummary ? `【当时图片摘要】${imageSummary}` : '',
-  ].filter(Boolean).join('\n');
+  const plainContent = String(content ?? '').trim();
+  if (message?.chattype !== 'group') {
+    return [
+      plainContent,
+      quote ? `【引用】${quote}` : '',
+      imageSummary ? `【当时图片摘要】${imageSummary}` : '',
+    ].filter(Boolean).join('\n');
+  }
+
+  // Group user turns used to be stored as bare text. That made a later
+  // speaker's “我/你/你的” look like a continuation of the previous member's
+  // turn in the shared group history. Store stable speaker markers so both
+  // history scoping and the model can recover ownership.
+  const interaction = getGroupInteractionContext(message, memberAliases);
+  const lines = [
+    '【群聊用户发言记录】',
+    `当前发言人：${interaction.speakerLabel}`,
+    `当前发言人QQ号（仅供历史消歧）：${String(message?.from?.userid ?? '').trim()}`,
+  ];
+  if (interaction.explicitBotMention) lines.push('本条消息明确 @ 机器人；当前消息中的“你/你的”默认指机器人。');
+  if (interaction.targetLabels.length > 0) {
+    lines.push(`本条消息提及成员：${interaction.targetLabels.join('、')}（仅供主语消歧，不自动视为攻击目标）`);
+  }
+  if (interaction.quotedAuthorLabel) lines.push(`引用消息作者：${interaction.quotedAuthorLabel}`);
+  if (interaction.quotedBot) lines.push('引用消息作者：机器人');
+  if (quote) lines.push(`引用消息内容：${quote}`);
+  lines.push(`当前消息：${plainContent}`);
+  if (imageSummary) lines.push(`【当时图片摘要】${imageSummary}`);
+  return lines.filter(Boolean).join('\n');
 }
 
 function isHistoricalImageReference(value = '') {
@@ -2083,7 +2107,7 @@ function historyEntrySpeakerLabel(entry) {
 
 function historyEntrySpeakerUserId(entry) {
   return String(
-    String(entry?.content ?? '').match(/(?:^|\n)本轮回复对象QQ号（仅供历史消歧）：([^\n]+)/u)?.[1] || '',
+    String(entry?.content ?? '').match(/(?:^|\n)(?:本轮回复对象|当前发言人)QQ号（仅供历史消歧）：([^\n]+)/u)?.[1] || '',
   ).trim();
 }
 
@@ -4259,7 +4283,7 @@ export class QqBotService {
       }
       this.conversationStore.appendExchange(
         conversationId,
-        buildStoredUserTurn(content, imageAnalysis, message),
+        buildStoredUserTurn(content, imageAnalysis, message, aliases),
         buildStoredAssistantReply(message, interactionContext, answer),
       );
       try {

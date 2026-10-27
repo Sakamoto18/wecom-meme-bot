@@ -748,6 +748,7 @@ export function buildNormalReplyContextPrompt(options = {}) {
     ...(interaction.quotedAuthorLabel
       ? [`引用作者 ${interaction.quotedAuthorLabel} 只是内容来源；优先分析引用内容的事实、逻辑和依据，当前发言者只是提问者。`]
       : []),
+    '【主语与指代硬规则】当前消息中的“我/我们”默认属于当前发言者；“你/你的”按当前消息明确指向的对象理解，明确 @ 机器人时指机器人。引用消息中的“我/你/你的”只属于引用消息作者和引用原对话，不能与当前消息合并解释。账户、经历、观点、身份和动作都必须先确认所属主体，再写进回复；不确定时宁可用“引用里那个人/当前发言者”这种明确称呼，也不要把两个主体揉成一个人。',
     ...(options.informationMemeMode || options.searchEvidenceAvailable || options.cultureGroundingRequired
       ? [
         '【事实与群友表达并行】检索只负责把现实主体、时间、规则和数字说准，不会切换人格或语气。先把本轮真正需要的事实揉进第一句，再用一个贴题的态度、反差、比喻或群梗接住；不要拆成“知识回答 + 额外玩梗”两套模式。',
