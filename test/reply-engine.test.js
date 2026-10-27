@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   generateConversationReply,
   removeInternalReplyMetadata,
+  redactSensitivePoliticalNames,
   repairUnsupportedNewsScope,
 } from '../src/reply-engine.js';
 
@@ -14,6 +15,42 @@ test('清理固定认错开场但保留事实修正', () => {
   assert.equal(
     removeInternalReplyMetadata('你提醒得对：这个链接已经失效了。'),
     '这个链接已经失效了。',
+  );
+});
+
+test('政治新闻避讳真实姓名并保留可读替代表达', async () => {
+  assert.equal(
+    redactSensitivePoliticalNames('相关历史人物与相关国家领导人'),
+    '相关历史人物与相关国家领导人',
+  );
+  assert.equal(
+    redactSensitivePoliticalNames('毛泽东和习近平出现在新闻里。'),
+    '相关历史人物和相关国家领导人出现在新闻里。',
+  );
+
+  let prompt = '';
+  let priorityPrompt = '';
+  const result = await generateConversationReply({
+    content: '如何评价这条争议新闻',
+    currentQuestion: '如何评价这条争议新闻',
+    modelInput: '当前消息：如何评价这条争议新闻',
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.cachePrefixSystemPrompt;
+        priorityPrompt = options.prioritySystemPrompt;
+        return '毛泽东头像被拿来玩梗，习近平相关的新闻也被反复转发。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.match(prompt, /政治人物姓名避讳硬规则/);
+  assert.match(priorityPrompt, /政治人物姓名避讳硬规则/);
+  assert.doesNotMatch(result.answer, /毛泽东|习近平/);
+  assert.match(result.answer, /相关历史人物|相关国家领导人/);
+  assert.equal(
+    redactSensitivePoliticalNames('毛\u200b泽\u200b东和毛 泽 东又被写进标题。'),
+    '相关历史人物和相关历史人物又被写进标题。',
   );
 });
 

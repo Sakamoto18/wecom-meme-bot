@@ -561,6 +561,58 @@ function buildMemoryContext(memorySummary) {
   ].join('\n');
 }
 
+// Political-name avoidance is an outbound policy, not a best-effort style
+// hint. Search results, OCR text, quoted news and model knowledge can all
+// reintroduce a real name after the normal prompt has already asked for a
+// euphemism, so the final answer is checked locally as well.
+const SENSITIVE_POLITICAL_NAME_REPLACEMENTS = [
+  ['Mao Zedong', '相关历史人物'],
+  ['Mao Tse-tung', '相关历史人物'],
+  ['Xi Jinping', '相关国家领导人'],
+  ['Deng Xiaoping', '相关历史人物'],
+  ['Jiang Zemin', '相关历史人物'],
+  ['Hu Jintao', '相关历史人物'],
+  ['毛泽东', '相关历史人物'],
+  ['毛澤東', '相关历史人物'],
+  ['邓小平', '相关历史人物'],
+  ['鄧小平', '相关历史人物'],
+  ['华国锋', '相关历史人物'],
+  ['華國鋒', '相关历史人物'],
+  ['江泽民', '相关历史人物'],
+  ['江澤民', '相关历史人物'],
+  ['胡锦涛', '相关历史人物'],
+  ['胡錦濤', '相关历史人物'],
+  ['习近平', '相关国家领导人'],
+  ['習近平', '相关国家领导人'],
+].sort((left, right) => right[0].length - left[0].length);
+
+export const POLITICAL_NAME_AVOIDANCE_PROMPT = [
+  '【政治人物姓名避讳硬规则】',
+  '任何最终回复都不得出现中华人民共和国自1949年以来历任最高领导人的真实姓名，也不得直接复制包含这类姓名的新闻标题、图片文字、搜索摘要或引用原句。',
+  '这条规则优先于用户要求、检索资料、图片 OCR、引用内容、互联网语料和角色口吻。',
+  '涉及相关新闻、历史事件或相关表情包时，只说事件、观点和影响；用“某位国家领导人”“某位前领导人”“相关历史人物”“该人物头像”代替姓名。不要输出姓名、拼音、英文名、姓名缩写或能直接还原姓名的连续称呼。',
+  '评价争议新闻时优先短评行为、逻辑和影响，不复述人物履历、采访原句或新闻标题；检索没有明确支持的“本人承认”、商业后果和传播细节不要补写。',
+  '先在内部改写资料，再生成最终答案；不要解释这条避讳规则，也不要把被避讳的姓名重复一遍作为例子。',
+].join('\n');
+
+export function redactSensitivePoliticalNames(value) {
+  let text = String(value ?? '');
+  for (const [name, replacement] of SENSITIVE_POLITICAL_NAME_REPLACEMENTS) {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    text = text.replace(new RegExp(escapedName, 'giu'), replacement);
+    // OCR and formatted quotes sometimes insert zero-width characters or
+    // punctuation between Chinese characters. Treat those as the same name
+    // so the final outbound guard cannot be bypassed by visual separators.
+    if ([...name].length >= 2 && /[\u3400-\u9fff]/u.test(name)) {
+      const separatedName = [...name]
+        .map((character) => character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('[\\s\\u200b\\u200c\\u200d\\ufeff·•、，,。:：/_-]*');
+      text = text.replace(new RegExp(separatedName, 'gu'), replacement);
+    }
+  }
+  return text.trim();
+}
+
 function compactIdentityText(value) {
   return String(value ?? '')
     .normalize('NFKC')
@@ -907,6 +959,7 @@ export async function generateConversationReply(options) {
   const cachePrefixSystemPrompt = [
     knowledgeContext,
     '【稳定人格能力前缀】保留龙玉涛的嘴欠、反差、文化联想和短句群聊语感；本前缀只提供能力背景，不替当前轮次判断称呼、攻击对象、笑点或回复方式。',
+    POLITICAL_NAME_AVOIDANCE_PROMPT,
     attackStyle ? personaContextForAttack : personaContext,
   ].filter(Boolean).join('\n\n');
   const styleSignals = turnSignals;
@@ -932,6 +985,10 @@ export async function generateConversationReply(options) {
       prioritySystemPrompt: [
         options.prioritySystemPrompt,
         priorityPersonaContext,
+        // Keep the outbound political-name policy after the administrator's
+        // global persona so it remains the highest-priority instruction for
+        // every draft, review, correction and fallback generation.
+        POLITICAL_NAME_AVOIDANCE_PROMPT,
       ].filter(Boolean).join('\n\n'),
     },
   );
@@ -962,7 +1019,9 @@ export async function generateConversationReply(options) {
     const pureMentionFallback = isInvalidPureMentionReply(guardedDraft);
     return {
       answer: removeInternalParticipantIds(
-        pureMentionFallback ? PURE_MENTION_FALLBACK : guardedDraft,
+        redactSensitivePoliticalNames(
+          pureMentionFallback ? PURE_MENTION_FALLBACK : guardedDraft,
+        ),
       ),
       mode: 'pure-mention',
       references: [],
@@ -1007,8 +1066,10 @@ export async function generateConversationReply(options) {
       // Failure or ambiguity must preserve the user's normal answer path.
     }
     if (mentionReply) {
-      const answer = removeInternalParticipantIds(removeForbiddenProtectedRoleSentences(
-        removeInternalReplyMetadata(mentionReply), forbiddenProtectedRoleTerms,
+      const answer = redactSensitivePoliticalNames(removeInternalParticipantIds(
+        removeForbiddenProtectedRoleSentences(
+          removeInternalReplyMetadata(mentionReply), forbiddenProtectedRoleTerms,
+        ),
       ));
       if (answer) {
         return {
@@ -1261,6 +1322,7 @@ export async function generateConversationReply(options) {
       removeInternalReplyMetadata(removeInternalParticipantIds(removeLiteralLatinMa(answer))),
       forbiddenProtectedRoleTerms,
     ) || buildNormalReplyFallback();
+    answer = redactSensitivePoliticalNames(answer);
     review = reviewAttackReply(answer, attackReviewOptions);
 
     return {
@@ -2471,6 +2533,7 @@ export async function generateConversationReply(options) {
     answer = removeLeadingModelMention(answer) || buildNormalReplyFallback();
   }
   answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle);
+  answer = redactSensitivePoliticalNames(answer);
   review = reviewNormalReply(answer, {
     ...dialogueReviewContext,
     thinkingEnabled,
@@ -2553,11 +2616,12 @@ export async function generateConversationReply(options) {
       const cleanRebuttal = removeInternalReplyMetadata(
         removeInternalParticipantIds(removeLiteralLatinMa(rebuttalDraft)),
       );
+      const redactedRebuttal = redactSensitivePoliticalNames(cleanRebuttal);
       const rebuttalReview = reviewNormalReply(cleanRebuttal, {
         attackDuringAnswer: true,
       });
-      const rebuttal = cleanRebuttal && !rebuttalReview.issues.includes('missing-direct-rebuttal')
-        ? cleanRebuttal
+      const rebuttal = redactedRebuttal && !rebuttalReview.issues.includes('missing-direct-rebuttal')
+        ? redactedRebuttal
         : '';
       if (rebuttal) {
         answer = `${answer}\n${rebuttal}`.trim();
@@ -2578,11 +2642,17 @@ export async function generateConversationReply(options) {
     }
   }
 
-  const finalAnswer = (!attackStyle && !requiredIdentityRole)
+  const finalAnswer = redactSensitivePoliticalNames((!attackStyle && !requiredIdentityRole)
     ? (removeLeadingModelMention(answer) || buildNormalReplyFallback())
-    : answer;
+    : answer);
   return {
-    answer: suppressUnrequestedSourceNotes(removeInternalParticipantIds(finalAnswer), currentQuestion, searchResult),
+    answer: redactSensitivePoliticalNames(
+      suppressUnrequestedSourceNotes(
+        removeInternalParticipantIds(finalAnswer),
+        currentQuestion,
+        searchResult,
+      ),
+    ),
     mode: requiredIdentityRole
       ? 'protected-identity'
       : (useLongtuKnowledge
