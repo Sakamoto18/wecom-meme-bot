@@ -29,6 +29,7 @@
   "dependencies": {
     "@wecom/aibot-node-sdk": "^1.0.7",
     "dotenv": "^17.2.3",
-    "jimp": "^1.6.1"
+    "jimp": "^1.6.1",
+    "opencc-js": "^1.4.2"
   }
 }
