@@ -2787,10 +2787,14 @@ export class QqBotService {
     return true;
   }
 
-  logActiveDecision(payload, decision, { engaged = false, discussion = false } = {}) {
+  logActiveDecision(payload, decision, {
+    engaged = false, discussion = false, socialCandidate = false,
+  } = {}) {
     this.logger.log(`QQ 接话判定：${JSON.stringify({
       group: payload.groupId, user: payload.userId, message: payload.messageId,
       reply: decision.reply, reason: decision.reason, engaged, discussion,
+      social_candidate: socialCandidate,
+      style_hit: socialCandidate,
       peerBot: this.isPeerBotMessage(payload),
       humanBusy: this.activeReplyDecider?.isBusy?.(payload.groupId, this.now(), { humanOnly: true }) ?? false,
     })}`);
@@ -4522,6 +4526,28 @@ export class QqBotService {
     }
   }
 
+  activeReplyStyleContext(payload, query = '') {
+    if (payload?.messageType !== 'group' || !payload.groupId
+      || !this.groupMemory?.isStyleEnabled?.(payload.groupId)) {
+      return '';
+    }
+    try {
+      // The classifier only needs a compact description of the group's reply
+      // mechanics.  Keeping this ahead of the decision prevents the style
+      // card from arriving too late in the final-generation prompt.
+      return String(this.groupMemory.buildStylePrompt({
+        groupId: payload.groupId,
+        query: String(query || '').slice(0, 500),
+        attack: false,
+      }) || '').slice(0, 2_400);
+    } catch (error) {
+      this.logger.warn(
+        `QQ 主动接梗语感读取失败：group=${payload.groupId || '-'} error=${error.message}`,
+      );
+      return '';
+    }
+  }
+
   recordParticipants(payload) {
     if (payload.messageType !== 'group') return;
     this.conversationStore.recordGroupMember?.(
@@ -4679,7 +4705,9 @@ export class QqBotService {
     const topicContext = this.topicContextFor(payload, {
       allowDirectFallback: directHumanEngagement || peerBotMessage,
     });
-    if (topicContext?.status === 'ambiguous' && !directHumanEngagement && !peerBotMessage) {
+    const socialContext = this.activeReplyStyleContext(payload, conversationContent);
+    if (topicContext?.status === 'ambiguous' && !directHumanEngagement && !peerBotMessage
+      && !socialContext) {
       this.logger.log(
         `QQ 群话题未定，跳过主动插话：group=${payload.groupId}`
         + ` message=${payload.messageId || '-'}`
@@ -4721,7 +4749,8 @@ export class QqBotService {
       this.logActiveDecision(payload, { reply: false, reason: 'ineligible' }, { engaged: Boolean(engagement) });
       return this.observeMessage(payload, message);
     }
-    const discussion = Boolean(passiveImage?.text || this.activeReplyDecider.isExplicitQuestion?.(payload)
+    const discussion = Boolean(passiveImage?.text || socialContext
+      || this.activeReplyDecider.isExplicitQuestion?.(payload)
       || this.activeReplyDecider.isBusy?.(payload.groupId, this.now(), { humanOnly: !peerBotMessage }));
     if (!peerBotMessage
       && !directHumanEngagement
@@ -4739,6 +4768,7 @@ export class QqBotService {
       activityRecorded: true,
       currentContent: passiveImage?.text ? (payload.text || '（群友发来信息图片，未明确提问）') : conversationContent,
       imageAnalysis: passiveImage?.analysis,
+      socialContext,
       contextImageCandidates: historicalContextImageCandidates,
       history: topicContext?.history?.length
         ? topicContext.history
@@ -4749,7 +4779,9 @@ export class QqBotService {
         ),
       topicContext,
     });
-    this.logActiveDecision(payload, decision, { engaged: Boolean(engagement), discussion });
+    this.logActiveDecision(payload, decision, {
+      engaged: Boolean(engagement), discussion, socialCandidate: Boolean(socialContext),
+    });
     if (!decision.reply) {
       return this.observeMessage(payload, message);
     }
