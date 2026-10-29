@@ -14,7 +14,8 @@ Linux 继续使用 `docker-compose.server.yml` / `docker-compose.qq.yml` 和原 
 - Node 22.23.4、Python 3.12.10、Edge、FFmpeg 9.0.2 和 Tesseract 5.5.3.20260724 已安装。已在 Windows 实测中文/英文 OCR、H.264 编码和 ffprobe；OCR 语言包含 `chi_sim`、`eng`、`osd`。
 - AstrBot v4.29.3（`f61a7f42696da6df25dc7a249ec9b8d54ed9da18`）原生安装在 `C:\AstrBot`，使用独立 `.venv`，依赖检查通过；匹配的 WebUI 已安装。Bridge v1.9.4 已加载。原部署使用 `latest`，未能可靠恢复其确切版本，因此本次安装了明确版本并验证启动，不能称为版本完全相同的恢复。
 - Node 和 Provider 的 `/healthz` 通过。已核对 134,754 条消息、19 个会话、10 份摘要、360 名群成员、53,703 条群事件、832 个群话题、3 份群风格档案、7 份人格档案、284 张图片。`.env.qq` SHA256 与原始归档完全一致，缓存 TTL、群配置及模型配置保持原值。
-- Windows QQ 9.9.33-52230 / NapCat v4.18.41 已启动。重启前管理接口无响应，保存配置并重启后恢复；快速登录明确返回“登录态已失效，请重新登录”。目前等待账号 `2053160463` 扫码，不能把进程运行视为 QQ 在线。反向 WebSocket 已配置到本机 AstrBot，实际连接和群内收发仍待登录验收。
+- Windows QQ 9.9.33-52230 / NapCat v4.18.41 已在线。重启前管理接口无响应，保存配置并重启后恢复；旧快速登录态失效，用户已重新扫码。19:27 核对 `isLogin=true`、`isOffline=false`、`coreReady=true`、`loginPhase=ready`，NapCat 与 AstrBot 的本机反向 WebSocket 已建立，AstrBot 确认 OneBot 适配器连接。
+- 用户登录后的自然消息已完成私聊和群聊收发；Bridge 记录 3 次表情图成功发送、1 次分享卡片发送及 1 次视频成功回执（19:28:37），未出现 Bridge 请求失败或视频发送失败。以上依据实际消息和 QQ 回执，未额外主动发送测试消息；单次成功不代表长时间稳定性、全部平台和定时任务均已验收。
 - B 站的可移植 storage state 已从原数据复制到 Windows 独立目录，`/bilibili-login-status` 实测 `logged_in=true`。抖音的动态图文和视频样例在原生 Provider 上均解析成功；小红书当前没有有效登录态，尚未完成验收。
 - 应用媒体链路已实测 `XTnePPdpL1g` 图文 → `8Q9wtBYz76A` 视频 → 同一图文缓存：两张动态图片转换为 4,636,050 / 3,183,591 字节 GIF，视频下载 1,119,256 字节，作品 ID 和媒体形态保持正确。验证没有向 QQ 发消息。
 - 四个组件已配置为 Administrator 登录时启动的 Windows 计划任务，当前均运行。远程桌面断开后会话可以保留；注销会终止交互组件，系统重启后仍需登录 Windows。尚未进行整机重启验收。
@@ -110,6 +111,8 @@ node scripts/windows/run.mjs astrbot
 
 启动器为 Bridge 注入本机后端地址和同一个 API token，并把主动视频内部接口绑定到本机；不打印密钥。AstrBot 的 OneBot 反向 WebSocket 监听 `127.0.0.1:6199`，NapCat 的 WebSocket 客户端使用 `ws://127.0.0.1:6199/ws`，两端 token 一致。具体以恢复后的平台配置为准，保持原 platform ID，避免定时任务会话标识失配。
 
+NapCat WebUI 的 Token 是管理页面密钥，与 QQ 登录分开。服务器桌面的 `NapCat Login` 快捷方式从本地配置读取 Token，打开 `/webui/web_login?token=...`；前端路由基路径为 `/webui/`，不能直接访问 `/web_login`。管理页登录后再进行 QQ 扫码。快捷方式脚本不把 Token 写死，也无需把密钥提交到仓库。
+
 ## 5. 计划任务与运行验收
 
 需要实际确认：Windows QQ 登录设备、OneBot 双向通信、Bridge 接管无双回复、原人格与群记忆、图库与中文 OCR、搜索、抖音视频/动态图文交替解析、B 站/小红书、定时任务时间和目标。验证时仅做本机健康检查；群消息测试及推送按用户指定范围执行。
@@ -199,4 +202,4 @@ powershell -NoProfile -ep Bypass -File .\enable.ps1 -Diagnostics
 
 已核验的服务器 ED25519 指纹为 `SHA256:Rj/1/KUWJWj0kn96eX9MVDZ82YC7NMGwb+6gVjrtakI`，连接端使用独立 known-hosts 文件 `~/.ssh/known_hosts_longtu_windows`，保持严格主机检查。远程默认 shell 是 cmd，自动部署显式调用 PowerShell；长脚本先传文件，避免 cmd 长度限制。
 
-后续源码、依赖、环境配置同步与健康检查走 SSH；COS 继续用于备份。迁移剩余验收包括 QQ 扫码及 WebSocket/实际消息链路、小红书登录、实际定时推送与整机重启后的恢复。不要据本机健康检查宣称这些项目已全部完成。
+后续源码、依赖、环境配置同步与健康检查走 SSH；COS 继续用于备份。QQ 登录、WebSocket 及实际私聊/群聊图片和视频收发已验证。迁移剩余验收包括小红书登录、实际定时推送、长时间在线及整机重启后的恢复。不要据本机健康检查宣称这些项目已全部完成。
