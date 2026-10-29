@@ -61,6 +61,7 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 $runStarted = Get-Date
 $reportPath = Join-Path $backup 'ssh-diagnostic.txt'
 $serverLog = Join-Path $sshRoot 'logs\sshd.log'
+$hostKeyAclBefore = @{}
 
 function Write-StartupReport([string]$Outcome) {
     $sections = [Collections.Generic.List[string]]::new()
@@ -170,6 +171,22 @@ try {
     Set-AdminOnlyAcl $config
     & $keygen -A
     if ($LASTEXITCODE -ne 0) { throw 'Could not generate SSH host keys.' }
+    # ssh-keygen run as Administrator can leave private host keys owned by that
+    # individual user. The SYSTEM service needs SYSTEM/Administrators ownership
+    # and access only; an interactive Administrator test does not verify this.
+    $hostKeys = @(Get-ChildItem -LiteralPath $sshRoot -Filter 'ssh_host_*_key' -File)
+    if ($hostKeys.Count -eq 0) { throw 'No SSH private host keys were generated.' }
+    foreach ($hostKey in $hostKeys) {
+        if ($hostKey.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Refusing to change permissions through a host-key reparse point: $($hostKey.Name)"
+        }
+        $hostKeyAclBefore[$hostKey.FullName] = (Get-Acl -LiteralPath $hostKey.FullName).Sddl
+    }
+    # Back up security descriptors only, never private key contents.
+    $hostAclBackup = Join-Path $backup 'host-key-permissions.json'
+    [IO.File]::WriteAllText($hostAclBackup, ($hostKeyAclBefore | ConvertTo-Json), $utf8)
+    Set-AdminOnlyAcl $hostAclBackup
+    foreach ($hostKey in $hostKeys) { Set-AdminOnlyAcl $hostKey.FullName }
     # Suppress DEBUG3 stderr during validation; PowerShell 5.1 can treat native stderr as an error.
     & $sshd -t -f $config -o 'LogLevel=ERROR'
     if ($LASTEXITCODE -ne 0) { throw 'OpenSSH configuration validation failed.' }
@@ -217,6 +234,11 @@ try {
         } elseif (Test-Path -LiteralPath $file) {
             Remove-Item -LiteralPath $file
         }
+    }
+    foreach ($path in $hostKeyAclBefore.Keys) {
+        $acl = [Security.AccessControl.FileSecurity]::new()
+        $acl.SetSecurityDescriptorSddlForm($hostKeyAclBefore[$path])
+        Set-Acl -LiteralPath $path -AclObject $acl
     }
     throw $failure
 }

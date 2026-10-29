@@ -127,6 +127,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\enable.ps1
 
 新版 `enable-ssh.ps1 -Diagnostics` 临时启用 `LOCAL0` / `DEBUG3` 文件日志。失败时先收集退出码、程序版本、目录与密钥文件的所有者/SDDL、22 端口及本次启动日志和事件，再执行原有回滚；报告只记录权限元数据，不读取私钥内容。每次尝试的报告在对应备份目录内，包目录另有 `ssh-diagnostic.txt` 便于 VNC 打开。如果成功，则切换为 `LOCAL0` / `INFO` 并重启复核；两次启动均要求服务持续运行五秒且自身进程持有 TCP 22 监听，避免瞬间运行被误报为成功。该分支不改变目录 ACL，不重装 OpenSSH，也不将前台调试当作常驻方案。
 
+18:21 的完整报告补充了明确的主机密钥权限问题：Windows Server 2022 为 20348.5499，OpenSSH 文件版本 9.5.5.1 / 产品版本 9.5p2，服务退出码为 1067，没有新文件日志或应用程序崩溃事件。两个目录的所有者均为 Administrators，配置和管理员授权文件仅 SYSTEM/Administrators 完全控制；但三个私有主机密钥的所有者都是具体账号 `10_0_0_6\Administrator`，且还存在该账号的显式访问 ACE（SDDL 中的 LA）。[官方主机密钥要求](https://github.com/PowerShell/Win32-OpenSSH/wiki/Security-protection-of-various-files-in-Win32-OpenSSH#host-private-key-files) 是 SYSTEM 或 Administrators 组拥有，且不允许其他用户访问。这解释了为何同一密钥可能通过 Administrator 前台检查，却不符合 SYSTEM 服务的要求；是否是唯一启动故障，仍需实际修复后验证。
+
+后续初始化会在 `ssh-keygen -A` 后保存全部标准私有主机密钥的原始安全描述符到独立备份里的 `host-key-permissions.json`，再将所有者和访问规则统一为 Administrators/SYSTEM。只修改 ACL，保留现有密钥内容、主机指纹和 `.pub` 文件；不读取或复制私钥内容。检测到重解析点会停止。后续初始化失败时恢复所保存的权限。已上传的旧诊断包没有这项修复，可先按截图中确认的账号手动修正，再执行原诊断包：
+
+```powershell
+cd C:\ProgramData\ssh
+icacls ssh_host_*_key /setowner "*S-1-5-32-544"
+icacls ssh_host_*_key /remove:g "10_0_0_6\Administrator"
+cd C:\migration-backup\ssh-diag
+powershell -NoProfile -ep Bypass -File .\enable.ps1 -Diagnostics
+```
+
+这组手动命令只适用于本次报告确认的三份标准主机密钥及已有的 SYSTEM/Administrators 完全控制权限。两条 `icacls` 均须显示三文件成功、零失败再继续；原所有者和完整 SDDL 已保存在先前独立诊断备份里。禁止将它直接套用于用户登录私钥或未经核实的其他目录。
+
 生成包含新脚本和原部署公钥的独立诊断包（生成器拒绝非 `.pub` 文件及非 Ed25519 公钥内容）：
 
 ```sh
