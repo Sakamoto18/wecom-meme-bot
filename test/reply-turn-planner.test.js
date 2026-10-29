@@ -57,6 +57,17 @@ test('战术卡保留群聊说话动作并在非法值时回落', () => {
   assert.equal(normalizeTurnPlan({ speech_act: 'essay' }).speechAct, 'reaction');
 });
 
+test('规划保留当前任务与换题关系，旧主题不能接管新问题', () => {
+  const plan = normalizeTurnPlan({ current_task: '给晚饭建议', topic_relation: 'switch', speech_act: 'follow_up' });
+  assert.equal(plan.currentTask, '给晚饭建议');
+  assert.equal(plan.topicRelation, 'switch');
+  const prompt = buildTurnPlanPrompt(plan);
+  assert.match(prompt, /本轮要完成的事：给晚饭建议/);
+  assert.match(prompt, /不把旧主题、旧答案或旧包袱带回来/);
+  assert.match(buildTurnPlanPrompt(normalizeTurnPlan({ topic_relation: 'correction' })), /不能继续维护旧答案/);
+  assert.equal(normalizeTurnPlan({ topic_relation: 'made_up' }).topicRelation, 'continue');
+});
+
 test('非法枚举回落到安全默认值', () => {
   const plan = normalizeTurnPlan({
     mode: 'unsupported-mode',

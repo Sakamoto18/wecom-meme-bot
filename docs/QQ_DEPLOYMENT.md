@@ -102,6 +102,8 @@ QQ_PERSONA_MAX_CONTEXT_CHARACTERS=1200
 
 普通用户或管理员发送“记住我的口癖：……”后，Bot 只生成待确认草稿；发送“确认保存”或 `/persona save` 才会写入。普通用户默认保存自己的专属口癖，管理员使用 `/persona global 规则` 才能提交全局人格。`/persona preview` 查看待确认内容，`/persona list` 查看当前范围，`/persona off` 停用当前范围，`/persona undo` 恢复上一历史版本。普通群聊、引用、图片 OCR 和搜索摘要不会自动写入人格。
 
+`/persona global 内容` 保持追加语义；完整覆盖使用 `/persona replace global 完整角色卡`，然后 `/persona save`，群或个人范围分别用 `group` / `user`。多段角色卡保留换行和内嵌对话，正文合计最多 12,000 字。规则、口癖、示例达到容量时明确报错，不生成被截断的草稿；旧版可以 `/persona undo global` 回退。全局卡片完整注入最高人格层，不再受普通补充上下文的 1,200 字预算截断；群/个人补充仍受该上下文预算限制。
+
 “已保存”不等于对所有人都生效：默认 `user` 范围只在 Bot 回复该用户时加载，包括该用户的私聊和群聊。全局人格需要管理员明确指定全局范围并确认保存；个人范围不会自动扩大，未确认的草稿不会进入回复。
 
 验收时先发 `/persona list` 查看当前已保存内容，再问“你口癖呢”，Bot 应原样展示至少一条；攻击性原句会以引号示范，不向测试者开骂。日常对话按语义选择合适原句，避免近期重复和无关硬插，不保证每轮出现。普通追问直接补充答案，不再自动添加“说白了”，也不以“某某问的是”转述提问。
@@ -164,7 +166,7 @@ LONGTU_QQ_JEV_OUTPUT_ENABLED=false
 # 每轮真实模型生成前先做一次轻量战术规划：分层攻击、按需检索、现实锚点接梗。
 QQ_REPLY_PLANNER_ENABLED=true
 QQ_REPLY_PLANNER_TIMEOUT_MS=8000
-QQ_REPLY_PLANNER_MAX_TOKENS=400
+QQ_REPLY_PLANNER_MAX_TOKENS=600
 LONGTU_QQ_JEV_MODE=off
 LONGTU_QQ_JEV_STATE_FILE=data/qq-jev-runtime.json
 LONGTU_QQ_JEV_TIMEOUT_MS=30000

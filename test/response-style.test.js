@@ -335,8 +335,8 @@ test('普通回复保留龙玉涛语感但不强制攻击任何参与者', () =>
   const prompt = buildNormalReplyPrompt({ thinkingEnabled: false });
   assert.match(prompt, /龙玉涛知识中的语言风格/);
   assert.match(prompt, /脾气冲、嘴损但懂行/);
-  assert.match(prompt, /默认只评价事情本身/);
-  assert.match(prompt, /只有本轮明确要求攻击或调侃某人/);
+  assert.match(prompt, /按当前互动决定调侃落点/);
+  assert.match(prompt, /高强度回击仍须确认对象/);
   assert.doesNotMatch(prompt, /至少写一句.*损人话|温和吐槽不算完成/);
   assert.match(prompt, /信息和锋芒融在同一句/);
 });
@@ -531,16 +531,16 @@ test('图片回答拦截连续画面播报，即使末尾贴了笑点标签', ()
   assert.equal(semantic.issues.includes('image-description-heavy'), false);
 });
 
-test('普通回复质量复核要求角色钩子但不把角色钩子等同于骂人', () => {
-  assert.ok(reviewNormalReply('这个方案目前可以落地，但要先备份数据。', {
-    requireRoleVoice: true,
-  }).issues.includes('missing-role-voice'));
-  assert.equal(reviewNormalReply('说白了，这个方案能落地，但先备份数据。', {
-    requireRoleVoice: true,
-  }).valid, true);
-  assert.equal(reviewNormalReply('先照顾好自己，别急着做决定。', {
-    requireRoleVoice: true,
-  }).valid, true);
+test('角色语气不以命中固定口癖词表为通过条件', () => {
+  for (const answer of [
+    '这个方案目前可以落地，但要先备份数据。',
+    '工资照领，工作记录倒是放了个长假。',
+    '先照顾好自己，别急着做决定。',
+  ]) {
+    const review = reviewNormalReply(answer, { requireRoleVoice: true });
+    assert.equal(review.issues.includes('missing-role-voice'), false);
+    assert.equal(review.valid, true);
+  }
 });
 
 test('直接对话不能转述提问者，聊天记录总结和谈论别人不误伤', () => {

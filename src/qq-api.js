@@ -718,7 +718,7 @@ export async function createQqRuntime() {
   ) ? new ReplyTurnPlanner({
     chatClient,
     timeoutMs: parsePositiveInteger(process.env.QQ_REPLY_PLANNER_TIMEOUT_MS) ?? 8_000,
-    maxTokens: parsePositiveInteger(process.env.QQ_REPLY_PLANNER_MAX_TOKENS) ?? 400,
+    maxTokens: parsePositiveInteger(process.env.QQ_REPLY_PLANNER_MAX_TOKENS) ?? 600,
     logger: console,
   }) : null;
   const groupTopicGroups = parseIdentifierSet(

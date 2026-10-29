@@ -16,6 +16,7 @@ const ADMIN_SLASH_COMMANDS = [
   ['/persona [undo|revert] [scope]', '回退指定范围的人格版本。'],
   ['/persona [off|disable] [scope]', '停用指定范围的人格配置。'],
   ['/persona [add|rule|phrase|example] ...', '新增表达规则、口癖或输入输出示例。'],
+  ['/persona replace <global|group|user> ...', '完整替换指定范围的人格，确认后生效；旧版可回退。global/group 仅超管可用。'],
   ['/persona global ...', '保存全局人格补充。仅超管可管理全局范围。'],
   ['/persona group ...', '保存当前群的人格补充。仅超管可管理群范围。'],
   ['/jev on|off|auto|shadow|status', '切换或查看 Jev 门控模式。'],

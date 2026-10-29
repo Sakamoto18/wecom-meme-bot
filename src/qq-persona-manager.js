@@ -1,4 +1,4 @@
-import { normalizePersonaProfile } from './qq-persona-store.js';
+import { PersonaValidationError } from './qq-persona-store.js';
 
 const PERSONA_PREFIX = /^\/persona(?:\s+([\s\S]*))?$/i;
 const REMEMBER_PATTERN = /^(?:记住|保存|把)(?:我的)?(?:长期)?(口癖|说话习惯|角色口癖|角色习惯|人格补充)[：:]\s*(.+)$/u;
@@ -6,8 +6,8 @@ const ROLE_REMEMBER_PATTERN = /^把(?:这句|这条|上面这句)?设为(?:我�
 const CONFIRM_PATTERN = /^(?:确认|确认保存|保存这个|就这样保存)$/u;
 const CANCEL_PATTERN = /^(?:取消|取消保存|不要保存|删掉这个待保存)$/u;
 
-function compact(value, max = 4_000) {
-  return String(value ?? '').replace(/[\u0000\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+function compact(value) {
+  return String(value ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n').trim();
 }
 
 function scopeLabel(scopeType, scopeId) {
@@ -39,12 +39,13 @@ function mergeProfiles(previous, next) {
 function parseProfileText(value, kind = 'rule') {
   const text = compact(value);
   if (!text) return null;
-  if (kind === 'phrase') return normalizePersonaProfile({ preferredPhrases: [text] });
+  if (kind === 'phrase') return { preferredPhrases: [text] };
   const example = text.match(/^输入[“"']?(.{1,180})[”"']?\s*(?:=>|→|回答为|答)[：:]?\s*[“"']?(.{1,300})[”"']?$/u);
   if (kind === 'example' && example) {
-    return normalizePersonaProfile({ examples: [{ input: example[1], output: example[2] }] });
+    return { examples: [{ input: example[1], output: example[2] }] };
   }
-  return normalizePersonaProfile({ styleRules: [text] });
+  if (kind === 'example') throw new PersonaValidationError('示例格式：/persona example 输入问题 => 回答；格式不符，未保存。');
+  return { styleRules: [text] };
 }
 
 export function parsePersonaRequest(value) {
@@ -54,9 +55,8 @@ export function parsePersonaRequest(value) {
   if (slash) {
     const argument = compact(slash[1] ?? '');
     if (!argument) return { action: 'help' };
-    const [command, ...rest] = argument.split(/\s+/u);
+    const [, command, remainder = ''] = argument.match(/^(\S+)(?:\s+([\s\S]*))?$/u);
     const normalizedCommand = command.toLowerCase();
-    const remainder = rest.join(' ').trim();
     if (['train', 'start', 'help'].includes(normalizedCommand)) {
       return { action: normalizedCommand === 'help' ? 'help' : 'train', argument: remainder, slash: true };
     }
@@ -66,14 +66,15 @@ export function parsePersonaRequest(value) {
     if (['list', 'status'].includes(normalizedCommand)) return { action: 'list', slash: true };
     if (['undo', 'revert'].includes(normalizedCommand)) return { action: 'undo', argument: remainder, slash: true };
     if (['off', 'disable'].includes(normalizedCommand)) return { action: 'disable', argument: remainder, slash: true };
-    if (['add', 'rule', 'phrase', 'example'].includes(normalizedCommand)) {
+    if (['add', 'replace', 'rule', 'phrase', 'example'].includes(normalizedCommand)) {
+      const scoped = normalizedCommand === 'add' || normalizedCommand === 'replace';
+      const [, scope = '', content = ''] = remainder.match(/^(\S+)(?:\s+([\s\S]*))?$/u) ?? [];
       return {
         action: 'draft',
-        kind: normalizedCommand === 'add' ? 'rule' : normalizedCommand,
-        scope: normalizedCommand === 'add' ? remainder.split(/\s+/u)[0] : '',
-        content: normalizedCommand === 'add'
-          ? remainder.split(/\s+/u).slice(1).join(' ')
-          : remainder,
+        kind: scoped ? 'rule' : normalizedCommand,
+        ...(normalizedCommand === 'replace' ? { replace: true } : {}),
+        scope: scoped ? scope : '',
+        content: scoped ? content : remainder,
         slash: true,
       };
     }
@@ -141,6 +142,7 @@ export class QqPersonaManager {
       '/persona preview 查看待确认内容，/persona cancel 取消。',
       '/persona list 查看当前人格，/persona undo 回退上一版本。',
       '管理员可以用 /persona global …… 保存全局人格；普通用户默认只保存自己的口癖。',
+      '/persona global …… 是追加；完整覆盖用 /persona replace global ……（group/user 同理），确认后生效，旧版仍可回退。',
     ].join('\n');
   }
 
@@ -189,8 +191,18 @@ export class QqPersonaManager {
       return { handled: true, mode: 'persona-list', messages: [{ type: 'text', text }] };
     }
     if (request.action === 'draft') {
+      if ((request.scope && !['global', 'group', 'user'].includes(request.scope))
+        || (request.replace && (!request.scope || !request.content))) {
+        return { handled: true, mode: 'persona-error', messages: [{ type: 'text', text: '范围必须是 global、group 或 user；例如 /persona replace global 完整角色卡。' }] };
+      }
       const rawContent = request.content || request.scope;
-      const profile = parseProfileText(rawContent, request.kind ?? 'rule');
+      let profile;
+      try {
+        profile = parseProfileText(request.content, request.kind ?? 'rule');
+      } catch (error) {
+        if (!(error instanceof PersonaValidationError)) throw error;
+        return { handled: true, mode: 'persona-error', messages: [{ type: 'text', text: error.message }] };
+      }
       if (!profile) return { handled: true, mode: 'persona-error', messages: [{ type: 'text', text: '请补充要记住的口癖或表达习惯。' }] };
       const scope = this.resolveScope(request.scope, payload, rawContent);
       if (!scope.scopeId) {
@@ -200,19 +212,25 @@ export class QqPersonaManager {
         return { handled: true, mode: 'persona-denied', messages: [{ type: 'text', text: '全局或群专属人格只能由管理员确认；你可以训练自己的专属口癖。' }] };
       }
       const current = this.store.getActive(scope.scopeType, scope.scopeId);
-      const event = this.store.createPending({
-        ...scope,
-        actorUserId: actor,
-        sourceText: payload.text,
-        profile: mergeProfiles(current?.profile, profile),
-      });
+      let event;
+      try {
+        event = this.store.createPending({
+          ...scope,
+          actorUserId: actor,
+          sourceText: payload.text,
+          profile: request.replace ? profile : mergeProfiles(current?.profile, profile),
+        });
+      } catch (error) {
+        if (!(error instanceof PersonaValidationError)) throw error;
+        return { handled: true, mode: 'persona-error', messages: [{ type: 'text', text: error.message }] };
+      }
       return {
         handled: true,
         mode: 'persona-pending',
         messages: [{
           type: 'text',
           text: [
-            `准备保存为${scopeLabel(scope.scopeType, scope.scopeId)}：`,
+            `准备${request.replace ? '完整替换' : '追加保存为'}${scopeLabel(scope.scopeType, scope.scopeId)}：`,
             profileText(event.profile),
             '回复“确认保存”或 /persona save 后生效；不确认不会写入长期人格。',
           ].join('\n'),

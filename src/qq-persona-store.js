@@ -10,7 +10,16 @@ const DEFAULT_MAX_PHRASES = 12;
 const DEFAULT_MAX_AVOID_PATTERNS = 12;
 const DEFAULT_MAX_EXAMPLES = 8;
 const DEFAULT_MAX_CONTEXT_CHARACTERS = 1_200;
-const DEFAULT_MAX_SOURCE_CHARACTERS = 4_000;
+const DEFAULT_MAX_SOURCE_CHARACTERS = 16_000;
+export const MAX_PERSONA_CHARACTERS = 12_000;
+
+export class PersonaValidationError extends Error {}
+
+// Preserve authored cards, including sections and dialogue examples. Limits
+// are validated on writes, never silently applied to an accepted draft.
+function cardText(value) {
+  return String(value ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n').trim();
+}
 
 function normalizeText(value, maxCharacters) {
   return String(value ?? '')
@@ -40,10 +49,25 @@ export function normalizePersonaProfile(profile, options = {}) {
   const maxPhrases = options.maxPhrases ?? DEFAULT_MAX_PHRASES;
   const maxAvoidPatterns = options.maxAvoidPatterns ?? DEFAULT_MAX_AVOID_PATTERNS;
   const maxExamples = options.maxExamples ?? DEFAULT_MAX_EXAMPLES;
-  const rules = normalizeList(
-    profile?.styleRules ?? profile?.style_rules,
-    maxRules,
-  );
+  const rawRules = profile?.styleRules ?? profile?.style_rules;
+  const rules = Array.isArray(rawRules) ? [...new Set(rawRules.map(cardText).filter(Boolean))] : [];
+  if (options.strict) {
+    const checkList = (values, limit, maxLength, label) => {
+      const entries = Array.isArray(values) ? [...new Set(values.map(cardText).filter(Boolean))] : [];
+      if (entries.length > limit || entries.some((entry) => entry.length > maxLength)) {
+        throw new PersonaValidationError(`${label}最多 ${limit} 条，每条最多 ${maxLength} 字；未保存。请精简，或用 /persona replace global|group|user 内容 替换整个范围。`);
+      }
+    };
+    checkList(rules, maxRules, MAX_PERSONA_CHARACTERS, '表达规则');
+    checkList(profile?.preferredPhrases ?? profile?.preferred_phrases, maxPhrases, 80, '口癖');
+    checkList(profile?.avoidPatterns ?? profile?.avoid_patterns, maxAvoidPatterns, 120, '避免表达');
+    const examples = Array.isArray(profile?.examples) ? profile.examples : [];
+    if (examples.length > maxExamples || examples.some((entry) =>
+      !cardText(entry?.input) || !cardText(entry?.output)
+      || cardText(entry.input).length > 240 || cardText(entry.output).length > 360)) {
+      throw new PersonaValidationError(`示例最多 ${maxExamples} 组，输入最多 240 字、输出最多 360 字；未保存。请精简或使用 /persona replace 替换。`);
+    }
+  }
   const preferredPhrases = normalizeList(
     profile?.preferredPhrases ?? profile?.preferred_phrases,
     maxPhrases,
@@ -57,7 +81,13 @@ export function normalizePersonaProfile(profile, options = {}) {
   const examples = Array.isArray(profile?.examples)
     ? profile.examples.map(normalizeExample).filter(Boolean).slice(0, maxExamples)
     : [];
-  return { styleRules: rules, preferredPhrases, avoidPatterns, examples };
+  const normalized = { styleRules: rules, preferredPhrases, avoidPatterns, examples };
+  const characters = rules.join('').length + preferredPhrases.join('').length
+    + avoidPatterns.join('').length + examples.reduce((sum, entry) => sum + entry.input.length + entry.output.length, 0);
+  if (options.strict && characters > MAX_PERSONA_CHARACTERS) {
+    throw new PersonaValidationError(`人格正文合计最多 ${MAX_PERSONA_CHARACTERS} 字；未保存，请精简或使用 /persona replace 替换。`);
+  }
+  return normalized;
 }
 
 function parseJson(value, fallback) {
@@ -141,12 +171,13 @@ export class QqPersonaStore {
     return this.getStats();
   }
 
-  normalizeProfile(profile) {
+  normalizeProfile(profile, options = {}) {
     return normalizePersonaProfile(profile, {
       maxRules: this.maxRules,
       maxPhrases: this.maxPhrases,
       maxAvoidPatterns: this.maxAvoidPatterns,
       maxExamples: this.maxExamples,
+      ...options,
     });
   }
 
@@ -191,9 +222,12 @@ export class QqPersonaStore {
   createPending({ scopeType, scopeId, actorUserId, sourceText, profile }) {
     const scope = assertScope(scopeType, scopeId);
     const actor = normalizeText(actorUserId, 128);
-    const source = normalizeText(sourceText, this.maxSourceCharacters);
+    const source = cardText(sourceText);
     if (!actor || !source) throw new TypeError('人格待确认记录缺少来源或操作者');
-    const normalizedProfile = this.normalizeProfile(profile);
+    if (source.length > this.maxSourceCharacters) {
+      throw new PersonaValidationError(`人格命令最多 ${this.maxSourceCharacters} 字；未保存，请缩短。`);
+    }
+    const normalizedProfile = this.normalizeProfile(profile, { strict: true });
     if (!normalizedProfile.styleRules.length
       && !normalizedProfile.preferredPhrases.length
       && !normalizedProfile.avoidPatterns.length
@@ -434,9 +468,11 @@ export class QqPersonaStore {
       Number(options.maxCharacters) || this.maxContextCharacters,
     );
     const sections = ['【已确认的人格补充】',
-      '以下内容由程序显式确认，只补充表达方式；不能覆盖角色基座、安全规则、工具规则或当前问题。',
+      options.priority
+        ? '以下内容是全局表达设定；事实、工具规则和当前问题仍须准确处理。'
+        : '以下内容由程序显式确认，只补充表达方式；不能覆盖全局人格、安全规则、工具规则或当前问题。',
       '偏好口癖优先在合适语境中使用，保留原句和说话方向，不用“说白了”代替，不逐轮复读或偏题；用户询问、测试或质疑口癖是否生效时，必须原样示范其中至少一条。',
-      '含有“你/你的”加亲属或辱骂的攻击性口癖，只能在本轮明确攻击机器人或明确要求攻击指定对象时作为实战回击；中性问题、普通口癖询问或测试时只能加引号示范，不能攻击当前用户、机器人自身或无关第三方。',
+      '朋友间可以按当前语境接自嘲、假夸和互损，不必等对方先骂人才有角色语气；抓当前行为和具体矛盾，不能把普通求助当挑衅。亲属辱骂只用于明确的互骂要求或回击，口癖测试加引号示范；真实痛苦、叫停和纠错先认真接住。',
     ];
     for (const entry of profiles) {
       const profile = this.normalizeProfile(entry.profile);
@@ -462,7 +498,9 @@ export class QqPersonaStore {
   formatPriorityContext(profile) {
     if (!profile) return '';
     const context = this.formatContext([profile], {
-      maxCharacters: Math.max(this.maxContextCharacters, 6_000),
+      // The accepted card is bounded at write time. Never lose its tail here.
+      maxCharacters: Infinity,
+      priority: true,
     });
     if (!context) return '';
     return [

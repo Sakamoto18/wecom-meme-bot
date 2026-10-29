@@ -1,11 +1,46 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { normalizeTurnPlan } from '../src/reply-turn-planner.js';
 import {
   generateConversationReply,
   removeInternalReplyMetadata,
   redactSensitivePoliticalNames,
   repairUnsupportedNewsScope,
 } from '../src/reply-engine.js';
+
+test('调侃、群语感、外部语料与时效检索和推理可同时生效', async () => {
+  const searches = [];
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '红枫队最近怎么回事，胜场是放假了吗？',
+    modelInput: '红枫队最近怎么回事，胜场是放假了吗？',
+    now: Date.parse('2026-10-29T12:00:00+08:00'),
+    turnPlan: normalizeTurnPlan({
+      mode: 'judgment', speech_act: 'answer_with_banter', reasoning_needed: true,
+      search: { fact_needed: true, freshness: 'current', fact_queries: ['红枫队 2026年10月 赛果'] },
+    }),
+    groupStyleProvider: () => '【本群真实语感参考】喜欢用假夸接具体动作。',
+    memeCorpus: { buildPrompt: () => '【中文互联网语料】只借节奏，不借事实。' },
+    webSearchEnabled: true,
+    webSearch: { async search(query) {
+      searches.push(query);
+      return { context: '测试资料：红枫队2026年10月最后三场均输，主力仍在队。', resultCount: 1 };
+    } },
+    chatClient: { isConfigured: true, async complete(_history, _input, options) {
+      calls.push(options);
+      return '最近三场都输了，主力还在，胜场先下班了。';
+    } },
+  });
+  assert.equal(result.factSearchAttempted, true);
+  assert.equal(result.thinkingEnabled, true);
+  assert.equal(result.groupStyleUsed, true);
+  assert.equal(result.memeCorpusUsed, true);
+  assert.ok(searches[0].includes('红枫队'));
+  assert.match(calls[0].additionalSystemPrompt, /本群真实语感参考/);
+  assert.match(calls[0].additionalSystemPrompt, /中文互联网语料/);
+  assert.match(calls[0].additionalSystemPrompt, /主力仍在队/);
+  assert.equal(result.answer, '最近三场都输了，主力还在，胜场先下班了。');
+});
 
 test('清理固定认错开场但保留事实修正', () => {
   assert.equal(
@@ -147,7 +182,7 @@ test('中文互联网语料默认覆盖普通、梗和图片回复', async () =>
     memeCorpus,
     groupStyleProvider() {
       groupStyleCalls += 1;
-      return '【群级语感】这会和互联网语料抢风格。';
+      return '【群级语感】本群喜欢顺着具体动作假夸。';
     },
     chatClient: {
       isConfigured: true,
@@ -161,9 +196,11 @@ test('中文互联网语料默认覆盖普通、梗和图片回复', async () =>
   assert.equal(corpusCalls[1].options.styleOnly, true);
   assert.equal(corpusCalls[1].options.autoDefinition, true);
   assert.match(prompt, /中文互联网语料/);
-  assert.doesNotMatch(prompt, /群级语感/);
-  assert.equal(groupStyleCalls, 0);
+  assert.match(prompt, /群级语感/);
+  assert.equal(groupStyleCalls, 1);
   assert.equal(ordinary.memeCorpusUsed, true);
+  assert.equal(ordinary.groupStyleUsed, true);
+  assert.ok(ordinary.groupStyleCharacters > 0);
 
   await generateConversationReply({
     content: '地狱笑话解读',
@@ -698,7 +735,7 @@ test('战术卡要求回击但当前消息没有明确挑衅时，只降级为�
     },
   });
   assert.notEqual(result.mode, 'generated-attack');
-  assert.match(prompt, /本轮不启动针对个人的人身攻击/);
+  assert.match(prompt, /本轮不升级人身辱骂/);
   assert.doesNotMatch(prompt, /target=current_speaker，angle=absurdity/);
 });
 
@@ -1197,7 +1234,7 @@ test('引用评价、识图和转发总结保留龙图知识，不自动攻击�
     assert.match(calls[0].cachePrefixSystemPrompt, /本地龙图知识/);
     assert.match(calls[0].stableSystemPrompt, /脾气冲、嘴损但懂行/);
     assert.match(calls[0].additionalSystemPrompt, /引用作者 甲 只是内容来源/);
-    assert.match(calls[0].additionalSystemPrompt, /只有本轮明确要求攻击或调侃某人/);
+    assert.match(calls[0].additionalSystemPrompt, /高强度回击仍须确认对象/);
   }
 });
 
@@ -1338,7 +1375,7 @@ test('问题窗口内遭到攻击时仍先回答问题，再允许简短回击',
   assert.equal(result.mode, 'model');
   assert.equal(calls.length, 1);
   assert.match(calls[0].stableSystemPrompt, /若当前发言者明确挑衅或攻击机器人/);
-  assert.match(calls[0].stableSystemPrompt, /已确认人格中的攻击性口癖不改变本轮攻击判定/);
+  assert.match(calls[0].stableSystemPrompt, /高强度的亲属辱骂仍需明确的互骂语境或回击依据/);
 });
 
 test('统一角色初稿把回击写成说教时，追加一次真正的临场对线句', async () => {

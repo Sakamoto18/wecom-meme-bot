@@ -4266,6 +4266,7 @@ export class QqBotService {
         + `，evidence_quality=${generated.evidenceQuality || 'none'}`
         + `，exact_match=${generated.exactMatch ? 'yes' : 'no'}`
         + `，style_profile=${generated.styleProfile || 'default'}`
+        + `，group_style=${generated.groupStyleUsed ? `${generated.groupStyleCharacters}chars` : 'off'}`
         + `，naturalness_issues=${generated.naturalnessIssues?.join('|') || 'none'}`
         + `，rewrite_used=${generated.rewriteUsed ? 'yes' : 'no'}`
         + `，identity=${generated.protectedRoleRewritten
