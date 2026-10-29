@@ -22,13 +22,26 @@ const { OpenAICompatibleChatClient } = await load('src/chat-client.js');
 const { ReplyTurnPlanner } = await load('src/reply-turn-planner.js');
 const { QqPersonaStore } = await load('src/qq-persona-store.js');
 const { generateConversationReply } = await load('src/reply-engine.js');
+const { buildModelInput, getGroupInteractionContext } = await load('src/message-utils.js');
+const styleGroup = option('--style-group', '');
+let groupMemory;
+let corpus;
+if (styleGroup) {
+  const { QqGroupMemory } = await load('src/group-memory.js');
+  const { MemeCorpusStore } = await load('src/meme-corpus.js');
+  groupMemory = new QqGroupMemory({ styleGroups: [styleGroup] });
+  groupMemory.database = new DatabaseSync(path.join(configRoot, 'data/qq-group-memory.sqlite'), { readOnly: true });
+  corpus = new MemeCorpusStore();
+  corpus.database = new DatabaseSync(path.join(configRoot, 'data/qq-meme-corpus.sqlite'), { readOnly: true });
+}
+const promptRoot = existsSync(path.join(root, 'config/system-prompt.md')) ? root : configRoot;
 const client = new OpenAICompatibleChatClient({
   apiKey: env.LLM_API_KEY, baseUrl: env.LLM_BASE_URL || 'https://api.deepseek.com',
   model: env.LLM_MODEL || 'deepseek-chat',
-  systemPrompt: readFileSync(path.join(configRoot, 'config/system-prompt.md'), 'utf8'),
+  systemPrompt: readFileSync(path.join(promptRoot, 'config/system-prompt.md'), 'utf8'),
   temperature: 0.5,
 });
-const knowledgeContext = readFileSync(path.join(configRoot, 'config/longtu-knowledge.md'), 'utf8');
+const knowledgeContext = readFileSync(path.join(promptRoot, 'config/longtu-knowledge.md'), 'utf8');
 const db = new DatabaseSync(path.join(configRoot, 'data/qq-persona.sqlite'), { readOnly: true });
 const row = db.prepare("SELECT version, profile_json FROM qq_persona_profiles WHERE scope_type='global' AND status='active' ORDER BY version DESC LIMIT 1").get();
 db.close();
@@ -37,6 +50,12 @@ const persona = row ? { scopeType: 'global', scopeId: 'global', version: row.ver
 const personaContext = persona ? formatter.formatContext([persona]) : '';
 const priorityPersonaContext = formatter.formatPriorityContext(persona);
 const cases = [
+  { id: 'correction_banter', text: '我扣问号不是我有问题，是我觉得你有问题',
+    history: [{ role: 'user', content: '？' }, { role: 'assistant', content: '就一个问号也敢往我脸上甩，你是把脑子按批发价清了才挤得出这俩笔画？' }],
+    quote: '就一个问号也敢往我脸上甩，你是把脑子按批发价清了才挤得出这俩笔画？',
+    expect: '接当前互损，不把词面纠正认定成指代听错；不先认错、自证、复述用户立场或解释一整套比喻。' },
+  { id: 'ordinary_contrast', text: '不是我不想下班，是这会还没开完。', expect: '普通对比句，不代表机器人之前犯错，不应认错。' },
+  { id: 'ordinary_agreement', text: '晚上一起吃面？', expect: '可以自然接受邀约或接话，“行”不是禁词，不必解释文风。' },
   { id: 'friendly_banter', text: '今天又摸了一天鱼，我这工资拿得真有技术含量。', expect: '接自嘲，贴具体行为；不编造现实情况。' },
   { id: 'reasoning', text: '同一个链接缓存十分钟，那第九分钟改了内容，我会看到新的吗？', expect: '说明有效期内可能仍命中旧内容，刷新/失效后重取；短句。' },
   { id: 'current_facts', text: '红枫队最近怎么回事，胜场是放假了吗？',
@@ -51,20 +70,38 @@ const cases = [
     history: [{ role: 'user', content: '缓存十分钟会怎样？' }, { role: 'assistant', content: '命中时会返回缓存，过期才重新抓。' }], expect: '跟上晚饭，不续讲缓存或检索不相干技术资料。' },
   { id: 'unknown_meme', text: '“月亮打卡报销”到底是哪来的梗？', expect: '检索无结果时承认出处没查到；可以解释可能的画面，不编固定梗、原作者和流行史。' },
 ];
-const report = { model: client.model, personaVersion: row?.version, syntheticSearch: true, results: [] };
+const report = { model: client.model, personaVersion: row?.version, syntheticSearch: true, liveStyleReferences: Boolean(styleGroup), results: [] };
 const selected = option('--cases', '').split(',').filter(Boolean);
-for (const fixture of cases.filter((item) => !selected.length || selected.includes(item.id))) {
+const repeats = Math.max(1, Math.min(3, Number(option('--repeat', '1')) || 1));
+for (const fixture of cases.filter((item) => !selected.length || selected.includes(item.id)).flatMap((item) => Array.from({ length: repeats }, () => item))) {
   const started = Date.now();
   const searches = [];
   const drafts = [];
+  const styleReferences = { groupCharacters: 0, corpusCharacters: 0 };
   const planner = new ReplyTurnPlanner({ chatClient: client, timeoutMs: 30_000, maxTokens: 700, logger: { debug() {} } });
   try {
-    const input = { content: fixture.text, currentQuestion: fixture.text, history: fixture.history ?? [], now: Date.parse('2026-10-29T12:00:00+08:00'), interactionContext: fixture.interactionContext ?? {} };
+    // Exercise the real group-message assembly, including @ and quotation
+    // metadata. Bare strings missed conflicting correction instructions.
+    const message = { msgtype: 'text', chattype: 'group', chatid: 'offline-eval',
+      from: { userid: 'eval-user', name: '测试群友' }, bot_user_id: 'eval-bot', bot_names: ['龙2号机'],
+      mentions: [{ user_id: 'eval-bot', name: '龙2号机' }], text: { content: fixture.text },
+      ...(fixture.quote ? { quote: { msgtype: 'text', from: { userid: 'eval-bot' }, text: { content: fixture.quote } } } : {}) };
+    const input = { content: fixture.text, currentQuestion: fixture.text, history: fixture.history ?? [], now: Date.parse('2026-10-29T12:00:00+08:00'),
+      interactionContext: { ...getGroupInteractionContext(message), ...fixture.interactionContext } };
     const turnPlan = await planner.plan(input);
     const result = await generateConversationReply({
-      ...input, modelInput: fixture.text, turnPlan, personaContext, priorityPersonaContext, knowledgeContext,
-      groupStyleProvider: () => '【本群真实语感参考】喜欢贴当前动作顺杆爬、假夸；多短句，不习惯给别人上课。',
-      memeCorpus: { buildPrompt: () => '【外部语料表达参考】只借节奏和反差，不作事实：忙活半天，进度条先睡了。' },
+      ...input, modelInput: buildModelInput(message, fixture.text), hasQuotedContent: Boolean(fixture.quote), turnPlan, personaContext, priorityPersonaContext, knowledgeContext,
+      groupStyleProvider: (mode) => {
+        const prompt = groupMemory ? groupMemory.buildStylePrompt({ groupId: styleGroup, query: fixture.text, attack: mode === 'attack' })
+          : '【本群真实语感参考】喜欢贴当前动作顺杆爬、假夸；多短句，不习惯给别人上课。';
+        styleReferences.groupCharacters = prompt.length;
+        return prompt;
+      },
+      memeCorpus: { buildPrompt: (query, options) => {
+        const prompt = corpus ? corpus.buildPrompt(query, options) : '【外部语料表达参考】只借节奏和反差，不作事实：忙活半天，进度条先睡了。';
+        styleReferences.corpusCharacters = prompt.length;
+        return prompt;
+      } },
       webSearchEnabled: true,
       webSearch: { async search(query, options) {
         searches.push({ query, mode: options?.mode });
@@ -74,12 +111,12 @@ for (const fixture of cases.filter((item) => !selected.length || selected.includ
         const answer = await client.complete(history, content, options);
         drafts.push({ stage: options.usageSource, answer,
           groupStylePresent: Boolean(options.additionalSystemPrompt?.includes('【本群真实语感参考】')),
-          corpusPresent: Boolean(options.additionalSystemPrompt?.includes('【外部语料表达参考】')) });
+          corpusPresent: Boolean(options.additionalSystemPrompt?.includes('【外部语料表达参考】') || options.additionalSystemPrompt?.includes('【中文互联网语料')) });
         return answer;
       } },
     });
     report.results.push({ id: fixture.id, input: fixture.text, expect: fixture.expect, plan: turnPlan,
-      searches, drafts, answer: result.answer, review: result.review,
+      searches, drafts, styleReferences, answer: result.answer, review: result.review,
       thinking: result.thinkingEnabled, rewritten: result.rewriteUsed,
       factSearch: result.factSearchAttempted, cultureSearch: result.cultureSearchAttempted,
       characters: result.answer.length, elapsedMs: Date.now() - started });
@@ -90,4 +127,6 @@ for (const fixture of cases.filter((item) => !selected.length || selected.includ
   writeFileSync(output, JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ completed: fixture.id, failed: Boolean(report.results.at(-1).failed) }));
 }
+groupMemory?.close();
+corpus?.close();
 if (report.results.some((result) => result.failed)) process.exitCode = 1;

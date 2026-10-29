@@ -1,12 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeTurnPlan } from '../src/reply-turn-planner.js';
+import { buildModelInput, getGroupInteractionContext } from '../src/message-utils.js';
 import {
   generateConversationReply,
   removeInternalReplyMetadata,
   redactSensitivePoliticalNames,
   repairUnsupportedNewsScope,
 } from '../src/reply-engine.js';
+
+test('群消息纠正候选不强制认错，仍会重写被纠正的重复旧答案', async () => {
+  const content = '我问的是上传速度，不是下载';
+  const message = { msgtype: 'text', chattype: 'group', from: { userid: 'sender' },
+    bot_user_id: 'bot', bot_names: ['龙2号机'], mentions: [{ user_id: 'bot', name: '龙2号机' }],
+    text: { content } };
+  const oldAnswer = '下载速度先看下行带宽，下载快慢主要受它限制。';
+  const corrected = '上传要看上行带宽，下载快不代表上传也快。';
+  const calls = [];
+  const result = await generateConversationReply({
+    content, modelInput: buildModelInput(message, content),
+    interactionContext: getGroupInteractionContext(message),
+    history: [{ role: 'user', content: '传文件为什么慢？' }, { role: 'assistant', content: oldAnswer }],
+    turnPlan: normalizeTurnPlan({ current_task: '解释上传速度', topic_relation: 'correction', speech_act: 'correction_with_banter' }),
+    webSearchEnabled: false,
+    chatClient: { isConfigured: true, async complete(_history, input, options) {
+      calls.push({ input, options });
+      return calls.length === 1 ? oldAnswer : corrected;
+    } },
+  });
+  assert.equal(result.answer, corrected);
+  assert.equal(calls.length, 2);
+  const assembled = calls.map(({ input, options }) => [input, options.cachePrefixSystemPrompt, options.stableSystemPrompt, options.additionalSystemPrompt, options.revisionSystemPrompt].filter(Boolean).join('\n')).join('\n');
+  assert.doesNotMatch(assembled, /先承认指代或意图判断错|先承认自己把指代或意图听反|被纠正时最多认一句|最多承认一句/);
+  assert.match(assembled, /不要求先认错或自证/);
+});
 
 test('调侃、群语感、外部语料与时效检索和推理可同时生效', async () => {
   const searches = [];

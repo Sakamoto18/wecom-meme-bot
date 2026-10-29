@@ -685,7 +685,8 @@ test('攻击提示要求直接攻击，不强求逻辑关联或固定语料', ()
   assert.match(prompt, /至少有一个明确的第二人称贬损动作/);
   assert.match(prompt, /祖安式压强/);
   assert.match(prompt, /龙图式落刀/);
-  assert.match(prompt, /至少写成两拍/);
+  assert.match(prompt, /一处贴题的短反问、拆台或直接回敬就可以/);
+  assert.match(prompt, /不强制两拍或比喻/);
   assert.doesNotMatch(prompt, /本轮只使用这个随机画面种子|本轮只使用.*截图意象/);
   assert.match(prompt, /禁止孤立拉丁字母 ma/);
   assert.doesNotMatch(prompt, /公开龙图语料参考/);

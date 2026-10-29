@@ -157,17 +157,19 @@ function detectBotAddress(text, botNames, explicitlyMentioned = false, explicitB
   }
   const userIntent = farewell
     ? 'farewell-to-bot'
-    : (correction ? 'correcting-bot-interpretation' : (questionLike ? 'addressing-bot-question' : 'addressing-bot'));
+    : (questionLike ? 'addressing-bot-question' : 'addressing-bot');
   return {
     addressedBotByName: true,
     addressedBotName: matched,
     isFarewellToBot: farewell,
-    isCorrectionOfPreviousReply: correction,
+    // A real @ confirms the addressee, not that our previous answer was wrong.
+    // Lexical correction cues remain hypotheses even with a known addressee.
+    isCorrectionOfPreviousReply: false,
     userIntent,
     botAddressCandidate: matched,
     botAddressCandidateIsUntrusted: false,
     botAddressCandidateSpeechAct: farewell ? 'farewell' : '',
-    correctionCandidate: false,
+    correctionCandidate: correction,
   };
 }
 
@@ -292,9 +294,9 @@ export function buildModelInput(message, content, memberAliases = {}) {
   if (interaction.isFarewellToBot) {
     lines.push('语用意图：这是让机器人退场/与机器人告别的说法，不是当前发言人在宣布自己要离开。');
   } else if (interaction.isCorrectionOfPreviousReply) {
-    lines.push('语用意图：当前发言者正在纠正机器人上一轮的理解；先承认指代或意图判断错，再按这轮纠正后的意思回答。');
+    lines.push('语用意图：当前发言者在修正上一轮理解；按最新前提直接回答，指代判断留在后台，不汇报认错过程。');
   } else if (interaction.correctionCandidate) {
-    lines.push('语用候选（不确定）：当前消息可能在纠正上一轮回复；结合最近对话判断，不要继续为旧答案争辩。');
+    lines.push('语用候选（不确定）：当前消息可能在纠正上一轮回复，也可能是反驳、互损或普通对比；结合最近对话判断。词面命中不证明机器人理解错了，不要求先认错或自证；若确有修正，直接按新前提回答。');
   }
   // A group message can contain several layers of “我/你/你的” (the
   // sender, the bot, and a quoted member). Labels alone are too weak when a

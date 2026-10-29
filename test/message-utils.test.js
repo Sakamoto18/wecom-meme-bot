@@ -273,3 +273,21 @@ test('不对和我问的是会被识别为纠正上一轮回答', () => {
     assert.match(buildModelInput(message, content), /可能在纠正上一轮回复/);
   }
 });
+
+test('真实 @ 只确认对象，不能把对比或互损判成机器人听错', () => {
+  for (const content of ['我扣问号不是我有问题，是我觉得你有问题', '不是我不想下班，是这会还没开完。', '不对，我问的是端口怎么配']) {
+    const message = { msgtype: 'text', chattype: 'group', from: { userid: 'sender' },
+      bot_user_id: 'bot', bot_names: ['龙2号机'], mentions: [{ user_id: 'bot', name: '龙2号机' }],
+      text: { content } };
+    const interaction = getGroupInteractionContext(message);
+    assert.equal(interaction.explicitBotMention, true);
+    assert.equal(interaction.addressedBotByName, true);
+    assert.equal(interaction.isCorrectionOfPreviousReply, false);
+    assert.equal(interaction.correctionCandidate, true);
+    const input = buildModelInput(message, content);
+    assert.match(input, /可能在纠正/);
+    assert.match(input, /不要求先认错或自证/);
+    assert.doesNotMatch(input, /先承认指代或意图判断错/);
+    assert.ok(input.endsWith(`当前消息：${content}`));
+  }
+});
