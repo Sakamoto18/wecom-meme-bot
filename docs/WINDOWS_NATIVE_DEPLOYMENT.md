@@ -63,6 +63,19 @@ node scripts/windows/run.mjs provider
 
 NapCat 官方 Windows Shell 文档：<https://napneko.github.io/guide/boot/Shell>（以页面 Windows 一键安装部分为准）。官方发布的 `NapCat.Shell.Windows.OneKey.zip` 解压后运行 `NapCatInstaller.exe`，安装器会下载 Windows QQ 与 NapCat，完成后通过生成目录里的 `napcat.bat` 启动并登录机器人账号。它可能还需联网下载组件；失败时保留报错再处理，不能将安装器下载完成视作 QQ 已安装。
 
+已在本次服务器安装中遇到两个前置问题：
+
+- 安装器直接退出，退出码 `-1073741515`（`0xC0000135`），且 `C:\Windows\System32\vcruntime140_1.dll` 不存在：补装微软官方 [Visual C++ x64 运行库](https://aka.ms/vs/17/release/vc_redist.x64.exe)。Node/Python 安装成功不代表这个运行库齐全；原 `install-runtimes.ps1` 没有包含它。
+- `NapCat.Shell.zip` 解压报 `Unexpected end of archive`：本次下载只有 7,970,816 字节，官方 v4.18.41 完整包是 35,894,640 字节，SHA256 为 `6801f93e533846cea05f4f531874a0e84371ab2331c5585b57cd7e3b869cf96b`。安装器会复用同目录缓存，直接重跑会再次解压坏包。
+
+可从官方 release 获取完整 Shell ZIP，通过私有 COS 传入 Windows，与 `scripts/windows/repair-napcat-download.ps1` 放在同一目录。退出旧安装器后执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\migration-backup\napcat-fix\repair.ps1 -RunInstaller
+```
+
+交付用 `napcat-fix.zip` 内将该脚本命名为 `repair.ps1`。脚本先核对官方归档大小、SHA256 和原 OneKey 安装器版本，再暂存替换缓存、保留旧归档；不会删除已下载的 QQ 包、旧 Linux 文件或 Bot 数据。`-RunInstaller` 在原安装目录继续执行原安装器，不会启动 Bot。压缩包同时携带 Windows/Linux 的原生模块，日志中的 `linux.x64.node` 文件名不代表启用了 Linux 运行环境。
+
 AstrBot 先确认备份中的部署版本及 `deploy` 目录结构，再选对应版本安装，避免未经核对直接升级。源码原生部署使用 `C:\AstrBot` 与独立 `.venv`，Windows 需确保 `tzdata` 可用。恢复原 AstrBot `data` 和 Bridge 插件，保留定时推送、群白名单与管理配置。在 `.env.windows` 写入 `ASTRBOT_ROOT=C:/AstrBot` 后：
 
 ```powershell
