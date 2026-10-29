@@ -10,7 +10,9 @@ Linux 继续使用 `docker-compose.server.yml` / `docker-compose.qq.yml` 和原 
 - 代码及主备份已解压到 `C:\longtu-qq-bot`。
 - 两份原始归档及 SHA256 校验文件在 `C:\migration-backup`，用户已验证 Match=True。
 - 一致性 SQLite 源在 `C:\sqlite-restore-temp\consistent-sqlite\data`。
-- 主归档里的数据库已被覆盖过，但**旧 WAL/SHM 尚未隔离**；首次启动前必须执行下面的恢复脚本。
+- 已应用 `windows-backend-patch`；一致性恢复脚本已隔离旧 WAL/SHM，并恢复及校验 12 个数据库。Node 后端现在已启动，不要再对运行中的数据重跑恢复脚本。
+- Windows QQ / NapCat 已登录并收到消息。Node 的 `/healthz` 已通过：13,475 条消息、53,703 条群事件、7 份人格档案、284 张图片；Provider 的 `/healthz` 已通过，`browser_ready=True`。这些是启动检查，端到端回复、检索与媒体发送仍待验收。
+- Windows OpenSSH Server 组件已安装，`RestartNeeded=False`；密钥配置和远程连接尚待执行下述初始化步骤。
 - 50GB 旧 Linux 数据盘保持原样；Windows 显示 RAW 不等于空盘，不初始化、不格式化。
 - WSL2 导入没有成功；误启用的组件已禁用并重启。
 - COS 桶 `long-bot-01-1257219847` 保持私有。账号与桶所有者已确认相同；COSBrowser 列表异常并不能证明无权限，当前使用网页控制台上传/下载。
@@ -107,3 +109,18 @@ node scripts/windows/run.mjs astrbot
 原生 QQ/浏览器有桌面会话要求。常驻配置应分开处理 Node 后台进程与 QQ/浏览器交互会话；不要贸然将所有组件设成无桌面的 SYSTEM 服务。远程桌面断开与注销不同，注销可能终止交互进程。安排启动策略后应做一次重启验收。
 
 当前本地自动测试覆盖配置保留、浏览器默认值、SQLite 日志隔离及原解析回归；**尚未在目标 Windows 上完成运行验收**。旧 Compose 与归档保留供以后 Linux 部署，Windows 原生配置不自动写回 Linux。
+
+## 6. 恢复远程维护通道
+
+安装组件后，使用 `scripts/windows/enable-ssh.ps1` 初始化新的、尚未启动的 Windows SSH 服务。交付包 `ssh-setup.zip` 包含该脚本（命名为 `enable.ps1`）、部署公钥 `deploy-key.pub` 和 `SSH-SETUP.json`（脚本/公钥哈希、公钥指纹），不包含私钥。
+
+```powershell
+Set-Location C:\migration-backup\ssh-setup
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\enable.ps1
+```
+
+脚本在检查管理员权限、安装状态和包完整性后，备份 SSH 配置与授权文件，保留已有公钥，将管理员授权文件权限设为 SYSTEM 和 Administrators，限制 SSH 为 administrator 公钥认证，验证配置后启用 TCP 22 防火墙规则和 sshd 自启动。验证失败时恢复原配置；不会重启系统或触碰 Node、NapCat、Provider。默认的远程 shell 保持不变，部署时可显式调用 PowerShell。
+
+用户需回传脚本末尾的服务器 ED25519 主机指纹；连接端先比对再保存新的主机密钥，不能因系统重装而直接跳过主机身份检查。连接端本次专用密钥路径为 `~/.ssh/id_ed25519_longtu_windows`，私钥只保留在本机，不打包、不上传 COS、不提交 Git。
+
+远程通道验证通过后，后续源码/依赖/环境配置同步与健康检查走 SSH；COS 继续用于备份和必要的安装包传递。首次迁移剩余工作包括 AstrBot、FFmpeg、中文 OCR、浏览器登录态和完整消息链路验证。
