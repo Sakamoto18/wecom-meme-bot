@@ -11,8 +11,8 @@ Linux 继续使用 `docker-compose.server.yml` / `docker-compose.qq.yml` 和原 
 - 两份原始归档及 SHA256 校验文件在 `C:\migration-backup`，用户已验证 Match=True。
 - 一致性 SQLite 源在 `C:\sqlite-restore-temp\consistent-sqlite\data`。
 - 已应用 `windows-backend-patch`；一致性恢复脚本已隔离旧 WAL/SHM，并恢复及校验 12 个数据库。Node 后端现在已启动，不要再对运行中的数据重跑恢复脚本。
-- Windows QQ / NapCat 已登录并收到消息。Node 的 `/healthz` 已通过：13,475 条消息、53,703 条群事件、7 份人格档案、284 张图片；Provider 的 `/healthz` 已通过，`browser_ready=True`。这些是启动检查，端到端回复、检索与媒体发送仍待验收。
-- Windows OpenSSH Server 组件已安装，`RestartNeeded=False`；密钥配置和远程连接尚待执行下述初始化步骤。
+- Windows QQ / NapCat 已登录并收到消息。Node 的 `/healthz` 已通过：53,703 条群事件、7 份人格档案、284 张图片；消息总数需重新查询，旧截图的数字不能可靠辨读。Provider 的 `/healthz` 已通过，`browser_ready=True`。这些是之前的启动检查，当前进程状态、端到端回复、检索与媒体发送仍待验收。
+- Windows OpenSSH Server 组件已安装，`RestartNeeded=False`。首次初始化在服务启动后立即退出，配置已回滚；远程维护通道尚未建立，详见下述诊断步骤。
 - 50GB 旧 Linux 数据盘保持原样；Windows 显示 RAW 不等于空盘，不初始化、不格式化。
 - WSL2 导入没有成功；误启用的组件已禁用并重启。
 - COS 桶 `long-bot-01-1257219847` 保持私有。账号与桶所有者已确认相同；COSBrowser 列表异常并不能证明无权限，当前使用网页控制台上传/下载。
@@ -120,6 +120,29 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\enable.ps1
 ```
 
 脚本在检查管理员权限、安装状态和包完整性后，备份 SSH 配置与授权文件，保留已有公钥，将管理员授权文件权限设为 SYSTEM 和 Administrators，限制 SSH 为 administrator 公钥认证，验证配置后启用 TCP 22 防火墙规则和 sshd 自启动。验证失败时恢复原配置；不会重启系统或触碰 Node、NapCat、Provider。默认的远程 shell 保持不变，部署时可显式调用 PowerShell。
+
+### 启动后立即退出时的诊断
+
+2026-10-29 的服务器截图确认：服务使用 `C:\Windows\System32\OpenSSH\sshd.exe` 和 LocalSystem，系统事件先报告运行（7036）随后异常停止（7034），脚本随后回滚启动类型（7040）。OpenSSH 事件通道没有记录。使用默认配置、回环地址和 22222 端口进行前台调试能正常监听；22 端口未发现监听进程。`ssh` 目录的 SYSTEM/Administrators 完全控制、Authenticated Users 只读，以及 `logs` 目录仅 SYSTEM/Administrators 完全控制的 DACL 均没有展示异常。目录所有者、服务退出码和服务模式下的日志尚待确认；不能据此前台成功就认定 SSH 服务正常，也不能直接认定目录权限是根因。
+
+新版 `enable-ssh.ps1 -Diagnostics` 临时启用 `LOCAL0` / `DEBUG3` 文件日志。失败时先收集退出码、程序版本、目录与密钥文件的所有者/SDDL、22 端口及本次启动日志和事件，再执行原有回滚；报告只记录权限元数据，不读取私钥内容。每次尝试的报告在对应备份目录内，包目录另有 `ssh-diagnostic.txt` 便于 VNC 打开。如果成功，则切换为 `LOCAL0` / `INFO` 并重启复核；两次启动均要求服务持续运行五秒且自身进程持有 TCP 22 监听，避免瞬间运行被误报为成功。该分支不改变目录 ACL，不重装 OpenSSH，也不将前台调试当作常驻方案。
+
+生成包含新脚本和原部署公钥的独立诊断包（生成器拒绝非 `.pub` 文件及非 Ed25519 公钥内容）：
+
+```sh
+python3 scripts/windows/build-ssh-setup.py --public-key /Users/lvyuning/.ssh/id_ed25519_longtu_windows.pub --output /Users/lvyuning/Desktop/ssh-diag.zip
+```
+
+传入 Windows 的 `C:\migration-backup` 后，逐条执行：
+
+```powershell
+cd C:\migration-backup
+Expand-Archive .\ssh-diag.zip .
+cd ssh-diag
+powershell -NoProfile -ep Bypass -File .\enable.ps1 -Diagnostics
+```
+
+若失败，打开 `notepad .\ssh-diagnostic.txt` 回传报告中的服务退出码、新 OpenSSH 日志和应用程序崩溃事件。若文件日志仍未生成，报告会明确标出，不能把前一次日志当成本次错误。本地的语法和打包校验不代替 Windows 服务执行验收。
 
 用户需回传脚本末尾的服务器 ED25519 主机指纹；连接端先比对再保存新的主机密钥，不能因系统重装而直接跳过主机身份检查。连接端本次专用密钥路径为 `~/.ssh/id_ed25519_longtu_windows`，私钥只保留在本机，不打包、不上传 COS、不提交 Git。
 

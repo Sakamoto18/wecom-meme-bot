@@ -1,6 +1,7 @@
 param(
     [string]$BundleRoot = $PSScriptRoot,
-    [string]$BackupRoot = 'C:\migration-backup'
+    [string]$BackupRoot = 'C:\migration-backup',
+    [switch]$Diagnostics
 )
 $ErrorActionPreference = 'Stop'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -57,6 +58,87 @@ foreach ($file in @($config, $authorized)) {
     }
 }
 $utf8 = [Text.UTF8Encoding]::new($false)
+$runStarted = Get-Date
+$reportPath = Join-Path $backup 'ssh-diagnostic.txt'
+$serverLog = Join-Path $sshRoot 'logs\sshd.log'
+
+function Write-StartupReport([string]$Outcome) {
+    $sections = [Collections.Generic.List[string]]::new()
+    $sections.Add("SSH startup diagnostic: $Outcome`r`nStarted: $($runStarted.ToString('o'))")
+    $checks = [ordered]@{
+        'Windows and binary version' = {
+            Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' |
+                Select-Object -Property @('ProductName', 'CurrentBuild', 'UBR') | Format-List
+            (Get-Item -LiteralPath $sshd).VersionInfo |
+                Select-Object -Property @('FileVersion', 'ProductVersion') | Format-List
+        }
+        'Service state before rollback' = {
+            Get-CimInstance Win32_Service -Filter "Name='sshd'" |
+                Select-Object -Property @('State', 'StartMode', 'ExitCode', 'ServiceSpecificExitCode', 'ProcessId', 'PathName', 'StartName') | Format-List
+        }
+        'Owners and permissions (no key contents)' = {
+            $paths = @($sshRoot, (Join-Path $sshRoot 'logs'), $config, $authorized)
+            $paths += @(Get-ChildItem -LiteralPath $sshRoot -Filter 'ssh_host_*_key' -File | ForEach-Object FullName)
+            foreach ($path in $paths) {
+                if (Test-Path -LiteralPath $path) {
+                    $acl = Get-Acl -LiteralPath $path
+                    [pscustomobject]@{ Path = $path; Owner = $acl.Owner; Sddl = $acl.Sddl } | Format-List
+                } else { "Missing: $path" }
+            }
+        }
+        'TCP 22 listeners' = {
+            Get-NetTCPConnection -State Listen -LocalPort 22 -ErrorAction SilentlyContinue |
+                Select-Object -Property @('LocalAddress', 'LocalPort', 'OwningProcess') | Format-Table
+        }
+        'New OpenSSH file log (last 100 lines)' = {
+            if ((Test-Path -LiteralPath $serverLog) -and
+                (Get-Item -LiteralPath $serverLog).LastWriteTime -ge $runStarted) {
+                Get-Content -LiteralPath $serverLog -Tail 100
+            } else { 'No OpenSSH file log written during this attempt.' }
+        }
+    }
+    foreach ($name in $checks.Keys) {
+        $sections.Add("`r`n=== $name ===")
+        try { $sections.Add((& $checks[$name] | Out-String -Width 220).TrimEnd()) }
+        catch { $sections.Add("Could not collect this section: $($_.Exception.Message)") }
+    }
+    foreach ($channel in @('OpenSSH/Admin', 'OpenSSH/Operational', 'System', 'Application')) {
+        $sections.Add("`r`n=== Recent events: $channel ===")
+        $filter = @{ LogName = $channel; StartTime = $runStarted.AddMinutes(-1) }
+        if ($channel -eq 'System') { $filter.ProviderName = 'Service Control Manager' }
+        if ($channel -eq 'Application') { $filter.Id = @(1000, 1001) }
+        try {
+            $events = Get-WinEvent -FilterHashtable $filter -MaxEvents 12 -ErrorAction Stop
+            $sections.Add(($events | Select-Object -Property @('TimeCreated', 'Id', 'ProviderName', 'Message') |
+                Format-List | Out-String -Width 220).TrimEnd())
+        } catch { $sections.Add("No events available: $($_.Exception.Message)") }
+    }
+    [IO.File]::WriteAllText($reportPath, ($sections -join "`r`n"), $utf8)
+    Set-AdminOnlyAcl $reportPath
+    # Keep the unique report in the backup; also provide a short, predictable path for VNC users.
+    $latestReport = Join-Path $BundleRoot 'ssh-diagnostic.txt'
+    Copy-Item -LiteralPath $reportPath -Destination $latestReport -Force
+    Set-AdminOnlyAcl $latestReport
+    Write-Host "DIAGNOSTIC REPORT: $latestReport"
+    if ((Test-Path -LiteralPath $serverLog) -and
+        (Get-Item -LiteralPath $serverLog).LastWriteTime -ge $runStarted) {
+        Write-Host 'LAST SSH LOG LINES:'
+        Get-Content -LiteralPath $serverLog -Tail 20 | ForEach-Object { Write-Host $_ }
+    }
+}
+
+function Assert-SshReady {
+    # Start-Service can return before a process exits. Require five seconds of stable service state.
+    for ($attempt = 0; $attempt -lt 10; $attempt++) {
+        Start-Sleep -Milliseconds 500
+        if ((Get-Service sshd).Status -ne 'Running') { throw 'SSH service exited shortly after startup.' }
+    }
+    $runningService = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 22 -ErrorAction SilentlyContinue |
+        Where-Object { $_.OwningProcess -eq $runningService.ProcessId })
+    if ($listeners.Count -eq 0) { throw 'The SSH service is running but does not own a TCP 22 listener.' }
+}
+
 $firewallCreated = $false
 $oldStartMode = (Get-CimInstance Win32_Service -Filter "Name='sshd'").StartMode
 $oldStartType = if ($oldStartMode -eq 'Auto') { 'Automatic' } else { $oldStartMode }
@@ -78,14 +160,20 @@ try {
         'PasswordAuthentication no'
         'AuthenticationMethods publickey'
         'AllowUsers administrator'
-    ) -join "`r`n"
+    )
+    if ($Diagnostics) {
+        # File logging also works when the OpenSSH event channels are empty.
+        $settings += @('SyslogFacility LOCAL0', 'LogLevel DEBUG3')
+    }
+    $settings = $settings -join "`r`n"
     [IO.File]::WriteAllText($config, ($settings + "`r`n" + $original), $utf8)
     Set-AdminOnlyAcl $config
     & $keygen -A
     if ($LASTEXITCODE -ne 0) { throw 'Could not generate SSH host keys.' }
-    & $sshd -t -f $config
+    # Suppress DEBUG3 stderr during validation; PowerShell 5.1 can treat native stderr as an error.
+    & $sshd -t -f $config -o 'LogLevel=ERROR'
     if ($LASTEXITCODE -ne 0) { throw 'OpenSSH configuration validation failed.' }
-    $effective = & $sshd -T -f $config -C 'user=administrator,host=localhost,addr=127.0.0.1'
+    $effective = & $sshd -T -f $config -o 'LogLevel=ERROR' -C 'user=administrator,host=localhost,addr=127.0.0.1'
     if ($LASTEXITCODE -ne 0) { throw 'Could not inspect effective SSH configuration.' }
     foreach ($line in @('passwordauthentication no', 'pubkeyauthentication yes', 'authenticationmethods publickey')) {
         if ($effective -notcontains $line) { throw "Unexpected SSH authentication setting: $line" }
@@ -99,9 +187,23 @@ try {
     }
     Set-Service -Name sshd -StartupType Automatic
     Start-Service sshd
-    if ((Get-Service sshd).Status -ne 'Running') { throw 'SSH service did not start.' }
+    Assert-SshReady
+    if ($Diagnostics) {
+        Write-StartupReport 'Diagnostic startup passed; checking normal logging next.'
+        Stop-Service sshd
+        $normalSettings = $settings.Replace('LogLevel DEBUG3', 'LogLevel INFO')
+        [IO.File]::WriteAllText($config, ($normalSettings + "`r`n" + $original), $utf8)
+        & $sshd -t -f $config
+        if ($LASTEXITCODE -ne 0) { throw 'Normal logging configuration validation failed.' }
+        Start-Service sshd
+        Assert-SshReady
+        Write-Host 'Normal INFO file logging enabled; verbose startup logging has been disabled.'
+    }
 } catch {
     $failure = $_
+    # Capture the original exit status and fresh logs BEFORE stopping or restoring anything.
+    try { Write-StartupReport $failure.Exception.Message }
+    catch { Write-Warning "Could not save startup diagnostic: $($_.Exception.Message)" }
     if ((Get-Service sshd).Status -ne 'Stopped') { Stop-Service sshd -Force }
     if ($firewallCreated) { Remove-NetFirewallRule -Name $newRule }
     Set-Service -Name sshd -StartupType $oldStartType
