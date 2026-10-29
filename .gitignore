@@ -1,5 +1,8 @@
 .env
 .env.qq
+.env.windows
+.venv-windows/
+data/windows/
 node_modules/
 npm-debug.log*
 .DS_Store

@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from profile_guard import acquire_profile
+from runtime_config import browser_options, data_path, douyin_profile_path
 from xhs_content import clean_author_name, is_note_url, normalize_note, parse_public_note
 from work_metadata import PAGE_DATA_SCRIPT, work_id, page_payloads, find_work, normalize_work
 
@@ -67,9 +68,7 @@ async def get_context():
             playwright = await async_playwright().start()
         try:
             context = await playwright.chromium.launch_persistent_context(
-                os.getenv('DOUYIN_PROFILE', '/data/profile'), headless=False,
-                executable_path='/usr/bin/chromium', timeout=10000,
-                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+                str(douyin_profile_path()), **browser_options(),
             )
             context.set_default_timeout(3000)
             context.on('close', context_closed)
@@ -87,11 +86,11 @@ def context_closed(*_):
 
 
 def bilibili_state_path():
-    return Path(os.getenv('BILIBILI_AUTH_STATE', '/data/bilibili-auth/state.json')).resolve()
+    return data_path('BILIBILI_AUTH_STATE', '/data/bilibili-auth/state.json', 'bilibili-auth/state.json')
 
 
 def xhs_profile_path():
-    return Path(os.getenv('XHS_PROFILE', '/data/xhs-profile')).resolve()
+    return data_path('XHS_PROFILE', '/data/xhs-profile', 'xhs-profile')
 
 
 async def get_xhs_context():
@@ -111,10 +110,7 @@ async def get_xhs_context():
         profile.mkdir(parents=True, exist_ok=True)
         try:
             xhs_context = await playwright.chromium.launch_persistent_context(
-                str(profile), headless=False,
-                executable_path='/usr/bin/chromium', timeout=10000,
-                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
-                      '--disk-cache-size=67108864'],
+                str(profile), **browser_options(cache=True),
             )
             xhs_context.set_default_timeout(5000)
             xhs_context.on('close', xhs_context_closed)
@@ -395,11 +391,7 @@ async def get_bilibili_context():
             playwright = await async_playwright().start()
         if bilibili_browser is None:
             bilibili_browser = await playwright.chromium.launch(
-                headless=False,
-                executable_path='/usr/bin/chromium',
-                timeout=10000,
-                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
-                      '--disk-cache-size=67108864'],
+                **browser_options(cache=True),
             )
         state = bilibili_state_path()
         kwargs = {'viewport': {'width': 1440, 'height': 1000}}
@@ -487,9 +479,10 @@ async def bilibili_cookie_header():
 async def lifespan(app):
     global profile_guard, xhs_profile_guard
     # This lock is held for the entire process lifetime, including browser startup.
-    profile_guard = acquire_profile(os.getenv('DOUYIN_PROFILE', '/data/profile'))
-    xhs_profile_guard = acquire_profile(xhs_profile_path())
+    profile_guard = acquire_profile(douyin_profile_path())
+    xhs_profile_guard = None
     try:
+        xhs_profile_guard = acquire_profile(xhs_profile_path())
         await get_context()
         logger.info('Douyin browser ready; persistent login profile preserved')
         yield

@@ -190,7 +190,7 @@ class LongtuQqBridge(Star):
         self.internal_send_runner = web.AppRunner(app, access_log=None)
         await self.internal_send_runner.setup()
         site = web.TCPSite(
-            self.internal_send_runner, '0.0.0.0',
+            self.internal_send_runner, os.getenv('LONGTU_QQ_INTERNAL_SEND_HOST', '0.0.0.0'),
             int(os.getenv('LONGTU_QQ_INTERNAL_SEND_PORT', '8790')),
         )
         await site.start()

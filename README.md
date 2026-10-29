@@ -2,6 +2,8 @@
 
 > QQ 主链路：QQ ↔ NapCat ↔ AstrBot / Python Bridge ↔ Node HTTP 后端。部署步骤见 [QQ 部署文档](docs/QQ_DEPLOYMENT.md)。
 
+Windows QQ + NapCat 的原生部署见 [Windows 部署与迁移](docs/WINDOWS_NATIVE_DEPLOYMENT.md)。Windows 和 Linux 共用业务代码，使用独立启动入口；原 Linux/Docker 部署方式继续保留。
+
 QQ 版支持既有人格对话、群聊旁观与主动接话、单轮复读、龙图库管理，以及 B 站/小红书/抖音分享解析。视频正常输出为“独立简介卡片 + 视频”；图文正常输出为“独立简介卡片 + 只含图片的合并聊天记录”。QQ 记忆、图库和用量统计使用 SQLite，Node.js 要求 **22.5 或更新版本**。
 
 企业微信入口仍保留，使用官方 `@wecom/aibot-node-sdk` 管理长连接。两种入口不要混用：
