@@ -31,6 +31,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\migration-backup\wind
 
 部署包的补丁可通过 `apply-project-patch.ps1` 应用：它先核对全部补丁与恢复的代码版本，再备份并覆盖匹配的源文件。如果发现服务器代码与本地基线不一致，会停止，不覆盖未知改动。它不包含 `.env.qq`、密钥或业务数据。
 
+本次原始备份的插件布局已实际核对：根目录只有旧的 `astrabot_plugin_longtu_bridge`（`astra` 中多一个 `a`），其 `video_card.py` 是空文件，且缺少多个被 `main.py` 导入的模块。Compose 实际配置挂载的是 `astrbot_plugin_longtu_bridge`，这个正确目录没有进入原归档。因此原 `windows-native-kit` 增量补丁会报 `Missing restored source`；不是 PowerShell 工作目录错误，也不能只重命名旧目录。
+
+改用基于实际归档生成的完整代码补丁 `windows-backend-patch.zip`。它补齐正确目录的全部 22 个 Bridge 源码/字体/素材文件，保留拼错名字的旧目录和 AstrBot 配置；其余已有后端文件仍严格校验旧版本哈希。生成器只从已跟踪的插件文件和原补丁清单取代码，不把备份数据打入补丁：
+
+```sh
+python3 scripts/windows/build-project-patch.py --backup /tmp/longtu-migration-20261028-181454.tar.gz --template .build/windows-native-kit --output /Users/lvyuning/Desktop/windows-backend-patch.zip
+```
+
+通过 COS 传入 Windows 并解压到 `C:\migration-backup` 后执行新包里的脚本：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\migration-backup\windows-backend-patch\apply-project-patch.ps1
+```
+
+看到 `PROJECT PATCH OK` 后再恢复数据库。新包和本地归档已进行完整性/源文件基线校验，不等于服务器上已成功应用；以实际命令结果为准。
+
 ```powershell
 py -3.12 C:\longtu-qq-bot\scripts\windows\restore_sqlite.py --source C:\sqlite-restore-temp\consistent-sqlite\data --target C:\longtu-qq-bot\data --backup-root C:\migration-backup\sqlite-before-native --services-stopped
 ```
