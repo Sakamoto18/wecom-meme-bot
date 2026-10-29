@@ -31,3 +31,15 @@ test('Windows overrides win without discarding inherited system variables', () =
   assert.equal(env.LONGTU_QQ_API_TOKEN, 'new');
   assert.equal(env.QQ_MEDIA_FFMPEG_COMMAND, 'D:/ffmpeg.exe');
 });
+
+test('Windows Python uses the system time zone and can find native media tools', () => {
+  const saved = Object.freeze({ TZ: 'Asia/Shanghai' });
+  const env = nativeEnvironment('C:\\bot', saved, {
+    QQ_MEDIA_FFMPEG_COMMAND: 'D:/media/bin/ffmpeg.exe',
+    QQ_IMAGE_OCR_COMMAND: 'C:/Program Files/Tesseract-OCR/tesseract.exe',
+  }, { Path: 'C:\\Windows\\System32' });
+  assert.equal(Object.hasOwn(env, 'TZ'), false);
+  assert.equal(saved.TZ, 'Asia/Shanghai');
+  assert.equal(env.Path, 'D:/media/bin;C:/Program Files/Tesseract-OCR;C:\\Windows\\System32');
+  assert.deepEqual(Object.keys(env).filter(key => key.toLowerCase() === 'path'), ['Path']);
+});

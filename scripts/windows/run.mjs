@@ -19,9 +19,12 @@ const modes = {
   provider: { command: python, args: ['-m', 'uvicorn', 'app:app', '--host', '127.0.0.1', '--port', '9001'], cwd: path.join(root, 'services/douyin-provider') },
   // AstrBot uses its own virtual environment; its dependency versions differ.
   astrbot: astrbot ? { command: path.join(astrbot, '.venv/Scripts/python.exe'), args: ['main.py'], cwd: astrbot } : null,
+  napcat: env.NAPCAT_ROOT && /^\d+$/.test(env.NAPCAT_ACCOUNT || '')
+    ? { command: path.join(env.NAPCAT_ROOT, 'NapCatWinBootMain.exe'), args: [env.NAPCAT_ACCOUNT], cwd: env.NAPCAT_ROOT }
+    : null,
 };
 const service = modes[process.argv[2]];
-if (!service) throw new Error('用法：node scripts/windows/run.mjs node|provider|astrbot（AstrBot 需配置 ASTRBOT_ROOT）。');
+if (!service) throw new Error('用法：node scripts/windows/run.mjs node|provider|astrbot|napcat（需配置 ASTRBOT_ROOT 或 NAPCAT_ROOT/NAPCAT_ACCOUNT）。');
 if (!existsSync(service.command)) throw new Error(`运行环境尚未安装：${service.command}`);
 // dotenv in qq-api must not reload the Linux settings over the native overlay.
 env.QQ_ENV_FILE = path.join(root, '.env.qq');

@@ -32,8 +32,19 @@ export function nativeEnvironment(root, saved, overrides = {}, inherited = {}) {
     LONGTU_OCR_LANGUAGES: saved.LONGTU_OCR_LANGUAGES || 'chi_sim+eng',
     MEDIA_BROWSER_CHANNEL: 'msedge',
     PYTHONUTF8: '1',
-    TZ: 'Asia/Shanghai',
+    PYTHONUNBUFFERED: '1',
   }, overrides);
+  // Windows Python's CRT interprets TZ as a POSIX string, not an IANA zone.
+  // Use the server's Windows time zone (China Standard Time) and the application's
+  // explicit ZoneInfo settings; forwarding the Linux TZ value shifts Python clocks.
+  delete env.TZ;
+  const pathKeys = Object.keys(env).filter(key => key.toLowerCase() === 'path');
+  const inheritedPath = pathKeys.map(key => env[key]).filter(Boolean).join(';');
+  for (const key of pathKeys) delete env[key];
+  const toolDirs = [env.QQ_MEDIA_FFMPEG_COMMAND, env.QQ_IMAGE_OCR_COMMAND]
+    .filter(command => command && path.win32.isAbsolute(command))
+    .map(command => path.win32.dirname(command));
+  env.Path = [...new Set(toolDirs), inheritedPath].filter(Boolean).join(';');
   if (!Object.hasOwn(overrides, 'LONGTU_QQ_API_TOKEN')) {
     env.LONGTU_QQ_API_TOKEN = env.QQ_API_TOKEN;
   }

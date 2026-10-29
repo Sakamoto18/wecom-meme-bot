@@ -4,15 +4,21 @@
 
 Linux 继续使用 `docker-compose.server.yml` / `docker-compose.qq.yml` 和原 `.env.qq`。Windows 启动器只对自己的子进程覆盖本机地址与文件路径；人格、群聊学习、联网、缓存 TTL、用量和推送逻辑共用原有代码。`runtime_config.py` 在 Linux 继续默认 `/usr/bin/chromium`、`/data/profile` 和原有启动参数。
 
-## 本次恢复状态
+## 本次恢复状态（2026-10-29）
 
 - Windows 实例：`124.222.111.193`，2 核 8GB，80GB 系统盘。
 - 代码及主备份已解压到 `C:\longtu-qq-bot`。
 - 两份原始归档及 SHA256 校验文件在 `C:\migration-backup`，用户已验证 Match=True。
 - 一致性 SQLite 源在 `C:\sqlite-restore-temp\consistent-sqlite\data`。
 - 已应用 `windows-backend-patch`；一致性恢复脚本已隔离旧 WAL/SHM，并恢复及校验 12 个数据库。Node 后端现在已启动，不要再对运行中的数据重跑恢复脚本。
-- Windows QQ / NapCat 已登录并收到消息。Node 的 `/healthz` 已通过：53,703 条群事件、7 份人格档案、284 张图片；消息总数需重新查询，旧截图的数字不能可靠辨读。Provider 的 `/healthz` 已通过，`browser_ready=True`。这些是之前的启动检查，当前进程状态、端到端回复、检索与媒体发送仍待验收。
-- Windows OpenSSH Server 组件已安装，`RestartNeeded=False`。首次初始化在服务启动后立即退出，配置已回滚；远程维护通道尚未建立，详见下述诊断步骤。
+- Node 22.23.4、Python 3.12.10、Edge、FFmpeg 9.0.2 和 Tesseract 5.5.3.20260724 已安装。已在 Windows 实测中文/英文 OCR、H.264 编码和 ffprobe；OCR 语言包含 `chi_sim`、`eng`、`osd`。
+- AstrBot v4.29.3（`f61a7f42696da6df25dc7a249ec9b8d54ed9da18`）原生安装在 `C:\AstrBot`，使用独立 `.venv`，依赖检查通过；匹配的 WebUI 已安装。Bridge v1.9.4 已加载。原部署使用 `latest`，未能可靠恢复其确切版本，因此本次安装了明确版本并验证启动，不能称为版本完全相同的恢复。
+- Node 和 Provider 的 `/healthz` 通过。已核对 134,754 条消息、19 个会话、10 份摘要、360 名群成员、53,703 条群事件、832 个群话题、3 份群风格档案、7 份人格档案、284 张图片。`.env.qq` SHA256 与原始归档完全一致，缓存 TTL、群配置及模型配置保持原值。
+- Windows QQ 9.9.33-52230 / NapCat v4.18.41 已启动。重启前管理接口无响应，保存配置并重启后恢复；快速登录明确返回“登录态已失效，请重新登录”。目前等待账号 `2053160463` 扫码，不能把进程运行视为 QQ 在线。反向 WebSocket 已配置到本机 AstrBot，实际连接和群内收发仍待登录验收。
+- B 站的可移植 storage state 已从原数据复制到 Windows 独立目录，`/bilibili-login-status` 实测 `logged_in=true`。抖音的动态图文和视频样例在原生 Provider 上均解析成功；小红书当前没有有效登录态，尚未完成验收。
+- 应用媒体链路已实测 `XTnePPdpL1g` 图文 → `8Q9wtBYz76A` 视频 → 同一图文缓存：两张动态图片转换为 4,636,050 / 3,183,591 字节 GIF，视频下载 1,119,256 字节，作品 ID 和媒体形态保持正确。验证没有向 QQ 发消息。
+- 四个组件已配置为 Administrator 登录时启动的 Windows 计划任务，当前均运行。远程桌面断开后会话可以保留；注销会终止交互组件，系统重启后仍需登录 Windows。尚未进行整机重启验收。
+- Windows OpenSSH 已修复并验证，服务为 Running / Automatic，使用管理员公钥认证。后续部署可直接走 SSH，无需每次通过 COS 替换代码包。
 - 50GB 旧 Linux 数据盘保持原样；Windows 显示 RAW 不等于空盘，不初始化、不格式化。
 - WSL2 导入没有成功；误启用的组件已禁用并重启。
 - COS 桶 `long-bot-01-1257219847` 保持私有。账号与桶所有者已确认相同；COSBrowser 列表异常并不能证明无权限，当前使用网页控制台上传/下载。
@@ -63,7 +69,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\longtu-qq-bot\scripts
 
 Node 使用项目 lockfile。媒体 Provider 使用 `.venv-windows`，AstrBot 使用自己的 `.venv`，避免 FastAPI 等依赖冲突。Python pip 使用腾讯云镜像；浏览器使用服务器已安装的 Windows Edge。首次启动前确认 Edge 可打开。
 
-还需要 Windows x64 FFmpeg（默认 `C:\tools\ffmpeg\bin\ffmpeg.exe`）和 Tesseract OCR（默认 `C:\Program Files\Tesseract-OCR\tesseract.exe`，须有 `chi_sim`、`eng` 语言数据）。路径不同时复制 `.env.windows.example` 为 `.env.windows` 并修改。不能把缺少这些依赖视为已保留全部能力。
+还需要 Windows x64 FFmpeg（默认 `C:\tools\ffmpeg\bin\ffmpeg.exe`）和 Tesseract OCR（默认 `C:\Program Files\Tesseract-OCR\tesseract.exe`，须有 `chi_sim`、`eng` 语言数据）。本次均已安装并实测。Tesseract 安装器完成主程序、卸载注册和英语包后卡在联网下载 OSD；停止该下载，按 SHA256 校验后补齐官方 `tessdata_fast` 的中文和 OSD 文件，随后通过实际识别测试。安装包与语言文件保留在 `C:\migration-backup\media-native`。
+
+路径不同时复制 `.env.windows.example` 为 `.env.windows` 并修改。启动器把 FFmpeg/OCR 目录加入子进程 `Path`，并移除 Linux 的 `TZ`：Windows Python CRT 会将 `Asia/Shanghai` 错解为 POSIX 时区，曾导致日志比本地时间慢七小时。服务器系统时区已设为 `China Standard Time`，AstrBot 日志已复核为 `+0800`；Bridge 定时任务继续显式使用 `ZoneInfo("Asia/Shanghai")`。
 
 在项目根目录分别启动两个窗口：
 
@@ -102,13 +110,40 @@ node scripts/windows/run.mjs astrbot
 
 启动器为 Bridge 注入本机后端地址和同一个 API token，并把主动视频内部接口绑定到本机；不打印密钥。AstrBot 的 OneBot 反向 WebSocket 监听 `127.0.0.1:6199`，NapCat 的 WebSocket 客户端使用 `ws://127.0.0.1:6199/ws`，两端 token 一致。具体以恢复后的平台配置为准，保持原 platform ID，避免定时任务会话标识失配。
 
-## 5. 验收后再做常驻启动
+## 5. 计划任务与运行验收
 
 需要实际确认：Windows QQ 登录设备、OneBot 双向通信、Bridge 接管无双回复、原人格与群记忆、图库与中文 OCR、搜索、抖音视频/动态图文交替解析、B 站/小红书、定时任务时间和目标。验证时仅做本机健康检查；群消息测试及推送按用户指定范围执行。
 
-原生 QQ/浏览器有桌面会话要求。常驻配置应分开处理 Node 后台进程与 QQ/浏览器交互会话；不要贸然将所有组件设成无桌面的 SYSTEM 服务。远程桌面断开与注销不同，注销可能终止交互进程。安排启动策略后应做一次重启验收。
+原生 QQ/浏览器有桌面会话要求。本次四个任务均使用 Administrator 的交互会话，不使用 SYSTEM 启动 QQ/Edge，不保存 Windows 登录密码。远程桌面断开与注销不同，注销会终止交互进程；重启后需登录 Administrator，不能将此描述为无人登录也会启动。需要保留桌面会话的运行方式下，后续仍须安排一次整机重启验收。
 
-当前本地自动测试覆盖配置保留、浏览器默认值、SQLite 日志隔离及原解析回归；**尚未在目标 Windows 上完成运行验收**。旧 Compose 与归档保留供以后 Linux 部署，Windows 原生配置不自动写回 Linux。
+在部署用户的管理员 PowerShell 注册任务（会先备份已有定义，不会自动停止或启动组件）：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\longtu-qq-bot\scripts\windows\install-tasks.ps1
+```
+
+| 任务 | 模式 | 本机接口 |
+| --- | --- | --- |
+| `Longtu-Backend` | `node` | 8787 |
+| `Longtu-Provider` | `provider` | 9001 |
+| `Longtu-AstrBot` | `astrbot` | 6185、6199、8790 |
+| `Longtu-NapCat` | `napcat` | 6099 |
+
+全部监听 `127.0.0.1`。任务以最高权限运行，失败后间隔一分钟重试，最多三次，没有默认三天运行时限，重复启动会被忽略。`task-run.ps1` 为每次启动分别保存 stdout/stderr 到 `data\windows\logs`；启动时清理该组件超过 14 天的旧日志，运行中的单个日志文件尚未做按大小轮转。
+
+PowerShell 5.1 的进程对象需要在等待前保留原生 Handle，否则退出码可能丢失并被当成成功。启动器已处理这一点，Windows 回归脚本 `test\windows-task-runner.test.ps1` 验证 0/7 两种退出码及 stdout/stderr 分离，确保失败能传递给计划任务。
+
+已确认旧手动启动进程全部退出后，才切换到任务启动，避免重复实例争抢端口或浏览器 profile。后续更新代码或 `.env.windows` 后，按组件重启任务并检查端口和健康接口；不要重跑数据恢复。更新 Bridge 时同步项目插件和 `C:\AstrBot\data\plugins\astrbot_plugin_longtu_bridge`。
+
+```powershell
+Get-ScheduledTask -TaskName 'Longtu-*' | Select-Object TaskName,State
+Stop-ScheduledTask -TaskName Longtu-Backend
+Start-ScheduledTask -TaskName Longtu-Backend
+```
+
+停止后应确认旧监听和子进程已退出，再执行启动。上述示例只重启后端；QQ 重新启动可能触发扫码，不应作为每次后端更新的固定步骤。
+
+本地自动测试覆盖 Windows 配置保留、时区/工具路径、浏览器默认值、SQLite 日志隔离及 Provider 生命周期回归。Windows 上已验证内部 API 认证、Exa 实际检索、DeepSeek 实际响应、应用 OCR、视频编码及 Provider 解析；未主动向任何群或私聊发送测试消息。旧 Compose、原始 `.env.qq`、原 Linux browser profile 和归档全部保留，Windows 原生配置不自动写回 Linux。
 
 ## 6. 恢复远程维护通道
 
@@ -121,9 +156,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\enable.ps1
 
 脚本在检查管理员权限、安装状态和包完整性后，备份 SSH 配置与授权文件，保留已有公钥，将管理员授权文件权限设为 SYSTEM 和 Administrators，限制 SSH 为 administrator 公钥认证，验证配置后启用 TCP 22 防火墙规则和 sshd 自启动。验证失败时恢复原配置；不会重启系统或触碰 Node、NapCat、Provider。默认的远程 shell 保持不变，部署时可显式调用 PowerShell。
 
-### 启动后立即退出时的诊断
+### 本次启动失败的诊断记录（已修复）
 
-2026-10-29 的服务器截图确认：服务使用 `C:\Windows\System32\OpenSSH\sshd.exe` 和 LocalSystem，系统事件先报告运行（7036）随后异常停止（7034），脚本随后回滚启动类型（7040）。OpenSSH 事件通道没有记录。使用默认配置、回环地址和 22222 端口进行前台调试能正常监听；22 端口未发现监听进程。`ssh` 目录的 SYSTEM/Administrators 完全控制、Authenticated Users 只读，以及 `logs` 目录仅 SYSTEM/Administrators 完全控制的 DACL 均没有展示异常。目录所有者、服务退出码和服务模式下的日志尚待确认；不能据此前台成功就认定 SSH 服务正常，也不能直接认定目录权限是根因。
+2026-10-29 初期的服务器截图确认：服务使用 `C:\Windows\System32\OpenSSH\sshd.exe` 和 LocalSystem，系统事件先报告运行（7036）随后异常停止（7034），脚本随后回滚启动类型（7040）。OpenSSH 事件通道没有记录。使用默认配置、回环地址和 22222 端口进行前台调试能正常监听；22 端口未发现监听进程。`ssh` 目录的 SYSTEM/Administrators 完全控制、Authenticated Users 只读，以及 `logs` 目录仅 SYSTEM/Administrators 完全控制的 DACL 均没有展示异常。当时目录所有者、服务退出码和服务模式下的日志仍待确认；这些初期证据不足以直接认定目录权限是根因。
 
 新版 `enable-ssh.ps1 -Diagnostics` 临时启用 `LOCAL0` / `DEBUG3` 文件日志。失败时先收集退出码、程序版本、目录与密钥文件的所有者/SDDL、22 端口及本次启动日志和事件，再执行原有回滚；报告只记录权限元数据，不读取私钥内容。每次尝试的报告在对应备份目录内，包目录另有 `ssh-diagnostic.txt` 便于 VNC 打开。如果成功，则切换为 `LOCAL0` / `INFO` 并重启复核；两次启动均要求服务持续运行五秒且自身进程持有 TCP 22 监听，避免瞬间运行被误报为成功。该分支不改变目录 ACL，不重装 OpenSSH，也不将前台调试当作常驻方案。
 
@@ -160,4 +195,8 @@ powershell -NoProfile -ep Bypass -File .\enable.ps1 -Diagnostics
 
 用户需回传脚本末尾的服务器 ED25519 主机指纹；连接端先比对再保存新的主机密钥，不能因系统重装而直接跳过主机身份检查。连接端本次专用密钥路径为 `~/.ssh/id_ed25519_longtu_windows`，私钥只保留在本机，不打包、不上传 COS、不提交 Git。
 
-远程通道验证通过后，后续源码/依赖/环境配置同步与健康检查走 SSH；COS 继续用于备份和必要的安装包传递。首次迁移剩余工作包括 AstrBot、FFmpeg、中文 OCR、浏览器登录态和完整消息链路验证。
+本次修正主机私钥的所有者和 ACL 后，`enable.ps1 -Diagnostics` 已成功，服务稳定运行，正常 INFO 日志恢复，SSH 登录成功。确认的根因是主机私钥权限，不是端口占用或 `ssh` 目录 DACL。成功前的备份位于 `C:\migration-backup\ssh-before-native-298972b2785d4c1890a448d1cb0233b3`。
+
+已核验的服务器 ED25519 指纹为 `SHA256:Rj/1/KUWJWj0kn96eX9MVDZ82YC7NMGwb+6gVjrtakI`，连接端使用独立 known-hosts 文件 `~/.ssh/known_hosts_longtu_windows`，保持严格主机检查。远程默认 shell 是 cmd，自动部署显式调用 PowerShell；长脚本先传文件，避免 cmd 长度限制。
+
+后续源码、依赖、环境配置同步与健康检查走 SSH；COS 继续用于备份。迁移剩余验收包括 QQ 扫码及 WebSocket/实际消息链路、小红书登录、实际定时推送与整机重启后的恢复。不要据本机健康检查宣称这些项目已全部完成。
