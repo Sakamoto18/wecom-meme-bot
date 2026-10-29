@@ -22,10 +22,18 @@
 
 ## 验证与局限
 
-- 修改前 731 项测试通过；新增和更新回归覆盖长卡尾部、容量、权限、替换回退、群语感与语料并存、调侃与事实检索/推理并存，以及当前任务与换题。
+- 修改前 731 项测试通过，修复后 `npm run check` 和全部 737 项测试通过；新增和更新回归覆盖长卡尾部、容量、权限、替换回退、群语感与语料并存、调侃与事实检索/推理并存，以及当前任务与换题。
 - `scripts/evaluate-persona-voice.mjs --live` 使用部署的 `deepseek-flash` 和激活的全局 v3；只调用模型，搜索使用固定虚构证据，不向 QQ 发消息，不写群记忆。记录规划、检索请求、初稿、重写及最终结果。
 - 八个场景包括朋友自嘲、缓存原理、当前赛果、转述他人、纠正主语、停止玩笑的求助、换话题、未知梗出处。小样本确认两类语感参考并存、时效查询和推理没有被禁用；同时暴露过旧话题回扣、无证据推断、求助时宣告“我认真”等问题，不能仅凭本地 review=valid 宣称表达质量全部达标。
 - 所谓“学习/训练”在本项目中是存储与检索参考、群习惯提炼和提示条件化，**没有修改 DeepSeek 的模型权重**。不能把语料条数等同于模型已经学会何时互损，也不能凭本次少量样本认定基座语料不足是唯一原因。
 - 上线后应继续查看自然消息，比较回答任务是否完成、证据范围、人物归属、重复率和用户反馈；不要奖励纯脏话或固定口癖。若未来微调，应使用多轮语境及好/坏回复对，覆盖答题、检索、纠错与收手，而非只喂辱骂语料。
 
 参考：SillyTavern [角色与对话示例](https://docs.sillytavern.app/usage/core-concepts/characterdesign/)、MaiBot [官方文档](https://docs.mai-mai.org/manual/)、TRL [偏好训练文档](https://github.com/huggingface/trl/blob/main/docs/source/dpo_trainer.md)。这些项目支持相应设计思路，不证明当前 Bot 已完成微调或达到相同效果。
+
+## 本次部署记录
+
+- 代码提交 `aab48b5` 已部署到 Windows 原生后端，仅重启 `Longtu-Backend`。运行文件按 SHA256 校验；NapCat、AstrBot 和 Provider 保持运行，OneBot WebSocket 连接仍建立。
+- `.env.windows` 仅追加 `QQ_REPLY_PLANNER_MAX_TOKENS=600`； `.env.qq` 哈希未变，缓存 TTL 没有调整。
+- 回滚文件和一致性人格数据库快照位于 `C:\migration-backup\persona-voice-20261029-201646`。部署清单位于 `C:\longtu-qq-bot\data\windows\persona-voice-deployment.json`。
+- 部署前后激活人格内容签名一致，全局仍为 v3。未向 QQ 主动发送验证消息。
+- 最后针对性复测中，换话题回复为“番茄鸡蛋面，十分钟搞定，别又整成外卖等一小时”；当前赛果回答限定在给定的三场比赛，没有误称用户提供了旧成绩；停止玩笑的求助直接给操作，没有再附带亲属攻击。它们是固定样本结果，不是所有未知对话的通过率。
