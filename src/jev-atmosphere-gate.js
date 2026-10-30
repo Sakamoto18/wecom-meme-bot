@@ -414,7 +414,7 @@ const QUESTIONS = {
   },
   attack_intensity: {
     type: 'noul',
-    instructions: '攻击语境成立时的自然强度。没有攻击授权必须为 0；不要因为角色设定而强行抬高。',
+    instructions: '攻击语境成立时的自然强度。没有攻击授权必须为 0；明确辱骂机器人、直接要求加大火力，或说机器人攻击性弱/太软时，若对象和对线关系清楚通常取 0.8 到 1.0；不要把高压回击降成礼貌吐槽。',
   },
   attack_angle: {
     type: 'choice',

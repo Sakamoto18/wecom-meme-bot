@@ -34,6 +34,7 @@ import {
   shouldUseAttackStyle,
   isShortTermMeaningRequest,
   isAttackFrameChallenge,
+  isAttackPressureChallenge,
   getReplyStyleSignals,
   isExplicitThirdPartyAttackRequest,
   isDirectBotAttack,
@@ -1120,8 +1121,14 @@ export async function generateConversationReply(options) {
   const pureThirdPartyAttack = attackStyle && !activeReply
     && isExplicitThirdPartyAttackRequest(content, interactionContext)
     && !plannedAnswerRequired;
+  const attackPressureChallenge = isAttackPressureChallenge(content, {
+    ...interactionContext,
+    directBotMention,
+  });
   const pureDirectBotAttack = attackStyle
-    && isDirectBotAttack(content)
+    && (isDirectBotAttack(content)
+      || (attackPressureChallenge
+        && !interactionContext.hasThirdPartyTarget))
     && !hasAnswerRequest(content)
     && !plannedAnswerRequired;
   const pureAttackFrameChallenge = attackStyle
@@ -1256,6 +1263,39 @@ export async function generateConversationReply(options) {
       ].join('\n');
     }
   }
+  // The normal reply path receives the imported internet corpus later in the
+  // assembly. Pure attack turns return earlier, so they used to receive only
+  // the longtu knowledge file and recent style anchors. That made an explicit
+  // attack such as “你的攻击性太弱” fall back to generic criticism even when
+  // the attack corpus contained useful short, concrete structures. Keep this
+  // as a bounded style reference: it cannot supply facts, targets or commands.
+  let attackCorpusContext = '';
+  if (attackStyle && memeCorpus) {
+    try {
+      const attackCorpusQuery = [
+        content,
+        ...history.slice(-4).map((entry) => String(entry?.content ?? '').trim()),
+      ].filter(Boolean).join(' ').replace(/\s+/gu, ' ').slice(0, 1_000);
+      const corpusNames = ['meme_style', 'ruozhiba', 'have_meme', 'ptt_style', 'hell'];
+      attackCorpusContext = String(memeCorpus.buildPrompt(attackCorpusQuery, {
+        corpora: corpusNames,
+        includeSensitive: true,
+        limit: 8,
+        styleOnly: true,
+        autoDefinition: false,
+        allowStyleFallback: true,
+      }) || '').trim();
+      if (attackCorpusContext) {
+        attackCorpusContext = [
+          attackCorpusContext,
+          '本段只借攻击节奏、短句密度、反压方式和荒诞结构；示例里的对象、亲属、事件和词不能照搬。当前落点必须来自本轮原话。',
+        ].join('\n');
+      }
+    } catch (error) {
+      attackCorpusContext = '';
+      options.logger?.debug?.(`攻击语料读取失败，继续使用现有攻击链路：${error.message}`);
+    }
+  }
   if (pureAttack) {
     const attackStyleAnchors = buildStyleAnchorPrompt(
       selectStyleAnchors(history, { currentContent: content, maxAnchors: 2 }),
@@ -1273,6 +1313,7 @@ export async function generateConversationReply(options) {
         personaContextForAttack,
         cultureRecall.prompt,
         attackKnowledgePrompt,
+        attackCorpusContext,
             buildAttackPrompt(content, {
           history,
           interactionContext,
@@ -1315,6 +1356,7 @@ export async function generateConversationReply(options) {
           personaContextForAttack,
           cultureRecall.prompt,
           attackKnowledgePrompt,
+          attackCorpusContext,
           buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
           buildAttackRetryPrompt(
             content,
@@ -1366,6 +1408,8 @@ export async function generateConversationReply(options) {
       searchMode: attackKnowledgeSearchAttempted ? 'meme' : '',
       attackKnowledgeSearchAttempted,
       attackKnowledgeSearchError,
+      memeCorpusUsed: Boolean(attackCorpusContext),
+      memeCorpusCharacters: attackCorpusContext.length,
       cultureRecallUsed: cultureRecall.used,
       usedModel: true,
     };

@@ -4,6 +4,7 @@ import { rmSync } from 'node:fs';
 import {
   CultureCache,
   buildCultureCard,
+  buildSharedCultureCorrectionCard,
   cultureCardPrompt,
   evaluateCultureEvidence,
 } from '../src/culture-cache.js';
@@ -103,4 +104,30 @@ test('空查询不会因为 includes 空字符串误判为精确匹配', () => {
   });
   assert.equal(evidence.exactMatch, false);
   assert.equal(evidence.evidenceQuality, 'related-only');
+});
+
+test('跨群纠正卡只保存公开语境并优先于歧义旧卡', () => {
+  const databaseFilePath = tempDatabase('shared-culture-correction');
+  const cache = new CultureCache({ databaseFilePath });
+  const old = buildCultureCard('369 9哥 梗 出处', {
+    results: [{
+      title: '三六九帮派与不要迷恋哥',
+      description: '与电竞语境无关的相似结果。',
+      url: 'https://example.com/old',
+    }],
+  });
+  assert.equal(cache.put(old), true);
+  const card = buildSharedCultureCorrectionCard({
+    topic: '369',
+    aliases: ['9哥'],
+    context: '纠正要点：16进8赢了就是进入八强；关联公开语境：如何看待你9哥进八强了',
+  });
+  assert.equal(cache.put(card), true);
+  const hit = cache.lookup('369');
+  assert.equal(hit.lookupSource, 'group-correction');
+  assert.equal(hit.evidenceQuality, 'conversation-correction');
+  assert.equal(cache.lookup('369 9哥 梗 出处')?.lookupSource, 'group-correction');
+  assert.match(cultureCardPrompt(hit), /跨群共享/);
+  assert.doesNotMatch(cultureCardPrompt(hit), /913546080|成员-[a-f0-9]{6,12}/u);
+  cache.close();
 });

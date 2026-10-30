@@ -19,6 +19,7 @@ import {
   isHostileContent,
   isDirectBotAttack,
   isAttackFrameChallenge,
+  isAttackPressureChallenge,
   isInvalidPureMentionReply,
   removeInternalParticipantIds,
   reviewAttackReply,
@@ -678,6 +679,13 @@ test('纯艾特使用短人格提示并拒绝客服式回复', () => {
   assert.equal(isInvalidPureMentionReply('**你好**\n- 有什么问题？'), true);
 });
 
+test('攻击性太弱被识别为二次挑衅并进入加压路由', () => {
+  assert.equal(isAttackPressureChallenge('你的攻击性太弱了，没火力就别端着', {}), true);
+  assert.equal(shouldUseAttackStyle('你的攻击性太弱了，没火力就别端着', []), true);
+  assert.equal(isAttackPressureChallenge('攻击性太弱，为什么会这样？', { hasThirdPartyTarget: true }), false);
+  assert.equal(isAttackPressureChallenge('火力不够，继续', { explicitBotMention: true }), true);
+});
+
 test('攻击提示要求直接攻击，不强求逻辑关联或固定语料', () => {
   const prompt = buildAttackPrompt('你真是司马了');
   assert.match(prompt, /你真是司马了/);
@@ -687,6 +695,8 @@ test('攻击提示要求直接攻击，不强求逻辑关联或固定语料', ()
   assert.match(prompt, /龙图式落刀/);
   assert.match(prompt, /一处贴题的短反问、拆台或直接回敬就可以/);
   assert.match(prompt, /不强制两拍或比喻/);
+  assert.match(prompt, /攻击性弱、软、没火力/);
+  assert.match(prompt, /直接给出更重的定性/);
   assert.doesNotMatch(prompt, /本轮只使用这个随机画面种子|本轮只使用.*截图意象/);
   assert.match(prompt, /禁止孤立拉丁字母 ma/);
   assert.doesNotMatch(prompt, /公开龙图语料参考/);
@@ -798,6 +808,19 @@ test('攻击提示不再抽随机画面，要求从当前原话找落点', () =>
   assert.match(prompt, /族谱、户口本、老冯、你🐎、红温龙、龙怒/);
   assert.doesNotMatch(prompt, /你妈是批发的/);
   assert.doesNotMatch(prompt, /遗照|骨灰盒|背景板|贴吧旧帖/);
+});
+
+test('对方质疑攻击性时提示要求二次加压，不停留在旁观点评', () => {
+  const prompt = buildAttackPrompt('你的攻击性也是弱的不行，没有攻击力的龙图就仿佛我把你妈鲨了你却无能为力一样的软弱', {
+    jevAttackStrategy: {
+      decision: 'reply', target: 'bot', targetConfidence: 0.95,
+      intensity: 0.62, angle: 'family_meme', timing: 'standalone',
+    },
+  });
+  assert.match(prompt, /明确对线加压/);
+  assert.match(prompt, /不是在让你解释攻击性/);
+  assert.match(prompt, /把评语改成当面落刀/);
+  assert.match(prompt, /intensity=0\.82/);
 });
 
 test('自然龙图回复不需要拉丁字母 ma，并能检测错误拼接', () => {

@@ -50,6 +50,7 @@ import {
 import { IMAGE_SOURCE_PROMPT, normalizeSourceCandidates } from './search-scope.js';
 import { isDenseImageText, PASSIVE_IMAGE_QUESTION } from './passive-image.js';
 import { formatAdminSlashCommandHelp, isSlashCommandHelp } from './qq-command-help.js';
+import { buildSharedCorrectionFromConversation } from './shared-culture-learning.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -4482,6 +4483,39 @@ export class QqBotService {
     }
   }
 
+  learnSharedCultureFromCorrection(payload, message, conversationContent) {
+    if (payload.messageType !== 'group'
+      || !this.cultureCache
+      || payload.pureBotMention
+      || this.isPeerBotMessage(payload)
+      || /^\s*\//u.test(String(payload.text ?? ''))
+      || !String(conversationContent ?? '').trim()) {
+      return false;
+    }
+    try {
+      const history = this.conversationStore.get(getConversationId(message));
+      const card = buildSharedCorrectionFromConversation({
+        currentText: conversationContent,
+        history,
+      });
+      if (!card) return false;
+      const saved = this.cultureCache.put(card);
+      if (saved) {
+        this.logger.log?.(
+          `QQ 跨群文化纠正卡已更新：topic=${card.normalizedTopic}`
+            + ` aliases=${card.terms.slice(1).join('|') || '-'}`
+            + '，仅保存脱敏语境，不覆盖当前事实检索',
+        );
+      }
+      return saved;
+    } catch (error) {
+      this.logger.warn?.(
+        `QQ 跨群文化纠正卡写入失败：group=${payload.groupId || '-'} error=${error.message}`,
+      );
+      return false;
+    }
+  }
+
   recordGroupEvent(payload, message, conversationContent) {
     try {
       const topicEnabled = this.groupMemory?.isEnabled?.(payload.groupId) === true;
@@ -5816,6 +5850,7 @@ export class QqBotService {
     this.recordParticipants(payload);
     this.inferPlainTextTargets(payload, message);
     this.recordMemberObservation(payload, message);
+    this.learnSharedCultureFromCorrection(payload, message, conversationContent);
     this.recordGroupEvent(payload, message, conversationContent);
     const adminStopCommand = payload.messageType === 'group'
       && isAdminStopCommand(payload.text);

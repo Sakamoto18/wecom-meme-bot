@@ -30,11 +30,16 @@ const DEESCALATION_PATTERN = /(?:认真回答|正常回答|就事论事|对事�
 const SENSITIVE_SUPPORT_PATTERN = /(?:我(?:的)?(?:妈|爸|父亲|母亲|家人|朋友|亲人).*(?:去世|过世|离世|没了)|自杀|轻生|性侵|强奸|家暴|绝症|病危|急救|葬礼|哀悼)/i;
 const ADVERSARIAL_FOLLOWUP_PATTERN = /(?:回答我|哪(?:里)?来的|你(?:妈|🐎|呢)|咋(?:了|地|么)|干什么|凭什么|不服|然后呢|就这|继续|有种|笑死)/i;
 const ATTACK_FRAME_CHALLENGE_PATTERN = /(?:吵架|对线|互骂|开骂|干架)[^。！？!?\n]{0,12}(?:还|也|就|要|得|当然)[^。！？!?\n]{0,10}(?:挑|讲|分析|解释|装|摆|方向|逻辑|道理|理中客)|(?:还|在)[^。！？!?\n]{0,8}(?:挑|讲|分析|解释)[^。！？!?\n]{0,6}(?:方向|逻辑|道理)|(?:装|当)理中客|讲(?:什么|啥)道理/u;
+// “攻击性太弱/没火力” is a direct second-round challenge, not a request
+// for a style report. Keep it semantic and narrow: a bare mention of “火力”
+// or “攻击性” must not turn an unrelated question into an attack turn.
+const ATTACK_PRESSURE_CHALLENGE_PATTERN = /(?:你(?:的|这|这套|这点)?|龙玉涛)?(?:攻击性|火力|嘴硬|回击|骂人).{0,12}(?:弱|软|不行|没劲|不够|太轻|加大|更狠|加强|提升)/u;
 const ATTACK_CULTURE_PLAYBOOK = [
   '【祖安/龙图攻击语法：只借结构，不抄旧句】',
   '祖安式压强来自咬住对方原话里的词、态度或矛盾，可用顺杆爬、假夸、反手定性、排比递进或荒诞转职；选贴合当前话头的方式，不必逐项完成。',
   '龙图式落刀要短、傲、嘴硬：可借族谱、户口本、老冯、你🐎、红温龙、龙怒这类虚构亲属或斗图意象，但一轮最多用一个核心落点，禁止关键词堆砌。',
   '一处贴题的短反问、拆台或直接回敬就可以，不强制两拍或比喻；有新的笑点才补刀，不为了达到结构要求扩写解释。',
+  '强度来自“具体落点 + 直接定性 + 贴题补刀”：不要把对方的挑衅改写成“你只是攻击性弱/借家属撑场面”这种旁观点评。对方已经把亲属梗甩过来时，可以顺着这条落点反压回去；对方只骂行为时，就把行为本身骂到位。',
 ].join('\n');
 // 只保留明确的指令入口，普通‘评价’或叙述某人在骂人不直接启动攻击。
 const THIRD_PARTY_ATTACK_REQUEST_PATTERN = /^(?:@[^\s]+\s+)*(?:(?:请|帮我|给我|麻烦你|你)\s*)*(?:把[^，。！？\n]{1,30})?(?:骂|攻击|怼|喷|拷打|羞辱|嘲讽|对线)/i;
@@ -170,6 +175,21 @@ export function isAttackFrameChallenge(content, history = []) {
     .some((message) => message?.role === 'assistant' && String(message?.content ?? '').trim());
 }
 
+export function isAttackPressureChallenge(content, options = {}) {
+  const normalized = styleRequestText(content);
+  if (!normalized || !ATTACK_PRESSURE_CHALLENGE_PATTERN.test(normalized)) return false;
+  // If another member is the explicit target, the phrase can be commentary
+  // about that member. Only a direct second-person phrase or a confirmed bot
+  // address may open the bot's high-pressure route.
+  if (options.hasThirdPartyTarget === true && options.quotedBot !== true) return false;
+  if (/(?:你(?:的|这|这套|这点)?|龙玉涛)(?:攻击性|火力|嘴硬|回击|骂人)/u.test(normalized)) return true;
+  return Boolean(
+    options.explicitBotMention
+      || options.directBotMention
+      || options.addressedBotByName,
+  );
+}
+
 /**
  * Lexical routing is only a hint for the response model.  Keep the complete
  * signal set together so callers can expose what the program noticed without
@@ -227,6 +247,7 @@ export function shouldUseAttackStyle(content, history = [], options = {}) {
   // Search intent must not silently erase the user's request for a comeback.
   if (signals.deescalationRequested || signals.sensitiveSupport) return false;
   if (directAttackAllowed || signals.explicitAttackRequest) return true;
+  if (isAttackPressureChallenge(normalized, options)) return true;
   // A hostile-looking token used as the subject of a meaning/current-facts
   // question is content to explain, not a request to attack.  This exception
   // is deliberately after the strong direct-address check above, so
@@ -527,16 +548,30 @@ export function buildAttackPrompt(userContent, options = {}) {
   const strategy = plannedAttack && ['reply', 'target', 'mixed'].includes(String(plannedAttack.decision ?? ''))
     ? plannedAttack : jevAttack;
   const strategyIsPlanned = strategy === plannedAttack;
+  const directAttack = isDirectBotAttack(normalized);
+  const strategyTargetsPerson = Boolean(
+    strategy
+      && ['reply', 'target', 'mixed'].includes(String(strategy.decision ?? ''))
+      && !['content', 'uncertain', 'none'].includes(String(strategy.target ?? '')),
+  );
+  const attackChallenge = isAttackPressureChallenge(normalized, options.interactionContext ?? {});
+  const highPressure = directAttack || attackChallenge || (
+    strategyTargetsPerson && Number(strategy?.intensity ?? 0) >= 0.7
+  );
+  const effectiveIntensity = Math.max(
+    Number(strategy?.intensity ?? 0) || 0,
+    highPressure && strategyTargetsPerson ? 0.82 : 0,
+  );
   const strategyLines = semanticAttack ? [
-    `${strategyIsPlanned ? '回合战术卡' : 'Jev 语境策略'}：decision=${strategy.decision}，target=${strategy.target || 'uncertain'}，angle=${strategy.angle || 'none'}，timing=${strategy.timing || 'standalone'}，intensity=${Number(strategy.intensity || 0).toFixed(2)}。`,
+    `${strategyIsPlanned ? '回合战术卡' : 'Jev 语境策略'}：decision=${strategy.decision}，target=${strategy.target || 'uncertain'}，angle=${strategy.angle || 'none'}，timing=${strategy.timing || 'standalone'}，intensity=${effectiveIntensity.toFixed(2)}。`,
     strategy.reason ? `策略依据（只供你理解，不要在回复中提及）：${strategy.reason}` : '',
     '这只是攻击方向，不是固定台词。根据当前原话和最近语境自己找最贴切的切口，优先攻击具体逻辑、行为、态度、矛盾或荒诞处；不要把每轮都写成固定亲属辱骂。',
     '默认使用贴吧祖安老哥的抽象表达能力：从对方这句原话里抓一个具体词、动作、态度或自相矛盾处，再决定要不要借位成画面。只有能指出对应关系时才用比喻；对不上就直骂具体行为，不要随手套一个无关场景。',
     strategy.angle === 'family_meme'
       ? '本轮语境确实允许使用龙图亲属梗，但仍只选一句自然的，不堆亲属关键词。'
-      : '本轮不强制双亲侮辱，但也不要为了避嫌退成温吞吐槽；当前原话若已有认爹、拆爹、亲属或族谱落点，可以顺势用一处龙图亲属梗加码。',
+      : '本轮不强制双亲侮辱，但也不要为了避嫌退成温吞吐槽；当前原话若已经主动出现亲属或族谱落点，可以顺势用一处龙图亲属梗反压回去。',
     '不要套用随机攻击画面，不要为了完成攻击而编造现实亲属事实；如果角度落在内容或行为，就直接针对该内容/行为下刀。',
-    Number(strategy?.intensity || 0) >= 0.8
+    effectiveIntensity >= 0.8
       ? '本轮是高强度回击：不要退回礼貌吐槽、空泛“离谱”或自我解释；把当前落点直接骂到位，允许一句贴题的亲属梗，但不编造现实家庭事实。'
       : '',
   ].filter(Boolean) : [
@@ -556,6 +591,10 @@ export function buildAttackPrompt(userContent, options = {}) {
     rhythmInstruction,
     ...strategyLines,
     ATTACK_CULTURE_PLAYBOOK,
+    ...(highPressure ? [
+      '【明确对线加压】对方如果说你攻击性弱、软、没火力，或直接拿亲属梗挑衅，这不是在让你解释攻击性。这是二次挑衅：抓住“弱/软”或对方刚才的具体动作，直接给出更重的定性和一个贴题落点。不要复述“你只是借家属撑场面”，那是在给对方写评语；要把评语改成当面落刀。',
+      '高压回击允许一到两句短句，第一句直接压住对方的具体说法，第二句可用一个贴题的龙图/亲属反差收刀；没有第二个好落点就一句结束，不写解释段。',
+    ] : []),
     ...(semanticAttack ? [] : [
       '不要抽取随机画面或固定龙图意象。先看当前原话里有什么可回击的词、动作或态度；可以直骂具体行为，但直话也必须带明确贬损，不能变成淡淡点评。',
     ]),

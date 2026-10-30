@@ -242,6 +242,65 @@ test('中文互联网语料默认覆盖普通、梗和图片回复', async () =>
   assert.equal(corpusCalls[2].options.includeSensitive, true);
 });
 
+test('纯攻击回合也注入攻击语料，避免外部语料只在普通回复路径生效', async () => {
+  const calls = [];
+  const memeCorpus = {
+    buildPrompt(query, options) {
+      calls.push({ query, options });
+      return '【中文互联网语料语感参考】接住对方的具体词，直接反压，短句收刀。';
+    },
+  };
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '你的攻击性也是弱的不行，没火力就别拿龙图出来',
+    currentQuestion: '你的攻击性也是弱的不行，没火力就别拿龙图出来',
+    modelInput: '当前消息：你的攻击性也是弱的不行，没火力就别拿龙图出来',
+    directBotMention: true,
+    memeCorpus,
+    webSearchEnabled: false,
+    jevStyle: {
+      attackStrategy: {
+        decision: 'reply', target: 'bot', targetConfidence: 0.95,
+        intensity: 0.62, angle: 'family_meme', timing: 'standalone',
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '你拿弱字当判词，火力没见长，嘴倒先替自己报废了。';
+      },
+    },
+  });
+  assert.equal(result.mode, 'generated-attack');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.styleOnly, true);
+  assert.equal(calls[0].options.includeSensitive, true);
+  assert.match(prompt, /攻击语料|中文互联网语料语感参考/);
+  assert.match(prompt, /当前落点必须来自本轮原话/);
+  assert.equal(result.memeCorpusUsed, true);
+});
+
+test('攻击性太弱的二次挑衅无需 Jev 也进入高压纯攻击回合', async () => {
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '你的攻击性太弱了，没火力就别装龙',
+    currentQuestion: '你的攻击性太弱了，没火力就别装龙',
+    modelInput: '当前消息：你的攻击性太弱了，没火力就别装龙',
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '你把“没火力”四个字端上来就以为能验收？这点压强还不够给你妈开门。';
+      },
+    },
+  });
+  assert.equal(result.mode, 'generated-attack');
+  assert.match(prompt, /明确对线加压/);
+  assert.match(prompt, /把评语改成当面落刀/);
+});
+
 test('图片回复解释提示词和像素会触发一次去 AI 腔重写', async () => {
   const calls = [];
   const result = await generateConversationReply({

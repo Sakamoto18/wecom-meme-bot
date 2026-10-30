@@ -37,8 +37,41 @@ function safeJson(value, fallback = []) {
 
 function termsFromText(value) {
   return [...new Set(normalized(value, 1_000).toLowerCase()
-    .match(/[\p{Script=Han}]{2,}|[a-z][a-z0-9_-]{1,}/giu) ?? [])]
+    .match(/[\p{Script=Han}]{2,}|\d{2,}|[a-z][a-z0-9_-]{1,}/giu) ?? [])]
     .slice(0, MAX_TERMS);
+}
+
+const SHARED_CORRECTION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Turn an explicit group correction into a small, cross-group culture card.
+ * The card records only the public term, aliases and semantic correction; it
+ * never stores group ids, QQ ids or a member relationship. It is a culture
+ * hint rather than a fact source, so current-event answers must still search.
+ */
+export function buildSharedCultureCorrectionCard(options = {}) {
+  const topic = normalized(options.topic, MAX_TOPIC_LENGTH);
+  const aliases = uniqueStrings(options.aliases, MAX_TERMS, 60);
+  const context = normalized(options.context, MAX_DESCRIPTOR_LENGTH);
+  if (!topic || !context) return null;
+  return {
+    topicKey: topic.toLowerCase(),
+    normalizedTopic: topic,
+    confidence: ['low', 'medium', 'high'].includes(options.confidence)
+      ? options.confidence : 'medium',
+    domain: 'general',
+    lookupSource: 'group-correction',
+    terms: uniqueStrings([topic, ...aliases], MAX_TERMS, 60),
+    descriptors: [context],
+    forbiddenTargets: [
+      '这是跨群共享的文化线索，不是现实事实；当前事件仍需重新核对',
+      '不得把原群成员、群号、QQ号或人际关系带入其他群',
+    ],
+    sourceDomains: [],
+    exactMatch: true,
+    evidenceQuality: 'conversation-correction',
+    ttlMs: Number(options.ttlMs) > 0 ? Number(options.ttlMs) : SHARED_CORRECTION_TTL_MS,
+  };
 }
 
 function hostOf(url) {
@@ -157,8 +190,12 @@ export function cultureCardPrompt(card, source = 'cache') {
     `互联网语境：${CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general'}`,
     `文化领域：${CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general'}`,
     `接梗线索：${uniqueStrings(card.descriptors, MAX_DESCRIPTORS, MAX_DESCRIPTOR_LENGTH).join('；')}`,
-    `检索来源状态：${source === 'cache' ? '本地缓存短卡' : '本轮公开检索后提炼'}${card.lookupSource === 'tieba' ? '（公开贴吧语境证据）' : ''}`,
-    `证据匹配：${card.exactMatch === false ? '仅相似结果，不足以确认' : (card.evidenceQuality || '已匹配')}`,
+    `检索来源状态：${card.lookupSource === 'group-correction'
+      ? '跨群共享的群聊纠正短卡（仅作文化线索）'
+      : (source === 'cache' ? '本地缓存短卡' : '本轮公开检索后提炼')}${card.lookupSource === 'tieba' ? '（公开贴吧语境证据）' : ''}`,
+    `证据匹配：${card.lookupSource === 'group-correction'
+      ? '群聊纠正已记录；不是现实事实证据，当前事件仍需核对'
+      : (card.exactMatch === false ? '仅相似结果，不足以确认' : (card.evidenceQuality || '已匹配'))}`,
     '只把这些线索融入当前回复，不复述来源、网页正文或检索过程；没有短卡也可以按当前语境自然接梗，不贴合就不用，不强塞固定梗。',
     `边界：${uniqueStrings(card.forbiddenTargets, 4, 120).join('；')}`,
   ].join('\n');
@@ -245,7 +282,14 @@ export class CultureCache {
       const terms = termsFromText(key).filter((term) => term.length >= 2);
       if (terms.length > 0) {
         const match = terms.map((term) => `"${term.replaceAll('"', ' ')}"`).join(' OR ');
-        const hit = database.prepare(`SELECT topic_key FROM culture_topics_fts WHERE culture_topics_fts MATCH ? LIMIT 1`).get(match);
+        const hit = database.prepare(`
+          SELECT f.topic_key
+          FROM culture_topics_fts AS f
+          LEFT JOIN culture_topics AS c ON c.topic_key = f.topic_key
+          WHERE culture_topics_fts MATCH ?
+          ORDER BY (c.lookup_source = 'group-correction') DESC, c.updated_at DESC
+          LIMIT 1
+        `).get(match);
         if (hit?.topic_key) row = database.prepare(
           requestedDomain
             ? 'SELECT * FROM culture_topics WHERE topic_key = ? AND domain = ? AND expires_at > ?'
@@ -259,9 +303,14 @@ export class CultureCache {
           // “女鬼电梯语境”. Keep FTS as the primary path and use a bounded
           // substring fallback for this small local table.
           const likeTerms = terms.map((term) => `%${term}%`);
-          const likeHit = database.prepare(
-            'SELECT topic_key FROM culture_topics_fts WHERE terms LIKE ? OR descriptors LIKE ? LIMIT 1',
-          ).get(likeTerms[0], likeTerms[0]);
+          const likeHit = database.prepare(`
+            SELECT f.topic_key
+            FROM culture_topics_fts AS f
+            LEFT JOIN culture_topics AS c ON c.topic_key = f.topic_key
+            WHERE f.terms LIKE ? OR f.descriptors LIKE ?
+            ORDER BY (c.lookup_source = 'group-correction') DESC, c.updated_at DESC
+            LIMIT 1
+          `).get(likeTerms[0], likeTerms[0]);
           if (likeHit?.topic_key) {
             row = database.prepare(
               requestedDomain
@@ -286,6 +335,9 @@ export class CultureCache {
       sourceDomains: safeJson(row.source_domains_json),
       domain: CULTURE_DOMAINS.has(row.domain) ? row.domain : 'general',
       lookupSource: normalized(row.lookup_source || 'web', 40),
+      exactMatch: row.lookup_source === 'group-correction' ? true : undefined,
+      evidenceQuality: row.lookup_source === 'group-correction'
+        ? 'conversation-correction' : undefined,
     };
   }
 
@@ -303,6 +355,7 @@ export class CultureCache {
       sourceDomains: uniqueStrings(card.sourceDomains, MAX_SOURCE_DOMAINS, 120),
       domain: CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general',
       lookupSource: normalized(card.lookupSource || 'web', 40),
+      ttlMs: Number(card.ttlMs) > 0 ? Number(card.ttlMs) : this.ttlMs,
     };
     if (!values.topicKey || values.descriptors.length === 0) return false;
     database.prepare(`
@@ -327,12 +380,30 @@ export class CultureCache {
       values.topicKey, values.normalizedTopic, values.confidence,
       JSON.stringify(values.terms), JSON.stringify(values.descriptors),
       JSON.stringify(values.forbiddenTargets), JSON.stringify(values.sourceDomains),
-      values.domain, values.lookupSource, now, now, now + this.ttlMs, now,
+      values.domain, values.lookupSource, now, now, now + values.ttlMs, now,
     );
     database.prepare('DELETE FROM culture_topics_fts WHERE topic_key = ?').run(values.topicKey);
     database.prepare('INSERT INTO culture_topics_fts(topic_key, terms, descriptors) VALUES (?, ?, ?)').run(
       values.topicKey, values.terms.join(' '), values.descriptors.join(' '),
     );
+    // A user correction supersedes an older fuzzy web card for the same
+    // public alias. Remove only cards whose key contains both the canonical
+    // topic and one of its aliases; unrelated cards remain available for
+    // later searches.
+    if (values.lookupSource === 'group-correction' && values.terms.length > 1) {
+      const topicLike = `%${values.topicKey}%`;
+      const aliasLikes = values.terms.slice(1, 4).map((term) => `%${term.toLowerCase()}%`);
+      const stale = database.prepare(`
+        SELECT topic_key FROM culture_topics
+        WHERE lookup_source <> 'group-correction'
+          AND topic_key LIKE ?
+          AND (${aliasLikes.map(() => 'topic_key LIKE ?').join(' OR ')})
+      `).all(topicLike, ...aliasLikes);
+      for (const row of stale) {
+        database.prepare('DELETE FROM culture_topics WHERE topic_key = ?').run(row.topic_key);
+        database.prepare('DELETE FROM culture_topics_fts WHERE topic_key = ?').run(row.topic_key);
+      }
+    }
     this.cleanup();
     return true;
   }
