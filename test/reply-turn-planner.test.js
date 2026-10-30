@@ -119,8 +119,23 @@ test('泛词不能成为检索词，具体专名、CVE、数字和独特原句�
   const genericOnly = normalizeTurnPlan({
     search: { fact_needed: true, culture_needed: true, fact_queries: ['新闻'], culture_queries: ['梗'] },
   });
-  assert.equal(genericOnly.search.factNeeded, false);
-  assert.equal(genericOnly.search.cultureNeeded, false);
+  assert.equal(genericOnly.search.factNeeded, true);
+  assert.equal(genericOnly.search.cultureNeeded, true);
+});
+
+test('保留没有具体查询词的语义检索决定，交给回复链路回退当前消息', () => {
+  const plan = normalizeTurnPlan({
+    search: {
+      fact_needed: true,
+      culture_needed: true,
+      fact_queries: ['新闻'],
+      culture_queries: ['什么梗'],
+    },
+  });
+  assert.equal(plan.search.factNeeded, true);
+  assert.equal(plan.search.cultureNeeded, true);
+  assert.deepEqual(plan.search.factQueries, []);
+  assert.deepEqual(plan.search.cultureQueries, []);
 });
 
 test('有现实锚点默认先接梗，明确求证默认先给判断', () => {

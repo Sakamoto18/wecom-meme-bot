@@ -878,6 +878,39 @@ test('战术卡的具体事实查询能补足攻击轮里被正则漏掉的检�
   assert.ok(prompts.some((prompt) => /【时间核对】检索资料没有出现 2026-10-21 北京时间/.test(prompt)));
 });
 
+test('战术卡明确要查但没有安全 query 时回退当前消息，不被泛词门控吞掉', async () => {
+  const queries = [];
+  const result = await generateConversationReply({
+    content: '最近那个突然爆火的梗到底在说什么',
+    currentQuestion: '最近那个突然爆火的梗到底在说什么',
+    modelInput: '最近那个突然爆火的梗到底在说什么',
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query) {
+        queries.push(query);
+        return { context: '检索到该梗近期在中文互联网传播的语境。', resultCount: 1 };
+      },
+    },
+    turnPlan: normalizeTurnPlan({
+      mode: 'culture',
+      answer_required: true,
+      search: {
+        fact_needed: false,
+        culture_needed: true,
+        culture_queries: ['什么梗'],
+      },
+    }),
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '先把这个梗的语境捞出来，再接。';
+      },
+    },
+  });
+  assert.equal(result.cultureSearchAttempted, true);
+  assert.deepEqual(queries, ['最近那个突然爆火的梗到底在说什么']);
+});
+
 test('攻击前遇到陌生梗会定向查询 wiki，并把结果只作为内部落点', async () => {
   const calls = [];
   let prompt = '';

@@ -41,7 +41,7 @@ export const TURN_PLANNER_SYSTEM_PROMPT = [
   'search={fact_needed:boolean,culture_needed:boolean,freshness:none|general|current,fact_queries:[最多3条],culture_queries:[最多3条]}；reasoning_needed=true|false。',
   'meme={anchor:"现实主体/事件/规则/数字条件",claim:"内容如何改写或利用它",mechanism:"双关/反差/错位/夸张/反转/谐音等",information_kind:news|public_event|public_figure|technical_rule|private_chat|reaction|unknown}。',
   '语气与任务独立：任何 mode 都可保持角色口吻；speech_act=tease 也可以是朋友互损，不等于辱骂。结合当前话头、熟悉程度和对方反应决定调侃力度；朋友自嘲、吹牛或逗你时可直接损其具体行为，不用等脏话触发。attack 字段只规划高强度回击，普通调侃用 content|none，不能因此把语气变成客服。当前发言者明确辱骂机器人时，才可 reply 当前发言者；明确指令攻击某个已给出成员或作者时，才可 target 该对象。引用作者、图片内角色、历史辱骂和单次提及不能自动成为攻击目标。用户直接说机器人“攻击性弱/太软/没火力”并且上下文已有对线时，这是二次挑衅：attack 仍指向已确认目标，intensity 通常取 0.8 以上；不要把它当成让机器人解释攻击方法。用户要求认真、停止攻击、就事论事，或涉及丧亲、疾病、性侵、家暴、自杀等敏感求助时，attack 必须为 none，mode=support 或 explanation。',
-  '搜索规则：只要答案依赖可能过时的现实信息、公开事件当前状态、人物/队伍最近表现、技术规则、数字合法性、梗的含义或出处，就置对应 needed=true；“怎么评价/怎么看”不等于不检索，公开事件即使没有“最新/今年”也要查当前状态，如果无法核实到最新消息，就读取群聊上下文检索是否有相关信息，再进行搜索。事实与文化可以同时为 true：fact 负责说对现实主体和状态，culture 只负责表达语境。攻击回合如果攻击落点依赖陌生名词、梗义、人物/事件或原话出处，也必须置 culture_needed=true；不要因为本轮最终是骂人就跳过对象检索。查询词保留当前原话里的主体、状态、日期、数字或独特原句，禁止凭空维护赛事/热点名称清单。',
+  '搜索规则：只要答案依赖可能过时的现实信息、公开事件当前状态、人物/队伍最近表现、技术规则、数字合法性、梗的含义或出处，就置对应 needed=true；“怎么评价/怎么看”不等于不检索，公开事件即使没有“最新/今年”也要查当前状态，如果无法核实到最新消息，就读取群聊上下文检索是否有相关信息，再进行搜索。事实与文化可以同时为 true：fact 负责说对现实主体和状态，culture 只负责表达语境。遇到你不认识的热词、梗、缩写、平台黑话、图片语境，或只凭记忆无法确定的近期热点，必须主动检索，不要猜；用户不需要先说“搜一下”，检索是后台动作，也不要在回复里宣布正在搜索。攻击回合如果攻击落点依赖陌生名词、梗义、人物/事件或原话出处，也必须置 culture_needed=true；不要因为本轮最终是骂人就跳过对象检索。查询词保留当前原话里的主体、状态、日期、数字或独特原句，禁止凭空维护赛事/热点名称清单。',
   '相对时间规则：上下文会给出当前北京时间和“昨天/今天/刚刚”对应的绝对日期。检索词必须带上换算后的绝对日期；“昨天”的证据日期对不上时，只能回答没查到对应那天的消息，不能把旧新闻、旧公告或旧版本更新写成昨天发生。',
   '梗规则：现实新闻或技术梗必须把现实锚点和梗的改写分开。首句默认 first_beat=anchor_meme：把具体主体/规则和接梗判断放在同一句；第二句再补准确事实。明确问真假、是否属实或出处时 first_beat=verdict，先给真/假/无法确认。纯反应图、无公共锚点的私人聊天不硬编新闻。',
   '闲聊规则：普通聊天优先 banter 或 judgment，first_beat=reaction 或 judgment，不因一句普通感叹启动搜索和攻击。speech_act 只选一个：先决定这一轮是在接情绪、损一个点、回答时顺手玩梗、纠正时顺手玩梗、顺着上一句拐一下、短拒绝还是闭嘴；不要把一轮写成完整报告。',
@@ -154,10 +154,12 @@ export function normalizeTurnPlan(value) {
       reason: text(attackBody.reason, 240),
     },
     search: {
-      factNeeded: factQueries.length > 0
-        && bool(searchBody.fact_needed ?? searchBody.factNeeded, true),
-      cultureNeeded: cultureQueries.length > 0
-        && bool(searchBody.culture_needed ?? searchBody.cultureNeeded, true),
+      // Keep the planner's semantic decision even when it could not produce a
+      // safe concrete query. reply-engine supplies the current message as a
+      // bounded fallback query; query shape must not be allowed to overrule
+      // an explicit request for evidence.
+      factNeeded: bool(searchBody.fact_needed ?? searchBody.factNeeded, factQueries.length > 0),
+      cultureNeeded: bool(searchBody.culture_needed ?? searchBody.cultureNeeded, cultureQueries.length > 0),
       freshness: choice(searchBody.freshness, new Set(['none', 'general', 'current']), 'none'),
       factQueries,
       cultureQueries,

@@ -2958,7 +2958,7 @@ class LongtuQqBridge(Star):
         event.stop_event()
 
     def _reply_delay_window(self) -> tuple[float, float]:
-        """Return the configured human-like pre-send delay, capped at 30s."""
+        """Return the configured human-like pre-send delay, capped at 60s."""
         def number(env_name: str, config_key: str, default: float) -> float:
             raw = os.getenv(env_name)
             if raw is None:
@@ -2976,13 +2976,13 @@ class LongtuQqBridge(Star):
 
         minimum = max(
             0.0,
-            number("LONGTU_QQ_REPLY_DELAY_MIN_SECONDS", "reply_delay_min_seconds", 1.0),
+            number("LONGTU_QQ_REPLY_DELAY_MIN_SECONDS", "reply_delay_min_seconds", 15.0),
         )
         maximum = min(
-            30.0,
+            60.0,
             max(
                 0.0,
-                number("LONGTU_QQ_REPLY_DELAY_MAX_SECONDS", "reply_delay_max_seconds", 15.0),
+                number("LONGTU_QQ_REPLY_DELAY_MAX_SECONDS", "reply_delay_max_seconds", 45.0),
             ),
         )
         if maximum < minimum:
