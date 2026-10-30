@@ -18,6 +18,13 @@ test('网络梗进入文化轨，明确来源同时进入事实轨', () => {
   assert.equal(both.cultureEligible, true);
 });
 
+test('重复歌词样式即使没有“梗”二字也进入来源文化检索', () => {
+  const policy = classifySearchPolicy({ content: '九妹九妹，上路的堡垒' });
+  assert.equal(policy.cultureEligible, true);
+  assert.equal(policy.lyricMemeTemplate, true);
+  assert.equal(policy.factEligible, false);
+});
+
 test('互联网风格请求只改变输出口吻，不自动触发联网', () => {
   for (const content of ['这图接梗一下，来点抽象联想', '给个反差回复', '用互联网语气说']) {
     const styleOnly = classifySearchPolicy({ content });

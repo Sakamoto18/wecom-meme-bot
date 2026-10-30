@@ -31,6 +31,7 @@ const EXPLICIT_VERIFICATION_PATTERN = /(?:真的假的|真假|是否属实|属�
 // voice.  They must not spend web-search quota.  This pattern is reserved for
 // an explicit request to identify, explain, or verify a meme/online term.
 const HIGH_CONFIDENCE_CULTURE_PATTERN = /(?:梗.{0,10}(?:意思|含义|来源|出处|由来|怎么火)|(?:什么|啥|这个|这|该)(?:网络)?梗|(?:查|搜|搜索|查询|科普|解释|讲讲|说说).{0,28}(?:梗|黑话|网络用语)|(?:网络用语|网络流行语|流行语|黑话).{0,10}(?:意思|含义|来源|出处|由来))/iu;
+const LYRIC_MEME_TEMPLATE_PATTERN = /(?<![\p{L}\p{N}])(?<phrase>[\p{Script=Han}\p{L}\p{N}]{2,8})\s*\k<phrase>(?:\s*[,，、:：-]?\s*)[^\n]{2,40}/u;
 const LOW_INFORMATION_IMAGE_PATTERN = /^(?:low_information|low|none)$/i;
 
 function textOf(value) {
@@ -82,10 +83,13 @@ export function classifySearchPolicy(options = {}) {
     || recentPublicEvent || recentNamedEvent || memeEventLink || technicalRuleRequested;
   const recentEventRequested = recentPublicEvent || recentNamedEvent;
   const highConfidenceCulture = HIGH_CONFIDENCE_CULTURE_PATTERN.test(content);
+  const lyricMemeTemplate = options.lyricTemplateMode === true
+    || LYRIC_MEME_TEMPLATE_PATTERN.test(content);
   const jevCultureEligible = !imageSearch && jevCultureLookupNeeded >= 0.4;
   const cultureEligible = semanticImageSearch
     || (!imageSearch
-      && (plannerCultureRequested || longtuTopic || memeTopic || highConfidenceCulture || jevCultureEligible || unknownConcept));
+      && (plannerCultureRequested || longtuTopic || memeTopic || highConfidenceCulture
+        || jevCultureEligible || unknownConcept || lyricMemeTemplate));
   // Asking for a meme's source/原帖 is both a cultural lookup and a factual
   // verification request. Keep the two rails independent so one does not
   // silently suppress the other. JEV's own fact/time signals join the union so
@@ -180,7 +184,7 @@ export function classifySearchPolicy(options = {}) {
     };
   }
 
-  const confidence = longtuTopic || memeTopic || jevLongtuLookupNeeded >= 0.7 || unknownConcept
+  const confidence = longtuTopic || memeTopic || jevLongtuLookupNeeded >= 0.7 || unknownConcept || lyricMemeTemplate
     ? 'high'
     : (highConfidenceCulture ? 'high' : (factEligible ? 'medium' : 'none'));
   return {
@@ -198,6 +202,7 @@ export function classifySearchPolicy(options = {}) {
       : (factEligible ? 'fact-intent' : (cultureEligible ? 'culture-intent' : 'no-search-intent')),
     explicitImageSearch,
     verificationRequested,
+    lyricMemeTemplate,
   };
 }
 

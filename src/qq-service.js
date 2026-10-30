@@ -50,7 +50,10 @@ import {
 import { IMAGE_SOURCE_PROMPT, normalizeSourceCandidates } from './search-scope.js';
 import { isDenseImageText, PASSIVE_IMAGE_QUESTION } from './passive-image.js';
 import { formatAdminSlashCommandHelp, isSlashCommandHelp } from './qq-command-help.js';
-import { buildSharedCorrectionFromConversation } from './shared-culture-learning.js';
+import {
+  buildSharedCorrectionFromConversation,
+  buildSharedRecurrenceFromConversation,
+} from './shared-culture-learning.js';
 
 const MAX_MESSAGE_CHARACTERS = 20_000;
 const MAX_QUOTE_CHARACTERS = 5_000;
@@ -4507,15 +4510,27 @@ export class QqBotService {
           history = context.history;
         }
       }
-      const card = buildSharedCorrectionFromConversation({
+      let card = buildSharedCorrectionFromConversation({
         currentText: conversationContent,
         history,
       });
+      if (!card) {
+        card = buildSharedRecurrenceFromConversation({
+          currentText: conversationContent,
+          history,
+        });
+        // An explicit correction is stronger than a repetition hint. Do not
+        // let a later casual mention downgrade its source and confidence.
+        if (card) {
+          const existing = this.cultureCache.lookup(card.normalizedTopic);
+          if (existing?.lookupSource === 'group-correction') return false;
+        }
+      }
       if (!card) return false;
       const saved = this.cultureCache.put(card);
       if (saved) {
         this.logger.log?.(
-          `QQ 跨群文化纠正卡已更新：topic=${card.normalizedTopic}`
+          `QQ 跨群文化卡已更新：source=${card.lookupSource} topic=${card.normalizedTopic}`
             + ` aliases=${card.terms.slice(1).join('|') || '-'}`
             + '，仅保存脱敏语境，不覆盖当前事实检索',
         );
