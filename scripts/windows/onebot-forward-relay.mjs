@@ -16,7 +16,7 @@ if (!token) throw new Error('ONEBOT_TOKEN is required for the local OneBot relay
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-function connect(url, label) {
+function connect(url, label, clientRole = '') {
   return new Promise((resolve, reject) => {
     let settled = false;
     const headers = {
@@ -24,6 +24,7 @@ function connect(url, label) {
       'User-Agent': 'Longtu-OneBot-Forward-Relay/1',
     };
     if (selfId) headers['X-Self-ID'] = selfId;
+    if (clientRole) headers['X-Client-Role'] = clientRole;
     const socket = new WebSocket(url, {
       headers,
       handshakeTimeout: 5000,
@@ -54,7 +55,9 @@ async function runPair() {
   let napcat;
   try {
     // Connect AstrBot first so NapCat's initial lifecycle event has a target.
-    astrbot = await connect(astrbotUrl, 'AstrBot');
+    // aiocqhttp requires a role header and the universal role carries both
+    // events and API responses through the same socket.
+    astrbot = await connect(astrbotUrl, 'AstrBot', 'universal');
     napcat = await connect(napcatUrl, 'NapCat forward');
 
     let closed;
