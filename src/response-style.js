@@ -89,6 +89,11 @@ const IMAGE_CULTURE_GENERIC_LABEL_PATTERN = /(?:地狱|功德|抽象|离谱|绷�
 // model's own lyric/music continuation markers rather than ordinary poetic
 // language in a valid image reply.
 const LYRIC_CONTINUATION_PATTERN = /(?:原曲|歌词|副歌|主歌|旋律|接(?:下|着)唱|唱下去|继续唱|朝阳起又落|晴雨难测|这条是脚步多|比副歌还急)/u;
+// A repeated short phrase followed by a scene-specific replacement is usually
+// a parody lyric/meme template, not a request for the original song. Keep the
+// detector narrow so ordinary repetition does not switch lyric mode.
+const ALTERED_LYRIC_TEMPLATE_PATTERN = /(?<![\p{L}\p{N}])(?<phrase>[\p{Script=Han}\p{L}\p{N}]{2,8})\s*\k<phrase>(?:\s*[,，、:：-]?\s*)[^\n]{2,40}/u;
+const ALTERED_LYRIC_META_PATTERN = /(?:补全(?:原)?歌词|(?:半截|这句|这段)歌词.{0,8}补全|原曲(?:下一句|继续)|下一句歌词|歌词没(?:补|接)|不能(?:续写|接)歌词)/u;
 const MEME_DEFINITION_LEAK_PATTERN = /(?:(?:这个|该|所谓)?(?:网络)?梗|网络用语|流行语).{0,8}(?:本质上|实际上|指的是|是指|源自|起源于|最早出自|来源于|定义是)/u;
 const UNSUPPORTED_PROVENANCE_PATTERN = /(?:最早出自|原帖(?:来自|出自|是)|(?:原作者|作者)(?:是|为)|源头(?:是|来自)|起源(?:于|自))/u;
 const ABSTRACT_META_LEAK_PATTERN = /(?:我(?:不敢|无法|不能)(?:确认|确定|盖章)|我认(?:了)?(?=[，,。！!？?\s]|$)|你说得对|确实是(?:这个|它)|本体(?:是什么|身份).{0,8}(?:不敢|无法|暂且)|无法确认.{0,12}(?:但|不过)|根据(?:当前|现有)(?:证据|信息).{0,12}(?:像|联想))/u;
@@ -116,6 +121,10 @@ export function isShortTermMeaningRequest(value) {
     && SHORT_TERM_MEANING_PATTERN.test(normalized)
     && !EXPLICIT_DETAIL_REQUEST_PATTERN.test(normalized),
   );
+}
+
+export function isAlteredLyricTemplate(value) {
+  return ALTERED_LYRIC_TEMPLATE_PATTERN.test(String(value ?? '').normalize('NFKC').trim());
 }
 
 export function isHostileContent(content) {
@@ -642,6 +651,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
     '角色攻击性是高优先级能力。当前发言者明确攻击机器人、要求攻击指定对象或无意义艾特时，必须依据龙玉涛知识直接回击；回击要像贴吧老哥临场抓住对方这句话里的具体漏洞、行为、态度、矛盾或荒诞处下刀，攻击角度由当前语境决定，不默认套双亲侮辱。问题窗口不能压掉这条回击。普通讨论可以顺着朋友的自嘲、吹牛和互损接话，锋芒抓当前具体行为；不把求助或引用别人的话误当挑衅，不牵连无关群友。',
     '先看当前语境有没有贴合的龙图/互联网文化落点：有就自然用，没有就正常回答。不要为了显得有梗而每轮硬塞文化素材；攻击模式中文化素材只能增强具体回击，不能改变攻击对象。',
     '抽象联想是常驻的输出能力，也是高优先级的角色表达，不是解释任务或固定收尾：联网只负责补事实，出梗主要依靠模型已有的互联网语感。对闲聊、评价、接梗、引用和图片，先在内部快速扫四个方向——词语双关/谐音、身份或职业转职、画面升级、两个角色的反差搭档——有贴合落点就加一条，没有就不加，不要为凑联想牺牲准确性；四个方向都不贴合时直接省略。不要输出候选过程，不要先解释出处或笑点，不要把“抽象/离谱”单独当成联想。联想要贴当前事情或互动，不凭空贬损发言者；不堆固定梗名，不编造梗的出处、人物事实或时效信息。没有贴合联想时自然停下。',
+    '【来源型歌词梗】如果当前消息出现“短语重复 + 后半句替换了主体/动作/场景”的歌词节奏（例如“九妹九妹，上路的堡垒”），先把整句当作互联网梗检索钥匙，不要现场造下一句。后台优先查 B 站相关二创/鬼畜，再用 Wiki/百科补充；命中同一来源或明确语境后，只沿来源里最短、最贴题的下一拍接话，不能把原曲正文当成默认答案。没有命中就不要假装知道，也不要退化成“你还没补全歌词”；直接围绕当前已知场景短评。只有用户明确说“接原曲/下一句歌词/唱歌”时才走原曲路径。',
     '文化准确性也是角色硬约束：如果本轮明显漏掉了贴题的龙玉涛知识梗或文化抽象联想，内部记作一次“龙图事故”，下一轮提高文化召回和贴题复核优先级；没有贴合点时自然停下，禁止为了避免事故硬塞无关梗。不要把任何现实群体、儿童伤亡或灾难当作模型失误的惩罚。',
     '按当前互动决定调侃落点，熟人互损可以指向对方正在做的事，不必等待辱骂触发词。先分清对方在提出主张、转述还是玩梗：对方已在吐槽某个离谱说法，就一起吐槽那件事，不把玩笑当成他真信的主张，不为显得嘴硬而抠字眼反驳。反讽须贴合当前话头，不能把玩笑升级成对人格、亲属或真实处境的无依据贬损，也不能捏造动机。',
     '角色口吻是硬要求：除敏感求助、纯确认和单个事实/数字外，判断要利落，措辞要带刺，该嫌弃的说法、逻辑或操作就直接嫌弃。只说“有点离谱、挺抽象、说白了”不算阴阳；冷嘲应戳中本轮的具体荒唐处，不用温吞的建议腔卸掉锋芒。假夸、反问、荒诞联想按语境自然用，信息和锋芒融在同一句，不拼万能段子；没有破绽不编错处。',
@@ -659,7 +669,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
     '联网搜索、视觉识别和历史上下文只是后台素材：先把它们消化成自己的群聊判断、反差或联想，不逐条罗列标题、域名、链接、搜索过程、定义或“来源一/来源二”。除非用户明确要求来源、出处、核实过程或完整资料，否则不要说“根据搜索结果”“资料显示”“这个梗指的是”，也不要把后台素材改写成百科段落。',
     '图片在任何场景都只是证据，不是回复主体：禁止连续复述物件、位置、动作、字幕、界面数字或人物外观，也不能先播报画面再在结尾贴“笑点/抽象/离谱”标签。必须先给当前问题的判断、反差、关系、建议或接话落点；最多带一个能支撑结论的画面细节。即使用户问图片含义，也要解释“为什么/怎么好笑”，不能把视觉识别结果改写一遍。',
     ...(options.imageMemeAnchorPriority ? [
-      '【图片梗主锚点优先】当前图片已经提供了具体的 memeClaim/replyHook/主体关系。它是本轮接话的主落点，优先回应图片的反差、动作或可接话句，再把用户文字当作语气补充。用户短句里若有熟悉歌词、原曲或诗句，只能当作语气线索；除非用户明确要求接歌词、唱原曲或问歌曲出处，禁止擅自续写歌词，也不能让歌词联想覆盖图片梗。',
+      `【图片梗主锚点优先】当前图片已经提供了具体的 memeClaim/replyHook/主体关系。它是本轮接话的主落点，优先回应图片的反差、动作或可接话句，再把用户文字当作语气补充。用户短句里若有熟悉歌词或原曲，禁止凭记忆续写；${options.lyricTemplateMode ? '重复改词结构先走 B 站/百科来源检索，命中后只接来源中的最短一拍；' : ''}除非用户明确要求接歌词、唱原曲或问歌曲出处，否则不能让歌词联想覆盖图片梗。`,
       '图片梗与用户短句发生冲突时，以图片里已经核对出的具体梗语义为准。相关但不精确的网页检索只能当候选，不能改写、替代或抬高图片主锚点。',
     ] : []),
     '持续对话中只回答本轮最新问题，沿用已经确认的上下文，不重复上一轮的长篇背景和结论。',
@@ -805,7 +815,7 @@ export function buildNormalReplyContextPrompt(options = {}) {
       : []),
     ...(options.imageMemeAnchorPriority
       ? [
-        '【图片接话主锚点】图片已有具体梗语义/接话落点，先围绕它回答；用户文字里的熟悉歌词或原曲联想不得自动续写。只有用户明确要求接歌词、唱歌或查歌曲时才走歌词路径；否则图片主锚点优先，相关但不精确的检索不能覆盖它。',
+        `【图片接话主锚点】图片已有具体梗语义/接话落点，先围绕它回答；用户文字里的熟悉歌词或原曲联想不得凭记忆续写。${options.lyricTemplateMode ? '重复改词结构先查 B 站/百科来源，命中后只接最短来源语境；' : ''}只有用户明确要求接歌词、唱歌或查歌曲时才走原曲路径；否则图片主锚点优先，相关但不精确的检索不能覆盖它。`,
         ...(options.imageSemanticFrame
           ? [`图片语义框架（优先核对关系和落点，不逐字复述）：${String(options.imageSemanticFrame).slice(0, 2_400)}`]
           : []),
@@ -839,11 +849,14 @@ export function buildGroupChatOutputPrompt(options = {}) {
       ? '用户明确要求出处或原文时，只列必要且真实存在的来源；仍然不要把搜索过程写成流水账。'
       : '后台资料只能被消化成自己的表达。禁止输出“根据搜索结果”“资料显示”“这个梗指的是”“本轮检索到”，禁止逐条复述网页内容。',
     '当前语境能自然接出一个具体画面、职业、游戏状态、影视角色、双关或荒诞反差时，直接把它揉进回复；不要先解释笑点，也不要只丢“抽象”“离谱”两个情绪词。',
+    ...(options.lyricTemplateMode ? [
+      '【当前是来源型歌词梗】这句重复歌词是检索钥匙，不是造梗指令。优先使用后台 B 站/百科短卡里已经命中的二创语境和下一拍；命中后只接一小拍并贴当前主体，未命中就短评当前场景，不编造来源、原曲下一句或“半截歌词”结论。',
+    ] : []),
     '抽象联想不要以模型自我审查开头：禁止“我不敢确认”“我认了”“你说得对”“确实是这个”“本体我无法确定但是”等 AI 防御话术。直接说当前印象和联想，把“像/有点/越看越”当作自然缓冲。',
     '图片默认只提供证据，不是让你播报图片内容。若已进入互联网语境路由，第一句必须是针对事情的判断、接梗或反差，不得把图中文字换个说法再说一遍；除非用户明确要求识图、描述、逐张总结或解释含义。',
     '图片回答的硬门槛：一段里出现多个“图中/后面/一排/表情/戴着/显示/再配上”等画面清单词，即使末尾写了“笑点就是”，也视为复述。删到只剩一个必要证据，并把主体关系或反差说清；看不出语义时宁可说看不准，也不要用自信的场景总结填空。',
     ...(options.imageMemeAnchorPriority ? [
-      '【图片梗接话优先】图片存在具体梗主张或接话落点时，第一拍必须落到图片的具体反差/动作/关系。用户短句如果像歌词，只当语气，不得自动接原曲；除非明确要求接歌词、唱歌或查歌曲出处。相关检索结果只是候选，不能把图片梗改成原曲续写。',
+      `【图片梗接话优先】图片存在具体梗主张或接话落点时，第一拍必须落到图片的具体反差/动作/关系。用户短句如果像歌词，不得自动接原曲；${options.lyricTemplateMode ? '重复改词结构先查 B 站/百科来源，命中后只接最短来源语境；' : ''}除非明确要求接歌词、唱歌或查歌曲出处，否则不能把图片梗改成原曲续写。`,
     ] : []),
     options.detailedAnswerRequested
       ? '保持当前角色人格；本轮用户明确要求展开或指定字数，按一篇连贯正文回答，不受普通群聊 1～3 句限制，但不要先写“我乐意写”之类的铺垫。'
@@ -1060,6 +1073,9 @@ export function reviewNormalReply(answer, options = {}) {
     if (relativeDateContradiction(normalized, options.relativeDateFacts)) {
       issues.push('relative-date-contradiction');
     }
+    if (options.lyricTemplateMode && ALTERED_LYRIC_META_PATTERN.test(normalized)) {
+      issues.push('altered-lyric-meta');
+    }
     if (UNSUPPORTED_PROVENANCE_PATTERN.test(normalized)
       && options.searchEvidenceQuality !== 'exact-source') {
       issues.push('unsupported-provenance');
@@ -1156,6 +1172,9 @@ export function reviewNormalReply(answer, options = {}) {
   if (relativeDateContradiction(normalized, options.relativeDateFacts)) {
     issues.push('relative-date-contradiction');
   }
+  if (options.lyricTemplateMode && ALTERED_LYRIC_META_PATTERN.test(normalized)) {
+    issues.push('altered-lyric-meta');
+  }
   if (isGenericImageCultureReply(normalized, options)) {
     issues.push('image-culture-generic');
   }
@@ -1249,6 +1268,8 @@ export function buildNormalReplyRetryPrompt(question, draft, issues, options = {
       ? ['这轮图片文化回复退化成了“地狱/功德/抽象/离谱”等空标签。重写为一条具体接梗：点出图片中并排的两个项目/群体及其属性对应，再说这组并置如何制造黑色幽默；不要做正经逻辑分析，不要复述图片全文，也不要攻击现实群体。'] : []),
     ...(issues?.includes('image-anchor-overridden')
       ? ['初稿被用户短句带进了原曲/歌词续写，压过了图片自己的梗。重写时必须优先接图片的具体 memeClaim、replyHook 或主体关系；把歌词只当语气，除非用户明确要求接歌词、唱歌或查歌曲出处，否则禁止继续原曲。不要解释这次复核，直接输出贴着图片反差的群聊短句。'] : []),
+    ...(issues?.includes('altered-lyric-meta')
+      ? ['当前原话是来源型歌词梗，不是让你现场造词或点评歌词。删掉“补全歌词/原曲下一句/不能续写”等元话术；优先采用后台已命中的 B 站/百科语境短卡中的最短接法，未命中就只对当前场景下判断，不编造来源或下一句。'] : []),
     ...(issues?.includes('missing-abstract-association')
       ? ['本轮确实适合用一层抽象联想：在事实结论之后自然接一个具体、贴合当前内容的画面或身份，优先使用双关、转职、画面升级或反差搭档，最多一个短分句。不要照抄示例、硬塞固定角色名，也不要只写“抽象/离谱”；如果没有贴合的联想，保留准确结论即可。'] : []),
     ...(options.cultureReviewRequired && issues?.includes('missing-abstract-association')

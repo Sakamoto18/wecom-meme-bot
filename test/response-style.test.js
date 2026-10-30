@@ -34,6 +34,7 @@ import {
   shouldRequestDetailedAnswer,
   shouldRequestAbstractAssociation,
   isShortTermMeaningRequest,
+  isAlteredLyricTemplate,
 } from '../src/response-style.js';
 
 test('短词释义识别为一句话群聊问题，详细请求不走短答', () => {
@@ -41,6 +42,30 @@ test('短词释义识别为一句话群聊问题，详细请求不走短答', ()
   assert.equal(isShortTermMeaningRequest('异色啥意思？'), true);
   assert.equal(isShortTermMeaningRequest('详细解释异色是什么意思'), false);
   assert.equal(isShortTermMeaningRequest('异色是什么意思，举三个例子'), false);
+});
+
+test('改词歌词梗保留节奏，不被当成原曲续写', () => {
+  assert.equal(isAlteredLyricTemplate('九妹九妹，上路的堡垒'), true);
+  assert.equal(isAlteredLyricTemplate('今天今天好热'), true);
+  assert.equal(isAlteredLyricTemplate('九妹今天上路'), false);
+  const stable = buildNormalReplyStablePrompt({ lyricTemplateMode: true });
+  const group = buildGroupChatOutputPrompt({ lyricTemplateMode: true });
+  assert.match(stable, /把整句当作互联网梗检索钥匙/);
+  assert.match(group, /不是造梗指令/);
+  assert.match(buildNormalReplyRetryPrompt(
+    '九妹九妹，上路的堡垒',
+    '你先把半截歌词补全再来。',
+    ['altered-lyric-meta'],
+    { lyricTemplateMode: true },
+  ), /后台已命中的 B 站\/百科语境短卡/);
+  assert.ok(reviewNormalReply('你先把半截歌词补全再来。', {
+    lyricTemplateMode: true,
+    hardOnly: true,
+  }).issues.includes('altered-lyric-meta'));
+  assert.equal(reviewNormalReply('九妹九妹，峡谷的堡垒。', {
+    lyricTemplateMode: true,
+    hardOnly: true,
+  }).issues.includes('altered-lyric-meta'), false);
 });
 
 test('短词释义和低信息群聊提示允许短反应，不强迫解释', () => {

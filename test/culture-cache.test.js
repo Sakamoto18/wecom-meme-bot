@@ -131,3 +131,23 @@ test('跨群纠正卡只保存公开语境并优先于歧义旧卡', () => {
   assert.doesNotMatch(cultureCardPrompt(hit), /913546080|成员-[a-f0-9]{6,12}/u);
   cache.close();
 });
+
+test('重复公共梗卡可被跨群召回并标注为文化线索', () => {
+  const databaseFilePath = tempDatabase('shared-culture-recurrence');
+  const cache = new CultureCache({ databaseFilePath });
+  assert.equal(cache.put({
+    topicKey: '九妹',
+    normalizedTopic: '九妹',
+    lookupSource: 'group-recurrence',
+    terms: ['九妹'],
+    descriptors: ['重复公共表达：九妹；当前公开语境：九妹九妹，上路的堡垒'],
+    forbiddenTargets: ['仅作文化线索'],
+    domain: 'general',
+    ttlMs: 86_400_000,
+  }), true);
+  const hit = cache.lookup('九妹');
+  assert.equal(hit.lookupSource, 'group-recurrence');
+  assert.equal(hit.evidenceQuality, 'conversation-recurrence');
+  assert.match(cultureCardPrompt(hit), /重复公共梗短卡/);
+  cache.close();
+});

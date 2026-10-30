@@ -171,6 +171,45 @@ test('普通闲聊不默认搜索，文化问题只走文化轨', async () => {
   assert.equal(searchCalls, 1);
 });
 
+test('重复歌词样式会先查 B 站来源，不现场造下一句', async () => {
+  const calls = [];
+  let prompt = '';
+  const result = await generateConversationReply({
+    content: '九妹九妹，上路的堡垒',
+    currentQuestion: '九妹九妹，上路的堡垒',
+    modelInput: '九妹九妹，上路的堡垒',
+    webSearchEnabled: true,
+    webSearch: {
+      async search(query, options) {
+        calls.push({ query, options });
+        return {
+          context: 'B站二创语境：把《九妹》的重复句式改成 369 上路抗压的鬼畜接法。',
+          resultCount: 1,
+          results: [{
+            title: '九妹九妹 上路的堡垒 369 鬼畜二创',
+            description: '滔博 369 上路语境的改词接法。',
+            url: 'https://www.bilibili.com/video/BV1meme369',
+          }],
+        };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        prompt = options.additionalSystemPrompt;
+        return '九妹九妹，上路的堡垒，369 把兵线也盖成城墙了。';
+      },
+    },
+  });
+  assert.equal(result.lyricTemplateMode, true);
+  assert.equal(result.cultureSearchAttempted, true);
+  assert.equal(calls[0].options.includeDomains.includes('bilibili.com'), true);
+  assert.match(calls[0].query, /九妹九妹/);
+  assert.match(prompt, /来源型歌词梗/);
+  assert.match(prompt, /不是造梗指令/);
+  assert.match(prompt, /369/);
+});
+
 test('中文互联网语料默认覆盖普通、梗和图片回复', async () => {
   const corpusCalls = [];
   let groupStyleCalls = 0;

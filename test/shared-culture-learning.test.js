@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSharedCorrectionFromConversation } from '../src/shared-culture-learning.js';
+import {
+  buildSharedCorrectionFromConversation,
+  buildSharedRecurrenceFromConversation,
+} from '../src/shared-culture-learning.js';
 
 test('369 纠正会提炼成跨群公开语境卡，不携带成员身份', () => {
   const card = buildSharedCorrectionFromConversation({
@@ -27,6 +30,23 @@ test('普通追问或缺少公开锚点时不自动入共享卡', () => {
   assert.equal(buildSharedCorrectionFromConversation({
     currentText: '不对，你理解错了',
     history: [{ role: 'assistant', content: '这个说法不对。' }],
+  }), null);
+});
+
+test('重复公共梗会形成脱敏跨群语境卡', () => {
+  const card = buildSharedRecurrenceFromConversation({
+    currentText: '九妹九妹，上路的堡垒',
+    history: [],
+  });
+  assert.ok(card);
+  assert.equal(card.normalizedTopic, '九妹');
+  assert.equal(card.lookupSource, 'group-recurrence');
+  assert.equal(card.evidenceQuality, 'conversation-recurrence');
+  assert.match(card.descriptors[0], /九妹九妹/);
+  assert.doesNotMatch(card.descriptors.join(' '), /成员-|QQ号|群号/);
+  assert.equal(buildSharedRecurrenceFromConversation({
+    currentText: '哈哈哈哈，这也太好笑了',
+    history: [],
   }), null);
 });
 

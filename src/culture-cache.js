@@ -10,6 +10,7 @@ const MAX_DESCRIPTORS = 8;
 const MAX_DESCRIPTOR_LENGTH = 180;
 const MAX_SOURCE_DOMAINS = 8;
 const CULTURE_DOMAINS = new Set(['longtu', 'general', 'platform', 'none']);
+const SHARED_CULTURE_SOURCES = new Set(['group-correction', 'group-recurrence']);
 
 function normalized(value, limit = 500) {
   return String(value ?? '')
@@ -60,7 +61,8 @@ export function buildSharedCultureCorrectionCard(options = {}) {
     confidence: ['low', 'medium', 'high'].includes(options.confidence)
       ? options.confidence : 'medium',
     domain: 'general',
-    lookupSource: 'group-correction',
+    lookupSource: SHARED_CULTURE_SOURCES.has(options.lookupSource)
+      ? options.lookupSource : 'group-correction',
     terms: uniqueStrings([topic, ...aliases], MAX_TERMS, 60),
     descriptors: [context],
     forbiddenTargets: [
@@ -69,7 +71,7 @@ export function buildSharedCultureCorrectionCard(options = {}) {
     ],
     sourceDomains: [],
     exactMatch: true,
-    evidenceQuality: 'conversation-correction',
+    evidenceQuality: options.evidenceQuality || 'conversation-correction',
     ttlMs: Number(options.ttlMs) > 0 ? Number(options.ttlMs) : SHARED_CORRECTION_TTL_MS,
   };
 }
@@ -137,6 +139,11 @@ function descriptorCandidates(text) {
   }
   if (candidates.length === 0) {
     candidates.push(...source.split(/[。！？!?；;\n]+/u).slice(0, 2));
+  } else {
+    // Keep one bounded evidence sentence as well as the extracted semantic
+    // phrase. Titles often carry the actual subject (for example a team or
+    // player name) while the descriptor regex only captures “改词接法”.
+    candidates.push(...source.split(/[。！？!?；;\n]+/u).slice(0, 1));
   }
   return uniqueStrings(candidates, MAX_DESCRIPTORS, MAX_DESCRIPTOR_LENGTH);
 }
@@ -190,11 +197,15 @@ export function cultureCardPrompt(card, source = 'cache') {
     `互联网语境：${CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general'}`,
     `文化领域：${CULTURE_DOMAINS.has(card.domain) ? card.domain : 'general'}`,
     `接梗线索：${uniqueStrings(card.descriptors, MAX_DESCRIPTORS, MAX_DESCRIPTOR_LENGTH).join('；')}`,
-    `检索来源状态：${card.lookupSource === 'group-correction'
-      ? '跨群共享的群聊纠正短卡（仅作文化线索）'
+    `检索来源状态：${SHARED_CULTURE_SOURCES.has(card.lookupSource)
+      ? (card.lookupSource === 'group-correction'
+        ? '跨群共享的群聊纠正短卡（仅作文化线索）'
+        : '跨群共享的重复公共梗短卡（仅作文化线索）')
       : (source === 'cache' ? '本地缓存短卡' : '本轮公开检索后提炼')}${card.lookupSource === 'tieba' ? '（公开贴吧语境证据）' : ''}`,
-    `证据匹配：${card.lookupSource === 'group-correction'
-      ? '群聊纠正已记录；不是现实事实证据，当前事件仍需核对'
+    `证据匹配：${SHARED_CULTURE_SOURCES.has(card.lookupSource)
+      ? (card.lookupSource === 'group-correction'
+        ? '群聊纠正已记录；不是现实事实证据，当前事件仍需核对'
+        : '群聊重复提及已记录；不是现实事实证据，当前事件仍需核对')
       : (card.exactMatch === false ? '仅相似结果，不足以确认' : (card.evidenceQuality || '已匹配'))}`,
     '只把这些线索融入当前回复，不复述来源、网页正文或检索过程；没有短卡也可以按当前语境自然接梗，不贴合就不用，不强塞固定梗。',
     `边界：${uniqueStrings(card.forbiddenTargets, 4, 120).join('；')}`,
@@ -287,7 +298,8 @@ export class CultureCache {
           FROM culture_topics_fts AS f
           LEFT JOIN culture_topics AS c ON c.topic_key = f.topic_key
           WHERE culture_topics_fts MATCH ?
-          ORDER BY (c.lookup_source = 'group-correction') DESC, c.updated_at DESC
+          ORDER BY (c.lookup_source = 'group-correction') DESC,
+            (c.lookup_source = 'group-recurrence') DESC, c.updated_at DESC
           LIMIT 1
         `).get(match);
         if (hit?.topic_key) row = database.prepare(
@@ -308,7 +320,8 @@ export class CultureCache {
             FROM culture_topics_fts AS f
             LEFT JOIN culture_topics AS c ON c.topic_key = f.topic_key
             WHERE f.terms LIKE ? OR f.descriptors LIKE ?
-            ORDER BY (c.lookup_source = 'group-correction') DESC, c.updated_at DESC
+            ORDER BY (c.lookup_source = 'group-correction') DESC,
+              (c.lookup_source = 'group-recurrence') DESC, c.updated_at DESC
             LIMIT 1
           `).get(likeTerms[0], likeTerms[0]);
           if (likeHit?.topic_key) {
@@ -335,9 +348,10 @@ export class CultureCache {
       sourceDomains: safeJson(row.source_domains_json),
       domain: CULTURE_DOMAINS.has(row.domain) ? row.domain : 'general',
       lookupSource: normalized(row.lookup_source || 'web', 40),
-      exactMatch: row.lookup_source === 'group-correction' ? true : undefined,
+      exactMatch: SHARED_CULTURE_SOURCES.has(row.lookup_source) ? true : undefined,
       evidenceQuality: row.lookup_source === 'group-correction'
-        ? 'conversation-correction' : undefined,
+        ? 'conversation-correction'
+        : (row.lookup_source === 'group-recurrence' ? 'conversation-recurrence' : undefined),
     };
   }
 

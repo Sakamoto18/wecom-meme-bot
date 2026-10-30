@@ -33,6 +33,7 @@ import {
   shouldUseThinking,
   shouldUseAttackStyle,
   isShortTermMeaningRequest,
+  isAlteredLyricTemplate,
   isAttackFrameChallenge,
   isAttackPressureChallenge,
   getReplyStyleSignals,
@@ -842,6 +843,8 @@ export async function generateConversationReply(options) {
   );
   const explicitLyricRequest = /(?:接(?:下|着)?(?:一句|歌词)|唱(?:歌|下去|原曲)|歌词|原曲|歌曲(?:出处|名字|是哪首))/u
     .test(String(currentQuestion ?? ''));
+  const lyricTemplateMode = !explicitLyricRequest
+    && isAlteredLyricTemplate(currentQuestion || content);
   const groundingQueryHint = [
     inputGroundingQueryHint,
     plannedMeme.anchor,
@@ -877,7 +880,7 @@ export async function generateConversationReply(options) {
       '【图片梗主锚点（本轮优先级最高）】',
       imageMemeClaim ? `图片梗主张：${imageMemeClaim.slice(0, 260)}` : '',
       imageSemanticFrame ? `图片关系与接话落点：${String(imageSemanticFrame).slice(0, 2_400)}` : '',
-      '先围绕图片已经给出的具体反差、动作或接话落点回应。用户短句若像歌词，只能改变语气，不得自动续写原曲；除非用户明确要求接歌词、唱歌或查歌曲出处。相关但不精确的检索材料只能作候选，不能覆盖图片主锚点。',
+      `先围绕图片已经给出的具体反差、动作或接话落点回应。用户短句若像歌词，不得自动续写原曲；${lyricTemplateMode ? '若是重复改词结构，先使用 B 站/百科来源检索，命中后只接来源中的最短一拍；' : ''}除非用户明确要求接歌词、唱歌或查歌曲出处，否则不要把原曲当答案。相关但不精确的检索材料只能作候选，不能覆盖图片主锚点。`,
     ].filter(Boolean).join('\n') : '',
     recordSummary ? FORWARD_SUMMARY_PROMPT : '',
   ].filter(Boolean).join('\n\n');
@@ -1453,6 +1456,7 @@ export async function generateConversationReply(options) {
     explicitImageSearch,
     cultureDomain: jevCulture.domain,
     cultureLookupNeeded: jevCulture.retrievalNeeded,
+    lyricTemplateMode,
     longtuLookupNeeded: jevCulture.longtu ? jevCulture.retrievalNeeded : 0,
     factLookupNeeded: jevCulture.factLookupNeeded,
     timeSensitive: jevCulture.timeSensitive,
@@ -1522,7 +1526,7 @@ export async function generateConversationReply(options) {
   // web_search function (and a prompt describing the tool) is what made casual
   // replies sound like a verification assistant even when no lookup was needed.
   const memeKnowledgeToolsAvailable = Boolean(
-    webSearchToolsAvailable && memeKnowledge && unknownConcept,
+    webSearchToolsAvailable && memeKnowledge && (unknownConcept || lyricTemplateMode),
   );
   const turnWebSearchTools = webSearchToolsAvailable && (
     retrievalPolicy.factEligible
@@ -1537,7 +1541,8 @@ export async function generateConversationReply(options) {
     [...(semanticImageSearch ? queries : []), ...jevCulture.terms, ...plannedCultureQueries].join(' ')
     || String(currentQuestion || content || '').trim()
   ).slice(0, 120);
-  const cultureLookupQuery = (unknownConcept && !semanticImageSearch ? `wiki ${cultureTerms}` : cultureTerms).slice(0, 120);
+  const cultureLookupQuery = (unknownConcept && !semanticImageSearch && !lyricTemplateMode
+    ? `wiki ${cultureTerms}` : cultureTerms).slice(0, 120);
   const cultureQuery = plannedCultureQueries.length > 0
     ? plannedCultureQueries.join(' ').slice(0, 240)
     : (unknownConcept || semanticImageSearch
@@ -1567,7 +1572,7 @@ export async function generateConversationReply(options) {
   let memeKnowledgeCacheHit = false;
   let abstractAssociationEntries = [...abstractSignalEntries];
   let abstractAssociationMemoryHit = false;
-  if (unknownConcept && memeKnowledge && cultureTerms) {
+  if ((unknownConcept || lyricTemplateMode) && memeKnowledge && cultureTerms) {
     try {
       memeKnowledgeEntry = memeKnowledge.lookup(cultureTerms);
       memeKnowledgeCacheHit = Boolean(memeKnowledgeEntry);
@@ -1628,7 +1633,7 @@ export async function generateConversationReply(options) {
         && (queries.length > 0 || textFactQueries.length > 0)
       : retrievalPolicy.factEligible);
   const cultureSearchEligible = (retrievalPolicy.cultureEligible
-    && !cultureCacheHit
+    && (!cultureCacheHit || lyricTemplateMode)
     && Boolean(cultureQuery)) || plannedCultureEligible;
   const attackAllowsFactSearch = !attackStyle
     || plannedAnswerRequired
@@ -1767,8 +1772,40 @@ export async function generateConversationReply(options) {
       if (failed) combined.context = [combined.context, '部分贴吧语境查询失败，未取回的证据不可视为已确认。'].filter(Boolean).join('\n');
       return combined;
     }
+    if (lyricTemplateMode) {
+      // A repeated lyric is a source-identification problem. Search Bilibili
+      // first (where the recent remix/鬼畜 usually lives), then use wiki-like
+      // pages only as a secondary semantic cross-check. Do not let a generic
+      // web hit become a confident culture card without an exact match.
+      const sourceTasks = [
+        {
+          query: `${cultureQuery} 二创 鬼畜`.slice(0, 180),
+          domains: ['bilibili.com', 'b23.tv'],
+          usageSource: 'web-search-culture-lyric-bilibili',
+        },
+        {
+          query: `${cultureQuery} 梗 来源`.slice(0, 180),
+          domains: ['baike.baidu.com', 'zh.moegirl.org.cn', 'zh.wikipedia.org'],
+          usageSource: 'web-search-culture-lyric-wiki',
+        },
+      ];
+      const outcomes = await Promise.allSettled(sourceTasks.map((task) => searchWithSourceScope(
+        webSearch,
+        task.query,
+        { mode: 'meme', usageSource: task.usageSource },
+        { includeDomains: task.domains, candidates: [], crossCheck: false },
+      )));
+      const successful = outcomes
+        .filter((outcome) => outcome.status === 'fulfilled')
+        .map((outcome) => outcome.value);
+      const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+      if (failed && successful.length === 0) throw failed.reason;
+      const combined = combineCultureSearchResults(successful);
+      if (failed) combined.context = [combined.context, '部分来源检索失败，未取回的证据不可视为已确认。'].filter(Boolean).join('\n');
+      return combined;
+    }
     const textScope = sourceScopeFromText(cultureQuery);
-    const scope = (unknownConcept || semanticImageSearch)
+    const scope = (unknownConcept || semanticImageSearch || lyricTemplateMode)
       ? unknownConceptScope
       : (textScope.includeDomains.length > 0 ? textScope : jevPlatformScope);
     const searchOptions = {
@@ -1836,23 +1873,25 @@ export async function generateConversationReply(options) {
     exactCultureQuery || cultureLookupQuery || cultureQuery,
     cultureSearchResult,
   );
-  if (!cultureCard && (cultureSearchResult.resultCount > 0 || cultureSearchResult.context)) {
-    cultureCard = buildCultureCard(cultureLookupQuery || cultureQuery, cultureSearchResult, {
+  if ((!cultureCard || lyricTemplateMode)
+    && (cultureSearchResult.resultCount > 0 || cultureSearchResult.context)) {
+    const freshCultureCard = buildCultureCard(cultureLookupQuery || cultureQuery, cultureSearchResult, {
       confidence: retrievalPolicy.confidence,
       domain: useLongtuKnowledge ? 'longtu' : (jevCulture.domain === 'none' ? 'general' : jevCulture.domain),
       lookupSource: useLongtuKnowledge && longtuRetrievalEnabled && longtuTiebaSearchEnabled ? 'tieba' : 'web',
       exactQuery: exactCultureQuery || cultureLookupQuery || cultureQuery,
-      requireExactMatch: plannedCultureSearchRequested,
+      requireExactMatch: plannedCultureSearchRequested || lyricTemplateMode,
     });
-    if (cultureCard && cultureCache) {
+    if (freshCultureCard) cultureCard = freshCultureCard;
+    if (freshCultureCard && cultureCache) {
       try {
-        cultureCache.put(cultureCard);
+        cultureCache.put(freshCultureCard);
       } catch {
         // The cache is best effort; keep the fresh card for this turn.
       }
     }
   }
-  if (unknownConcept && !memeKnowledgeEntry
+  if ((unknownConcept || lyricTemplateMode) && !memeKnowledgeEntry
     && (cultureSearchResult.resultCount > 0 || cultureSearchResult.context)
     && memeKnowledge) {
     memeKnowledgeEntry = buildMemeKnowledgeEntry(cultureTerms, cultureSearchResult, {
@@ -1873,6 +1912,7 @@ export async function generateConversationReply(options) {
   const cultureGroundingRequired = Boolean(
     plannedCultureSearchRequested
       || unknownConcept
+      || lyricTemplateMode
       || (cultureSearchAttempted && Boolean(cultureQuery)),
   );
   const searchResult = factSearchAttempted || factSearchResult.resultCount > 0
@@ -1887,7 +1927,7 @@ export async function generateConversationReply(options) {
   const compactActiveReply = activeReply && activeReplyPriority !== 'must';
   const thinkingEnabled = !passiveImageComment && !compactActiveReply
     && (shouldUseThinking(content, { pureAttack })
-      || (cultureGroundingSignal && !pureAttack)
+      || ((cultureGroundingSignal || lyricTemplateMode) && !pureAttack)
       || turnPlan?.reasoningNeeded === true);
   const detailedAnswerRequested = recordSummary
     || (!passiveImageComment && !compactActiveReply && shouldRequestDetailedAnswer(currentQuestion));
@@ -1982,6 +2022,7 @@ export async function generateConversationReply(options) {
       && (
         isHighConfidenceCulturePolicy(retrievalPolicy) && cultureCardUsed
         || plannedCultureSearchRequested
+        || lyricTemplateMode && cultureSearchAttempted
         || unknownConcept
       ),
   );
@@ -2098,6 +2139,7 @@ export async function generateConversationReply(options) {
     imageSemanticFrame,
     imageMemeAnchorPriority,
     explicitLyricRequest,
+    lyricTemplateMode,
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     cultureReviewRequired,
@@ -2135,6 +2177,7 @@ export async function generateConversationReply(options) {
     imageSemanticFrame,
     imageMemeAnchorPriority,
     explicitLyricRequest,
+    lyricTemplateMode,
     quotedPersonaPhrases: personaDemonstration ? personaPhrasesFromContext(personaContext) : [],
     relativeDateFacts,
     searchEvidenceQuality: searchResult?.evidenceQuality
@@ -2245,6 +2288,7 @@ export async function generateConversationReply(options) {
       imageSemanticFrame,
       imageMemeAnchorPriority,
       explicitLyricRequest,
+      lyricTemplateMode,
       verificationRequested,
     }),
     memeCorpusContext,
@@ -2405,6 +2449,7 @@ export async function generateConversationReply(options) {
               imageSemanticFrame,
               imageMemeAnchorPriority,
               explicitLyricRequest,
+              lyricTemplateMode,
               artAppraisal,
               abstractAssociationRequested,
               abstractAssociationReviewRequired,
@@ -2752,6 +2797,7 @@ export async function generateConversationReply(options) {
     searchMode,
     factSearchAttempted,
     cultureSearchAttempted,
+    lyricTemplateMode,
     attackKnowledgeSearchAttempted,
     attackKnowledgeSearchError,
     cultureCacheHit,
