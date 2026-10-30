@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('node', 'provider', 'astrbot', 'napcat')]
+    [ValidateSet('node', 'provider', 'astrbot', 'napcat', 'relay')]
     [string[]]$Modes = @('node', 'provider', 'astrbot', 'napcat')
 )
 $ErrorActionPreference = 'Stop'
@@ -13,7 +13,7 @@ $runner = Join-Path $PSScriptRoot 'task-run.ps1'
 foreach ($file in @($runner, (Join-Path $root '.env.qq'), (Join-Path $env:ProgramFiles 'nodejs\node.exe'))) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing prerequisite: $file" }
 }
-$names = @{ node = 'Longtu-Backend'; provider = 'Longtu-Provider'; astrbot = 'Longtu-AstrBot'; napcat = 'Longtu-NapCat' }
+$names = @{ node = 'Longtu-Backend'; provider = 'Longtu-Provider'; astrbot = 'Longtu-AstrBot'; napcat = 'Longtu-NapCat'; relay = 'Longtu-OneBot-Relay' }
 $backup = Join-Path $root ('data\windows\task-backups\' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $backup -Force | Out-Null
 $principal = New-ScheduledTaskPrincipal -UserId $identity.Name -LogonType Interactive -RunLevel Highest

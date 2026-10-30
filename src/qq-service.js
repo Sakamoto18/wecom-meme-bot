@@ -4493,7 +4493,20 @@ export class QqBotService {
       return false;
     }
     try {
-      const history = this.conversationStore.get(getConversationId(message));
+      let history = this.conversationStore.get(getConversationId(message));
+      // Passive group observations live in qq_group_memory rather than the
+      // conversational exchange store. After the current event is recorded,
+      // use that bounded direct context as a restart-safe fallback.
+      if (history.length < 2 && this.groupMemory?.resolveReplyContext) {
+        const context = this.groupMemory.resolveReplyContext({
+          groupId: payload.groupId,
+          messageId: payload.messageId,
+          allowDirectFallback: true,
+        });
+        if (Array.isArray(context?.history) && context.history.length > history.length) {
+          history = context.history;
+        }
+      }
       const card = buildSharedCorrectionFromConversation({
         currentText: conversationContent,
         history,
@@ -5850,8 +5863,8 @@ export class QqBotService {
     this.recordParticipants(payload);
     this.inferPlainTextTargets(payload, message);
     this.recordMemberObservation(payload, message);
-    this.learnSharedCultureFromCorrection(payload, message, conversationContent);
     this.recordGroupEvent(payload, message, conversationContent);
+    this.learnSharedCultureFromCorrection(payload, message, conversationContent);
     const adminStopCommand = payload.messageType === 'group'
       && isAdminStopCommand(payload.text);
     if (adminStopCommand) {

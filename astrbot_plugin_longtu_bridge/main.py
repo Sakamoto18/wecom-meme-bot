@@ -5,6 +5,7 @@ import copy
 import hmac
 from datetime import datetime, time as datetime_time, timedelta
 import os
+import random
 import re
 import time
 from zoneinfo import ZoneInfo
@@ -2945,6 +2946,7 @@ class LongtuQqBridge(Star):
 
         reply_chain = self._reply_chain_from_backend(response)
         if reply_chain:
+            await self._sleep_before_reply(event, response)
             reply_chain = self._reply_prefix(event, event.get_messages()) + reply_chain
             await event.send(MessageChain(chain=reply_chain))
             event.set_extra("longtu_pure_mention_sent", True)
@@ -2954,6 +2956,54 @@ class LongtuQqBridge(Star):
         else:
             logger.info("纯 At 前置兜底被 Node 判定为静默")
         event.stop_event()
+
+    def _reply_delay_window(self) -> tuple[float, float]:
+        """Return the configured human-like pre-send delay, capped at 30s."""
+        def number(env_name: str, config_key: str, default: float) -> float:
+            raw = os.getenv(env_name)
+            if raw is None:
+                raw = self.config.get(config_key, default)
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return default
+
+        enabled = os.getenv("LONGTU_QQ_REPLY_DELAY_ENABLED")
+        if enabled is None:
+            enabled = self.config.get("reply_delay_enabled", True)
+        if str(enabled).strip().lower() in {"0", "false", "no", "off"}:
+            return (0.0, 0.0)
+
+        minimum = max(
+            0.0,
+            number("LONGTU_QQ_REPLY_DELAY_MIN_SECONDS", "reply_delay_min_seconds", 1.0),
+        )
+        maximum = min(
+            30.0,
+            max(
+                0.0,
+                number("LONGTU_QQ_REPLY_DELAY_MAX_SECONDS", "reply_delay_max_seconds", 15.0),
+            ),
+        )
+        if maximum < minimum:
+            minimum, maximum = maximum, minimum
+        return minimum, maximum
+
+    async def _sleep_before_reply(self, event: AstrMessageEvent, response: dict) -> None:
+        """Spread visible replies without delaying silent observations."""
+        if not isinstance(response, dict) or not response.get("messages"):
+            return
+        minimum, maximum = self._reply_delay_window()
+        if maximum <= 0:
+            return
+        delay = minimum if maximum <= minimum else random.uniform(minimum, maximum)
+        if delay <= 0:
+            return
+        logger.info(
+            f"QQ 回复打散：chat={'private' if event.is_private_chat() else event.get_group_id()} "
+            f"delay_ms={int(delay * 1000)}",
+        )
+        await asyncio.sleep(delay)
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
@@ -3392,6 +3442,8 @@ class LongtuQqBridge(Star):
             # “读空气”判定把它升级为主动回复；只有确实没有返回消息时才保持静默。
             if observe_only and not response["messages"]:
                 return
+
+            await self._sleep_before_reply(event, response)
 
             if response.get("mode") == "media-unavailable":
                 with contextlib.suppress(Exception):

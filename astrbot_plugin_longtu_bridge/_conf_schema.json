@@ -52,6 +52,24 @@
     "type": "bool",
     "default": false
   },
+  "reply_delay_enabled": {
+    "description": "发送回复前随机等待，避免每次秒回",
+    "type": "bool",
+    "default": true,
+    "hint": "默认在 1-15 秒内随机等待；最长可通过 reply_delay_max_seconds 或 LONGTU_QQ_REPLY_DELAY_MAX_SECONDS 调到 30 秒"
+  },
+  "reply_delay_min_seconds": {
+    "description": "回复随机等待下限（秒）",
+    "type": "float",
+    "default": 1,
+    "hint": "不能小于 0；由 LONGTU_QQ_REPLY_DELAY_MIN_SECONDS 覆盖"
+  },
+  "reply_delay_max_seconds": {
+    "description": "回复随机等待上限（秒）",
+    "type": "float",
+    "default": 15,
+    "hint": "允许设置到 30 秒；超过 30 秒会自动限制为 30；由 LONGTU_QQ_REPLY_DELAY_MAX_SECONDS 覆盖"
+  },
   "media_ack_emoji_id": {
     "description": "视频分享解析前挂在原消息上的 QQ 表情回应 ID",
     "type": "string",

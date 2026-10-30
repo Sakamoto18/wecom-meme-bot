@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('node', 'provider', 'astrbot', 'napcat')]
+    [ValidateSet('node', 'provider', 'astrbot', 'napcat', 'relay')]
     [string]$Mode,
     [string]$ProjectRoot = ''
 )
