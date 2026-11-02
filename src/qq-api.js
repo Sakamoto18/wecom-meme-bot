@@ -613,6 +613,7 @@ export async function createQqRuntime() {
     provider: process.env.WEB_SEARCH_PROVIDER,
     endpoint: process.env.WEB_SEARCH_ENDPOINT ?? process.env.LONGTU_WEB_SEARCH_ENDPOINT,
     exaApiKey: process.env.WEB_SEARCH_EXA_API_KEY ?? process.env.EXA_API_KEY,
+    exaApiKeys: process.env.WEB_SEARCH_EXA_API_KEYS?.trim() || process.env.EXA_API_KEYS,
     exaEndpoint: process.env.WEB_SEARCH_EXA_ENDPOINT,
     exaSearchType: process.env.WEB_SEARCH_EXA_TYPE,
     timeoutMs: parsePositiveInteger(
@@ -1220,6 +1221,7 @@ export async function startQqApi() {
         model_configured: runtime.chatClient.isConfigured,
         web_search_enabled: runtime.webSearchEnabled,
         web_search_provider: runtime.webSearch.provider,
+        web_search_exa_keys: runtime.webSearch.exaKeyPool.getStatus(),
         culture_cache: runtime.cultureCache.getStats(),
         meme_knowledge: runtime.memeKnowledge.getStats(),
         group_memory: groupMemoryStats,

@@ -1,4 +1,5 @@
 import { normalizeDomains, matchesSearchDomains } from './search-scope.js';
+import { ExaHttpError, ExaKeyPool, parseExaApiKeys } from './exa-key-pool.js';
 
 const DEFAULT_ENDPOINT = 'https://www.bing.com/search';
 const DEFAULT_EXA_ENDPOINT = 'https://api.exa.ai/search';
@@ -432,12 +433,15 @@ function formatContext(results, options = {}) {
 export class LongtuWebSearch {
   constructor(options = {}) {
     this.enabled = options.enabled ?? true;
+    this.exaKeyPool = new ExaKeyPool(parseExaApiKeys(options.exaApiKeys, options.exaApiKey), {
+      now: options.now,
+      logger: options.logger,
+    });
     this.provider = String(options.provider ?? '').trim().toLowerCase()
-      || (options.exaApiKey?.trim() ? 'exa' : 'bing');
+      || (this.exaKeyPool.size ? 'exa' : 'bing');
     if (!['bing', 'exa'].includes(this.provider)) {
       throw new TypeError(`不支持的联网检索提供商：${this.provider}`);
     }
-    this.exaApiKey = options.exaApiKey?.trim() || '';
     this.exaEndpoint = options.exaEndpoint?.trim() || DEFAULT_EXA_ENDPOINT;
     this.exaSearchType = ['auto', 'keyword', 'neural'].includes(options.exaSearchType)
       ? options.exaSearchType
@@ -465,6 +469,42 @@ export class LongtuWebSearch {
   }
 
   async fetchResults(endpoint, query, options = {}) {
+    const usesExa = /(?:^|\.)exa\.ai$/i.test(new URL(endpoint).hostname);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    timeout.unref();
+    const attempted = new Set();
+    let lastError;
+    try {
+      do {
+        controller.signal.throwIfAborted();
+        const lease = usesExa ? this.exaKeyPool.acquire(attempted) : null;
+        if (usesExa && !lease) {
+          throw lastError ?? new Error(this.exaKeyPool.size
+            ? 'Exa 暂无可用 API Key（额度耗尽、冷却中或认证失效）'
+            : 'Exa API Key 尚未配置');
+        }
+        if (lease) attempted.add(lease.index);
+        try {
+          return await this.fetchResultsOnce(endpoint, query, options, controller.signal, lease?.key);
+        } catch (error) {
+          controller.signal.throwIfAborted();
+          if (!lease || !this.exaKeyPool.reject(lease, error)) throw error;
+          lastError = error;
+        }
+      } while (attempted.size < this.exaKeyPool.size);
+      throw lastError;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        throw new Error(`联网检索超时（${this.timeoutMs}ms）`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async fetchResultsOnce(endpoint, query, options, signal, exaKey) {
     const url = new URL(endpoint);
     const includeDomains = normalizeDomains(options.includeDomains);
     const usesExa = /(?:^|\.)exa\.ai$/i.test(url.hostname);
@@ -480,18 +520,11 @@ export class LongtuWebSearch {
       url.searchParams.set('format', 'rss');
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    timeout.unref();
-
     let succeeded = false;
     let resultCount = 0;
     let upstreamStarted = false;
     let costDollars;
     try {
-      if (usesExa && !this.exaApiKey) {
-        throw new Error('Exa API Key 尚未配置');
-      }
       options.onBeforeUpstreamRequest?.({
         endpoint,
         provider: usesExa ? 'exa' : 'web',
@@ -500,12 +533,12 @@ export class LongtuWebSearch {
         query,
       });
       upstreamStarted = true;
-      const response = await this.fetchImpl(url, usesExa
+      const requestOptions = usesExa
         ? {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': this.exaApiKey,
+            'x-api-key': exaKey,
           },
           body: JSON.stringify({
             query,
@@ -516,7 +549,7 @@ export class LongtuWebSearch {
               text: { maxCharacters: this.exaMaxContentCharacters },
             },
           }),
-          signal: controller.signal,
+          signal,
         }
         : {
           headers: {
@@ -525,15 +558,38 @@ export class LongtuWebSearch {
               : 'text/html,application/xhtml+xml;q=0.9',
             'User-Agent': 'Mozilla/5.0 (compatible; WeComLongtuBot/1.0)',
           },
-          signal: controller.signal,
-        });
+          signal,
+        };
+      let response;
+      try {
+        response = await this.fetchImpl(url, requestOptions);
+      } catch (error) {
+        signal.throwIfAborted();
+        if (usesExa) throw new Error('Exa 检索请求失败（网络错误）');
+        throw error;
+      }
+      signal.throwIfAborted();
 
       if (!response.ok) {
+        // Do not forward provider bodies: they can echo credentials or the query.
+        if (usesExa) {
+          void response.body?.cancel().catch(() => {});
+          throw new ExaHttpError(response);
+        }
         throw new Error(`联网检索失败（HTTP ${response.status}）`);
       }
 
-      const responseBody = await response.text();
-      const exaPayload = usesExa ? JSON.parse(responseBody) : null;
+      let responseBody;
+      let exaPayload;
+      try {
+        responseBody = await response.text();
+        signal.throwIfAborted();
+        exaPayload = usesExa ? JSON.parse(responseBody) : null;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (usesExa) throw new Error('Exa 检索响应读取或解析失败');
+        throw error;
+      }
       costDollars = exaPayload?.costDollars;
       const parseStats = { rawResultCount: 0 };
       const parsedResults = usesExa
@@ -555,13 +611,7 @@ export class LongtuWebSearch {
         results,
         rawResultCount: parseStats.rawResultCount,
       };
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        throw new Error(`联网检索超时（${this.timeoutMs}ms）`);
-      }
-      throw error;
     } finally {
-      clearTimeout(timeout);
       if (upstreamStarted) {
         options.onUpstreamRequest?.({
           endpoint,
