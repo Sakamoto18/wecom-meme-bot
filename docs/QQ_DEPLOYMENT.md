@@ -469,6 +469,34 @@ sudo docker compose --env-file .env.qq -f docker-compose.server.yml up -d --buil
 
 6. 请求健康检查后，`web_search_provider` 应为 `exa`。日志中只记录 `api.exa.ai`，不会记录 API Key。
 
+#### 多个 Exa key 自动接替
+
+在环境文件设置 `WEB_SEARCH_EXA_API_KEYS=key1,key2,key3` 后重启后端。支持逗号、空白分隔，也支持 dotenv 中的 JSON 字符串数组（如 `WEB_SEARCH_EXA_API_KEYS='["key1","key2"]'`）；会去空、去重。非空列表优先于旧 `WEB_SEARCH_EXA_API_KEY`，请把要保留的原 key 也列进去。未填列表时沿用原单 key。兼容别名为 `EXA_API_KEYS` / `EXA_API_KEY`。
+
+正常请求持续使用当前可用 key，不轮询消耗。按 [Exa 官方错误码](https://exa.ai/docs/admin/error-codes.md)处理：
+
+- HTTP 402：额度耗尽或预算超限，当前请求切下一个；该 key 暂停 30 分钟，之后在需要备用时重新尝试。
+- HTTP 401：认证失效，跳过至后端重启；修正配置后需重启。
+- HTTP 429：遵守 `Retry-After`（秒数或 HTTP 日期），缺失时冷却 60 秒，然后可再次选用；当前请求尝试可用备用。
+- HTTP 400/403/5xx、网络错误和响应异常不标记为额度耗尽、不轮换 key。403 可能属于内容策略拒绝，不能用切 key 重试。
+
+每次检索最多尝试每个 key 一次，全部尝试共用原 `WEB_SEARCH_TIMEOUT_MS`，不会逐 key 叠加超时。无可用 key 时沿用已有搜索失败/备用搜索源处理。冷却不阻塞其他请求；较早请求迟到的结果不会恢复已停用 key，也不会把当前 key 切回去。状态保存在后端进程内，重启后重新检查。
+
+每次真实尝试仍受原群搜索额度限制并独立记账，缓存命中不请求上游、不消耗额度。失败请求按现有规则标为费用未知，不冒充成功收费。`/healthz` 的 `web_search_exa_keys` 只显示数量、编号、状态和可重试时间；日志不输出 key 或上游错误正文。
+
+据 [Exa 账单说明](https://exa.ai/docs/admin/billing.md)，余额属于 team。同一 team 新建多个 key 不增加总额度；只有单 key 预算已用完、团队仍有余额，或备用 key 所属团队有独立余额时，接替才有帮助。团队/网络层限流也可能同时影响多个 key。
+
+Windows 原生部署请编辑 `C:\longtu-qq-bot\.env.windows`，它覆盖 `.env.qq`；保存后仅重启 `Longtu-Backend` 任务。不要覆盖其他配置，也不需要重启 QQ/NapCat。管理员 PowerShell：
+
+```powershell
+notepad C:\longtu-qq-bot\.env.windows
+# 保存 key 列表后：
+Stop-ScheduledTask -TaskName Longtu-Backend
+# 等 8787 的旧进程退出，再启动：
+Start-ScheduledTask -TaskName Longtu-Backend
+(Invoke-RestMethod http://127.0.0.1:8787/healthz).web_search_exa_keys
+```
+
 ### 聊天管理龙图库
 
 只有 `LONGTU_QQ_ADMIN_USERS` 中的 QQ 账号可以使用：

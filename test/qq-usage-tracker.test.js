@@ -790,6 +790,57 @@ test('real Exa wrapper preserves reported charges even when local filtering disc
   } finally { f.close(); }
 });
 
+test('Exa key failover records each attempt and actual successful cost; cache adds no upstream usage', async () => {
+  const f = createTracker({ maxGroupSearchCallsPerDay: 2 });
+  const calls = [];
+  const search = f.tracker.wrapWebSearch(new LongtuWebSearch({
+    exaApiKeys: ['exhausted', 'backup'], fallbackEndpoint: null, logger: { warn() {} },
+    fetchImpl: async (_url, options) => {
+      const key = options.headers['x-api-key'];
+      calls.push(key);
+      return key === 'exhausted' ? new Response('', { status: 402 })
+        : Response.json({ results: [], costDollars: { total: 0.007 } });
+    },
+  }));
+  try {
+    const task = () => search.search('example', { mode: 'current' });
+    await f.tracker.runWithContext({ groupId: 'failover' }, task);
+    await f.tracker.runWithContext({ groupId: 'failover' }, task);
+    const report = f.tracker.getReport();
+    assert.deepEqual(calls, ['exhausted', 'backup']);
+    assert.equal(report.totals.searchCalls, 2);
+    assert.equal(report.totals.searchCacheHits, 1);
+    assert.equal(report.pricing.search.searchEstimatedCostUsd, 0.007);
+    assert.equal(report.pricing.search.searchUnknownCalls, 1);
+  } finally { f.close(); }
+});
+
+test('Exa failover cannot bypass the group daily budget or image rate limit', async () => {
+  for (const [limits, source, metric] of [
+    [{ maxGroupSearchCallsPerDay: 1 }, 'web-search-general', 'search-calls'],
+    [{ maxImageSearchCallsPerWindow: 1 }, 'web-search-image', 'search-rate'],
+  ]) {
+    const f = createTracker(limits);
+    let calls = 0;
+    const client = new LongtuWebSearch({
+      exaApiKeys: ['exhausted', 'backup'],
+      fallbackEndpoint: 'https://www.bing.com/search', logger: { warn() {} },
+      fetchImpl: async () => { calls += 1; return new Response('', { status: 402 }); },
+    });
+    const search = f.tracker.wrapWebSearch(client);
+    try {
+      await assert.rejects(f.tracker.runWithContext({ groupId: 'failover', messageType: 'group' }, () => (
+        search.search('example', { mode: 'current', usageSource: source })
+      )), error => error instanceof QqUsageLimitError && error.metric === metric);
+      assert.equal(calls, 1);
+      const report = f.tracker.getReport();
+      assert.equal(report.totals.searchCalls, 1);
+      assert.equal(report.totals.blockedSearchCalls, 1);
+      assert.equal(client.exaKeyPool.getStatus().keys[1].state, 'available');
+    } finally { f.close(); }
+  }
+});
+
 test('image reports can request all groups while ordinary report queries retain their limit', () => {
   const f = createTracker();
   try {

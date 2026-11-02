@@ -123,6 +123,7 @@ const webSearch = new LongtuWebSearch({
   provider: process.env.WEB_SEARCH_PROVIDER,
   endpoint: process.env.WEB_SEARCH_ENDPOINT ?? process.env.LONGTU_WEB_SEARCH_ENDPOINT,
   exaApiKey: process.env.WEB_SEARCH_EXA_API_KEY ?? process.env.EXA_API_KEY,
+  exaApiKeys: process.env.WEB_SEARCH_EXA_API_KEYS?.trim() || process.env.EXA_API_KEYS,
   exaEndpoint: process.env.WEB_SEARCH_EXA_ENDPOINT,
   exaSearchType: process.env.WEB_SEARCH_EXA_TYPE,
   timeoutMs: Number.isInteger(configuredSearchTimeout) && configuredSearchTimeout > 0
