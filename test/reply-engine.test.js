@@ -1533,7 +1533,7 @@ test('问题窗口内遭到攻击时仍先回答问题，再允许简短回击',
   assert.equal(result.mode, 'model');
   assert.equal(calls.length, 1);
   assert.match(calls[0].stableSystemPrompt, /若当前发言者明确挑衅或攻击机器人/);
-  assert.match(calls[0].stableSystemPrompt, /高强度的亲属辱骂仍需明确的互骂语境或回击依据/);
+  assert.match(calls[0].stableSystemPrompt, /按全局人格可以用很过分的梗和龙图亲属梗互损/);
 });
 
 test('统一角色初稿把回击写成说教时，追加一次真正的临场对线句', async () => {
@@ -1753,7 +1753,7 @@ test('质疑口癖没有生效时也只引用示范，不把口癖反打到用�
   assert.equal(result.roleReplyHadAttack, false);
 });
 
-test('普通问题中的未授权亲属攻击会被删除', async () => {
+test('普通问题中的亲属梗互损按全局人格保留', async () => {
   const result = await generateConversationReply({
     content: '今天适合跑步吗',
     modelInput: '今天适合跑步吗',
@@ -1762,6 +1762,22 @@ test('普通问题中的未授权亲属攻击会被删除', async () => {
       isConfigured: true,
       async complete() {
         return '天气合适就去跑，你🐎在龙图里当背景板呢。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.match(result.answer, /你🐎/u);
+});
+
+test('敏感求助中的亲属攻击仍会被删除', async () => {
+  const result = await generateConversationReply({
+    content: '我妈刚去世，心里很难受',
+    modelInput: '我妈刚去世，心里很难受',
+    personaContext: '偏好口癖：敢这么跟我说话，你的🐎是批发的？',
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '先缓一缓，想说就说。你🐎在龙图里当背景板呢。';
       },
     },
     webSearchEnabled: false,
