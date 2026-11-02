@@ -932,7 +932,8 @@ export async function createQqRuntime() {
     headersJson: process.env.XHS_HEADERS_JSON,
     userAgent: process.env.XHS_USER_AGENT,
     cookie: process.env.XHS_COOKIE,
-    timeoutMs: (parsePositiveNumber(process.env.XHS_PROVIDER_TIMEOUT_SECONDS) ?? 6) * 1000,
+    timeoutMs: (parsePositiveNumber(process.env.XHS_PROVIDER_TIMEOUT_SECONDS)
+      ?? (process.env.XHS_PROVIDER_URL?.trim() ? 85 : 6)) * 1000,
   });
   const douyinProvider = createDouyinProvider({ providerUrl: process.env.DOUYIN_PROVIDER_URL });
   const bilibiliSessionProvider = createBilibiliSessionProvider({

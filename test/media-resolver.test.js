@@ -8,6 +8,102 @@ import {
   extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
 } from '../src/bilibili-provider.js';
 
+test('并发名额直接交给队首，新请求不能抢走刚释放的名额', async () => {
+  const resolver = new MediaResolver({ maxConcurrent: 1 });
+  try {
+    await resolver.acquireSlot();
+    const second = resolver.acquireSlot();
+    resolver.releaseSlot();
+    let thirdStarted = false;
+    const third = resolver.acquireSlot().then(() => { thirdStarted = true; });
+    await second;
+    assert.equal(thirdStarted, false);
+    assert.equal(resolver.active, 1);
+    resolver.releaseSlot();
+    await third;
+    assert.equal(resolver.active, 1);
+    resolver.releaseSlot();
+    assert.equal(resolver.active, 0);
+  } finally { resolver.close(); }
+});
+
+test('三个群不同链接有界并发，同链接合并，已有缓存不等抓取名额', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'media-concurrent-'));
+  const gates = new Map(['one', 'two', 'three'].map(key => [key, Promise.withResolvers()]));
+  const entered = new Map(['one', 'two', 'three'].map(key => [key, Promise.withResolvers()]));
+  const calls = [];
+  const resolver = new MediaResolver({ enabled: true, maxConcurrent: 2, cacheDirectory: directory,
+    providerResolver: async ({ url }) => {
+      const key = new URL(url).pathname.slice(1);
+      calls.push(key);
+      entered.get(key)?.resolve();
+      if (gates.has(key)) await gates.get(key).promise;
+      return { images: [`https://cdn.example/${key}.jpg`], title: key };
+    },
+  });
+  const candidate = key => ({ provider: 'xiaohongshu', url: `https://xhslink.com/${key}` });
+  const pending = [];
+  try {
+    const cached = await resolver.resolve(candidate('cached'));
+    pending.push(resolver.resolve(candidate('one')), resolver.resolve(candidate('two')));
+    await Promise.all([entered.get('one').promise, entered.get('two').promise]);
+    pending.push(resolver.resolve(candidate('three')), resolver.resolve(candidate('one')));
+    assert.strictEqual(await resolver.resolve(candidate('cached')), cached);
+    assert.deepEqual([...calls].sort(), ['cached', 'one', 'two']);
+    gates.get('one').resolve();
+    await entered.get('three').promise;
+    assert.equal(resolver.active, 2);
+    gates.get('two').resolve();
+    gates.get('three').resolve();
+    const results = await Promise.all(pending);
+    assert.deepEqual(results.map(r => r.title), ['one', 'two', 'three', 'one']);
+    assert.strictEqual(results[0], results[3]);
+    assert.deepEqual([...calls].sort(), ['cached', 'one', 'three', 'two']);
+    assert.equal(resolver.active, 0);
+  } finally {
+    for (const gate of gates.values()) gate.resolve();
+    await Promise.allSettled(pending);
+    resolver.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('三个群共用一次失败解析后，下次分享重新抓取，不缓存失败', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'media-retry-'));
+  const finish = Promise.withResolvers();
+  let calls = 0;
+  const resolver = new MediaResolver({ enabled: true, cacheDirectory: directory,
+    providerResolver: async () => {
+      calls++;
+      await finish.promise;
+      if (calls === 1) throw new Error('provider timeout');
+      return { sourceId: '123', contentKind: 'gallery', images: ['https://cdn.example/ok.jpg'] };
+    },
+  });
+  try {
+    const candidate = { url: 'https://www.douyin.com/note/123', provider: 'douyin' };
+    // Let all three callers join the first task before simulating its failure.
+    const originalCleanup = resolver.cleanupExpired.bind(resolver);
+    const joined = Promise.withResolvers();
+    let arrivals = 0;
+    resolver.cleanupExpired = async () => { await originalCleanup(); if (++arrivals === 3) joined.resolve(); };
+    const pending = Promise.allSettled([1, 2, 3].map(() => resolver.resolve(candidate)));
+    await joined.promise;
+    await new Promise(resolve => setImmediate(resolve));
+    finish.resolve();
+    assert.ok((await pending).every(r => r.status === 'rejected'));
+    assert.equal(calls, 1);
+    assert.equal(resolver.inflight.size, 0);
+    assert.equal(resolver.cache.size, 0);
+    assert.equal((await resolver.resolve(candidate)).images.length, 1);
+    assert.equal(calls, 2);
+  } finally {
+    finish.resolve();
+    resolver.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('B站 QQ 小程序播放器地址转换为 yt-dlp 支持的视频页', () => {
   assert.equal(
     normalizeDownloadSource('https://player.bilibili.com/player.html?bvid=BV1DV5v6HELu'),

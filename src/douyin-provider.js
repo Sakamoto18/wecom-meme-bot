@@ -1,8 +1,8 @@
 import { normalizeMediaUrl } from './media-link-extractor.js';
 import { looksRemoved, removedError } from './media-removed.js';
 
-// Cover the Provider's bounded queue (22s), resolve (20s), and page cleanup (2s).
-export function createDouyinProvider({ providerUrl, timeoutMs = 50_000 } = {}) {
+// Cover the Provider's bounded queue (40s), resolve (35s), cleanup (2s) and I/O.
+export function createDouyinProvider({ providerUrl, timeoutMs = 85_000 } = {}) {
   const endpoint = String(providerUrl || '').trim();
   if (!endpoint) return null;
   return async ({ url, platform }) => {

@@ -509,12 +509,14 @@ export class MediaResolver {
       return;
     }
     await new Promise((resolve) => this.waiters.push(resolve));
-    this.active += 1;
+    // releaseSlot transfers its existing permit to us. Incrementing only after
+    // waking left a gap where a new request could steal the permit.
   }
 
   releaseSlot() {
-    this.active = Math.max(0, this.active - 1);
-    this.waiters.shift()?.();
+    const next = this.waiters.shift();
+    if (next) next();
+    else this.active = Math.max(0, this.active - 1);
   }
 
   async cleanupExpired() {

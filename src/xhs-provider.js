@@ -79,7 +79,9 @@ export function createXhsProvider(options = {}) {
   const apiUrl = String(options.apiUrl || '').trim();
   const providerUrl = String(options.providerUrl || '').trim();
   if (!apiUrl && !providerUrl) return null;
-  const timeoutMs = Math.max(100, Number(options.timeoutMs ?? 6_000));
+  // Browser Provider: 40s queue + 35s resolve + cleanup/transport overhead.
+  // The standalone API script retains its shorter default.
+  const timeoutMs = Math.max(100, Number(options.timeoutMs ?? (providerUrl ? 85_000 : 6_000)));
   const command = options.command || 'python3';
   const scriptPath = options.scriptPath || DEFAULT_SCRIPT;
   const headersJson = String(options.headersJson || '').trim();

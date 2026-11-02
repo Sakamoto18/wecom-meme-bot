@@ -29,12 +29,17 @@ bilibili_context = None
 bilibili_login_page = None
 xhs_context = None
 xhs_login_page = None
-lock = asyncio.Lock()
+# Each resolve owns a page and its response payloads. Bound browser load while
+# allowing independent group shares to progress together; login/context setup
+# remains protected by the separate locks below.
+douyin_resolve_slots = asyncio.BoundedSemaphore(2)
 context_lock = asyncio.Lock()
 bilibili_context_lock = asyncio.Lock()
 xhs_context_lock = asyncio.Lock()
-xhs_resolve_lock = asyncio.Lock()
-QUEUE_TIMEOUT = 22
+xhs_resolve_slots = asyncio.BoundedSemaphore(2)
+# One full 35s resolve plus page cleanup must fit before a queued request fails.
+# HTTP clients allow 85s for queue + resolve + cleanup/transport overhead.
+QUEUE_TIMEOUT = 40
 RESOLVE_TIMEOUT = 35
 NAVIGATION_TIMEOUT_MS = 10000
 BILIBILI_NAV_URL = 'https://api.bilibili.com/x/web-interface/nav'
@@ -370,7 +375,7 @@ async def resolve_xhs_request(url):
         if page is not None:
             page.remove_listener('response', capture)
             with suppress(Exception):
-                await page.close()
+                await asyncio.wait_for(page.close(), 2)
         for task in response_tasks:
             task.cancel()
         await asyncio.gather(*response_tasks, return_exceptions=True)
@@ -605,9 +610,12 @@ async def xhs_save_session():
 @app.post('/xhs/resolve')
 async def xhs_resolve(req: Req):
     started = time.monotonic()
+    stage = 'queue'
     try:
-        await asyncio.wait_for(xhs_resolve_lock.acquire(), QUEUE_TIMEOUT)
+        await asyncio.wait_for(xhs_resolve_slots.acquire(), QUEUE_TIMEOUT)
         try:
+            logger.info('XHS resolve start queue_ms=%d', (time.monotonic() - started) * 1000)
+            stage = 'resolve'
             async with asyncio.timeout(RESOLVE_TIMEOUT):
                 data = await resolve_xhs_request(req.url)
             logger.info('XHS resolve ok duration_ms=%d kind=%s images=%d author=%s',
@@ -616,10 +624,10 @@ async def xhs_resolve(req: Req):
                         bool(data.get('author')))
             return {'status': 'success', 'data': data}
         finally:
-            xhs_resolve_lock.release()
+            xhs_resolve_slots.release()
     except TimeoutError:
-        logger.warning('XHS resolve timeout duration_ms=%d', (time.monotonic() - started) * 1000)
-        return {'status': 'failed', 'msg': '小红书 Provider 超时'}
+        logger.warning('XHS resolve timeout stage=%s duration_ms=%d', stage, (time.monotonic() - started) * 1000)
+        return {'status': 'failed', 'msg': f'小红书 Provider 超时 stage={stage}'}
     except Exception as error:
         reason = str(error).strip() or type(error).__name__
         removed = reason.startswith('content_removed')
@@ -713,7 +721,7 @@ async def resolve(req: Req):
     source = urlsplit(req.url)
     label = source.netloc + source.path  # Never log cookies or signed query parameters.
     try:
-        await asyncio.wait_for(lock.acquire(), QUEUE_TIMEOUT)
+        await asyncio.wait_for(douyin_resolve_slots.acquire(), QUEUE_TIMEOUT)
         acquired = True
         logger.info('Douyin resolve start source=%s queue_ms=%d', label, (time.monotonic()-started)*1000)
         async with asyncio.timeout(RESOLVE_TIMEOUT):
@@ -783,4 +791,4 @@ async def resolve(req: Req):
             with suppress(Exception):
                 await asyncio.wait_for(page.close(), 2)
         if acquired:
-            lock.release()
+            douyin_resolve_slots.release()
