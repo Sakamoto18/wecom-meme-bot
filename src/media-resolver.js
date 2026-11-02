@@ -481,6 +481,12 @@ export class MediaResolver {
     this.maxCacheBytes = Math.max(0, Number(options.maxCacheBytes ?? 512 * 1024 * 1024));
     this.publicBaseUrl = String(options.publicBaseUrl || 'http://qq-bot:8787').replace(/\/+$/u, '');
     this.maxConcurrent = Math.max(1, Number(options.maxConcurrent ?? 2));
+    // Pacing belongs to cache misses, before acquiring a scarce media slot.
+    // Non-QQ callers remain unpaced unless they opt in (QQ defaults to 1–10s).
+    this.startDelayMaxMs = Math.min(10_000, positive(options.startDelayMaxMs));
+    this.startDelayMinMs = Math.min(this.startDelayMaxMs, positive(options.startDelayMinMs));
+    this.random = options.random ?? Math.random;
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.publicResolverEnabled = options.publicResolverEnabled !== false;
     this.providerResolver = typeof options.providerResolver === 'function'
       ? options.providerResolver
@@ -517,6 +523,14 @@ export class MediaResolver {
     const next = this.waiters.shift();
     if (next) next();
     else this.active = Math.max(0, this.active - 1);
+  }
+
+  async waitBeforeResolve(provider) {
+    const delayMs = Math.round(this.startDelayMinMs
+      + this.random() * (this.startDelayMaxMs - this.startDelayMinMs));
+    if (delayMs <= 0) return;
+    this.logger.info?.(`媒体抓取打散：provider=${provider} delay_ms=${delayMs}`);
+    await this.sleep(delayMs);
   }
 
   async cleanupExpired() {
@@ -732,24 +746,36 @@ export class MediaResolver {
     const workCacheKey = requestedId ? mediaCacheKey(provider, '', requestedId) : '';
     const lookupKeys = [workCacheKey, sourceCacheKey].filter(Boolean);
     await this.cleanupExpired();
-    for (const cacheKey of lookupKeys) {
-      const cached = this.cache.get(cacheKey);
-      if (!cached) continue;
-      if (cached.expiresAt <= Date.now()) {
-        this.cache.delete(cacheKey);
-        continue;
+    const readCached = () => {
+      for (const cacheKey of lookupKeys) {
+        const cached = this.cache.get(cacheKey);
+        if (!cached) continue;
+        if (cached.expiresAt <= Date.now()) {
+          this.cache.delete(cacheKey);
+          continue;
+        }
+        const invalidReason = provider === 'douyin'
+          ? validateDouyinCachedValue(cached.value, sourceUrl, requestedId) : '';
+        if (invalidReason) {
+          this.cache.delete(cacheKey);
+          this.logger.warn?.(`媒体解析缓存失效：provider=${provider} reason=${invalidReason}`);
+          continue;
+        }
+        this.logger.info?.(`媒体解析缓存命中：provider=${provider}`
+          + ` sourceId=${cached.value?.sourceId || 'unknown'}`
+          + ` contentKind=${cached.value?.contentKind || 'unknown'}`);
+        return cached.value;
       }
-      const invalidReason = provider === 'douyin'
-        ? validateDouyinCachedValue(cached.value, sourceUrl, requestedId) : '';
-      if (invalidReason) {
-        this.cache.delete(cacheKey);
-        this.logger.warn?.(`媒体解析缓存失效：provider=${provider} reason=${invalidReason}`);
-        continue;
-      }
-      this.logger.info?.(`媒体解析缓存命中：provider=${provider}`
-        + ` sourceId=${cached.value?.sourceId || 'unknown'}`
-        + ` contentKind=${cached.value?.contentKind || 'unknown'}`);
-      return cached.value;
+      return null;
+    };
+    const cached = readCached();
+    if (cached) return cached;
+    if (this.startDelayMaxMs > 0) {
+      // Each cold request draws independently: a later group with a shorter
+      // delay may start first. Sleep outside both the slot and shared task.
+      await this.waitBeforeResolve(provider);
+      const ready = readCached();
+      if (ready) return ready;
     }
     if (this.inflight.has(sourceCacheKey)) {
       this.logger.info?.(`媒体解析共用任务：provider=${provider}`);
@@ -1033,27 +1059,31 @@ export class MediaResolver {
         return this.registerMedia(downloaded);
       } finally {
         this.releaseSlot();
-        this.inflight.delete(sourceCacheKey);
       }
-    })();
+    })().then((value) => {
+      const cacheTtlMs = provider === 'douyin' && !requestedId
+        ? Math.min(this.cacheTtlMs, this.douyinShortLinkCacheTtlMs)
+        : this.cacheTtlMs;
+      if (cacheTtlMs > 0 && (provider !== 'douyin'
+        || (value.sourceId && ['gallery', 'video'].includes(value.contentKind)))) {
+        const cacheKeys = [sourceCacheKey];
+        if (provider === 'douyin' && value.sourceId) {
+          cacheKeys.push(mediaCacheKey(provider, '', String(value.sourceId)));
+        }
+        const expiresAt = Date.now() + cacheTtlMs;
+        for (const cacheKey of cacheKeys) this.cache.set(cacheKey, { value, expiresAt });
+        if (this.cache.size > 500) {
+          const oldest = this.cache.keys().next().value;
+          if (oldest) this.cache.delete(oldest);
+        }
+      }
+      return value;
+    }).finally(() => {
+      // Publish success before removing the shared task so a racing waiter
+      // always sees either the task or its cache entry, never an empty gap.
+      this.inflight.delete(sourceCacheKey);
+    });
     this.inflight.set(sourceCacheKey, task);
-    const value = await task;
-    const cacheTtlMs = provider === 'douyin' && !requestedId
-      ? Math.min(this.cacheTtlMs, this.douyinShortLinkCacheTtlMs)
-      : this.cacheTtlMs;
-    if (cacheTtlMs > 0 && (provider !== 'douyin'
-      || (value.sourceId && ['gallery', 'video'].includes(value.contentKind)))) {
-      const cacheKeys = [sourceCacheKey];
-      if (provider === 'douyin' && value.sourceId) {
-        cacheKeys.push(mediaCacheKey(provider, '', String(value.sourceId)));
-      }
-      const expiresAt = Date.now() + cacheTtlMs;
-      for (const cacheKey of cacheKeys) this.cache.set(cacheKey, { value, expiresAt });
-      if (this.cache.size > 500) {
-        const oldest = this.cache.keys().next().value;
-        if (oldest) this.cache.delete(oldest);
-      }
-    }
-    return value;
+    return task;
   }
 }

@@ -965,6 +965,8 @@ export async function createQqRuntime() {
     maxCacheBytes: (parsePositiveNumber(process.env.QQ_MEDIA_CACHE_MAX_MIB) ?? 512) * 1024 * 1024,
     publicBaseUrl: process.env.QQ_MEDIA_PUBLIC_BASE_URL?.trim() || 'http://qq-bot:8787',
     maxConcurrent: parsePositiveInteger(process.env.QQ_MEDIA_MAX_CONCURRENT) ?? 2,
+    startDelayMinMs: parseNonnegativeInteger(process.env.QQ_MEDIA_START_DELAY_MIN_SECONDS, 1) * 1000,
+    startDelayMaxMs: parseNonnegativeInteger(process.env.QQ_MEDIA_START_DELAY_MAX_SECONDS, 10) * 1000,
     providerResolver: mediaProvider,
     logger: console,
   });
