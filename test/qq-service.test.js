@@ -4318,6 +4318,37 @@ test('纯角色图跳过评价时不调用回合规划器', async () => {
   assert.equal(plannerCalls, 0);
 });
 
+test('带纯角色图的普通接梗仍正常回复，不静默', async () => {
+  const png = (await createPng()).toString('base64');
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        if (options.usageSource === 'image-understanding') {
+          return JSON.stringify({
+            description: '卡通动画角色猪妈妈站在厨房里',
+            subject_kind: 'anime_character',
+            information_kind: 'unknown',
+            visible_text: [],
+            keywords: ['动画角色', '卡通'],
+          });
+        }
+        return '替你妈的天，先把烤乳猪放下。';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'character-banter-reply',
+    message_type: 'private',
+    user_id: 'character-banter-user',
+    text: '是不是需要替天行道！',
+    image_base64: png,
+  });
+  assert.notEqual(result.mode, 'observe');
+  assert.notEqual(result.mode, 'character-image-skip');
+  assert.ok(result.messages?.some((item) => item.type === 'text' && /烤乳猪/.test(item.text)));
+});
+
 test('纯游戏角色图问身份时仍允许识别', async () => {
   const png = (await createPng()).toString('base64');
   const calls = [];

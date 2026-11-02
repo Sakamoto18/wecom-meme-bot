@@ -3763,17 +3763,23 @@ export class QqBotService {
       // explicitly excluded inside shouldSkipCharacterEvaluation().
       const characterImageSkip = !recordSummary
         && shouldSkipCharacterEvaluation(imageAnalysis, imageSearchQuestion);
+      // Only passive comments and explicit appraisal requests are skipped. A
+      // direct message that merely carries a character image (banter, a
+      // quoted sticker) still gets a normal reply.
+      const asksForCharacterComment = characterImageSkip
+        && (isImageEvaluationIntent(imageSearchQuestion)
+          || CHARACTER_IMAGE_COMMENT_PATTERN.test(imageSearchQuestion));
       if (characterImageSkip) {
-        this.rememberContextImages(conversationId, imageBlocks, imageAnalysis, message);
         this.logger.log?.(
           `QQ 纯角色图跳过评价：conversation=${conversationId}`
           + ` passive=${options.passiveImageComment ? 'yes' : 'no'}`
-          + ` question=${imageSearchQuestion ? 'yes' : 'no'}`,
+          + ` question=${imageSearchQuestion ? 'yes' : 'no'}`
+          + ` action=${options.passiveImageComment ? 'observe' : (asksForCharacterComment ? 'refuse' : 'reply')}`,
         );
+      }
+      if (characterImageSkip && (options.passiveImageComment || asksForCharacterComment)) {
+        this.rememberContextImages(conversationId, imageBlocks, imageAnalysis, message);
         if (options.passiveImageComment) return { mode: 'observe', messages: [] };
-        const asksForCharacterComment = isImageEvaluationIntent(imageSearchQuestion)
-          || CHARACTER_IMAGE_COMMENT_PATTERN.test(imageSearchQuestion);
-        if (!asksForCharacterComment) return { mode: 'observe', messages: [] };
         return {
           mode: 'character-image-skip',
           messages: [{ type: 'text', text: CHARACTER_IMAGE_SKIP_TEXT }],
