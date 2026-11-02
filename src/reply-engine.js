@@ -249,7 +249,7 @@ function stripSelfReferentialAttribution(value, { hasQuotedContent = false } = {
     .trim();
 }
 
-function protectPersonaAttackDirection(answer, content, personaContext, attackStyle) {
+function protectPersonaAttackDirection(answer, content, personaContext, attackStyle, familyBanterAllowed = false) {
   if (attackStyle) return answer;
   // A neutral question about the saved phrase is a demonstration request, not
   // permission to aim a stored insult at the current speaker. Quote the
@@ -268,7 +268,7 @@ function protectPersonaAttackDirection(answer, content, personaContext, attackSt
       return remainder ? `${demonstration}\n${remainder}` : demonstration;
     }
   }
-  if (!hasUnauthorizedFamilyAttack(answer)) return answer;
+  if (familyBanterAllowed || !hasUnauthorizedFamilyAttack(answer)) return answer;
   return stripUnauthorizedFamilyAttack(answer) || buildNormalReplyFallback();
 }
 
@@ -912,6 +912,11 @@ export async function generateConversationReply(options) {
     hasImageContext,
     hasQuotedContent,
   });
+  // The global persona treats group members as friends who trade kin memes.
+  // Pull that back only when the user is hurting or asks to stop.
+  const familyBanterAllowed = !recordSummary
+    && !turnSignals.sensitiveSupport
+    && !turnSignals.deescalationRequested;
   const lexicalAttackStyle = !recordSummary && shouldUseAttackStyle(content, history, {
     ...interactionContext,
     activeReply,
@@ -2123,6 +2128,7 @@ export async function generateConversationReply(options) {
     : '';
   const normalPromptOptions = {
     currentQuestion,
+    familyBanterAllowed,
     thinkingEnabled,
     detailedAnswerRequested,
     recordSummary,
@@ -2164,7 +2170,7 @@ export async function generateConversationReply(options) {
   const personaDemonstration = !attackStyle
     && PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''));
   const dialogueReviewContext = {
-    interactionContext, currentQuestion, recordSummary, history,
+    interactionContext, currentQuestion, recordSummary, history, familyBanterAllowed,
     // Repeating the previous answer is only a hard failure when the user is
     // correcting the bot. Otherwise short acknowledgements and peer-bot turns
     // could trigger an unnecessary second model call.
@@ -2380,7 +2386,7 @@ export async function generateConversationReply(options) {
   // A saved-phrase demonstration can be formatted locally; do not spend a
   // second model call trying to remove the very quote the user requested.
   if (personaDemonstration) {
-    answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle);
+    answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle, familyBanterAllowed);
   }
   answer = stripUnauthorizedPersonaDemonstration(answer, personaDemonstration) || buildNormalReplyFallback();
   answer = stripSelfReferentialAttribution(answer, { hasQuotedContent }) || buildNormalReplyFallback();
@@ -2661,7 +2667,7 @@ export async function generateConversationReply(options) {
     // like a narrated report.
     answer = removeLeadingModelMention(answer) || buildNormalReplyFallback();
   }
-  answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle);
+  answer = protectPersonaAttackDirection(answer, currentQuestion, personaContext, attackStyle, familyBanterAllowed);
   answer = stripUnauthorizedPersonaDemonstration(answer, personaDemonstration) || buildNormalReplyFallback();
   answer = stripSelfReferentialAttribution(answer, { hasQuotedContent }) || buildNormalReplyFallback();
   answer = redactSensitivePoliticalNames(answer);
