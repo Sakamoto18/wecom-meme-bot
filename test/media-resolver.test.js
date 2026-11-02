@@ -8,8 +8,11 @@ import {
   extractBilibiliVideoId, extractBilibiliVideoIdFromToolOutput, resolveBilibiliMedia,
 } from '../src/bilibili-provider.js';
 
+// Avoid raw fixture logs hitting Node 22's test IPC bug (nodejs/node#65934).
+const quietLogger = { info() {}, warn() {} };
+
 test('并发名额直接交给队首，新请求不能抢走刚释放的名额', async () => {
-  const resolver = new MediaResolver({ maxConcurrent: 1 });
+  const resolver = new MediaResolver({ logger: quietLogger, maxConcurrent: 1 });
   try {
     await resolver.acquireSlot();
     const second = resolver.acquireSlot();
@@ -32,7 +35,7 @@ test('三个群不同链接有界并发，同链接合并，已有缓存不等�
   const gates = new Map(['one', 'two', 'three'].map(key => [key, Promise.withResolvers()]));
   const entered = new Map(['one', 'two', 'three'].map(key => [key, Promise.withResolvers()]));
   const calls = [];
-  const resolver = new MediaResolver({ enabled: true, maxConcurrent: 2, cacheDirectory: directory,
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true, maxConcurrent: 2, cacheDirectory: directory,
     providerResolver: async ({ url }) => {
       const key = new URL(url).pathname.slice(1);
       calls.push(key);
@@ -72,7 +75,7 @@ test('三个群共用一次失败解析后，下次分享重新抓取，不缓�
   const directory = await mkdtemp(path.join(os.tmpdir(), 'media-retry-'));
   const finish = Promise.withResolvers();
   let calls = 0;
-  const resolver = new MediaResolver({ enabled: true, cacheDirectory: directory,
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true, cacheDirectory: directory,
     providerResolver: async () => {
       calls++;
       await finish.promise;
@@ -219,7 +222,7 @@ test('B站公开接口携带配置的 Cookie，避免匿名请求被风控返回
 });
 
 test('B站单文件 MP4 注册为流式中转，不等待完整下载', async () => {
-  const resolver = new MediaResolver({ enabled: true, cacheTtlMs: 60_000 });
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true, cacheTtlMs: 60_000 });
   const result = resolver.registerRemoteMedia({
     mediaUrl: 'https://cdn.example/video.mp4', size: 1234, title: '流式视频',
     backupMediaUrls: ['https://cdn.example/backup.mp4'],
@@ -237,7 +240,7 @@ test('B站单文件 MP4 注册为流式中转，不等待完整下载', async ()
 });
 
 test('已知超过 500 MiB 的远程视频在注册代理前拒绝', () => {
-  const resolver = new MediaResolver({ enabled: true });
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true });
   try {
     assert.throws(
       () => resolver.registerRemoteMedia({
@@ -265,7 +268,7 @@ test('B站优先 API 返回的 UPOS 备用 CDN，保留主地址且去重', asyn
 
 test('媒体主链优先使用 Provider 直链且不下载文件', async () => {
   const calls = [];
-  const resolver = new MediaResolver({
+  const resolver = new MediaResolver({ logger: quietLogger,
     enabled: true,
     providerResolver: async (input) => {
       calls.push(input);
@@ -289,7 +292,7 @@ test('媒体主链优先使用 Provider 直链且不下载文件', async () => {
 });
 
 test('媒体主链把 Provider 图文结果保留为 gallery', async () => {
-  const resolver = new MediaResolver({
+  const resolver = new MediaResolver({ logger: quietLogger,
     enabled: true, cacheTtlMs: 0,
     providerResolver: async () => ({
       title: '图文标题', description: '图文正文',
@@ -310,7 +313,7 @@ test('媒体主链把 Provider 图文结果保留为 gallery', async () => {
 
 test('Provider 原作者/正文/tag 经跨群缓存复用且没有视频下载', async () => {
   let calls = 0;
-  const resolver = new MediaResolver({ enabled: true,
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true,
     providerResolver: async () => {
       calls++;
       return { mediaUrl: 'https://cdn.example/v.mp4', title: '视频',
@@ -333,7 +336,7 @@ test('Provider 原作者/正文/tag 经跨群缓存复用且没有视频下载',
 
 test('缺少可选卡片元数据也复用媒体缓存，不为生成卡片重复解析', async () => {
   let calls = 0;
-  const resolver = new MediaResolver({ enabled: true, providerResolver: async () => {
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true, providerResolver: async () => {
     calls++; return { mediaUrl: 'https://cdn.example/a.mp4' };
   } });
   try {
@@ -345,7 +348,7 @@ test('缺少可选卡片元数据也复用媒体缓存，不为生成卡片重�
 });
 
 test('B站简介和原作者经过播放代理仍完整保留', async () => {
-  const resolver = new MediaResolver({ enabled: true });
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true });
   try {
     const result = resolver.registerRemoteMedia({ mediaUrl: 'https://cdn.example/video.mp4',
       author: 'UP主', avatarUrl: 'https://cdn.example/avatar.jpg', description: '第一行\n#高达 第二行',
@@ -361,7 +364,7 @@ test('本地动图媒体注册后保留 image/gif 类型', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'media-gif-'));
   const filePath = path.join(directory, 'example.gif');
   await writeFile(filePath, Buffer.from('GIF89a'));
-  const resolver = new MediaResolver({ enabled: true, cacheTtlMs: 60_000 });
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true, cacheTtlMs: 60_000 });
   try {
     const result = resolver.registerMedia({
       filePath, outputBytes: 6, mediaType: 'image/gif',
