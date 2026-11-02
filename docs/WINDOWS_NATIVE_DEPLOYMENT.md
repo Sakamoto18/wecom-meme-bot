@@ -203,3 +203,17 @@ powershell -NoProfile -ep Bypass -File .\enable.ps1 -Diagnostics
 已核验的服务器 ED25519 指纹为 `SHA256:Rj/1/KUWJWj0kn96eX9MVDZ82YC7NMGwb+6gVjrtakI`，连接端使用独立 known-hosts 文件 `~/.ssh/known_hosts_longtu_windows`，保持严格主机检查。远程默认 shell 是 cmd，自动部署显式调用 PowerShell；长脚本先传文件，避免 cmd 长度限制。
 
 后续源码、依赖、环境配置同步与健康检查走 SSH；COS 继续用于备份。QQ 登录、WebSocket 及实际私聊/群聊图片和视频收发已验证。迁移剩余验收包括小红书登录、实际定时推送、长时间在线及整机重启后的恢复。不要据本机健康检查宣称这些项目已全部完成。
+
+### 媒体并发与回复延迟（2026-11-02）
+
+普通聊天继续随机等待 15–45 秒。Bridge 对 `media`、`media-gallery` 及 `media-unavailable` 等媒体结果立即进入发送流程，缓存命中也不会额外等待。这里的“立即”指取消人为延迟；首次下载、封面处理和 QQ 上传仍按实际耗时完成。
+
+抖音、小红书各使用两个并发抓取名额，每个请求独占页面和响应数据；浏览器初始化仍加锁。排队预算 40 秒、解析预算 35 秒、页面关闭最多 2 秒，HTTP 客户端默认留 85 秒。Node 的 `QQ_MEDIA_MAX_CONCURRENT=2` 保持不变，并修复释放名额到队首时被新请求抢占的间隙。同一链接继续跨群合并解析，失败不缓存；不同链接有界并发；已有缓存不排队。
+
+Windows 现有 `.env.qq` 的 `XHS_PROVIDER_TIMEOUT_SECONDS=20` 小于浏览器解析预算。部署时在实际加载的 `.env.windows` 覆盖为 `XHS_PROVIDER_TIMEOUT_SECONDS=85`，不覆盖人格、群记忆和缓存 TTL。Linux 的配置示例同步说明该预算；已有 Linux 部署使用浏览器 Provider 时也应检查这个显式配置。同步项目中的 Bridge 和 AstrBot 实际插件目录，重启 Backend、Provider、AstrBot；NapCat 与 OneBot Relay 保持运行。
+
+排查依据：服务器媒体用量记录显示 2026-11-01 23:00 三群同一小红书链接共用解析后同时失败，约 22.4 秒；后来同一链接解析成功，缓存命中耗时 3–6 毫秒。原始失败日志未能完整取得，不能仅凭耗时断言该次失败的唯一原因。修复前单独重查原始链接成功（约 13 秒）；代码确认延迟只发生在后端返回之后，与客户端 20 秒预算不足是两个独立问题。
+
+本次验证：757 项 Node 测试与 85 项相关 Python 测试通过。线上使用三条真实分享（原失败的小红书链接和两条抖音链接）同时解析，额外加入两次相同链接请求：五个调用全部成功，只产生三次 Provider 调用，最多两个并发；整批约 26 秒。原链接缓存复查约 2 毫秒，没有新增 Provider 调用。另一个抽测的小红书来源跳转平台 `/404`，单独重查也失败，不计为并发成功样例。验证未向群或私聊发送测试消息，因此不代表实际 QQ 上传已做完整复测。
+
+部署前备份位于 `C:\migration-backup\media-concurrency-20261102-102744`，包括目标文件哈希清单、九个目标文件原件及原 `.env.windows`。部署后 Backend/Provider 健康、Bridge 加载及 OneBot 重连通过，NapCat PID 保持不变。项目中的旧 Bridge 副本也已与 AstrBot 实际插件目录同步。

@@ -2990,8 +2990,13 @@ class LongtuQqBridge(Star):
         return minimum, maximum
 
     async def _sleep_before_reply(self, event: AstrMessageEvent, response: dict) -> None:
-        """Spread visible replies without delaying silent observations."""
+        """Pace conversation only; resolved media (including cache hits) sends now."""
         if not isinstance(response, dict) or not response.get("messages"):
+            return
+        # Resolution, download and QQ upload already take time. Never hold a
+        # ready media result behind the conversational delay, including cached
+        # videos, galleries and failure/limit notices.
+        if str(response.get("mode") or "").split("-", 1)[0] == "media":
             return
         minimum, maximum = self._reply_delay_window()
         if maximum <= 0:
@@ -3001,7 +3006,7 @@ class LongtuQqBridge(Star):
             return
         logger.info(
             f"QQ 回复打散：chat={'private' if event.is_private_chat() else event.get_group_id()} "
-            f"delay_ms={int(delay * 1000)}",
+            f"mode={response.get('mode', '')} delay_ms={int(delay * 1000)}",
         )
         await asyncio.sleep(delay)
 

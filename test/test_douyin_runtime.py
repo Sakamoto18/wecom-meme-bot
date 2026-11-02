@@ -57,14 +57,18 @@ class ProfileTests(unittest.TestCase):
 
 def runtime():
     tree = ast.parse((ROOT / 'app.py').read_text())
-    nodes = [n for n in tree.body if getattr(n, 'name', '') in ('is_real_video_url', 'read_page', 'resolve')]
+    nodes = [n for n in tree.body if getattr(n, 'name', '') in (
+        'is_real_video_url', 'read_page', 'resolve', 'xhs_resolve',
+    ) or (isinstance(n, ast.Assign) and any(
+        isinstance(t, ast.Name) and t.id in ('douyin_resolve_slots', 'xhs_resolve_slots')
+        for t in n.targets))]
     for node in nodes:
         node.decorator_list = []
     ns = dict(asyncio=asyncio, html=html, logger=logging.getLogger('test'), time=time,
               urlsplit=urlsplit, suppress=suppress, Req=object, PlaywrightTimeoutError=TimeoutError, PlaywrightError=RuntimeError,
               QUEUE_TIMEOUT=.05, RESOLVE_TIMEOUT=.02, NAVIGATION_TIMEOUT_MS=10,
               PAGE_DATA_SCRIPT=PAGE_DATA_SCRIPT, work_id=work_id, page_payloads=page_payloads,
-              find_work=find_work, normalize_work=normalize_work, removed_marker=lambda text: '', lock=asyncio.Lock())
+              find_work=find_work, normalize_work=normalize_work, removed_marker=lambda text: '')
     exec(compile(ast.Module(body=nodes, type_ignores=[]), '<provider>', 'exec'), ns)
     return ns
 
@@ -136,7 +140,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         ns['read_page'] = hang
         result = await ns['resolve'](SimpleNamespace(url='https://v.douyin.com/test/'))
         self.assertEqual(result['status'], 'failed')
-        self.assertFalse(ns['lock'].locked())
+        self.assertEqual(ns['douyin_resolve_slots']._value, 2)
         page.close.assert_awaited_once()
         ns['read_page'] = AsyncMock(return_value={'status':'success','data':{'cover':''}})
         result = await ns['resolve'](SimpleNamespace(url='https://v.douyin.com/next/'))
@@ -144,11 +148,13 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queue_timeout_does_not_release_another_request_lock(self):
         ns = runtime()
-        await ns['lock'].acquire()
+        await ns['douyin_resolve_slots'].acquire()
+        await ns['douyin_resolve_slots'].acquire()
         result = await ns['resolve'](SimpleNamespace(url='https://v.douyin.com/test/'))
         self.assertIn('stage=queue', result['msg'])
-        self.assertTrue(ns['lock'].locked())
-        ns['lock'].release()
+        self.assertTrue(ns['douyin_resolve_slots'].locked())
+        ns['douyin_resolve_slots'].release()
+        ns['douyin_resolve_slots'].release()
 
     async def test_exception_closes_page(self):
         ns = runtime()
@@ -157,5 +163,91 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         ns['read_page'] = AsyncMock(side_effect=RuntimeError('failed'))
         result = await ns['resolve'](SimpleNamespace(url='https://v.douyin.com/test/'))
         self.assertEqual(result['status'], 'failed')
-        self.assertFalse(ns['lock'].locked())
+        self.assertEqual(ns['douyin_resolve_slots']._value, 2)
         page.close.assert_awaited_once()
+
+    async def test_three_shares_use_two_pages_with_isolated_results_and_bounded_queue(self):
+        for provider in ('douyin', 'xhs'):
+            with self.subTest(provider=provider):
+                ns = runtime()
+                ns.update(QUEUE_TIMEOUT=1, RESOLVE_TIMEOUT=1)
+                entered = asyncio.Queue()
+                gates = {str(i): asyncio.Event() for i in range(3)}
+                pages, calls = [], []
+                async def new_page():
+                    page = SimpleNamespace(on=lambda *a: None, remove_listener=lambda *a: None, close=AsyncMock())
+                    pages.append(page)
+                    return page
+                async def work(url):
+                    key = url.rsplit('/', 1)[-1]
+                    calls.append(key)
+                    await entered.put(key)
+                    await gates[key].wait()
+                    return {'source_id': key, 'cover': ''}
+                async def read(page, url, payloads, state):
+                    payloads.append(url)
+                    data = await work(url)
+                    self.assertEqual(payloads, [url])
+                    return {'status': 'success', 'data': data}
+                ns['get_context'] = AsyncMock(return_value=SimpleNamespace(new_page=new_page))
+                ns['read_page'] = read
+                ns['resolve_xhs_request'] = work
+                resolve = ns['resolve' if provider == 'douyin' else 'xhs_resolve']
+                tasks = [asyncio.create_task(resolve(SimpleNamespace(url=f'https://example.com/{i}'))) for i in range(3)]
+                try:
+                    self.assertEqual(await asyncio.wait_for(entered.get(), .5), '0')
+                    self.assertEqual(await asyncio.wait_for(entered.get(), .5), '1')
+                    self.assertEqual(calls, ['0', '1'])
+                    gates['0'].set()
+                    self.assertEqual(await asyncio.wait_for(entered.get(), .5), '2')
+                    self.assertFalse(tasks[1].done())
+                    gates['1'].set()
+                    gates['2'].set()
+                    results = await asyncio.wait_for(asyncio.gather(*tasks), .5)
+                    self.assertEqual([r['data']['source_id'] for r in results], ['0', '1', '2'])
+                    self.assertEqual(ns[f'{provider}_resolve_slots']._value, 2)
+                    for page in pages:
+                        page.close.assert_awaited_once()
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def test_xhs_timeout_cancellation_and_failure_release_only_owned_slot(self):
+        ns = runtime()
+        slots = ns['xhs_resolve_slots']
+        async def hang(url):
+            await asyncio.Event().wait()
+        ns['resolve_xhs_request'] = hang
+        result = await ns['xhs_resolve'](SimpleNamespace(url='https://xhslink.com/test'))
+        self.assertIn('stage=resolve', result['msg'])
+        self.assertEqual(slots._value, 2)
+        await slots.acquire()
+        await slots.acquire()
+        result = await ns['xhs_resolve'](SimpleNamespace(url='https://xhslink.com/test'))
+        self.assertIn('stage=queue', result['msg'])
+        self.assertEqual(slots._value, 0)
+        waiting = asyncio.create_task(ns['xhs_resolve'](SimpleNamespace(url='https://xhslink.com/test')))
+        await asyncio.sleep(0)
+        waiting.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiting
+        self.assertEqual(slots._value, 0)
+        slots.release()
+        slots.release()
+        started = asyncio.Event()
+        async def cancellable(url):
+            started.set()
+            await asyncio.Event().wait()
+        ns['resolve_xhs_request'] = cancellable
+        active = asyncio.create_task(ns['xhs_resolve'](SimpleNamespace(url='https://xhslink.com/test')))
+        await started.wait()
+        active.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await active
+        self.assertEqual(slots._value, 2)
+        ns['resolve_xhs_request'] = AsyncMock(side_effect=ValueError('bad page'))
+        self.assertEqual((await ns['xhs_resolve'](SimpleNamespace(url='bad')))['status'], 'failed')
+        self.assertEqual(slots._value, 2)
+        ns['resolve_xhs_request'] = AsyncMock(return_value={'media_type': 'video'})
+        self.assertEqual((await ns['xhs_resolve'](SimpleNamespace(url='good')))['status'], 'success')
