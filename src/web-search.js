@@ -486,7 +486,7 @@ export class LongtuWebSearch {
         }
         if (lease) attempted.add(lease.index);
         try {
-          return await this.fetchResultsOnce(endpoint, query, options, controller.signal, lease?.key);
+          return await this.fetchResultsOnce(endpoint, query, options, controller.signal, lease?.key, lease ? lease.index + 1 : 0);
         } catch (error) {
           controller.signal.throwIfAborted();
           if (!lease || !this.exaKeyPool.reject(lease, error)) throw error;
@@ -504,7 +504,7 @@ export class LongtuWebSearch {
     }
   }
 
-  async fetchResultsOnce(endpoint, query, options, signal, exaKey) {
+  async fetchResultsOnce(endpoint, query, options, signal, exaKey, exaKeyNumber = 0) {
     const url = new URL(endpoint);
     const includeDomains = normalizeDomains(options.includeDomains);
     const usesExa = /(?:^|\.)exa\.ai$/i.test(url.hostname);
@@ -524,12 +524,14 @@ export class LongtuWebSearch {
     let resultCount = 0;
     let upstreamStarted = false;
     let costDollars;
+    let errorStatus = 0;
     try {
       options.onBeforeUpstreamRequest?.({
         endpoint,
         provider: usesExa ? 'exa' : 'web',
         searchType: usesExa ? this.exaSearchType : '',
         requestedResults: this.maxResults,
+        keyNumber: exaKeyNumber,
         query,
       });
       upstreamStarted = true;
@@ -571,6 +573,7 @@ export class LongtuWebSearch {
       signal.throwIfAborted();
 
       if (!response.ok) {
+        errorStatus = response.status;
         // Do not forward provider bodies: they can echo credentials or the query.
         if (usesExa) {
           void response.body?.cancel().catch(() => {});
@@ -618,6 +621,8 @@ export class LongtuWebSearch {
           provider: usesExa ? 'exa' : 'web',
           searchType: usesExa ? this.exaSearchType : '',
           requestedResults: this.maxResults,
+          keyNumber: exaKeyNumber,
+          errorStatus,
           costDollars,
           query,
           resultCount,

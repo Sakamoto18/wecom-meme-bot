@@ -10,10 +10,11 @@ import re
 import time
 from zoneinfo import ZoneInfo
 from .video_card import render_video_card
-from .usage_report_card import render_usage_report
+from .usage_report_card import exa_key_header, exa_key_lines, exa_key_note, render_usage_report
 from .video_delivery_cache import VideoDeliveryCache, VideoForwardRejected
 from .qq_sticker import QqSticker
 from .crazy_thursday import generate_crazy_thursday_copy, nearby_holiday_context
+from .group_context import fetch_recent_group_context
 
 import aiohttp
 from aiohttp import web
@@ -120,6 +121,54 @@ COVER_FETCH_ATTEMPTS = 3
 COVER_FETCH_RETRY_SECONDS = 0.6
 
 
+
+LEARNING_POLL_SECONDS = 5
+
+
+def catchup_report_lines(run) -> list[str]:
+    """Daily-report lines for the overnight meme catch-up run."""
+    if not isinstance(run, dict) or not run.get("day"):
+        return []
+    items = [item for item in run.get("items") or [] if isinstance(item, dict)]
+    learned = [item for item in items if item.get("status") == "learned"]
+    minutes = sum(float(item.get("seconds") or 0) for item in items) / 60
+    elapsed = float(run.get("elapsedMs") or 0) / 60000
+    header = (
+        f"每日补课（{run['day']}）：学会 {len(learned)}/{len(items)} 个梗，"
+        f"看了 {minutes:.1f} 分钟视频，耗时 {elapsed:.1f} 分钟"
+    )
+    if run.get("status") == "failed":
+        return [f"{header}｜补课失败：{run.get('error') or '未知原因'}"]
+    if not items:
+        return [f"{header}｜群聊和 B 站梗百科都没找到要学的新梗"]
+    source = {"group": "群聊", "bilibili": "B站梗百科"}
+    lines = [header]
+    for item in items:
+        origin = source.get(item.get("source"), "")
+        tag = f"［{origin}］" if origin else ""
+        if item.get("status") == "learned":
+            lines.append(f"· {tag}{item.get('term')}：{item.get('meaning') or '已入梗库'}")
+        else:
+            lines.append(f"· {tag}{item.get('term')}：没学会（{item.get('error') or '证据不足'}）")
+    return lines
+
+
+def learning_delivery_message(payload: dict):
+    """OneBot action, target and message for one learning delivery, or None."""
+    text = str(payload.get("text") or "").strip()
+    target = str(payload.get("groupId") if payload.get("chatType") == "group" else payload.get("userId") or "")
+    if not text or not target.isdigit():
+        return None
+    message = []
+    message_id = str(payload.get("messageId") or "")
+    if message_id.lstrip("-").isdigit():
+        message.append({"type": "reply", "data": {"id": message_id}})
+    message.append({"type": "text", "data": {"text": text}})
+    if payload.get("chatType") == "group":
+        return "send_group_msg", {"group_id": int(target)}, message
+    return "send_private_msg", {"user_id": int(target)}, message
+
+
 @register(
     "astrbot_plugin_longtu_bridge",
     "Sakamoto18",
@@ -145,6 +194,7 @@ class LongtuQqBridge(Star):
         self.video_delivery_cache = VideoDeliveryCache(logger=logger)
         self.report_task: asyncio.Task | None = None
         self.crazy_thursday_task: asyncio.Task | None = None
+        self.learning_delivery_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
         self.internal_send_runner: web.AppRunner | None = None
         # get_image 熔断状态：连续失败到阈值后在一段时间内直接走下载回退。
@@ -170,6 +220,10 @@ class LongtuQqBridge(Star):
                 self._crazy_thursday_loop(),
                 name="longtu-crazy-thursday",
             )
+        self.learning_delivery_task = asyncio.create_task(
+            self._learning_delivery_loop(),
+            name="longtu-learning-delivery",
+        )
 
     def _api_url(self) -> str:
         return (
@@ -490,6 +544,70 @@ class LongtuQqBridge(Star):
         if api_url.endswith("/v1/qq/message"):
             return api_url.removesuffix("/v1/qq/message") + "/v1/qq/usage"
         return api_url + "/v1/qq/usage"
+
+    def _learning_api_url(self, path: str) -> str:
+        api_url = self._api_url().rstrip("/")
+        return api_url.removesuffix("/v1/qq/message") + f"/v1/qq/learning/{path}"
+
+    async def _learning_delivery_loop(self) -> None:
+        """Send video-learning results queued by the backend, then report receipts."""
+        while not self.report_stop.is_set():
+            try:
+                await self._deliver_learning_results()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.warning(f"视频学梗投递轮询失败：{error}")
+            try:
+                await asyncio.wait_for(self.report_stop.wait(), timeout=LEARNING_POLL_SECONDS)
+                return
+            except asyncio.TimeoutError:
+                pass
+
+    async def _deliver_learning_results(self) -> int:
+        platform = self._qq_platform()
+        bot = getattr(platform, "bot", None) if platform else None
+        token = self._api_token()
+        if not bot or not token or not self.session or self.session.closed:
+            return 0
+        headers = {"Authorization": f"Bearer {token}"}
+        async with self.session.get(
+            self._learning_api_url("deliveries"),
+            params={"limit": 10, "lease_ms": 60_000},
+            headers=headers,
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError(f"学习投递接口返回 HTTP {response.status}")
+            body = await response.json(content_type=None)
+        sent_count = 0
+        for delivery in body.get("deliveries") or []:
+            sent, error = False, ""
+            planned = learning_delivery_message(delivery.get("payload") or {})
+            if not planned:
+                error = "投递目标无效"
+            else:
+                action, destination, message = planned
+                try:
+                    result = await bot.call_action(action, **destination, message=message)
+                    failed = isinstance(result, dict) and (
+                        result.get("status") == "failed" or result.get("retcode", 0) not in (0, None)
+                    )
+                    sent, error = (not failed), ("OneBot 发送失败" if failed else "")
+                except Exception as send_error:
+                    error = str(send_error)[:300]
+            logger.info(
+                f"视频学梗投递：kind={delivery.get('kind')} target={planned[1] if planned else '-'} "
+                f"sent={sent}{' error=' + error if error else ''}",
+            )
+            async with self.session.post(
+                self._learning_api_url("receipts"),
+                json={"delivery_id": delivery.get("deliveryId"), "sent": sent, "error": error},
+                headers=headers,
+            ) as receipt:
+                if receipt.status != 200:
+                    logger.warning(f"视频学梗回执失败：HTTP {receipt.status}")
+            sent_count += int(sent)
+        return sent_count
 
     def _daily_report_enabled(self) -> bool:
         return self._enabled(self.config.get("daily_usage_report_enabled", True), True)
@@ -883,6 +1001,17 @@ class LongtuQqBridge(Star):
                 f"统计说明：用量数据库从 {available_at:%Y-%m-%d %H:%M} 开始记录；"
                 "更早的消息与 Token 无法补录，本期不是完整自然日。",
             )
+        exa_keys = report.get("exaKeys") or {}
+        exa_rows = exa_key_lines(exa_keys)
+        if exa_rows:
+            lines.append(f"Exa key 剩余（{exa_key_header(exa_keys)}）：")
+            for index, row in enumerate(exa_rows, 1):
+                lines.append(
+                    f"{index}. {row['label']}｜{row['status']}｜剩 {row['remaining']}"
+                    f"｜{row['detail']}"
+                )
+            lines.append(exa_key_note(exa_keys))
+        lines.extend(catchup_report_lines(report.get("videoLearningCatchup")))
         blocked = int(totals.get("blockedLlmCalls") or 0)
         blocked_search = int(totals.get("blockedSearchCalls") or 0)
         if blocked or blocked_search:
@@ -2879,6 +3008,28 @@ class LongtuQqBridge(Star):
                     logger.warning(f"小红书图片发送失败：group={event.get_group_id()} error={image_error}")
             return sent > 0
 
+    async def _recent_group_context(self, event: AstrMessageEvent, payload: dict) -> dict:
+        if (event.is_private_chat() or payload.get("observe_only")
+                or payload.get("media_share")
+                or self._reply_component(event.get_messages()) is not None
+                or not self._is_explicitly_at_bot(event)):
+            return {}
+        try:
+            context = await fetch_recent_group_context(
+                event, self._forward_image_base64,
+                text=self._raw_text(event),
+                pure_mention=bool(payload.get("pure_bot_mention")),
+                include_images=not payload.get("has_image"),
+            )
+            logger.info(
+                f"QQ 艾特回看群聊：group={event.get_group_id()} "
+                f"messages={len(context.get('messages', []))} images={len(context.get('images', []))}",
+            )
+            return context
+        except Exception as error:
+            logger.warning(f"QQ 群聊回看暂不可用，沿用已有语境：{type(error).__name__}")
+            return {}
+
     def _pure_mention_payload(
         self,
         event: AstrMessageEvent,
@@ -2936,9 +3087,9 @@ class LongtuQqBridge(Star):
         event.call_llm = True
         try:
             group_info = await self._group_info(event.get_group_id())
-            response = await self._request_backend(
-                self._pure_mention_payload(event, group_info),
-            )
+            payload = self._pure_mention_payload(event, group_info)
+            payload["recent_group_context"] = await self._recent_group_context(event, payload)
+            response = await self._request_backend(payload)
         except Exception as error:
             logger.error(f"纯 At 前置兜底请求失败，保持静默以避免默认客服回复：{error}")
             event.stop_event()
@@ -2990,8 +3141,12 @@ class LongtuQqBridge(Star):
         return minimum, maximum
 
     async def _sleep_before_reply(self, event: AstrMessageEvent, response: dict) -> None:
-        """Pace conversation only; resolved media (including cache hits) sends now."""
+        """Pace conversation only; repeats and resolved media send immediately."""
         if not isinstance(response, dict) or not response.get("messages"):
+            return
+        # A +1 must join the ongoing repeat run before the group moves on, and
+        # a "let me look it up" reminder should land before the lookup does.
+        if response.get("mode") in {"repeat-reply", "learning-pending"}:
             return
         # Resolution, download and QQ upload already take time. Never hold a
         # ready media result behind the conversational delay, including cached
@@ -3428,6 +3583,7 @@ class LongtuQqBridge(Star):
             }
 
             try:
+                payload["recent_group_context"] = await self._recent_group_context(event, payload)
                 response = await self._request_backend(payload)
             except Exception as error:
                 logger.error(f"龙图 QQ Bridge 请求失败：{error}")
@@ -3573,7 +3729,7 @@ class LongtuQqBridge(Star):
         if getattr(self, 'video_delivery_cache', None):
             await self.video_delivery_cache.close()
         self.report_stop.set()
-        for task in (self.report_task, self.crazy_thursday_task):
+        for task in (self.report_task, self.crazy_thursday_task, self.learning_delivery_task):
             if task:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

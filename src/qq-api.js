@@ -31,6 +31,8 @@ import { createBilibiliSessionProvider } from './bilibili-session-provider.js';
 import { CultureCache } from './culture-cache.js';
 import { MemeKnowledgeStore } from './meme-knowledge.js';
 import { MemeCorpusStore } from './meme-corpus.js';
+import { VideoLearningStore } from './video-learning-store.js';
+import { VideoLearningCoordinator } from './video-learning.js';
 import { JevAtmosphereGate, JevRuntimeState } from './jev-atmosphere-gate.js';
 import { JevResponseModeMemory } from './jev-response-mode.js';
 import { ReplyTurnPlanner } from './reply-turn-planner.js';
@@ -264,8 +266,11 @@ export function createQqApiServer(options) {
   const usageTracker = options.usageTracker;
   const mediaUsageTracker = options.mediaUsageTracker;
   const mediaResolver = options.mediaResolver;
+  const videoLearningStore = options.videoLearningStore;
   const adminUsers = options.adminUsers ?? new Set();
   const usageReportUsers = options.usageReportUsers ?? adminUsers;
+  const exaKeyStatus = options.exaKeyStatus ?? (() => null);
+  const videoLearningReport = options.videoLearningReport ?? (() => null);
 
   const server = createServer(async (request, response) => {
     try {
@@ -287,16 +292,19 @@ export function createQqApiServer(options) {
         const startAt = Number(url.searchParams.get('start_at'));
         const endAt = Number(url.searchParams.get('end_at'));
         const limit = Number(url.searchParams.get('limit'));
+        const report = usageTracker.getReport({
+          allGroups: url.searchParams.get('all_groups') === 'true',
+          startAt: Number.isFinite(startAt) && startAt > 0 ? startAt : undefined,
+          endAt: Number.isFinite(endAt) && endAt > 0 ? endAt : undefined,
+          limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
+          exaKeyStatus: exaKeyStatus(),
+        });
+        report.videoLearningCatchup = videoLearningReport(report.startAt, report.endAt);
         sendJson(response, 200, {
           ok: true,
           admin_user_ids: [...adminUsers],
           report_user_ids: [...usageReportUsers],
-          report: usageTracker.getReport({
-            allGroups: url.searchParams.get('all_groups') === 'true',
-            startAt: Number.isFinite(startAt) && startAt > 0 ? startAt : undefined,
-            endAt: Number.isFinite(endAt) && endAt > 0 ? endAt : undefined,
-            limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
-          }),
+          report,
         });
         return;
       }
@@ -312,6 +320,62 @@ export function createQqApiServer(options) {
             endAt: Number(url.searchParams.get('end_at')) || Date.now(),
           }) ?? { totals: {}, byProvider: [] },
         });
+        return;
+      }
+
+      if (url.pathname === '/v1/qq/learning/deliveries') {
+        if (!isAuthorized(request, apiToken)) {
+          sendJson(response, 401, { ok: false, error: '认证失败' });
+          return;
+        }
+        if (!videoLearningStore) {
+          sendJson(response, 503, { ok: false, error: '视频学习存储尚未启用' });
+          return;
+        }
+        if (request.method !== 'GET') {
+          sendJson(response, 405, { ok: false, error: '只允许 GET' });
+          return;
+        }
+        const limit = Number(url.searchParams.get('limit'));
+        const leaseMs = Number(url.searchParams.get('lease_ms'));
+        sendJson(response, 200, {
+          ok: true,
+          deliveries: videoLearningStore.claimDeliveries(
+            Number.isInteger(limit) && limit > 0 ? limit : 10,
+            Number.isInteger(leaseMs) && leaseMs > 0 ? leaseMs : 30_000,
+          ),
+        });
+        return;
+      }
+
+      if (url.pathname === '/v1/qq/learning/receipts') {
+        if (!isAuthorized(request, apiToken)) {
+          sendJson(response, 401, { ok: false, error: '认证失败' });
+          return;
+        }
+        if (!videoLearningStore) {
+          sendJson(response, 503, { ok: false, error: '视频学习存储尚未启用' });
+          return;
+        }
+        if (request.method !== 'POST') {
+          sendJson(response, 405, { ok: false, error: '只允许 POST' });
+          return;
+        }
+        const payload = await readJsonBody(request);
+        const deliveryId = String(payload.delivery_id ?? payload.deliveryId ?? '').trim();
+        if (!deliveryId) {
+          sendJson(response, 400, { ok: false, error: '缺少 delivery_id' });
+          return;
+        }
+        const delivery = videoLearningStore.completeDelivery(deliveryId, {
+          sent: payload.sent !== false,
+          error: payload.error,
+        });
+        if (!delivery) {
+          sendJson(response, 404, { ok: false, error: '投递记录不存在' });
+          return;
+        }
+        sendJson(response, 200, { ok: true, delivery });
         return;
       }
 
@@ -568,6 +632,13 @@ export async function createQqRuntime() {
       process.env.QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS,
     ),
     searchUsdToCny: parsePositiveNumber(process.env.QQ_USAGE_USD_TO_CNY) ?? 7.2,
+    exaKeyLabels: String(process.env.WEB_SEARCH_EXA_KEY_LABELS ?? '')
+      .split(',').map((label) => label.trim()),
+    exaKeyMonthlyUsd: String(process.env.WEB_SEARCH_EXA_KEY_MONTHLY_USD ?? '')
+      .split(',').map((value) => value.trim()).map((value) => (value ? Number(value) : NaN)),
+    exaKeyBonusUsd: String(process.env.WEB_SEARCH_EXA_KEY_BONUS_USD ?? '')
+      .split(',').map((value) => value.trim()).map((value) => (value ? Number(value) : NaN)),
+    exaKeyBonusSince: process.env.WEB_SEARCH_EXA_KEY_BONUS_SINCE?.trim() ?? '',
     jevPricing: {
       model: jevConfig.model,
       region: process.env.LONGTU_QQ_JEV_PRICING_REGION?.trim() || '华北2（北京）',
@@ -659,6 +730,14 @@ export async function createQqRuntime() {
     ),
     ttlMs: (parsePositiveNumber(process.env.QQ_MEME_KNOWLEDGE_TTL_DAYS) ?? 30)
       * 24 * 60 * 60 * 1000,
+  });
+  // Video-learning records are durable and intentionally separate from the
+  // expiring culture cache/meme knowledge lookup.
+  const videoLearningStore = new VideoLearningStore({
+    databaseFilePath: path.resolve(
+      projectRoot,
+      process.env.QQ_VIDEO_LEARNING_DATABASE_FILE?.trim() || 'data/qq-video-learning.sqlite',
+    ),
   });
   const memeCorpusEnabled = parseBoolean(process.env.QQ_MEME_CORPUS_ENABLED, true);
   const memeCorpus = memeCorpusEnabled
@@ -990,6 +1069,7 @@ export async function createQqRuntime() {
     webSearchEnabled,
     cultureCache,
     memeKnowledge,
+    videoLearningStore,
     memeCorpus,
     groupMemory,
     longtuRetrievalEnabled: parseBoolean(
@@ -1156,9 +1236,34 @@ export async function createQqRuntime() {
       false,
     ),
   });
+  const videoLearningAsrPython = process.env.QQ_VIDEO_LEARNING_ASR_PYTHON?.trim() || '';
+  const videoLearning = parseBoolean(process.env.QQ_VIDEO_LEARNING_ENABLED, true)
+    ? new VideoLearningCoordinator({
+      store: videoLearningStore,
+      chatClient,
+      memeKnowledge,
+      memeCorpus,
+      groupMemory,
+      cookieProvider: bilibiliSessionProvider,
+      ffmpegCommand: process.env.QQ_MEDIA_FFMPEG_COMMAND?.trim() || 'ffmpeg',
+      asr: videoLearningAsrPython
+        ? {
+          command: videoLearningAsrPython,
+          args: [path.join(projectRoot, 'scripts/asr_transcribe.py')],
+          env: {
+            ASR_MODEL: process.env.QQ_VIDEO_LEARNING_ASR_MODEL?.trim() || 'small',
+            ...(process.env.HF_ENDPOINT ? { HF_ENDPOINT: process.env.HF_ENDPOINT } : {}),
+          },
+        }
+        : null,
+      personaPrompt: () => service.personaManager?.priorityContextFor?.({}) ?? '',
+    })
+    : null;
+  service.videoLearning = videoLearning;
 
   return {
     service,
+    videoLearning,
     chatClient,
     conversationStore,
     personaStore,
@@ -1169,6 +1274,7 @@ export async function createQqRuntime() {
     webSearch,
     cultureCache,
     memeKnowledge,
+    videoLearningStore,
     memeCorpus,
     usageTracker,
     mediaUsageTracker,
@@ -1202,6 +1308,7 @@ export async function startQqApi() {
   }
 
   const runtime = await createQqRuntime();
+  runtime.videoLearning?.start();
   const restoredConversationCount = await runtime.conversationStore.load();
   const stats = await runtime.memeStore.getStats();
   const server = createQqApiServer({
@@ -1210,8 +1317,11 @@ export async function startQqApi() {
     usageTracker: runtime.usageTracker,
     mediaUsageTracker: runtime.mediaUsageTracker,
     mediaResolver: runtime.mediaResolver,
+    videoLearningStore: runtime.videoLearningStore,
     adminUsers: runtime.adminUsers,
     usageReportUsers: runtime.usageReportUsers,
+    exaKeyStatus: () => runtime.webSearch.exaKeyPool.getStatus(),
+    videoLearningReport: (startAt, endAt) => runtime.videoLearning?.catchupReport(startAt, endAt) ?? null,
     health: async () => {
       const currentStats = await runtime.memeStore.getStats();
       let groupMemoryStats;
@@ -1229,6 +1339,7 @@ export async function startQqApi() {
         web_search_exa_keys: runtime.webSearch.exaKeyPool.getStatus(),
         culture_cache: runtime.cultureCache.getStats(),
         meme_knowledge: runtime.memeKnowledge.getStats(),
+        video_learning: runtime.videoLearningStore.getStats(),
         group_memory: groupMemoryStats,
         active_reply_enabled: runtime.activeReplyEnabled,
         repeat_enabled: runtime.repeatEnabled,
@@ -1291,6 +1402,8 @@ export async function startQqApi() {
     runtime.mediaResolver.close();
     runtime.cultureCache.close();
     runtime.memeKnowledge.close();
+    runtime.videoLearning?.stop();
+    runtime.videoLearningStore.close();
     runtime.groupMemory.close();
   };
   process.once('SIGINT', () => shutdown('SIGINT'));

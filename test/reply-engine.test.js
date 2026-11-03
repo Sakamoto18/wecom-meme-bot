@@ -1440,7 +1440,7 @@ test('攻击回合不把已保存口癖当固定开场', async () => {
   assert.equal(result.mode, 'generated-attack');
   assert.equal(result.attempts, 1);
   assert.doesNotMatch(calls[0].additionalSystemPrompt, new RegExp(savedPhrase));
-  assert.match(calls[0].additionalSystemPrompt, /不要连续两轮用同一句/);
+  assert.match(calls[0].additionalSystemPrompt, /不要把口癖拆开拼进别的句子/);
 });
 
 test('@机器人后直接接“臭傻逼你妈死了”仍走临场对线，不退回说教式回答', async () => {
@@ -2797,4 +2797,181 @@ test('角色沉浸正文里夹带的内心独白会被删掉，其余保留', as
     webSearchEnabled: false,
   });
   assert.equal(result.answer, '跑你妈，外面雾霾都能拿来糊墙。');
+});
+
+test('普通回复和攻击回复都带上防复读提示', async () => {
+  const history = [
+    { role: 'user', content: '在吗' },
+    { role: 'assistant', content: '我杀你妈，有屁快放。' },
+  ];
+  const personaContext = '偏好口癖：我杀你妈、一拳打飞你妈';
+  const promptFor = async (content) => {
+    const prompts = [];
+    await generateConversationReply({
+      content,
+      modelInput: content,
+      history,
+      personaContext,
+      chatClient: {
+        isConfigured: true,
+        async complete(_history, _input, options) {
+          prompts.push(String(options.additionalSystemPrompt ?? ''));
+          return '行。';
+        },
+      },
+      webSearchEnabled: false,
+    });
+    return prompts.join('\n');
+  };
+  assert.match(await promptFor('今天适合跑步吗'), /已用过的口癖：我杀你妈/);
+  assert.match(await promptFor('你个傻逼'), /已用过的口癖：我杀你妈/);
+});
+
+test('陌生梗进入视频学习时只回一句去查的提醒，不调用正式回复', async () => {
+  const calls = [];
+  const gateCalls = [];
+  const result = await generateConversationReply({
+    content: '怎么似了？',
+    modelInput: '怎么似了？',
+    turnPlan: normalizeTurnPlan({
+      current_task: '解释似了',
+      search: { culture_needed: true, culture_queries: ['似了'] },
+    }),
+    videoLearningGate: (info) => {
+      gateCalls.push(info);
+      return { action: 'remind', taskKey: 'task-1', topic: '似了' };
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        return '似了？等我去 B 站翻翻。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.equal(result.mode, 'learning-pending');
+  assert.equal(result.learningTaskKey, 'task-1');
+  assert.equal(result.answer, '似了？等我去 B 站翻翻。');
+  assert.equal(gateCalls[0].term, '似了');
+  assert.ok(calls.every((options) => options.usageSource !== 'conversation-reply'));
+  assert.match(calls.find((options) => options.usageSource === 'video-learning-reminder').additionalSystemPrompt, /不猜梗的意思/);
+});
+
+test('指定视频链接学习时没有梗名也强制进入学习流程', async () => {
+  const calls = [];
+  const gateCalls = [];
+  const result = await generateConversationReply({
+    content: '学一下这个视频 https://www.bilibili.com/video/BV1aa411c7xx',
+    modelInput: '学一下这个视频 https://www.bilibili.com/video/BV1aa411c7xx',
+    videoLearningRequest: {
+      directLink: true,
+      preferredUrl: 'https://www.bilibili.com/video/BV1aa411c7xx',
+      preferredBvid: 'BV1aa411c7xx',
+    },
+    videoLearningGate: (info) => {
+      gateCalls.push(info);
+      return {
+        action: 'remind',
+        taskKey: 'link-task-1',
+        topic: 'B 站视频 BV1aa411c7xx',
+        directLink: true,
+        topicExplicit: false,
+      };
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        return '行，我先把这视频看完再说。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.equal(result.mode, 'learning-pending');
+  assert.equal(result.learningTaskKey, 'link-task-1');
+  assert.equal(result.answer, '行，我先把这视频看完再说。');
+  assert.equal(gateCalls[0].term, '');
+  assert.equal(gateCalls[0].preferredBvid, 'BV1aa411c7xx');
+  assert.ok(calls.every((options) => options.usageSource !== 'conversation-reply'));
+  assert.match(
+    calls.find((options) => options.usageSource === 'video-learning-reminder').additionalSystemPrompt,
+    /把这个视频看完并找出里面的梗/,
+  );
+});
+
+test('指定视频链接学习时优先于已命中的梗百科词条', async () => {
+  const gateCalls = [];
+  const result = await generateConversationReply({
+    content: '学一下这个视频 https://www.bilibili.com/video/BV1aa411c7xx',
+    modelInput: '学一下这个视频 https://www.bilibili.com/video/BV1aa411c7xx',
+    turnPlan: normalizeTurnPlan({
+      current_task: '学习指定视频',
+      search: { culture_needed: true, culture_queries: ['似了'] },
+    }),
+    memeKnowledge: {
+      lookup() {
+        return {
+          term: '似了',
+          meaning: '“死了”的谐音',
+          usage: ['我似了'],
+          confidence: 'high',
+          sourceDomains: ['bilibili.com'],
+          sourceUrls: ['https://www.bilibili.com/video/BV1old'],
+        };
+      },
+    },
+    videoLearningRequest: {
+      directLink: true,
+      preferredUrl: 'https://www.bilibili.com/video/BV1aa411c7xx',
+      preferredBvid: 'BV1aa411c7xx',
+    },
+    videoLearningGate: (info) => {
+      gateCalls.push(info);
+      return {
+        action: 'remind',
+        taskKey: 'link-task-2',
+        topic: 'B 站视频 BV1aa411c7xx',
+        directLink: true,
+        topicExplicit: false,
+      };
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '行，我先把这视频看完再说。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.equal(result.mode, 'learning-pending');
+  assert.equal(gateCalls.length, 1);
+  assert.equal(gateCalls[0].preferredBvid, 'BV1aa411c7xx');
+});
+
+test('视频学过的梗直接作为梗知识用于回答', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '似了是什么梗',
+    modelInput: '似了是什么梗',
+    turnPlan: normalizeTurnPlan({
+      current_task: '解释似了',
+      search: { culture_needed: true, culture_queries: ['似了'] },
+    }),
+    videoLearningGate: () => ({
+      action: 'use',
+      entry: { term: '似了', meaning: '“死了”的谐音', usage: ['我似了'], confidence: 'high', sourceUrls: ['https://www.bilibili.com/video/BV1aa411c7xx'] },
+    }),
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        return '死了的谐音，装可爱用的。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.notEqual(result.mode, 'learning-pending');
+  const main = calls.find((options) => options.usageSource === 'conversation-reply');
+  assert.match(main.additionalSystemPrompt, /词条：似了/);
 });

@@ -189,17 +189,45 @@ test('普通聊天按短语重合命中梗的近似说法，不要求逐字相�
       assert.match(prompt, /头顶尖尖的/, query);
     }
 
-    for (const query of ['尖尖的东西怎么画', '老板周末加班怎么回']) {
-      const prompt = store.buildPrompt(query, {
-        styleOnly: true,
-        autoDefinition: true,
-      });
-      assert.doesNotMatch(prompt, /释义参考/, query);
-    }
+    // A shared keyword now makes the meme a candidate callback.
+    assert.match(store.buildPrompt('尖尖的东西怎么画', {
+      styleOnly: true,
+      autoDefinition: true,
+    }), /头顶尖尖的/);
+    assert.doesNotMatch(store.buildPrompt('老板周末加班怎么回', {
+      styleOnly: true,
+      autoDefinition: true,
+    }), /释义参考/);
 
     assert.doesNotMatch(store.buildPrompt('你脑袋怎么尖尖的啊', {
       styleOnly: true,
     }), /释义参考/);
+  } finally {
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('风格语料占满全文检索结果时，仍按关键词召回梗百科词条并要求主动玩梗', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'meme-corpus-test-'));
+  const store = new MemeCorpusStore({ databaseFilePath: path.join(directory, 'corpus.sqlite') });
+  try {
+    store.replaceCorpus('memewiki', [
+      { id: 1, text: '【词条】蛤蟆画饼\n【用法】讽刺虚假承诺、空有设想却无法实现。', terms: '蛤蟆画饼' },
+    ]);
+    store.replaceCorpus('meme_style', Array.from({ length: 30 }, (_, index) => ({
+      id: index + 1,
+      text: `对话：\n用户：今天加班到十点老板还画饼${index}\n回复：我不行了`,
+    })));
+    const prompt = store.buildPrompt('今天加班到十点，老板还画饼', {
+      corpora: ['memewiki', 'meme_style'],
+      limit: 8,
+      styleOnly: true,
+      autoDefinition: true,
+    });
+    assert.match(prompt, /蛤蟆画饼/);
+    assert.match(prompt, /主动玩梗/);
+    assert.equal((prompt.match(/接法示例\d/gu) ?? []).length, 1);
   } finally {
     store.close();
     rmSync(directory, { recursive: true, force: true });

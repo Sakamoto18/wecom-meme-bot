@@ -53,10 +53,10 @@
     "default": false
   },
   "reply_delay_enabled": {
-    "description": "普通聊天回复前随机等待，媒体结果立即发送",
+    "description": "普通聊天回复前随机等待，复读与媒体结果立即发送",
     "type": "bool",
     "default": true,
-    "hint": "仅普通聊天默认等待 15-45 秒，平均约 30 秒；视频、图文、缓存媒体及媒体失败通知不等待。最长可通过 reply_delay_max_seconds 或 LONGTU_QQ_REPLY_DELAY_MAX_SECONDS 调到 60 秒"
+    "hint": "仅普通聊天默认等待 15-45 秒，平均约 30 秒；群友 +1 复读、视频、图文、缓存媒体及媒体失败通知不等待。最长可通过 reply_delay_max_seconds 或 LONGTU_QQ_REPLY_DELAY_MAX_SECONDS 调到 60 秒"
   },
   "reply_delay_min_seconds": {
     "description": "回复随机等待下限（秒）",

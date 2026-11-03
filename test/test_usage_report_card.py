@@ -14,7 +14,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from astrbot_plugin_longtu_bridge.usage_report_card import render_usage_report, report_rows, parts, total
+from astrbot_plugin_longtu_bridge.usage_report_card import exa_key_lines, render_usage_report, report_rows, parts, total
 
 
 def sample():
@@ -80,6 +80,42 @@ ns = dict(asyncio=asyncio, base64=base64, logger=logging.getLogger('test'),
 exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(name='Bridge', bases=[],
     keywords=[], body=methods, decorator_list=[])], type_ignores=[])), '<bridge>', 'exec'), ns)
 Bridge = ns['Bridge']
+
+
+def exa_sample():
+    return dict(periodStartAt=1793491200000, resetAt=1796083200000, unattributedCalls=0, keys=[
+        dict(number=1, label='测试key甲', budgetUsd=17.1, spentUsd=17.3, monthlyRemainingUsd=0, bonusRemainingUsd=0, remainingUsd=0, calls=2450, state='exhausted', current=True),
+        dict(number=2, label='测试key乙', budgetUsd=20, spentUsd=1.23, monthlyRemainingUsd=8.77, bonusRemainingUsd=10, remainingUsd=18.77, calls=177, state='available', current=False),
+        dict(number=3, label='测试key丙', budgetUsd=20, spentUsd=0, monthlyRemainingUsd=10, bonusRemainingUsd=10, remainingUsd=20, calls=0, state='available', current=False),
+    ])
+
+
+class ExaKeyTests(unittest.TestCase):
+    def test_rows_follow_pool_order_and_move_on_after_exhaustion(self):
+        rows = exa_key_lines(exa_sample())
+        self.assertEqual([(r['label'], r['status'], r['remaining']) for r in rows], [
+            ('测试key甲', '已用完', '$0.00 / $17.10'),
+            ('测试key乙', '使用中', '$18.77 / $20.00'),
+            ('测试key丙', '待用', '$20.00 / $20.00'),
+        ])
+        self.assertEqual(exa_key_lines({}), [])
+
+    def test_card_adds_catchup_panel_on_last_page(self):
+        report = sample()
+        plain = Image.open(io.BytesIO(render_usage_report(report)[-1]))
+        report['videoLearningCatchup'] = {'day': '2026-11-04', 'status': 'done', 'items': [
+            {'term': '似了', 'source': 'group', 'status': 'learned', 'meaning': '死了的谐音', 'seconds': 120},
+            {'term': '黑猫鼓掌', 'source': 'bilibili', 'status': 'failed', 'error': '证据不足', 'seconds': 60},
+        ]}
+        with_run = Image.open(io.BytesIO(render_usage_report(report)[-1]))
+        self.assertEqual(with_run.height - plain.height, 84 + 2 * 34)
+
+    def test_card_adds_key_panel_on_last_page(self):
+        report = sample()
+        plain = Image.open(io.BytesIO(render_usage_report(report)[-1]))
+        report['exaKeys'] = exa_sample()
+        with_keys = Image.open(io.BytesIO(render_usage_report(report)[-1]))
+        self.assertEqual(with_keys.height - plain.height, 112 + 3 * 58)
 
 
 class DeliveryTests(unittest.IsolatedAsyncioTestCase):

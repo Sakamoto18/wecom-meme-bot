@@ -47,6 +47,29 @@ class ReplyDelayTests(unittest.IsolatedAsyncioTestCase):
             await self.bridge._sleep_before_reply(self.event, {'messages': [{'type': 'text'}]})
             sleep.assert_not_awaited()
 
+    async def test_group_repeat_skips_even_explicitly_configured_delay(self):
+        with patch.dict(os.environ, {
+            'LONGTU_QQ_REPLY_DELAY_ENABLED': 'true',
+            'LONGTU_QQ_REPLY_DELAY_MIN_SECONDS': '60',
+            'LONGTU_QQ_REPLY_DELAY_MAX_SECONDS': '60',
+        }), patch.object(asyncio, 'sleep', new_callable=AsyncMock) as sleep:
+            for text in ('+1', '这也太巧了'):
+                with self.subTest(text=text):
+                    await self.bridge._sleep_before_reply(self.event, {
+                        'mode': 'repeat-reply',
+                        'messages': [{'type': 'text', 'text': text}],
+                        'active_reply': True,
+                        'active_reply_priority': 'may',
+                    })
+                    sleep.assert_not_awaited()
+            await self.bridge._sleep_before_reply(self.event, {
+                'mode': 'chat',
+                'messages': [{'type': 'text', 'text': '+1'}],
+                'active_reply': True,
+                'active_reply_priority': 'may',
+            })
+            sleep.assert_awaited_once_with(60)
+
     async def test_three_media_groups_finish_while_chat_waits(self):
         started, finish = asyncio.Event(), asyncio.Event()
         async def sleep(delay):

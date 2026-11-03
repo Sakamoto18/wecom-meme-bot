@@ -221,3 +221,15 @@ Windows 现有 `.env.qq` 的 `XHS_PROVIDER_TIMEOUT_SECONDS=20` 小于浏览器�
 媒体打散配置为 `QQ_MEDIA_START_DELAY_MIN_SECONDS=1`、`QQ_MEDIA_START_DELAY_MAX_SECONDS=10`，通过 Windows 实际加载的 `.env.windows` 同步；Linux 在 `.env.qq` 配置。最大等待硬上限 10 秒，MAX=0 可以关闭媒体打散。只有未命中缓存才抽取等待时间，过期或身份校验失败的缓存视为未命中。此次行为调整只需重启 Backend。
 
 本轮媒体打散调整通过全部 761 项 Node 测试与语法检查。服务器使用实际生效的环境配置对同一真实抖音分享发起三个并发解析请求，抽到 3607、1213、4871 毫秒；1213 毫秒的请求先启动抓取，另外两次共用任务，只调用一次 Provider，三个请求均取得同一可播放结果。随后缓存请求约 4 毫秒返回，没有新的随机等待或 Provider 调用。验证限于解析和缓存，不向 QQ 发送测试消息。仅重启 Backend，其他服务进程保持不变；回滚备份为 `C:\migration-backup\media-jitter-20261102-112900`，含两份源文件及原 `.env.windows`。
+
+### 群友复读立即发送（2026-11-03）
+
+Bridge 对 `repeat-reply` 跳过发送前的随机等待，群友「+1」复读命中后立即发送；普通聊天仍按原配置打散，每轮复读仍只跟一次。项目插件与 AstrBot 实际插件目录中的 `main.py`、`_conf_schema.json` 已同步，替换前后均校验 SHA-256。备份和部署清单位于 `C:\migration-backup\repeat-no-delay-20261103-150216`。
+
+本地 4 项延迟测试与 7 项复读相关测试通过；Windows Python 3.12 以 `-X utf8` 运行部署包内的 4 项延迟测试通过。仅重启 AstrBot，日志确认 Bridge 加载、OneBot 重连成功，三个监听端口恢复，Backend 健康检查通过；NapCat、Backend、Provider 的监听进程 PID 保持不变。未向群或私聊发送测试消息。
+
+### 无引用艾特回看群聊（2026-11-03）
+
+无引用的明确 @（包括纯 @）会在回复前读取同群近期消息；对承接问法补充最近图片，并向模型标明来源。详细范围见 [QQ 部署文档](QQ_DEPLOYMENT.md)。本机 NapCat 的 `get_group_msg_history` 必须传入 `message_seq=触发消息的 OneBot message_id`；省略或传 0 会返回“消息不存在”。已用近期实收消息完成只读实测，成功返回含文字、时间及图片组件的历史；迁移前的旧消息 ID 不一定仍可被 NapCat 定位，查询失败时回退到已有语境。
+
+本地相关 305 项 Node 测试、17 项 Python 测试通过；最后一次图片选择调整后，22 项定向 Node 回归通过。服务器 Python 3.12 上 7 项回看测试通过，并用实际部署的 Node 模块与模拟模型验证纯 @ 能接收多人讨论；测试未向 QQ 发送消息。已同步 4 个 Node 文件及项目、AstrBot 两份 Bridge 模块，共 8 个目标文件；逐一核对哈希后重启 Backend 和 AstrBot，健康检查、Bridge 监听及 OneBot 重连通过。NapCat 和 Provider 进程保持运行。备份和部署结果清单位于 `C:\migration-backup\group-context-20261103-154039`。

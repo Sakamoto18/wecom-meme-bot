@@ -126,6 +126,8 @@ class QuoteImageTests(unittest.IsolatedAsyncioTestCase):
         instance._cache_recent_images = Mock()
         instance._recent_images_for_reference = Mock(return_value=['stale-bot-image'])
         instance._group_info = AsyncMock(return_value={})
+        instance._recent_group_context = AsyncMock(return_value={})
+        instance._sleep_before_reply = AsyncMock()
         instance._mentions = lambda _components: []
         instance._request_backend = AsyncMock(return_value={'mode': 'observed', 'messages': []})
         instance._send_forward_from_backend = AsyncMock(return_value=False)

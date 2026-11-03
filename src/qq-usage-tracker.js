@@ -614,6 +614,13 @@ export class QqUsageTracker {
       : new Map();
     this.jevPricing = normalizeJevPricing(options.jevPricing);
     this.searchUsdToCny = positivePrice(options.searchUsdToCny, 7.2) || 7.2;
+    // Exa key names, free monthly credit and one-time bonus, in key-pool order.
+    // The bonus is the balance at the start of exaKeyBonusSince (YYYY-MM).
+    this.exaKeyLabels = Array.isArray(options.exaKeyLabels) ? options.exaKeyLabels : [];
+    this.exaKeyMonthlyUsd = Array.isArray(options.exaKeyMonthlyUsd) ? options.exaKeyMonthlyUsd : [];
+    this.exaKeyBonusUsd = Array.isArray(options.exaKeyBonusUsd) ? options.exaKeyBonusUsd : [];
+    this.exaKeyBonusSince = /^\d{4}-\d{2}$/.test(String(options.exaKeyBonusSince ?? ''))
+      ? String(options.exaKeyBonusSince) : '';
     this.retentionMs = positiveInteger(options.retentionMs, DEFAULT_RETENTION_MS)
       || DEFAULT_RETENTION_MS;
     this.now = options.now ?? Date.now;
@@ -730,9 +737,19 @@ export class QqUsageTracker {
       search_requested_results: 'INTEGER NOT NULL DEFAULT 0',
       search_billing_status: "TEXT NOT NULL DEFAULT ''",
       search_price_version: "TEXT NOT NULL DEFAULT ''",
+      search_key_number: 'INTEGER NOT NULL DEFAULT 0',
     })) {
       if (!columns.has(name)) this.database.exec(`ALTER TABLE qq_usage_events ADD COLUMN ${name} ${definition}`);
     }
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS qq_exa_key_months (
+        key_number INTEGER NOT NULL,
+        month TEXT NOT NULL,
+        spent_usd REAL NOT NULL DEFAULT 0,
+        calls INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (key_number, month)
+      )
+    `);
     return this.database;
   }
 
@@ -1250,7 +1267,7 @@ export class QqUsageTracker {
     this.prune();
   }
 
-  startSearchCall({ source, provider = '', searchType = '', requestedResults = 0 } = {}) {
+  startSearchCall({ source, provider = '', searchType = '', requestedResults = 0, keyNumber = 0 } = {}) {
     const context = this.currentContext();
     const now = this.now();
     const database = this.ensureOpen();
@@ -1301,12 +1318,13 @@ export class QqUsageTracker {
     );
     database.prepare(`UPDATE qq_usage_events SET provider = ?, search_type = ?,
       search_requested_results = ?, usd_to_cny = ?, search_billing_status = 'pending',
-      search_price_version = ? WHERE id = ?`).run(provider, searchType,
-      usageNumber(requestedResults), this.searchUsdToCny, EXA_PRICE_VERSION, result.lastInsertRowid);
+      search_price_version = ?, search_key_number = ? WHERE id = ?`).run(provider, searchType,
+      usageNumber(requestedResults), this.searchUsdToCny, EXA_PRICE_VERSION,
+      usageNumber(keyNumber), result.lastInsertRowid);
     return Number(result.lastInsertRowid);
   }
 
-  finishSearchCall(reservationId, { resultCount, succeeded = true, costDollars } = {}) {
+  finishSearchCall(reservationId, { resultCount, succeeded = true, costDollars, errorStatus = 0 } = {}) {
     if (!reservationId) return;
     const database = this.ensureOpen();
     const row = database.prepare(`SELECT provider, search_type AS searchType,
@@ -1315,9 +1333,9 @@ export class QqUsageTracker {
     if (!row) return;
     const charge = searchCharge({ ...row, succeeded, costDollars }, row.usdToCny);
     database.prepare(`UPDATE qq_usage_events SET succeeded = ?, search_results = ?,
-      estimated_cost_usd = ?, estimated_cost_cny = ?, search_billing_status = ?
+      estimated_cost_usd = ?, estimated_cost_cny = ?, search_billing_status = ?, error_status = ?
       WHERE id = ? AND kind = 'search'`).run(succeeded ? 1 : 0, usageNumber(resultCount),
-      charge.usd, charge.cny, charge.status, reservationId);
+      charge.usd, charge.cny, charge.status, usageNumber(errorStatus), reservationId);
   }
 
   recordSearchCacheHit({ source, resultCount } = {}) {
@@ -1384,7 +1402,7 @@ export class QqUsageTracker {
     };
   }
 
-  getReport({ startAt, endAt, limit = 20, allGroups = false } = {}) {
+  getReport({ startAt, endAt, limit = 20, allGroups = false, exaKeyStatus = null } = {}) {
     const now = this.now();
     const start = Number.isFinite(Number(startAt)) ? Number(startAt) : now - 24 * HOUR_MS;
     const end = Number.isFinite(Number(endAt)) ? Number(endAt) : now + 1;
@@ -1717,6 +1735,107 @@ export class QqUsageTracker {
         searchCacheHits: Number(totals.searchCacheHits || 0),
         ...jevTotals,
       },
+      exaKeys: this.getExaKeyReport({ now, status: exaKeyStatus }),
+    };
+  }
+
+  /**
+   * Per-key Exa balance. Exa has no balance API for normal keys, so it is
+   * estimated from what this bot recorded. Each month Exa spends the free
+   * monthly credit first (reset on the 1st, taken as 00:00 UTC), then the
+   * key's one-time bonus. Monthly spend is copied into qq_exa_key_months,
+   * which pruning does not touch, so bonus use is counted across months. A
+   * 402 on the key's latest call means it is out regardless of the estimate.
+   */
+  getExaKeyReport({ now = this.now(), status = null } = {}) {
+    const date = new Date(now);
+    const periodStartAt = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+    const resetAt = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
+    const previousStartAt = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() - 1, 1);
+    const monthKey = (at) => new Date(at).toISOString().slice(0, 7);
+    const database = this.ensureOpen();
+    const monthlySpend = database.prepare(`
+      SELECT search_key_number AS keyNumber, COUNT(*) AS calls,
+        SUM(estimated_cost_usd) AS spentUsd
+      FROM qq_usage_events
+      WHERE kind = 'search' AND allowed = 1 AND search_cache = 0 AND provider = 'exa'
+        AND created_at >= ? AND created_at < ?
+      GROUP BY search_key_number
+    `);
+    const saveMonth = database.prepare(`
+      INSERT INTO qq_exa_key_months (key_number, month, spent_usd, calls)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT (key_number, month) DO UPDATE SET spent_usd = excluded.spent_usd, calls = excluded.calls
+    `);
+    // The previous month stays within retention for a few days into the new
+    // month, so its final total is saved before the raw rows are pruned.
+    for (const [from, to] of [[previousStartAt, periodStartAt], [periodStartAt, resetAt]]) {
+      for (const row of monthlySpend.all(from, to)) {
+        if (Number(row.keyNumber) > 0) {
+          saveMonth.run(Number(row.keyNumber), monthKey(from), Number(row.spentUsd || 0), Number(row.calls || 0));
+        }
+      }
+    }
+    const currentRows = monthlySpend.all(periodStartAt, resetAt);
+    const spendByKey = new Map(currentRows.map((row) => [Number(row.keyNumber), row]));
+    const pastMonths = database.prepare(`
+      SELECT month, spent_usd AS spentUsd FROM qq_exa_key_months
+      WHERE key_number = ? AND month >= ? AND month < ?
+    `);
+    const latestStatus = database.prepare(`
+      SELECT error_status AS errorStatus FROM qq_usage_events
+      WHERE kind = 'search' AND provider = 'exa' AND search_key_number = ?
+        AND created_at >= ? AND created_at < ?
+      ORDER BY id DESC LIMIT 1
+    `);
+    const liveKeys = new Map((status?.keys ?? []).map((key) => [Number(key.number), key]));
+    const configured = Math.max(
+      Number(status?.configured) || 0,
+      this.exaKeyLabels.length,
+      ...currentRows.map((row) => Number(row.keyNumber) || 0),
+    );
+    const amount = (list, index, fallback) => {
+      const value = Number(list[index]);
+      return Number.isFinite(value) && value >= 0 ? value : fallback;
+    };
+    const round = (value) => Number(Math.max(0, value).toFixed(6));
+    const currentMonth = monthKey(periodStartAt);
+    const keys = Array.from({ length: configured }, (_, index) => {
+      const number = index + 1;
+      const spend = spendByKey.get(number);
+      const spentUsd = Number(spend?.spentUsd || 0);
+      const monthlyUsd = amount(this.exaKeyMonthlyUsd, index, 10);
+      const bonusUsd = amount(this.exaKeyBonusUsd, index, 0);
+      const bonusUsedBefore = pastMonths.all(number, this.exaKeyBonusSince || '0000-00', currentMonth)
+        .reduce((sum, row) => sum + Math.max(0, Number(row.spentUsd || 0) - monthlyUsd), 0);
+      const bonusLeftAtMonthStart = Math.max(0, bonusUsd - bonusUsedBefore);
+      const monthlyRemainingUsd = Math.max(0, monthlyUsd - spentUsd);
+      const bonusRemainingUsd = Math.max(0, bonusLeftAtMonthStart - Math.max(0, spentUsd - monthlyUsd));
+      const live = liveKeys.get(number);
+      const exhausted = live?.state === 'credits-exhausted'
+        || Number(latestStatus.get(number, periodStartAt, resetAt)?.errorStatus) === 402;
+      return {
+        number,
+        label: String(this.exaKeyLabels[index] ?? '').trim() || `Key ${number}`,
+        budgetUsd: round(monthlyUsd + bonusLeftAtMonthStart),
+        monthlyUsd: round(monthlyUsd),
+        bonusUsd: round(bonusLeftAtMonthStart),
+        spentUsd: round(spentUsd),
+        monthlyRemainingUsd: exhausted ? 0 : round(monthlyRemainingUsd),
+        bonusRemainingUsd: exhausted ? 0 : round(bonusRemainingUsd),
+        remainingUsd: exhausted ? 0 : round(monthlyRemainingUsd + bonusRemainingUsd),
+        calls: Number(spend?.calls || 0),
+        state: exhausted ? 'exhausted' : (live?.state && live.state !== 'available' ? live.state : 'available'),
+        current: Number(status?.preferredKey) === number,
+      };
+    });
+    const unattributed = spendByKey.get(0);
+    return {
+      periodStartAt,
+      resetAt,
+      keys,
+      unattributedCalls: Number(unattributed?.calls || 0),
+      unattributedSpentUsd: round(Number(unattributed?.spentUsd || 0)),
     };
   }
 

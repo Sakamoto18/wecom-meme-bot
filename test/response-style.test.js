@@ -18,6 +18,7 @@ import {
   isThinSeriousReply,
   isHostileContent,
   isDirectBotAttack,
+  buildRepetitionGuardPrompt,
   isAttackFrameChallenge,
   isAttackPressureChallenge,
   isInvalidPureMentionReply,
@@ -956,4 +957,31 @@ test('语感契约进入普通回复基座和文化复核提示', () => {
 test('以“司马”开头的辱骂识别为直接攻击机器人，但不误伤司马懿等人名', () => {
   assert.equal(isDirectBotAttack('司马废物攻击性这么低也配和老子聊天？能上点强度吗'), true);
   assert.equal(isDirectBotAttack('司马懿真是废物'), false);
+});
+
+test('防复读只列出 bot 自己最近用过的口癖和反复出现的说法', () => {
+  const history = [
+    { role: 'user', content: '你是谁' },
+    { role: 'assistant', content: '敢这么跟我说话，你的🐎是批发的？' },
+    { role: 'user', content: '九妹九妹' },
+    { role: 'assistant', content: '九妹你个头，你这复读机嘴，滚去练你的牌。' },
+    { role: 'assistant', content: '问三遍还问不出个屁，你这脑子是复读机成精了？' },
+  ];
+  const prompt = buildRepetitionGuardPrompt(history, [
+    '敢这么跟我说话，你的🐎是批发的？',
+    '简直是半夜上厕所，找屎！',
+  ]);
+  assert.match(prompt, /已用过的口癖：敢这么跟我说话，你的🐎是批发的？/);
+  assert.doesNotMatch(prompt, /找屎/);
+  assert.match(prompt, /复读机/);
+  assert.equal(buildRepetitionGuardPrompt([{ role: 'assistant', content: '行。' }], ['我杀你妈']), '');
+  assert.equal(buildRepetitionGuardPrompt([], ['我杀你妈']), '');
+});
+
+test('口癖拆开拼进别的句子也算用过', () => {
+  const prompt = buildRepetitionGuardPrompt(
+    [{ role: 'assistant', content: '谐音梗缺德得半夜上厕所找屎，但确实戳中腰眼。' }],
+    ['简直是半夜上厕所，找屎！'],
+  );
+  assert.match(prompt, /已用过的口癖：简直是半夜上厕所，找屎！/);
 });

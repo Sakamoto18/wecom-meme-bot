@@ -1,0 +1,925 @@
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { buildBilibiliWbiParams } from './bilibili-ai-summary.js';
+import { resolveBilibiliMedia } from './bilibili-provider.js';
+
+// Defaults from docs/VIDEO_MEME_LEARNING_PLAN.md §5.
+export const VIDEO_LEARNING_LIMITS = Object.freeze({
+  dailyTasks: 10,
+  dailyMaterialSeconds: 30 * 60,
+  maxSources: 3,
+  taskMaterialSeconds: 5 * 60,
+  maxModelCalls: 20,
+  waitMs: 10 * 60 * 1000,
+  failureCooldownMs: 24 * 60 * 60 * 1000,
+  segmentSeconds: 27,
+  tileSeconds: 9,
+  dailyCatchupTasks: 3,
+  dailyCatchupSeconds: 10 * 60,
+  catchupHour: 3,
+});
+const KNOWN_EVIDENCE = new Set(['exact-source', 'exact-match', 'cached']);
+const SEARCH_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+const KNOWLEDGE_TTL_MS = 10 * 365 * 24 * 60 * 60 * 1000;
+const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+const SEGMENT_PROMPT = [
+  '你是视频梗分析员，正在逐段观看一个 B 站视频来弄懂一个网络梗。',
+  '图片是按时间顺序拼好的截图网格，每张网格从左到右、从上到下每格间隔 1 秒，标题里写了每张网格覆盖的时间段。',
+  '只根据截图、字幕/语音转写和视频信息描述你看到的东西，看不清的写进 uncertain，不要编。',
+  '严格只输出 JSON：{"events":"这一段按时间发生了什么（人物动作、画面文字、台词）","joke":"这一段里的梗点或笑点机制，没有就留空","keep":["二创时必须保留的元素"],"sound_dependent":true或false（笑点是否依赖破音、变调、音效、语气这类只能听到的东西）,"uncertain":"没看清或不确定的地方"}',
+].join('\n');
+
+const DIRECT_SEGMENT_PROMPT = [
+  '你是网络梗分析员，正在逐段观看用户指定的一个 B 站视频。',
+  '你的任务是从视频里找出真正成立、之后还能复用的网络梗、黑话、口头禅、名场面或笑点机制；如果只是普通内容，不要硬造梗。',
+  '图片是按时间顺序拼好的截图网格，每张网格从左到右、从上到下每格间隔 1 秒，标题里写了每张网格覆盖的时间段。',
+  '只根据截图、字幕/语音转写和视频信息描述你看到的东西，看不清的写进 uncertain，不要编。',
+  '严格只输出 JSON：{"events":"这一段按时间发生了什么（人物动作、画面文字、台词）","joke":"这一段里的梗点或笑点机制，没有就留空","keep":["二创时必须保留的元素"],"sound_dependent":true或false（笑点是否依赖破音、变调、音效、语气这类只能听到的东西）,"uncertain":"没看清或不确定的地方"}',
+].join('\n');
+
+const CATCHUP_PROMPT = [
+  '下面是 QQ 群最近 24 小时的聊天记录，每行前面是匿名发言人编号。',
+  '找出群友在用、但不是常用词的网络梗、黑话、谐音梗或圈内说法，要至少两个不同的人用过或者反复出现。',
+  '只要公共网络梗：不要人名、群友外号、群内私事、普通词语、新闻事件、品牌或游戏名本身。',
+  '严格只输出 JSON：{"memes":[{"term":"梗原文","count":出现次数,"speakers":不同发言人数,"why":"一句话说明为什么像梗"}]}，最多 8 个，按出现次数排序；没有就返回空数组。',
+].join('\n');
+
+const BROWSE_PROMPT = [
+  '下面是 B 站最近发布的梗科普视频标题，带播放量。',
+  '挑出最值得学的、大众网络圈子都在用的梗：优先播放量高、跨圈子通用的；跳过只在单个游戏或小圈子里流传的、名场面合集、读评论、纯搞笑段子和直播回放。',
+  '每个梗写出梗名本身（去掉“梗百科”“是什么梗”这类前后缀），同一个梗只写一次。',
+  '严格只输出 JSON：{"memes":[{"term":"梗名","bvid":"对应视频的 BV 号","why":"一句话说明为什么值得学"}]}，最多 6 个，按值得学的程度排序；没有合适的就返回空数组。',
+].join('\n');
+const BROWSE_KEYWORDS = Object.freeze(['梗百科', '是什么梗', '梗知识']);
+
+const MERGE_PROMPT = [
+  '你是网络梗考据员。下面是同一个梗相关的 B 站视频逐段观察记录和视频信息。',
+  '判断这些材料能不能解释用户问的梗。视频必须是在讲这个词本身；只是字面相近、谐音相近或讲的是另一个梗，就 found=false。看完仍说不清也 found=false，不要硬凑。',
+  '出处只写视频里能确认的；弹幕、标题、评论只是线索。声音相关的笑点如果只有字幕或转写、没有确认声音本身，sound_unconfirmed=true。',
+  '严格只输出 JSON：{"found":true或false,"term":"规范梗名","aliases":["别名或常见变体"],"meaning":"一两句话说清梗义","origin":"能确认的出处，不确定留空","mechanism":"笑点机制（反差、谐音、错位、变调、重复、转折等）","usage":["常见接法或用法"],"avoid":"不适用的场景","confidence":"high|medium|low","sound_unconfirmed":true或false,"unconfirmed":"仍待核实的部分"}',
+].join('\n');
+
+const DIRECT_MERGE_PROMPT = [
+  '你是网络梗考据员。用户直接指定了一个 B 站视频，下面是这个视频的逐段观察记录和视频信息。',
+  '从视频里选出一个最值得学的梗、黑话、口头禅或名场面，term 写视频里实际出现的最短、可复用的原词或短语；如果视频没有明确可学的梗，found=false，不要硬凑。',
+  '出处只写视频里能确认的；标题、简介、弹幕和评论只是线索。声音相关的笑点如果只有字幕或转写、没有确认声音本身，sound_unconfirmed=true。',
+  '严格只输出 JSON：{"found":true或false,"term":"规范梗名","aliases":["别名或常见变体"],"meaning":"一两句话说清梗义","origin":"能确认的出处，不确定留空","mechanism":"笑点机制（反差、谐音、错位、变调、重复、转折等）","usage":["常见接法或用法"],"avoid":"不适用的场景","confidence":"high|medium|low","sound_unconfirmed":true或false,"unconfirmed":"仍待核实的部分"}',
+].join('\n');
+
+export function learningTopic(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/[?!.,。，、~～…]+$/u, '')
+    .replace(/(?:这个|那个|这)?(?:梗|词)?(?:是什么|是啥|什么意思|啥意思|的意思|的出处|出处|来源|怎么来的|含义)(?:梗)?[？?。!！]*$/u, '')
+    .replace(/(?:是什么梗|什么梗|啥梗)[？?。!！]*$/u, '')
+    .replace(/^(?:wiki|百科)\s+/iu, '')
+    .replace(/^(?:请问|问一下|你知道|知道|怎么就|怎么|为什么|为啥|啥叫|什么叫)/u, '')
+    .replace(/[\s"“”'‘’「」《》【】]+/gu, ' ')
+    .trim()
+    .slice(0, 60);
+}
+
+function topicKey(value) {
+  return learningTopic(value).toLowerCase().replace(/\s+/gu, '');
+}
+
+function directLinkKey(url, bvid) {
+  if (bvid) return `link:${bvid.toLowerCase()}`;
+  return `link:${createHash('sha256').update(String(url || '')).digest('hex').slice(0, 24)}`;
+}
+
+function startOfShanghaiDay(now) {
+  return Math.floor((now + SHANGHAI_OFFSET_MS) / 86_400_000) * 86_400_000 - SHANGHAI_OFFSET_MS;
+}
+
+function parseJson(value) {
+  const textValue = String(value ?? '').trim()
+    .replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '');
+  const start = textValue.indexOf('{');
+  const end = textValue.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(textValue.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function clean(value, limit = 500) {
+  return String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, limit);
+}
+
+function list(value, limit = 6) {
+  return (Array.isArray(value) ? value : []).map((item) => clean(item, 120)).filter(Boolean).slice(0, limit);
+}
+
+function formatSeconds(seconds) {
+  const value = Math.max(0, Math.floor(seconds));
+  return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+}
+
+function waiterKey(waiter = {}) {
+  return [waiter.chatType || '', waiter.groupId || '', waiter.userId || '', waiter.messageId || ''].join(':');
+}
+
+export function runCommand(command, args, { timeoutMs = 120_000, env } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { windowsHide: true, env: env ? { ...process.env, ...env } : process.env });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-4_000); });
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`${path.basename(command)} 超时（${timeoutMs}ms）`));
+    }, timeoutMs);
+    child.on('error', (error) => { clearTimeout(timer); reject(error); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout);
+      else reject(new Error(`${path.basename(command)} 退出码 ${code}：${stderr.trim().slice(-300)}`));
+    });
+  });
+}
+
+/**
+ * Finds unknown memes in direct questions, queues a learning task, watches
+ * B 站 videos in the background (1 fps frames, subtitles or local ASR, a
+ * vision model per segment), stores the result as long-term meme knowledge
+ * and queues a persona reply to every asker for the Bridge to deliver.
+ */
+export class VideoLearningCoordinator {
+  constructor(options = {}) {
+    this.store = options.store;
+    this.chatClient = options.chatClient;
+    this.memeKnowledge = options.memeKnowledge ?? null;
+    this.memeCorpus = options.memeCorpus ?? null;
+    this.personaPrompt = options.personaPrompt ?? (() => '');
+    this.cookieProvider = options.cookieProvider ?? null;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.ffmpegCommand = options.ffmpegCommand || 'ffmpeg';
+    this.asr = options.asr ?? null; // { command, args: [script], env }
+    this.runCommand = options.runCommand ?? runCommand;
+    this.resolveMedia = options.resolveMedia ?? ((url) => resolveBilibiliMedia(url, {
+      fetchImpl: this.fetchImpl,
+      bilibiliCookieProvider: this.cookieProvider,
+      timeoutMs: 15_000,
+    }));
+    this.limits = { ...VIDEO_LEARNING_LIMITS, ...(options.limits ?? {}) };
+    this.logger = options.logger ?? console;
+    this.now = options.now ?? Date.now;
+    this.groupMemory = options.groupMemory ?? null;
+    this.running = false;
+    this.timer = null;
+    this.catchupRunning = false;
+  }
+
+  start(intervalMs = 15_000) {
+    const recovered = this.store.requeueInterrupted();
+    if (recovered) this.logger.log?.(`视频学梗：恢复 ${recovered} 个中断任务`);
+    this.timer = setInterval(() => { void this.tick(); }, intervalMs);
+    this.timer.unref?.();
+    void this.tick();
+  }
+
+  stop() {
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  knowledgeFor(topic) {
+    const key = topicKey(topic);
+    if (!key) return null;
+    const task = this.store.findLatestTask(key, 'completed');
+    return task?.result?.found ? task.result.entry : null;
+  }
+
+  corpusKnows(topic) {
+    if (!this.memeCorpus?.search) return false;
+    const key = topicKey(topic);
+    try {
+      return this.memeCorpus.search(topic, { corpora: ['memewiki', 'cheer_terms', 'vbar'], limit: 6 })
+        .some((row) => {
+          const terms = String(row.terms ?? '').toLowerCase().replace(/\s+/gu, '');
+          return terms.length >= 2 && (terms === key || (key.length >= 3 && terms.includes(key)));
+        });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Called from a direct reply before the model answers. Returns null to
+   * answer normally, { action: 'use', entry } to answer from earlier learning,
+   * or { action: 'remind' | 'silent' } once a task has been queued.
+   */
+  gate({
+    term,
+    question = '',
+    evidenceQuality = 'none',
+    waiter = {},
+    preferredUrl = '',
+    preferredBvid = '',
+    directLink = false,
+  } = {}) {
+    if (directLink) {
+      return this.queueDirectLink({ question, waiter, preferredUrl, preferredBvid });
+    }
+    const topic = learningTopic(term);
+    const key = topicKey(topic);
+    if (!key || key.length < 2) return null;
+    const learned = this.knowledgeFor(topic);
+    if (learned) return { action: 'use', entry: learned };
+    if (KNOWN_EVIDENCE.has(evidenceQuality) || this.corpusKnows(topic)) return null;
+    const now = this.now();
+    if (this.store.findLatestTask(key, 'failed', now - this.limits.failureCooldownMs)) return null;
+    const active = this.store.findActiveTask(key);
+    if (!active) {
+      const dayStart = startOfShanghaiDay(now);
+      if (this.store.countTasksSince(dayStart) >= this.limits.dailyTasks
+        || this.store.materialSecondsSince(dayStart) >= this.limits.dailyMaterialSeconds) return null;
+    }
+    const entry = { ...waiter, question: clean(question, 400), key: waiterKey(waiter) };
+    const { task, joined } = this.store.createOrJoinTask({
+      topicKey: key,
+      topic,
+      groupId: waiter.groupId,
+      userId: waiter.userId,
+      messageId: waiter.messageId,
+      conversationId: waiter.conversationId,
+      question,
+      metadata: { waiters: [] },
+    });
+    const waiters = Array.isArray(task.metadata?.waiters) ? task.metadata.waiters : [];
+    const sameChat = waiters.some((item) => item.chatType === waiter.chatType
+      && item.groupId === waiter.groupId && (waiter.chatType === 'group' || item.userId === waiter.userId));
+    if (!waiters.some((item) => item.key === entry.key)) {
+      this.store.updateTask(task.taskKey, { metadata: { ...task.metadata, waiters: [...waiters, entry] } });
+    }
+    this.logger.log?.(`视频学梗：${joined ? '加入' : '新建'}任务 topic=${topic} task=${task.taskKey}`);
+    void this.tick();
+    return { action: joined && sameChat ? 'silent' : 'remind', taskKey: task.taskKey, topic };
+  }
+
+  queueDirectLink({ question = '', waiter = {}, preferredUrl = '', preferredBvid = '' } = {}) {
+    const url = String(preferredUrl ?? '').trim();
+    const bvid = /^BV[0-9A-Za-z]{10}$/u.test(String(preferredBvid ?? ''))
+      ? String(preferredBvid) : '';
+    if (!url && !bvid) return null;
+    const key = directLinkKey(url, bvid);
+    const now = this.now();
+    if (this.store.findLatestTask(key, 'failed', now - this.limits.failureCooldownMs)) return null;
+    const active = this.store.findActiveTask(key);
+    if (!active) {
+      const dayStart = startOfShanghaiDay(now);
+      if (this.store.countTasksSince(dayStart) >= this.limits.dailyTasks
+        || this.store.materialSecondsSince(dayStart) >= this.limits.dailyMaterialSeconds) return null;
+    }
+    const topic = bvid ? `B 站视频 ${bvid}` : 'B 站视频';
+    const entry = { ...waiter, question: clean(question, 400), key: waiterKey(waiter) };
+    const { task, joined } = this.store.createOrJoinTask({
+      topicKey: key,
+      topic,
+      groupId: waiter.groupId,
+      userId: waiter.userId,
+      messageId: waiter.messageId,
+      conversationId: waiter.conversationId,
+      question,
+      metadata: {
+        waiters: [],
+        directLink: true,
+        topicExplicit: false,
+        preferredUrl: url,
+        preferredBvid: bvid,
+      },
+    });
+    const waiters = Array.isArray(task.metadata?.waiters) ? task.metadata.waiters : [];
+    const sameChat = waiters.some((item) => item.chatType === waiter.chatType
+      && item.groupId === waiter.groupId && (waiter.chatType === 'group' || item.userId === waiter.userId));
+    if (!waiters.some((item) => item.key === entry.key)) {
+      this.store.updateTask(task.taskKey, { metadata: { ...task.metadata, waiters: [...waiters, entry] } });
+    }
+    this.logger.log?.(`视频学梗：${joined ? '加入' : '新建'}指定链接任务 bvid=${bvid || '-'} task=${task.taskKey}`);
+    void this.tick();
+    return {
+      action: joined && sameChat ? 'silent' : 'remind',
+      taskKey: task.taskKey,
+      topic,
+      directLink: true,
+      topicExplicit: false,
+    };
+  }
+
+  // Beijing-time day key for the catch-up run that is due now, or '' if none.
+  catchupDue(now = this.now()) {
+    const hour = new Date(now + SHANGHAI_OFFSET_MS).getUTCHours();
+    if (hour < this.limits.catchupHour) return '';
+    const day = new Date(startOfShanghaiDay(now) + SHANGHAI_OFFSET_MS).toISOString().slice(0, 10);
+    return this.store.getCatchupRun(day) ? '' : day;
+  }
+
+  recentGroupText(since) {
+    const db = this.groupMemory?.ensureOpen?.();
+    if (!db) return '';
+    const rows = db.prepare(`
+      SELECT user_id AS userId, text FROM qq_group_events
+      WHERE author_type = 'human' AND kind = 'text' AND created_at >= ?
+        AND length(text) BETWEEN 2 AND 200 AND text NOT LIKE '/%'
+      ORDER BY id DESC LIMIT 1500
+    `).all(since).reverse();
+    const speakers = new Map();
+    const lines = rows.map((row) => {
+      if (!speakers.has(row.userId)) speakers.set(row.userId, `u${speakers.size + 1}`);
+      return `${speakers.get(row.userId)}：${clean(row.text, 200)}`;
+    });
+    return lines.join('\n').slice(-20_000);
+  }
+
+  async pickCatchupTopics(since) {
+    const chat = this.recentGroupText(since);
+    if (!chat) return { picked: [], candidates: [] };
+    const answer = await this.chatClient.complete([], chat, {
+      systemPrompt: CATCHUP_PROMPT,
+      maxTokens: 900,
+      temperature: 0.1,
+      timeoutMs: 90_000,
+      thinking: { type: 'disabled' },
+      usageSource: 'video-learning-catchup-pick',
+    });
+    const candidates = (Array.isArray(parseJson(answer)?.memes) ? parseJson(answer).memes : [])
+      .map((item) => ({ term: learningTopic(item?.term), count: Number(item?.count) || 0, speakers: Number(item?.speakers) || 0 }))
+      .filter((item) => topicKey(item.term).length >= 2 && (item.speakers >= 2 || item.count >= 3));
+    const picked = [];
+    for (const item of candidates) {
+      if (picked.length >= this.limits.dailyCatchupTasks) break;
+      const key = topicKey(item.term);
+      if (picked.some((other) => topicKey(other.term) === key)) continue;
+      if (this.knowledgeFor(item.term) || this.corpusKnows(item.term) || this.store.findActiveTask(key)) continue;
+      if (this.store.findLatestTask(key, 'failed', this.now() - this.limits.failureCooldownMs)) continue;
+      picked.push(item);
+    }
+    return { picked, candidates };
+  }
+
+  // Fallback when group chat has nothing: browse recent B 站 meme-explainer
+  // videos and pick widely used memes that are not known yet.
+  async browseCatchupTopics(limit) {
+    const headers = await this.bilibiliHeaders();
+    const seen = new Set();
+    const videos = [];
+    for (const keyword of BROWSE_KEYWORDS) {
+      try {
+        const url = await this.wbiUrl('https://api.bilibili.com/x/web-interface/wbi/search/type', {
+          search_type: 'video', keyword, order: 'pubdate', page: 1,
+        }, headers);
+        for (const row of (await this.getJson(url, headers))?.data?.result ?? []) {
+          const bvid = String(row.bvid ?? '');
+          if (!/^BV[0-9A-Za-z]{10}$/u.test(bvid) || seen.has(bvid)) continue;
+          seen.add(bvid);
+          videos.push({ bvid, title: String(row.title ?? '').replace(/<[^>]+>/gu, ''), play: Number(row.play) || 0 });
+        }
+      } catch (error) {
+        this.logger.warn?.(`视频学梗补课：B 站梗百科搜索失败 ${keyword}：${error.message}`);
+      }
+    }
+    if (!videos.length) return [];
+    videos.sort((left, right) => right.play - left.play);
+    const answer = await this.chatClient.complete([], videos.slice(0, 40)
+      .map((video) => `${video.bvid}｜播放 ${video.play}｜${clean(video.title, 80)}`).join('\n'), {
+      systemPrompt: BROWSE_PROMPT,
+      maxTokens: 700,
+      temperature: 0.1,
+      timeoutMs: 90_000,
+      thinking: { type: 'disabled' },
+      usageSource: 'video-learning-catchup-browse',
+    });
+    const picked = [];
+    for (const item of Array.isArray(parseJson(answer)?.memes) ? parseJson(answer).memes : []) {
+      if (picked.length >= limit) break;
+      const term = learningTopic(item?.term);
+      const key = topicKey(term);
+      if (key.length < 2 || picked.some((other) => topicKey(other.term) === key)) continue;
+      if (this.knowledgeFor(term) || this.corpusKnows(term) || this.store.findActiveTask(key)) continue;
+      if (this.store.findLatestTask(key, 'failed', this.now() - this.limits.failureCooldownMs)) continue;
+      const video = videos.find((row) => row.bvid === String(item?.bvid ?? ''));
+      picked.push({ term, source: 'bilibili', bvid: video?.bvid || '', play: video?.play || 0 });
+    }
+    return picked;
+  }
+
+  /**
+   * Daily catch-up (plan §5): after 03:00 Beijing time, learn up to 3 public
+   * memes that recurred in group chat over the last 24 hours and are not yet
+   * known, within 10 minutes of material. Results only go to the meme store
+   * and the admin daily report; nothing is posted to groups.
+   */
+  async runCatchup(day = this.catchupDue()) {
+    if (!day || this.catchupRunning) return null;
+    this.catchupRunning = true;
+    const started = this.now();
+    const run = { day, startedAt: started, items: [], candidates: [] };
+    try {
+      this.store.saveCatchupRun(day, { ...run, status: 'running' });
+      const { picked, candidates } = await this.pickCatchupTopics(started - 24 * 60 * 60 * 1000);
+      run.candidates = candidates.map((item) => item.term).slice(0, 8);
+      picked.forEach((item) => { item.source = 'group'; });
+      if (picked.length < this.limits.dailyCatchupTasks) {
+        picked.push(...await this.browseCatchupTopics(this.limits.dailyCatchupTasks - picked.length));
+      }
+      let seconds = 0;
+      for (const item of picked) {
+        const remaining = this.limits.dailyCatchupSeconds - seconds;
+        if (remaining < 20) break;
+        const dayStart = startOfShanghaiDay(this.now());
+        if (this.store.materialSecondsSince(dayStart) >= this.limits.dailyMaterialSeconds) break;
+        const { task } = this.store.createOrJoinTask({
+          topicKey: topicKey(item.term),
+          topic: item.term,
+          question: `${item.term}是什么梗`,
+          metadata: {
+            waiters: [],
+            catchup: day,
+            materialLimitSeconds: Math.min(this.limits.taskMaterialSeconds, remaining),
+            // The explainer that surfaced the meme is watched first.
+            preferredBvid: item.bvid || '',
+          },
+        });
+        await this.processTask(task);
+        const done = this.store.getTask(task.taskKey);
+        seconds += Number(done?.result?.materialSeconds) || 0;
+        run.items.push({
+          term: item.term,
+          source: item.source,
+          status: done?.status === 'completed' ? 'learned' : 'failed',
+          meaning: clean(done?.result?.entry?.meaning, 120),
+          error: clean(done?.error, 80),
+          seconds: Number(done?.result?.materialSeconds) || 0,
+          elapsedMs: Number(done?.result?.elapsedMs) || 0,
+        });
+      }
+      run.status = 'done';
+    } catch (error) {
+      run.status = 'failed';
+      run.error = clean(error.message, 200);
+      this.logger.warn?.(`视频学梗补课失败：${error.message}`);
+    } finally {
+      run.elapsedMs = this.now() - started;
+      this.store.saveCatchupRun(day, run);
+      this.catchupRunning = false;
+    }
+    this.logger.log?.(`视频学梗补课：${day} 学会 ${run.items.filter((item) => item.status === 'learned').length}/${run.items.length}，候选 ${run.candidates.length}`);
+    return run;
+  }
+
+  // Latest finished catch-up run within the report window, for the daily report.
+  catchupReport(startAt, endAt) {
+    const run = this.store.latestCatchupRun();
+    if (!run || run.startedAt < startAt || run.startedAt >= endAt) return null;
+    return run;
+  }
+
+  async tick() {
+    if (this.running) return;
+    this.running = true;
+    try {
+      for (let task = this.store.nextQueuedTask(); task; task = this.store.nextQueuedTask()) {
+        await this.processTask(task);
+      }
+      // On-demand learning goes first; catch-up runs once the queue is empty.
+      if (this.catchupDue()) await this.runCatchup();
+    } catch (error) {
+      this.logger.warn?.(`视频学梗调度失败：${error.message}`);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  async processTask(task) {
+    // Catch-up tasks have nobody waiting, so they are not held to the wait limit.
+    const catchup = Boolean(task.metadata?.catchup);
+    const budget = { modelCalls: 0, deadline: (catchup ? this.now() : task.createdAt) + this.limits.waitMs };
+    const materialLimit = Number(task.metadata?.materialLimitSeconds) || this.limits.taskMaterialSeconds;
+    const started = this.now();
+    let workDir = '';
+    try {
+      if (this.now() > budget.deadline) throw new Error('排队超过等待上限');
+      this.store.updateTask(task.taskKey, { status: 'searching' });
+      const preferred = String(task.metadata?.preferredBvid ?? '');
+      const preferredUrl = String(task.metadata?.preferredUrl ?? '');
+      let candidates;
+      if (task.metadata?.directLink) {
+        if (!preferredUrl && !preferred) throw new Error('指定视频链接无效');
+        candidates = [{
+          bvid: preferred,
+          url: preferredUrl,
+          title: '',
+          description: '',
+          duration: 0,
+        }];
+      } else {
+        let found = [];
+        try {
+          found = await this.searchVideos(task.topic);
+        } catch (error) {
+          if (!preferred) throw error;
+          this.logger.warn?.(`视频学梗：搜索失败，继续看指定视频：${error.message}`);
+        }
+        candidates = preferred
+          ? [{ bvid: preferred, title: '', description: '', duration: 0 }, ...found.filter((row) => row.bvid !== preferred)]
+          : found;
+      }
+      if (!candidates.length) throw new Error('B 站没有搜到相关视频');
+      workDir = await mkdtemp(path.join(os.tmpdir(), 'video-learning-'));
+      this.store.updateTask(task.taskKey, { status: 'watching' });
+      const watched = [];
+      let material = 0;
+      for (const candidate of candidates.slice(0, this.limits.maxSources)) {
+        const remaining = materialLimit - material;
+        if (remaining < 10 || budget.modelCalls >= this.limits.maxModelCalls - 2) break;
+        if (this.now() > budget.deadline) break;
+        try {
+          const result = await this.watchVideo(task, candidate, remaining, budget, workDir);
+          if (result) {
+            watched.push(result);
+            material += result.seconds;
+          }
+        } catch (error) {
+          this.logger.warn?.(`视频学梗：${candidate.bvid} 观看失败：${error.message}`);
+        }
+      }
+      if (!watched.length) throw new Error('相关视频都没能看成');
+      this.store.updateTask(task.taskKey, { status: 'reviewing' });
+      const merged = await this.mergeKnowledge(task, watched, budget);
+      // A video that never says the term is about something else, however
+      // similar it looks; such a result must not become meme knowledge.
+      const groundingTopic = task.metadata?.directLink ? (merged?.term || '') : task.topic;
+      const grounded = task.metadata?.directLink
+        ? Boolean(groundingTopic)
+        : this.mentionsTopic(groundingTopic, watched);
+      const entry = merged?.found && grounded ? this.toEntry(task, merged, watched) : null;
+      if (entry && merged.confidence === 'high') {
+        try {
+          this.memeKnowledge?.put?.(entry, { ttlMs: KNOWLEDGE_TTL_MS });
+        } catch (error) {
+          this.logger.warn?.(`视频学梗：写入梗库失败：${error.message}`);
+        }
+      }
+      const result = {
+        found: Boolean(entry),
+        entry,
+        merged,
+        materialSeconds: material,
+        sources: watched.map((item) => ({ bvid: item.bvid, title: item.title, seconds: item.seconds, transcript: item.transcriptSource })),
+        modelCalls: budget.modelCalls,
+        elapsedMs: this.now() - started,
+      };
+      this.store.updateTask(task.taskKey, {
+        status: entry ? 'completed' : 'failed',
+        result,
+        error: entry ? '' : (task.metadata?.directLink
+          ? '看完仍没确认这个梗'
+          : (merged?.found && !grounded ? '视频里没出现这个词' : '看完仍没确认这个梗')),
+      });
+      await this.notifyWaiters(this.store.getTask(task.taskKey), entry ? 'result' : 'failure', entry);
+      this.logger.log?.(`视频学梗：${entry ? '完成' : '未确认'} topic=${task.topic} sources=${watched.length} seconds=${material} calls=${budget.modelCalls}`);
+    } catch (error) {
+      this.logger.warn?.(`视频学梗：任务失败 topic=${task.topic}：${error.message}`);
+      this.store.updateTask(task.taskKey, { status: 'failed', error: error.message });
+      await this.notifyWaiters(this.store.getTask(task.taskKey), 'failure', null);
+    } finally {
+      if (workDir) await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  async bilibiliHeaders(extra = {}) {
+    let cookie = '';
+    try {
+      cookie = String(await this.cookieProvider?.() || '').trim();
+    } catch {
+      cookie = '';
+    }
+    return { 'user-agent': SEARCH_UA, referer: 'https://www.bilibili.com/', ...(cookie ? { cookie } : {}), ...extra };
+  }
+
+  async getJson(url, headers) {
+    const response = await this.fetchImpl(url, { headers, signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    if (Number(payload?.code ?? 0) !== 0) throw new Error(`B 站返回 ${payload?.code} ${payload?.message || ''}`.trim());
+    return payload;
+  }
+
+  async wbiUrl(base, params, headers) {
+    const nav = await this.fetchImpl('https://api.bilibili.com/x/web-interface/nav', { headers, signal: AbortSignal.timeout(10_000) })
+      .then((response) => response.json());
+    const images = nav?.data?.wbi_img;
+    if (!images?.img_url || !images?.sub_url) throw new Error('B 站未返回 WBI 参数');
+    const url = new URL(base);
+    for (const [key, value] of Object.entries(buildBilibiliWbiParams(params, images.img_url, images.sub_url))) {
+      url.searchParams.set(key, value);
+    }
+    return url.href;
+  }
+
+  async searchVideos(topic) {
+    const headers = await this.bilibiliHeaders();
+    const url = await this.wbiUrl('https://api.bilibili.com/x/web-interface/wbi/search/type', {
+      search_type: 'video', keyword: `${topic} 梗`, page: 1,
+    }, headers);
+    const payload = await this.getJson(url, headers);
+    const durationSeconds = (value) => String(value ?? '').split(':').reduce((sum, part) => sum * 60 + (Number(part) || 0), 0);
+    return (payload?.data?.result ?? [])
+      .map((row) => ({
+        bvid: String(row.bvid ?? ''),
+        title: String(row.title ?? '').replace(/<[^>]+>/gu, ''),
+        description: clean(row.description, 300),
+        duration: durationSeconds(row.duration),
+      }))
+      .filter((row) => /^BV[0-9A-Za-z]{10}$/u.test(row.bvid) && row.duration > 0)
+      .slice(0, 8);
+  }
+
+  async fetchSubtitles(bvid, cid) {
+    try {
+      const headers = await this.bilibiliHeaders();
+      const url = await this.wbiUrl('https://api.bilibili.com/x/player/wbi/v2', { bvid, cid }, headers);
+      const tracks = (await this.getJson(url, headers))?.data?.subtitle?.subtitles ?? [];
+      const track = tracks.find((item) => /zh/iu.test(String(item.lan ?? ''))) ?? tracks[0];
+      if (!track?.subtitle_url) return [];
+      const subtitleUrl = String(track.subtitle_url).replace(/^\/\//u, 'https://');
+      const body = await this.fetchImpl(subtitleUrl, { headers, signal: AbortSignal.timeout(10_000) }).then((response) => response.json());
+      return (body?.body ?? []).map((line) => ({
+        start: Number(line.from) || 0,
+        end: Number(line.to) || 0,
+        text: clean(line.content, 200),
+      })).filter((line) => line.text);
+    } catch (error) {
+      this.logger.warn?.(`视频学梗：字幕读取失败 ${bvid}：${error.message}`);
+      return [];
+    }
+  }
+
+  async transcribe(audioPath, timeoutMs) {
+    if (!this.asr?.command) return [];
+    try {
+      const output = await this.runCommand(this.asr.command, [...(this.asr.args ?? []), audioPath], {
+        timeoutMs: Math.max(30_000, timeoutMs),
+        env: this.asr.env,
+      });
+      const rows = JSON.parse(output);
+      return (Array.isArray(rows) ? rows : []).map((row) => ({
+        start: Number(row.start) || 0,
+        end: Number(row.end) || 0,
+        text: clean(row.text, 200),
+      })).filter((row) => row.text);
+    } catch (error) {
+      this.logger.warn?.(`视频学梗：语音识别失败：${error.message}`);
+      return [];
+    }
+  }
+
+  async watchVideo(task, candidate, maxSeconds, budget, workDir) {
+    const sourceUrl = candidate.url || `https://www.bilibili.com/video/${candidate.bvid}`;
+    const media = await this.resolveMedia(sourceUrl);
+    const sourceKey = [media.bvid || candidate.bvid, media.cid, media.page || 1].join(':');
+    // ffmpeg stops at the end of the stream, so an unknown length is safe.
+    const duration = Number(media.duration) || candidate.duration || maxSeconds;
+    const seconds = Math.max(1, Math.min(duration, maxSeconds));
+    const directoryName = String(media.bvid || candidate.bvid || 'source').replace(/[^0-9A-Za-z_-]/gu, '') || 'source';
+    const dir = path.join(workDir, directoryName);
+    await mkdir(dir, { recursive: true });
+    const headerText = Object.entries(media.requestHeaders ?? {}).map(([key, value]) => `${key}: ${value}\r\n`).join('');
+    await this.runCommand(this.ffmpegCommand, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      ...(headerText ? ['-headers', headerText] : []),
+      '-t', String(seconds), '-i', media.mediaUrl,
+      '-map', '0:v:0', '-vf', `fps=1,scale=320:-2,tile=3x${this.limits.tileSeconds / 3}`, '-q:v', '5',
+      path.join(dir, 'tile_%03d.jpg'),
+      '-map', '0:a:0?', '-ac', '1', '-ar', '16000', path.join(dir, 'audio.wav'),
+    ], { timeoutMs: 180_000 });
+    const tiles = (await readdir(dir)).filter((name) => name.startsWith('tile_')).sort();
+    let transcript = await this.fetchSubtitles(media.bvid || candidate.bvid, media.cid);
+    let transcriptSource = transcript.length ? 'subtitle' : 'none';
+    if (!transcript.length) {
+      transcript = await this.transcribe(path.join(dir, 'audio.wav'), budget.deadline - this.now());
+      if (transcript.length) transcriptSource = 'asr';
+    }
+    this.store.rememberSource({
+      sourceKey,
+      bvid: media.bvid || candidate.bvid,
+      cid: media.cid,
+      page: media.page || 1,
+      url: media.sourceUrl,
+      title: media.title || candidate.title,
+      durationSeconds: duration,
+      metadata: { transcriptSource, analyzedSeconds: seconds },
+    });
+    const observations = [];
+    const tilesPerSegment = Math.max(1, Math.round(this.limits.segmentSeconds / this.limits.tileSeconds));
+    for (let index = 0; index < tiles.length; index += tilesPerSegment) {
+      if (budget.modelCalls >= this.limits.maxModelCalls - 2 || this.now() > budget.deadline) break;
+      const start = index * this.limits.tileSeconds;
+      const end = Math.min(seconds, start + tilesPerSegment * this.limits.tileSeconds);
+      const lines = transcript.filter((line) => line.end >= start && line.start < end)
+        .map((line) => `[${formatSeconds(line.start)}] ${line.text}`);
+      const blocks = [{
+        type: 'text',
+        text: [
+          task.metadata?.directLink
+            ? '任务：从这个视频里找出最值得学的网络梗，并说明它怎么成立。'
+            : `要弄懂的梗：${task.topic}`,
+          `视频：${media.title || candidate.title}（${media.bvid || candidate.bvid}）`,
+          media.description ? `简介：${clean(media.description, 300)}` : '',
+          task.metadata?.directLink && task.question ? `用户原话：${clean(task.question, 200)}` : '',
+          `本段：${formatSeconds(start)}-${formatSeconds(end)}`,
+          lines.length
+            ? `${transcriptSource === 'asr' ? '语音转写（可能有错字）' : 'B 站字幕'}：\n${lines.join('\n')}`
+            : '本段没有字幕或语音转写。',
+        ].filter(Boolean).join('\n'),
+      }];
+      for (const [offset, tile] of tiles.slice(index, index + tilesPerSegment).entries()) {
+        const tileStart = start + offset * this.limits.tileSeconds;
+        const image = await readFile(path.join(dir, tile));
+        blocks.push({ type: 'text', text: `网格 ${formatSeconds(tileStart)}-${formatSeconds(tileStart + this.limits.tileSeconds)}` });
+        blocks.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image.toString('base64')}` } });
+      }
+      budget.modelCalls += 1;
+      const answer = await this.chatClient.complete([], blocks, {
+        systemPrompt: task.metadata?.directLink ? DIRECT_SEGMENT_PROMPT : SEGMENT_PROMPT,
+        maxTokens: 700,
+        temperature: 0.2,
+        timeoutMs: 90_000,
+        thinking: { type: 'disabled' },
+        usageSource: 'video-learning-watch',
+      }).catch((error) => {
+        this.logger.warn?.(`视频学梗：分段分析失败：${error.message}`);
+        return '';
+      });
+      const parsed = parseJson(answer);
+      if (!parsed) continue;
+      const evidence = {
+        events: clean(parsed.events, 600),
+        joke: clean(parsed.joke, 300),
+        keep: list(parsed.keep),
+        soundDependent: parsed.sound_dependent === true,
+        uncertain: clean(parsed.uncertain, 200),
+        transcript: lines.join(' ').slice(0, 800),
+      };
+      this.store.addObservation({ taskKey: task.taskKey, sourceKey, startSeconds: start, endSeconds: end, evidence });
+      observations.push({ start, end, ...evidence });
+    }
+    if (!observations.length) return null;
+    return {
+      bvid: media.bvid || candidate.bvid,
+      title: media.title || candidate.title,
+      description: clean(media.description, 300),
+      aiSummary: clean(media.aiSummary, 600),
+      url: media.sourceUrl,
+      seconds,
+      transcriptSource,
+      observations,
+    };
+  }
+
+  mentionsTopic(topic, watched) {
+    const key = topicKey(topic);
+    return watched.some((video) => [
+      video.title,
+      video.description,
+      video.aiSummary,
+      ...video.observations.map((item) => `${item.transcript} ${item.events}`),
+    ].join(' ').toLowerCase().replace(/\s+/gu, '').includes(key));
+  }
+
+  async mergeKnowledge(task, watched, budget) {
+    budget.modelCalls += 1;
+    const directLink = task.metadata?.directLink === true;
+    const material = watched.map((video, index) => [
+      `视频${index + 1}：${video.title}（${video.bvid}，看了 ${video.seconds} 秒，${video.transcriptSource === 'subtitle' ? '有字幕' : (video.transcriptSource === 'asr' ? '用语音转写' : '没有字幕和转写')}）`,
+      video.description ? `简介：${video.description}` : '',
+      video.aiSummary ? `B 站 AI 总结：${video.aiSummary}` : '',
+      ...video.observations.map((item) => [
+        `[${formatSeconds(item.start)}-${formatSeconds(item.end)}] ${item.events}`,
+        item.joke ? `  梗点：${item.joke}` : '',
+        item.keep.length ? `  必须保留：${item.keep.join('、')}` : '',
+        item.soundDependent ? '  （笑点依赖声音）' : '',
+        item.uncertain ? `  不确定：${item.uncertain}` : '',
+      ].filter(Boolean).join('\n')),
+    ].filter(Boolean).join('\n')).join('\n\n');
+    const answer = await this.chatClient.complete([], [
+      directLink ? '任务：从用户指定的视频里找出最值得学的网络梗。' : `用户问的梗：${task.topic}`,
+      task.question ? `用户原话：${task.question}` : '',
+      '',
+      material.slice(0, 12_000),
+    ].filter(Boolean).join('\n'), {
+      systemPrompt: directLink ? DIRECT_MERGE_PROMPT : MERGE_PROMPT,
+      maxTokens: 900,
+      temperature: 0.1,
+      timeoutMs: 90_000,
+      thinking: { type: 'disabled' },
+      usageSource: 'video-learning-merge',
+    });
+    const parsed = parseJson(answer);
+    if (!parsed) return null;
+    const soundDependent = watched.some((video) => video.observations.some((item) => item.soundDependent));
+    const noAudio = watched.every((video) => video.transcriptSource === 'none');
+    const term = clean(parsed.term, 60) || (directLink ? '' : task.topic);
+    return {
+      found: parsed.found === true && clean(parsed.meaning).length >= 4,
+      term,
+      aliases: list(parsed.aliases, 8),
+      meaning: clean(parsed.meaning, 300),
+      origin: clean(parsed.origin, 200),
+      mechanism: clean(parsed.mechanism, 200),
+      usage: list(parsed.usage, 5),
+      avoid: clean(parsed.avoid, 200),
+      confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low',
+      // ASR gives words, not pitch or sound effects.
+      soundUnconfirmed: parsed.sound_unconfirmed === true || soundDependent || noAudio,
+      unconfirmed: clean(parsed.unconfirmed, 200),
+    };
+  }
+
+  toEntry(task, merged, watched) {
+    if (merged.confidence === 'low') return null;
+    const meaning = [
+      merged.meaning,
+      merged.origin ? `出处：${merged.origin}` : '',
+      merged.mechanism ? `笑点：${merged.mechanism}` : '',
+      merged.soundUnconfirmed ? '（声音因素未确认）' : '',
+    ].filter(Boolean).join(' ');
+    const aliases = task.metadata?.directLink ? merged.aliases : [task.topic, ...merged.aliases];
+    return {
+      term: merged.term || task.topic,
+      aliases: [...new Set(aliases.filter((alias) => alias && alias !== merged.term))],
+      meaning: clean(meaning, 500),
+      usage: [...merged.usage, merged.avoid ? `不适用：${merged.avoid}` : ''].filter(Boolean),
+      sourceDomains: ['bilibili.com'],
+      sourceUrls: watched.map((video) => video.url).filter(Boolean),
+      confidence: 'high',
+      lookupSource: 'video',
+      verified: merged.confidence === 'high',
+      unconfirmed: merged.unconfirmed,
+    };
+  }
+
+  async notifyWaiters(task, kind, entry) {
+    const waiters = Array.isArray(task?.metadata?.waiters) ? task.metadata.waiters : [];
+    const topic = entry?.term || task?.topic || '这个视频';
+    for (const waiter of waiters) {
+      let textValue = '';
+      try {
+        textValue = await this.composeReply(task, waiter, entry);
+      } catch (error) {
+        this.logger.warn?.(`视频学梗：生成回复失败：${error.message}`);
+      }
+      if (!textValue) {
+        textValue = entry
+          ? `查到了：${topic}，${entry.meaning}`.slice(0, 300)
+          : `${topic} 我去看了一圈，还是没弄准，不瞎说了。`;
+      }
+      this.store.enqueueDelivery(task.taskKey, kind, {
+        waiterKey: waiter.key,
+        chatType: waiter.chatType,
+        groupId: waiter.groupId,
+        userId: waiter.userId,
+        messageId: waiter.messageId,
+        topic: task.topic,
+        text: textValue,
+      });
+    }
+  }
+
+  async composeReply(task, waiter, entry) {
+    const topic = entry?.term || task.topic;
+    const instruction = entry
+      ? [
+        '【本轮：查完梗回来回答】你之前说去 B 站看视频查这个梗，现在看完了，回到原问题。',
+        `梗：${topic}`,
+        `查到的：${entry.meaning}`,
+        entry.usage.length ? `用法：${entry.usage.slice(0, 3).join('；')}` : '',
+        entry.unconfirmed ? `还没确认的：${entry.unconfirmed}` : '',
+        `对方原话：${waiter.question || task.question}`,
+        '按你的人设直接回答原问题，1～3 句。不要说“根据视频”“我看了几个视频”之类的过程，不要贴链接；还没确认的部分直接略过，不要提核实、音频或“别当定论”。',
+      ]
+      : [
+        '【本轮：查梗没查到】你之前说去 B 站看视频查这个梗，结果没弄明白。',
+        `梗：${topic}`,
+        `对方原话：${waiter.question || task.question}`,
+        '按你的人设回一句，说这个梗暂时没整明白、不瞎编，8～40 字。不要猜梗义，不要反问。',
+      ];
+    const answer = await this.chatClient.complete([], instruction.filter(Boolean).join('\n'), {
+      prioritySystemPrompt: this.personaPrompt(waiter),
+      maxTokens: 300,
+      temperature: 0.8,
+      timeoutMs: 60_000,
+      thinking: { type: 'disabled' },
+      usageSource: 'video-learning-reply',
+    });
+    return clean(answer, 600);
+  }
+}

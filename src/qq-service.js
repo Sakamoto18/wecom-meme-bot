@@ -22,6 +22,7 @@ import {
   isExplicitEngagementEnd,
 } from './active-reply.js';
 import { RepeatDetector } from './repeat-detector.js';
+import { normalizeRecentGroupContext, recentGroupHistory, RECENT_GROUP_CONTEXT_PROMPT } from './recent-group-context.js';
 import { Jimp } from 'jimp';
 import { recognizeImageText } from './image-ocr.js';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -29,6 +30,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
+import { buildVideoLearningLinkRequest } from './video-learning-request.js';
 import { isRemovedError } from './media-removed.js';
 import { isMediaExtractionTimeoutError, isMediaTooLargeError } from './media-limits.js';
 import { crazyThursdayCalendarRejection } from './crazy-thursday-calendar.js';
@@ -1690,6 +1692,11 @@ export function normalizeQqPayload(payload) {
       || limitedImages.forwardImages.length > 0
       || limitedImages.quotedForwardImages.length > 0,
     pureBotMention: payload.pure_bot_mention === true,
+    recentGroupContext: normalizeRecentGroupContext(payload.recent_group_context, {
+      groupId: messageType === 'group' ? normalizeString(payload.group_id, MAX_IDENTIFIER_CHARACTERS) : '',
+      messageId: normalizeString(payload.message_id, MAX_IDENTIFIER_CHARACTERS),
+      botUserId: normalizeString(payload.bot_user_id, MAX_IDENTIFIER_CHARACTERS),
+    }),
     observeOnly: payload.observe_only === true && messageType === 'group',
     richSegments: Array.isArray(payload.rich_segments)
       ? payload.rich_segments.slice(0, 8)
@@ -2246,6 +2253,11 @@ export class QqBotService {
     this.webSearchEnabled = options.webSearchEnabled ?? true;
     this.cultureCache = options.cultureCache ?? null;
     this.memeKnowledge = options.memeKnowledge ?? null;
+    // Durable video-learning tasks are kept separate from reply history and
+    // short-lived culture cache. The worker integration can advance tasks
+    // without making an ordinary message wait on browser work.
+    this.videoLearningStore = options.videoLearningStore ?? null;
+    this.videoLearning = options.videoLearning ?? null;
     this.memeCorpus = options.memeCorpus ?? null;
     this.abstractAssociationFeedback = new Map();
     this.abstractAssociationFeedbackTtlMs = Math.max(
@@ -3679,7 +3691,12 @@ export class QqBotService {
       const hasTopicContext = message.chattype === 'group'
         && options.topicContext
         && Array.isArray(options.topicContext.history);
-      const topicHistory = hasTopicContext ? options.topicContext.history : null;
+      const readGroupContext = message.chattype === 'group'
+        && options.directBotMention === true && !message.quote;
+      const recalledHistory = readGroupContext ? recentGroupHistory(options.recentGroupContext) : [];
+      const topicHistory = readGroupContext && options.recentGroupContext?.available
+        && options.topicContext?.status !== 'matched'
+        ? recalledHistory : (hasTopicContext ? options.topicContext.history : null);
       let history = sanitizeConversationHistory(
         resetPrivateHistory
           ? []
@@ -3696,7 +3713,7 @@ export class QqBotService {
         history = scopeReplyHistory(history, interactionContext, {
           // Images and direct @/active turns are the cases where an unrelated
           // member's old answer most often becomes a false visual premise.
-          enabled: message.chattype === 'group'
+          enabled: message.chattype === 'group' && !readGroupContext
             && (Array.isArray(options.imageBlocks) && options.imageBlocks.length > 0
               || options.directBotMention === true
               || options.activeReply === true),
@@ -3709,7 +3726,8 @@ export class QqBotService {
       // Keep same-speaker follow-ups, but require an explicit image reference
       // before crossing speakers. This prevents “上一个人发了图，下一个人随口
       // 说两个字” from becoming “这糊图配上……”, while still allowing “刚才那张图”.
-      const historicalContextImageCandidates = this.contextImageCandidatesForTurn(
+      const historicalContextImageCandidates = readGroupContext && options.recentGroupImageBlocks?.length
+        ? [] : this.contextImageCandidatesForTurn(
         conversationId,
         {
           candidates: Array.isArray(options.contextImageCandidates)
@@ -3891,7 +3909,8 @@ export class QqBotService {
         { type: 'text', text: `上下文历史图片 ${entry.candidateIndex}（${entry.label}）` },
         entry.block,
       ]);
-      if (historicalContextImageBlocks.length > 0) hasImageContext = true;
+      const recalledImageBlocks = readGroupContext ? options.recentGroupImageBlocks ?? [] : [];
+      if (historicalContextImageBlocks.length > 0 || recalledImageBlocks.length > 0) hasImageContext = true;
       // A follow-up may contain no new pixels but still explicitly refer to a
       // recently selected image. Reuse its short visual summary as search
       // evidence; otherwise the image reaches DeepSeek but silently skips the
@@ -4016,6 +4035,7 @@ export class QqBotService {
       const replyImageBlocks = imageAnalysisSucceeded && !preserveRawImageForInterpretation
         ? [] : imageBlocks;
       const mergedReplyImageBlocks = [
+        ...recalledImageBlocks,
         ...historicalContextImageBlocks,
         ...replyImageBlocks,
       ];
@@ -4058,9 +4078,31 @@ export class QqBotService {
       let modelInput = [historicalContextImageText, imageRoleBoundary, imageAnalysisContext, baseModelInput]
         .filter(Boolean)
         .join('\n\n');
+      // Only a question put to the bot (private chat or a direct @) may start
+      // background learning; overheard group chatter never does.
+      const forcedLinkLearning = options.videoLearningRequest?.directLink === true;
+      const learningWaiter = this.videoLearning && (!recordSummary || forcedLinkLearning)
+        && (forcedLinkLearning || (!options.activeReply && !options.passiveImageComment))
+        && (forcedLinkLearning || message.chattype === 'single' || options.directBotMention === true)
+        ? {
+          chatType: message.chattype === 'group' ? 'group' : 'private',
+          groupId: message.chattype === 'group' ? String(message.chatid ?? '') : '',
+          userId: String(message.from?.userid ?? ''),
+          messageId: String(message.msgid ?? ''),
+          conversationId,
+        }
+        : null;
       const generateReply = (input, blocks) => generateConversationReply({
         content,
         roleplayImmersion: this.roleplayImmersion,
+        videoLearningGate: learningWaiter
+          ? (info) => this.videoLearning.gate({
+            ...info,
+            ...(forcedLinkLearning ? options.videoLearningRequest : {}),
+            waiter: learningWaiter,
+          })
+          : null,
+        videoLearningRequest: options.videoLearningRequest ?? null,
         currentQuestion: imageQuestion,
         modelInput: input,
         imageBlocks: blocks,
@@ -4153,7 +4195,10 @@ export class QqBotService {
             model: this.chatClient.model,
           })
           : undefined,
-        groupTopicPrompt: options.topicContext?.prompt ?? '',
+        groupTopicPrompt: [
+          options.topicContext?.prompt,
+          readGroupContext ? RECENT_GROUP_CONTEXT_PROMPT : '',
+        ].filter(Boolean).join('\n\n'),
         groupStyleProvider: message.chattype === 'group' && this.groupMemory?.isStyleEnabled?.(message.chatid)
           ? (mode) => {
             try {
@@ -4262,6 +4307,21 @@ export class QqBotService {
         );
       }
 
+      if (generated.mode === 'learning-pending') {
+        this.logger.log(`QQ 对话回复模式：learning-pending，task=${generated.learningTaskKey || '-'}，reminder=${generated.answer ? 'yes' : 'no'}`);
+        if (generated.answer) {
+          this.conversationStore.appendExchange(
+            conversationId,
+            buildStoredUserTurn(content, imageAnalysis, message, aliases),
+            buildStoredAssistantReply(message, interactionContext, generated.answer),
+          );
+        }
+        return {
+          mode: 'learning-pending',
+          learningPending: true,
+          messages: generated.answer ? [{ type: 'text', text: generated.answer }] : [],
+        };
+      }
       const answer = generated.answer;
       this.rememberAbstractAssociationFeedback(
         conversationId,
@@ -5655,11 +5715,28 @@ export class QqBotService {
     ) {
       return { mode: 'media-excluded', messages: [] };
     }
+    const directLearningCandidates = payload.observeOnly
+      ? []
+      : mediaCandidates({
+        text: [
+          payload.text,
+          payload.forwardedText,
+          payload.quotedText,
+          payload.quotedForwardedText,
+        ].filter(Boolean).join('\n'),
+        richSegments: payload.richSegments,
+      }).filter((candidate) => candidate.provider === 'bilibili'
+        && (!allowedProviders || allowedProviders.has('bilibili')));
+    const directLearningRequest = this.videoLearning && !mediaExcluded
+      && (payload.messageType === 'private' || this.isDirectHumanEngagementTrigger(payload))
+      ? buildVideoLearningLinkRequest({ text: payload.text, candidates: directLearningCandidates })
+      : null;
     if (
       payload.mediaShare
       && supportedCandidates.length > 0
       && !payload.observeOnly
       && !mediaExcluded
+      && !directLearningRequest
     ) {
       if (!this.mediaResolver?.enabled) {
         return { mode: 'media-disabled', messages: [] };
@@ -6008,6 +6085,19 @@ export class QqBotService {
     }
 
     const preparedImages = await prepareImageBlocks(payload, this.logger);
+    const recall = this.isDirectHumanMentionTrigger(payload) && !message.quote
+      ? payload.recentGroupContext : { messages: [], images: [] };
+    const recentImages = preparedImages.blocks.length === 0
+      ? await prepareImageBlocks({ imageBase64s: recall.images.map(image => image.base64) }, this.logger)
+      : { blocks: [] };
+    const recentGroupImageBlocks = recentImages.blocks.map(block => block.type !== 'text' ? block : {
+      ...block,
+      text: block.text.replace(/当前消息图片 (\d+)/gu, (_match, index) => {
+        const image = recall.images[Number(index) - 1];
+        const source = recall.messages.find(row => row.messageId === image?.messageId);
+        return `群聊历史图片 ${index}（之前由${source?.senderName || '群友'}发送，仅在当前话题相关时参考）`;
+      }),
+    });
     return this.replyConversation(
       message,
       conversationContent,
@@ -6021,7 +6111,10 @@ export class QqBotService {
         longtuAliases,
         pureBotMention: payload.pureBotMention,
         directBotMention: this.isDirectHumanMentionTrigger(payload),
+        recentGroupContext: recall,
+        recentGroupImageBlocks,
         topicContext,
+        videoLearningRequest: directLearningRequest,
       },
     );
   }

@@ -851,3 +851,86 @@ test('image reports can request all groups while ordinary report queries retain 
     assert.equal(f.tracker.getReport({ allGroups: true }).groups.length, 105);
   } finally { f.close(); }
 });
+
+test('按 key 顺序估算剩余：先扣每月免费额度，再扣跨月累计的赠送额度，402 视为用完', () => {
+  let now = Date.UTC(2026, 10, 3, 4);
+  const f = createTracker({
+    now: () => now,
+    exaKeyLabels: ['冷魔', '优新', 'xp哥'],
+    exaKeyMonthlyUsd: [10, 10, 10],
+    exaKeyBonusUsd: [7.1, 10, 10],
+    exaKeyBonusSince: '2026-11',
+    retentionMs: 400 * 24 * 3600e3,
+  });
+  try {
+    const record = (keyNumber, result = {}) => {
+      const id = f.tracker.startSearchCall({ provider: 'exa', searchType: 'auto', requestedResults: 6, keyNumber });
+      f.tracker.finishSearchCall(id, { succeeded: true, resultCount: 1, ...result });
+    };
+    const status = (preferredKey) => ({
+      configured: 3,
+      preferredKey,
+      keys: [1, 2, 3].map((number) => ({ number, state: 'available' })),
+    });
+    now = Date.UTC(2026, 9, 31, 12);
+    record(1, { costDollars: { total: 5 } }); // before the bonus baseline month
+    now = Date.UTC(2026, 10, 2, 4);
+    record(1, { costDollars: { total: 1.23 } });
+    record(2, { costDollars: { total: 0.5 } });
+    record(2, { succeeded: false, errorStatus: 402 });
+    record(0, { costDollars: { total: 0.1 } });
+    now = Date.UTC(2026, 10, 3, 4);
+    let exa = f.tracker.getReport({ allGroups: true, exaKeyStatus: status(3) }).exaKeys;
+    assert.equal(exa.periodStartAt, Date.UTC(2026, 10, 1));
+    assert.equal(exa.resetAt, Date.UTC(2026, 11, 1));
+    assert.deepEqual(exa.keys.map((key) => [key.label, key.monthlyRemainingUsd, key.bonusRemainingUsd, key.remainingUsd, key.state, key.current]), [
+      ['冷魔', 8.77, 7.1, 15.87, 'available', false],
+      ['优新', 0, 0, 0, 'exhausted', false],
+      ['xp哥', 10, 10, 20, 'available', true],
+    ]);
+    assert.equal(exa.unattributedCalls, 1);
+
+    // Spending past the monthly credit draws down the bonus, and the bonus
+    // used in November is still gone in December after a free-credit reset.
+    now = Date.UTC(2026, 10, 20, 4);
+    record(1, { costDollars: { total: 10 } });
+    exa = f.tracker.getReport({ allGroups: true, exaKeyStatus: status(1) }).exaKeys;
+    assert.deepEqual([exa.keys[0].monthlyRemainingUsd, exa.keys[0].bonusRemainingUsd], [0, 5.87]);
+    now = Date.UTC(2026, 11, 2, 4);
+    exa = f.tracker.getReport({ allGroups: true, exaKeyStatus: status(1) }).exaKeys;
+    assert.deepEqual([exa.keys[0].monthlyRemainingUsd, exa.keys[0].bonusRemainingUsd, exa.keys[0].bonusUsd], [10, 5.87, 5.87]);
+  } finally {
+    f.close();
+  }
+});
+
+test('Exa 搜索把实际使用的 key 序号和失败状态写进用量记录', async () => {
+  const f = createTracker({ now: () => Date.UTC(2026, 10, 3, 4), exaKeyLabels: ['冷魔', '优新'] });
+  try {
+    let calls = 0;
+    const search = f.tracker.wrapWebSearch(new LongtuWebSearch({
+      provider: 'exa',
+      exaApiKeys: ['first-key', 'second-key'],
+      fallbackEndpoint: null,
+      fetchImpl: async (_url, request) => {
+        calls += 1;
+        if (request.headers['x-api-key'] === 'first-key') {
+          return new Response('{}', { status: 402 });
+        }
+        return new Response(JSON.stringify({
+          results: [{ title: '标题', url: 'https://example.com/a', text: '正文内容' }],
+          costDollars: { total: 0.007 },
+        }), { status: 200 });
+      },
+    }));
+    await f.tracker.runWithContext({ groupId: 'g' }, () => search.search('今天的新闻', { mode: 'general', usageSource: 'web-search' }));
+    const exa = f.tracker.getReport({ allGroups: true }).exaKeys;
+    assert.equal(calls, 2);
+    assert.deepEqual(exa.keys.map((key) => [key.label, key.calls, key.spentUsd, key.state]), [
+      ['冷魔', 1, 0, 'exhausted'],
+      ['优新', 1, 0.007, 'available'],
+    ]);
+  } finally {
+    f.close();
+  }
+});

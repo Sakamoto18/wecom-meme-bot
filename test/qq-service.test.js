@@ -7,6 +7,7 @@ import path from 'node:path';
 import { Jimp } from 'jimp';
 import { createQqApiServer } from '../src/qq-api.js';
 import { ConversationStore } from '../src/conversation-store.js';
+import { QqMemoryStore } from '../src/qq-memory-store.js';
 import { QqGroupMemory } from '../src/group-memory.js';
 import {
   calculateImageTileRegions,
@@ -81,6 +82,8 @@ function createService(options = {}) {
     peerBotLoopWindowMs: options.peerBotLoopWindowMs,
     usageTracker: options.usageTracker,
     mediaResolver: options.mediaResolver,
+    videoLearning: options.videoLearning,
+    videoLearningStore: options.videoLearningStore,
     mediaUsageTracker: options.mediaUsageTracker,
     mediaExcludedGroups: options.mediaExcludedGroups,
     passiveSearchDisabledGroups: options.passiveSearchDisabledGroups,
@@ -851,6 +854,92 @@ test('私聊问候后明确接着旧话题时仍保留上下文', async () => {
   });
 
   assert.equal(calls[1].history.length, 2);
+});
+
+test('未启用话题记忆的群聊在无引用艾特时保留其他群友的近期讨论', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'qq-recent-context-'));
+  const conversationStore = new QqMemoryStore({ databaseFilePath: path.join(directory, 'memory.sqlite') });
+  t.after(async () => { conversationStore.close(); await rm(directory, { recursive: true, force: true }); });
+  const { service, calls } = createService({ conversationStore });
+  for (const [index, [user, text]] of [
+    ['u1', '先讨论部署计划'], ['u2', '灰度先放百分之十'],
+    ['u3', '监控半小时再扩大'], ['u2', '失败就回滚上一版'],
+  ].entries()) {
+    await service.handleMessage({ message_type: 'group', group_id: 'recall-group',
+      message_id: `observe-${index}`, user_id: user, sender_name: user, text, observe_only: true });
+  }
+  await service.handleMessage({ message_type: 'group', group_id: 'recall-group',
+    message_id: 'recall-at', user_id: 'u1', sender_name: 'u1', bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot' }], text: '总结一下刚才讨论的部署计划' });
+  const final = calls.at(-1);
+  assert.match(final.history.map(row => row.content).join('\n'), /灰度先放百分之十/);
+  assert.match(final.history.map(row => row.content).join('\n'), /监控半小时再扩大/);
+  assert.match(final.options.additionalSystemPrompt, /无引用艾特的群聊语境/);
+});
+
+test('纯艾特优先读取回捞的群友讨论，不固定当作无事空喊', async () => {
+  const { service, calls } = createService();
+  const result = await service.handleMessage({ message_type: 'group', group_id: 'recall-group',
+    message_id: 'recall-pure', user_id: 'u3', sender_name: '群友丙', bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot' }], pure_bot_mention: true,
+    text: '（用户仅 @ 了你，没有附加文字）',
+    recent_group_context: { group_id: 'recall-group', messages: [
+      { message_id: 'past1', user_id: 'u1', sender_name: '群友甲', text: '周末去爬山还是露营' },
+      { message_id: 'past2', user_id: 'u2', sender_name: '群友乙', text: '预报周末暴雨，改室内吧' },
+    ] },
+  });
+  assert.equal(result.mode, 'pure-mention');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].history.map(row => row.content).join('\n'), /周末暴雨/);
+  assert.match(calls[0].options.additionalSystemPrompt, /这次点名之前有群聊语境/);
+  assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /抓住“无事艾特”这个具体动作现场写/);
+});
+
+test('无引用艾特看法问题把最近其他群友的原图和来源交给最终模型', async () => {
+  const png = (await createPng()).toString('base64');
+  const { service, calls } = createService();
+  await service.handleMessage({ message_type: 'group', group_id: 'recall-group',
+    message_id: 'recall-image', user_id: 'u2', sender_name: '乙', bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot' }], text: '你怎么看',
+    recent_group_context: { group_id: 'recall-group', messages: [
+      { message_id: 'pic', user_id: 'u1', sender_name: '甲', text: '[图片]这个设计如何' },
+    ], images: [{ message_id: 'pic', base64: png }] },
+  });
+  const input = calls.at(-1).modelInput;
+  assert.ok(Array.isArray(input));
+  assert.ok(input.some(block => block.type === 'image_url'));
+  assert.match(input.filter(block => block.type === 'text').map(block => block.text).join('\n'), /群聊历史图片 1（之前由甲发送/);
+});
+
+test('成功回看但最近无人讨论时不重新带入陈旧会话', async () => {
+  const { service, calls } = createService();
+  service.conversationStore.appendExchange('group:recall-group', '陈旧话题：昨天的外卖', '旧回答');
+  await service.handleMessage({ message_type: 'group', group_id: 'recall-group',
+    message_id: 'recall-empty', user_id: 'u1', bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot' }], pure_bot_mention: true,
+    text: '（用户仅 @ 了你，没有附加文字）',
+    recent_group_context: { group_id: 'recall-group', messages: [] },
+  });
+  assert.deepEqual(calls[0].history, []);
+  assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /这次点名之前有群聊语境/);
+});
+
+test('群聊回看过滤异群、自身和当前消息，引用原消息时不使用额外回看图片', async () => {
+  const png = (await createPng()).toString('base64');
+  const payload = { message_type: 'group', group_id: 'recall-group',
+    message_id: 'recall-quoted', user_id: 'u2', bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot' }], text: '解释引用这段话', quoted_text: '引用原文', quoted_user_id: 'u1',
+    recent_group_context: { group_id: 'recall-group', messages: [
+      { message_id: 'recall-quoted', user_id: 'u2', text: '当前消息不回灌' },
+      { message_id: 'own', user_id: 'bot', text: '机器人自己不参与回看' },
+      { message_id: 'pic', user_id: 'u1', sender_name: '甲', text: '无关历史图片' },
+    ], images: [{ message_id: 'pic', base64: png }] } };
+  assert.equal(normalizeQqPayload(payload).recentGroupContext.messages.length, 1);
+  assert.deepEqual(normalizeQqPayload({ ...payload, group_id: 'different-group' }).recentGroupContext.messages, []);
+  const { service, calls } = createService();
+  await service.handleMessage(payload);
+  assert.equal(typeof calls.at(-1).modelInput, 'string');
+  assert.doesNotMatch(calls.at(-1).modelInput, /无关历史图片/);
 });
 
 test('QQ 纯艾特标记会传入快速人格模式并拦截客服式回复', async () => {
@@ -3943,6 +4032,131 @@ test('外部视频分享在排除群中保持静默且不调用解析器', async
   assert.equal(calls.length, 0);
 });
 
+test('指定 B站链接学习时绕过普通媒体解析，并把链接传给学习任务', async () => {
+  let resolveCalls = 0;
+  const gateCalls = [];
+  const { service } = createService({
+    mediaResolver: {
+      enabled: true,
+      async resolve() {
+        resolveCalls += 1;
+        throw new Error('不应进入普通媒体解析');
+      },
+    },
+    videoLearning: {
+      gate(info) {
+        gateCalls.push(info);
+        return {
+          action: 'remind',
+          taskKey: 'link-task-1',
+          topic: 'B 站视频 BV1aa411c7xx',
+          directLink: true,
+          topicExplicit: false,
+        };
+      },
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'bilibili-learning-link-1',
+    message_type: 'private',
+    user_id: '1079175957',
+    text: '学一下这个视频 https://www.bilibili.com/video/BV1aa411c7xx',
+    media_share: true,
+  });
+
+  assert.equal(resolveCalls, 0);
+  assert.equal(gateCalls.length, 1);
+  assert.equal(gateCalls[0].directLink, true);
+  assert.equal(gateCalls[0].preferredUrl, 'https://www.bilibili.com/video/BV1aa411c7xx');
+  assert.equal(gateCalls[0].preferredBvid, 'BV1aa411c7xx');
+  assert.equal(result.mode, 'learning-pending');
+  assert.equal(result.messages.length, 1);
+});
+
+test('群聊引用 Bot 后发 B站链接学习，也能进入指定链接任务', async () => {
+  let resolveCalls = 0;
+  const gateCalls = [];
+  const { service } = createService({
+    mediaResolver: {
+      enabled: true,
+      async resolve() {
+        resolveCalls += 1;
+        throw new Error('不应进入普通媒体解析');
+      },
+    },
+    videoLearning: {
+      gate(info) {
+        gateCalls.push(info);
+        return {
+          action: 'remind',
+          taskKey: 'link-task-quoted',
+          topic: 'B 站视频 BV1aa411c7xx',
+          directLink: true,
+          topicExplicit: false,
+        };
+      },
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'bilibili-learning-link-quoted',
+    message_type: 'group',
+    group_id: '239375116',
+    user_id: 'sender-1',
+    bot_user_id: 'bot-1',
+    quoted_user_id: 'bot-1',
+    quoted_text: 'https://www.bilibili.com/video/BV1aa411c7xx',
+    text: '学一下这个视频',
+    media_share: true,
+  });
+
+  assert.equal(resolveCalls, 0);
+  assert.equal(gateCalls.length, 1);
+  assert.equal(gateCalls[0].preferredBvid, 'BV1aa411c7xx');
+  assert.equal(result.mode, 'learning-pending');
+});
+
+test('合并转发里的 B站链接也能按明确学习指令进入任务', async () => {
+  let resolveCalls = 0;
+  const gateCalls = [];
+  const { service } = createService({
+    mediaResolver: {
+      enabled: true,
+      async resolve() {
+        resolveCalls += 1;
+        throw new Error('不应进入普通媒体解析');
+      },
+    },
+    videoLearning: {
+      gate(info) {
+        gateCalls.push(info);
+        return {
+          action: 'remind',
+          taskKey: 'link-task-forwarded',
+          topic: 'B 站视频 BV1aa411c7xx',
+          directLink: true,
+          topicExplicit: false,
+        };
+      },
+    },
+  });
+
+  const result = await service.handleMessage({
+    message_id: 'bilibili-learning-link-forwarded',
+    message_type: 'private',
+    user_id: '1079175957',
+    forwarded_text: '群友：[分享视频]\nhttps://www.bilibili.com/video/BV1aa411c7xx',
+    text: '学一下这个视频',
+    media_share: true,
+  });
+
+  assert.equal(resolveCalls, 0);
+  assert.equal(gateCalls.length, 1);
+  assert.equal(gateCalls[0].preferredBvid, 'BV1aa411c7xx');
+  assert.equal(result.mode, 'learning-pending');
+});
+
 test('B站直播间分享不进入视频解析器', async () => {
   let resolveCalls = 0;
   const { service } = createService({
@@ -4086,9 +4300,9 @@ test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
       ok: true,
       admin_user_ids: ['admin-1'],
       report_user_ids: ['recipient-1', 'recipient-2'],
-      report: { totals: { totalTokens: 12 }, groups: [] },
+      report: { totals: { totalTokens: 12 }, groups: [], videoLearningCatchup: null },
     });
-    assert.deepEqual(usageRequests, [{ allGroups: false, startAt: 10, endAt: 20, limit: 5 }]);
+    assert.deepEqual(usageRequests, [{ allGroups: false, startAt: 10, endAt: 20, limit: 5, exaKeyStatus: null }]);
     const allGroups = await fetch(`${baseUrl}/v1/qq/usage?all_groups=true`, {
       headers: { Authorization: 'Bearer test-token' },
     });

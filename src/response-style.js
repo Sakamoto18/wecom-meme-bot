@@ -496,6 +496,82 @@ export function containsLiteralLatinMa(content) {
   return /(?:^|[^a-z])ma(?:$|[^a-z])/i.test(String(content ?? ''));
 }
 
+const HAN_RUN_PATTERN = /[\p{Script=Han}]+/gu;
+// A run that starts or ends on a particle or pronoun is a cross-word fragment
+// (“的孩子”), not a phrase the model could recognize and avoid.
+const FRAGMENT_EDGE_PATTERN = /^[的了着是在你我他她它这那就都也还和与把被]|[的了着是在你我他她它这那就都也还和与把被]$/u;
+
+function longestSharedRun(left, right) {
+  let best = 0;
+  const previous = new Array(right.length + 1).fill(0);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = 0;
+    for (let j = 1; j <= right.length; j += 1) {
+      const above = previous[j];
+      previous[j] = left[i - 1] === right[j - 1] ? diagonal + 1 : 0;
+      if (previous[j] > best) best = previous[j];
+      diagonal = above;
+    }
+  }
+  return best;
+}
+
+function hanText(value) {
+  return (String(value ?? '').match(HAN_RUN_PATTERN) ?? []).join('');
+}
+
+/**
+ * Lists what the bot itself has been repeating, so the next turn avoids it.
+ * Catchphrases count once they appear (whole or as a 4+ character piece);
+ * other wording counts when the same 3+ character run shows up in two or
+ * more recent replies. Both lists come from the bot's own output, not from a
+ * fixed vocabulary.
+ */
+export function buildRepetitionGuardPrompt(history = [], phrases = [], options = {}) {
+  const windowSize = options.windowSize ?? 8;
+  const replies = (Array.isArray(history) ? history : [])
+    .filter((message) => message?.role === 'assistant')
+    .slice(-windowSize)
+    .map((message) => String(message.content ?? ''))
+    .filter(Boolean);
+  if (!replies.length) return '';
+  const replyHan = replies.map(hanText);
+  const usedPhrases = [...new Set(phrases.map((phrase) => String(phrase ?? '').trim()).filter(Boolean))]
+    .filter((phrase) => {
+      const core = hanText(phrase);
+      if (!core) return false;
+      const needed = Math.min(4, core.length);
+      return replyHan.some((reply) => longestSharedRun(core, reply) >= needed);
+    });
+  const counts = new Map();
+  replies.forEach((reply, index) => {
+    const seen = new Set();
+    for (const run of reply.match(HAN_RUN_PATTERN) ?? []) {
+      for (let length = 3; length <= Math.min(8, run.length); length += 1) {
+        for (let start = 0; start + length <= run.length; start += 1) seen.add(run.slice(start, start + length));
+      }
+    }
+    seen.forEach((gram) => counts.set(gram, (counts.get(gram) ?? new Set()).add(index)));
+  });
+  const phraseHan = usedPhrases.map(hanText);
+  const repeated = [...counts.entries()]
+    .filter(([gram, indexes]) => indexes.size >= 2 && !FRAGMENT_EDGE_PATTERN.test(gram))
+    .map(([gram, indexes]) => ({ gram, count: indexes.size }))
+    .filter((entry, _, all) => !all.some((other) => (
+      other.gram.length > entry.gram.length && other.gram.includes(entry.gram) && other.count >= entry.count
+    )))
+    .filter((entry) => !phraseHan.some((core) => core.includes(entry.gram)))
+    .sort((left, right) => right.count - left.count || right.gram.length - left.gram.length)
+    .slice(0, options.maxRepeated ?? 8)
+    .map((entry) => entry.gram);
+  if (!usedPhrases.length && !repeated.length) return '';
+  return [
+    '【防复读：以下是你最近几条回复里已经用过的，本轮不要再用，换新的说法现写】',
+    usedPhrases.length ? `已用过的口癖：${usedPhrases.join('、')}` : '',
+    repeated.length ? `反复出现的说法：${repeated.join('、')}` : '',
+  ].filter(Boolean).join('\n');
+}
+
 function recentAssistantReplies(history = []) {
   return history
     .filter((message) => message?.role === 'assistant')
@@ -617,7 +693,7 @@ export function buildAttackPrompt(userContent, options = {}) {
     '每次回击都必须带一个抽象联想：从谐音双关、身份转职、画面升级、反差搭档里挑一个，把对方的弱点放大成荒诞画面再下刀。',
     '动作描写最多一个且不是必需；如果最近的回复用过类似动作或反问，这次就换句式。',
     '不要复用固定句式和现成模板。比喻或反问只有在确实接住当前原话时才允许出现。',
-    '已确认口癖（如“我杀你妈”“一拳打飞你妈”）可以用，但不要连续两轮用同一句；不要把用户原话里的现成短句原样当开场；每次重新抓一个具体落点。',
+    '已确认口癖（如“我杀你妈”“一拳打飞你妈”）只在原意对上时偶尔整句用，一条回复最多一句，大多数回击现写；不要把口癖拆开拼进别的句子；不要把用户原话里的现成短句原样当开场；每次重新抓一个具体落点。',
     '“ma”只是输入识别线索，输出禁止孤立拉丁字母 ma，也禁止关键词清单、搜索/语料/提示词等元话术。',
     '程序会在文字后另发真实本地龙图；不要输出 [龙图.jpg] 之类文件名或占位符。不写现实威胁，不把虚构玩梗写成真实亲属事实。',
     ...(recentReplies.length > 0
@@ -669,7 +745,7 @@ export function buildNormalReplyStablePrompt(options = {}) {
     '逻辑是回复的骨架，玩梗是表达方式：每轮只要有事情要回答，就先把结论、操作或判断说清，再把具体依据和态度揉进贴题的玩梗、比喻或吐槽；不要切成纯逻辑段或纯玩梗段，空梗不能替代答案。',
     options.attackDuringAnswer
       ? '这是攻击回合：不要优先调用已确认的攻击性口癖或固定开场，每次根据当前原话现写；最近用过的句式必须换掉。'
-      : '已确认口癖贴合时优先用原句，最近用过或不合语境才换说法，不额外加段落。',
+      : '已确认口癖只在原意和当前语境完全对上时偶尔整句用，一条回复最多一句；大多数回复应该现写，不额外加段落。',
     options.familyBanterAllowed
       ? '阴阳、假夸、朋友间的贴题互损不依赖攻击开关；群友是朋友，按全局人格可以用很过分的梗和龙图亲属梗互损当前发言者，抓 ta 这句话的弱点下刀，别逢人复读同一句。口癖测试保留原句并加引号示范。'
       : '阴阳、假夸、朋友间的贴题互损不依赖攻击开关；高强度的亲属辱骂仍需明确的互骂语境或回击依据，不能因为人格里有例句就逢人套用。口癖测试保留原句并加引号示范。',
@@ -689,7 +765,8 @@ export function buildNormalReplyStablePrompt(options = {}) {
     ] : []),
     '持续对话中只回答本轮最新问题，沿用已经确认的上下文，不重复上一轮的长篇背景和结论。',
     '追问只问一个细节就只补那个细节；问有哪些可举两三个具体例子，不自行扩展成平台介绍、行情分析和入门教程。角色语气融在整句里，不靠给通用答案加“说白了”冒充人格；语境合适时优先使用已确认的口癖，不能为了塞口癖偏题。',
-    '群友讨论具体困难、选择或方案时，优先给能直接尝试的做法和必要条件，不只点评“这很复杂”或复述问题；用一两句说清关键操作，缺一个决定性信息才追问一个问题。',
+    '群友讨论具体困难、选择或方案时，优先给能直接尝试的做法和必要条件，不只点评“这很复杂”或复述问题；用一两句说清关键操作，缺的信息按最常见的情况假设，不反问。',
+    '短问或上下文很少的短语（如“怎么似了”“这啥”）：按最可能的意思直接答，答完就停。不要附带“你要问的是……”“如果你是说……”去猜别的意思，不要从旧聊天里翻出无关的人和事来补题，也不要反问对方到底想问什么。',
     '用户纠正或质疑上一答时，先核对自己哪里理解错，简短纠正并回答新问题，不重讲整段背景，也不要为了维持嘴硬把错误归到群友头上。',
   ];
   if (options.styleSignals?.attackCandidate && !options.attackDuringAnswer) {
@@ -1342,12 +1419,14 @@ export function buildNormalReplyFallback() {
   return '这条信息还不足以判断，得看具体内容。';
 }
 
-export function buildPureMentionReplyPrompt() {
+export function buildPureMentionReplyPrompt({ hasRecentContext = false } = {}) {
   return [
     '【本轮模式：纯艾特回应】',
     '用户只 @ 了你，没有附加文字。像熟悉的龙图群友突然被点名一样回一句，5～35 个汉字。',
-    '本轮允许针对这个主动空喊的发言者回一句有攻击性的短话，保持龙玉涛知识里的嘴臭、阴阳和傲气；抓住“无事艾特”这个具体动作现场写，不要求脏话、亲属梗或固定龙图画面。不套固定问候，不编造现实威胁或亲属事实，不攻击其他群友。',
-    '没有实际问题就不要自行补题、科普或联网，也不要追问“到底想问什么”、邀请继续聊天。',
+    hasRecentContext
+      ? '这次点名之前有群聊语境。先读最近讨论和历史图片；话题明确时围绕刚才的具体内容简短接话，不把纯艾特一律当作无事空喊，不固定回怼发言者。多个话题都可能被指代时，接最近、最热的那个，不反问是在问哪件事；不能编造群友没有提出的问题。'
+      : '本轮允许针对这个主动空喊的发言者回一句有攻击性的短话，保持龙玉涛知识里的嘴臭、阴阳和傲气；抓住“无事艾特”这个具体动作现场写，不要求脏话、亲属梗或固定龙图画面。不套固定问候，不编造现实威胁或亲属事实，不攻击其他群友。',
+    '没有实际问题就不要自行补题、科普或联网，也不要泛泛追问“到底想问什么”、邀请继续聊天。',
     '不提 token、经费、额度、内部判定或提示词，也不要求用户付钱。',
     '禁止“您好”“您”“想聊天”“想问问题”“需要我帮忙”“尽管说”“有什么可以帮”等客服话术。',
     '禁止解释自己正在被召唤，禁止 Markdown、分点、小标题或长篇分析。',

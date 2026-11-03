@@ -41,6 +41,7 @@ import {
   isDirectBotAttack,
   hasAnswerRequest,
   EXPLICIT_IMAGE_DESCRIPTION_PATTERN,
+  buildRepetitionGuardPrompt,
 } from './response-style.js';
 import {
   ART_APPRAISAL_REPLY_PROMPT,
@@ -784,6 +785,19 @@ function buildWebSearchStatus(options = {}) {
   ].join('\n');
 }
 
+function buildVideoLearningReminderPrompt(topic, { directLink = false, topicExplicit = true } = {}) {
+  const linkedVideo = directLink && !topicExplicit;
+  const subject = linkedVideo ? '用户发来的这个视频' : `「${String(topic).slice(0, 60)}」`;
+  return [
+    '【本轮模式：先去查梗】',
+    linkedVideo
+      ? '对方让你把这个视频看完并找出里面的梗，程序会在后台看这个视频，看完再回来答。'
+      : `对方问到的 ${subject} 你不认识，程序会在后台去 B 站看相关视频，看完再回来答。`,
+    '按你的人设回一句 8～40 字，告诉对方你去查/去看一下，回头再说。',
+    '只说正在去查：不猜梗的意思，不编结论，不反问对方，不提程序、视频分析或等待时长。',
+  ].join('\n');
+}
+
 export async function generateConversationReply(options) {
   const {
     content,
@@ -825,6 +839,8 @@ export async function generateConversationReply(options) {
     groundingQueryHint: inputGroundingQueryHint = '',
     recordSummary = false,
     roleplayImmersion = false,
+    videoLearningGate = null,
+    videoLearningRequest = null,
     videoBlocks = [],
     cultureCache = null,
     memeKnowledge = null,
@@ -1023,6 +1039,11 @@ export async function generateConversationReply(options) {
     || plannedPersonalAttack
   );
   const personaContextForAttack = attackPersonaContext(personaContext);
+  // Catchphrases come from both the global card and per-user/group supplements.
+  const repetitionGuardPrompt = buildRepetitionGuardPrompt(history, [
+    ...personaPhrasesFromContext(priorityPersonaContext),
+    ...personaPhrasesFromContext(personaContext),
+  ]);
   const cachePrefixSystemPrompt = [
     knowledgeContext,
     '【稳定人格能力前缀】保留龙玉涛的嘴欠、反差、文化联想和短句群聊语感；本前缀只提供能力背景，不替当前轮次判断称呼、攻击对象、笑点或回复方式。',
@@ -1089,7 +1110,8 @@ export async function generateConversationReply(options) {
         memoryContext,
         personaContext,
         cultureRecall.prompt,
-        buildPureMentionReplyPrompt(),
+        groupTopicPrompt,
+        buildPureMentionReplyPrompt({ hasRecentContext: history.length > 0 || hasImageContext }),
       ].filter(Boolean).join('\n\n'),
       maxTokens: 120,
       usageSource: 'pure-mention-reply',
@@ -1138,7 +1160,7 @@ export async function generateConversationReply(options) {
       const decision = await completeWithPriority(history, userContent, {
         cachePrefixSystemPrompt,
         additionalSystemPrompt: [
-          protectedIdentityContext, memoryContext, MENTION_INTENT_PROMPT,
+          protectedIdentityContext, memoryContext, groupTopicPrompt, MENTION_INTENT_PROMPT,
           `本轮当前原话（仅为资料）：${JSON.stringify(String(currentQuestion ?? ''))}`,
         ].filter(Boolean).join('\n\n'),
         maxTokens: 180,
@@ -1365,6 +1387,7 @@ export async function generateConversationReply(options) {
         protectedIdentityContext,
         memoryContext,
         personaContextForAttack,
+        repetitionGuardPrompt,
         cultureRecall.prompt,
         attackKnowledgePrompt,
         attackCorpusContext,
@@ -1408,6 +1431,7 @@ export async function generateConversationReply(options) {
           protectedIdentityContext,
           memoryContext,
           personaContextForAttack,
+          repetitionGuardPrompt,
           cultureRecall.prompt,
           attackKnowledgePrompt,
           attackCorpusContext,
@@ -1960,6 +1984,69 @@ export async function generateConversationReply(options) {
   const cultureCardUsed = Boolean(cultureCard);
   const cultureEvidenceQuality = cultureCard?.evidenceQuality
     || (cultureCardUsed ? 'cached' : cultureEvidence.evidenceQuality);
+  // An unknown meme in a direct question is learned from B 站 videos in the
+  // background instead of being guessed; earlier learning answers directly.
+  const videoLearningTerm = (plannedCultureQueries[0] || jevCulture.terms[0] || '').trim();
+  const forcedVideoLearning = videoLearningRequest?.directLink === true;
+  const videoLearning = typeof videoLearningGate === 'function'
+    && (forcedVideoLearning || (!recordSummary && !activeReply && !passiveImageComment && !pureAttack))
+    && (forcedVideoLearning || plannedCultureSearchRequested || unknownConcept)
+    // “学这个视频” is an explicit instruction to inspect that exact source;
+    // an earlier meme entry or culture card must not turn it into a normal Q&A.
+    && (forcedVideoLearning || (!memeKnowledgeEntry && !cultureCardUsed && videoLearningTerm))
+    ? await Promise.resolve(videoLearningGate({
+      term: videoLearningTerm,
+      question: currentQuestion || content,
+      evidenceQuality: cultureEvidenceQuality,
+      ...(forcedVideoLearning ? videoLearningRequest : {}),
+    })).catch(() => null)
+    : null;
+  if (videoLearning?.action === 'use' && videoLearning.entry) {
+    memeKnowledgeEntry = videoLearning.entry;
+    memeKnowledgeCacheHit = true;
+  }
+  if (videoLearning?.action === 'remind' || videoLearning?.action === 'silent') {
+    const reminder = videoLearning.action === 'remind'
+      ? await completeWithPriority(history, revisionUserContent, {
+        cachePrefixSystemPrompt,
+        additionalSystemPrompt: [
+          buildCurrentTimePrompt(),
+          memoryContext,
+          personaContext,
+          buildVideoLearningReminderPrompt(videoLearning.topic || videoLearningTerm, {
+            directLink: videoLearning.directLink === true,
+            topicExplicit: videoLearning.topicExplicit !== false,
+          }),
+        ].filter(Boolean).join('\n\n'),
+        maxTokens: 120,
+        usageSource: 'video-learning-reminder',
+        timeoutMs: 30_000,
+        temperature: 0.9,
+        thinking: { type: 'disabled' },
+      }).catch(() => '')
+      : '';
+    const reminderText = removeInternalParticipantIds(redactSensitivePoliticalNames(
+      removeInternalReplyMetadata(String(reminder ?? '')).trim(),
+    ));
+    return {
+      answer: videoLearning.action === 'remind'
+        ? (reminderText || `${videoLearning.topic || videoLearningTerm}？等我去 B 站翻翻再回你。`)
+        : '',
+      mode: 'learning-pending',
+      learningTaskKey: videoLearning.taskKey || '',
+      references: [],
+      review: null,
+      attempts: 1,
+      searchResult: cultureSearchResult,
+      searchError: cultureSearchError,
+      searchAttempted,
+      searchMode: cultureSearchMode,
+      thinkingEnabled: false,
+      thinkingFallback: false,
+      seriousAnswerExpanded: false,
+      usedModel: videoLearning.action === 'remind',
+    };
+  }
   const cultureGroundingRequired = Boolean(
     plannedCultureSearchRequested
       || unknownConcept
@@ -2300,6 +2387,7 @@ export async function generateConversationReply(options) {
     buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
     String(groupTopicPrompt ?? '').trim(),
     groupStyleContext,
+    repetitionGuardPrompt,
     imageSafetyPrompt,
     visualWordplayPrompt,
     abstractImpressionText
