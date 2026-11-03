@@ -829,7 +829,7 @@ test('普通回复和直接回击都经过龙图文化召回层', async () => {
   assert.equal(attack.review.valid, true);
 });
 
-test('战术卡要求回击但当前消息没有明确挑衅时，只降级为锐评事情', async () => {
+test('战术卡要求回击当前发言者时，不再要求命中固定骂词表', async () => {
   let prompt = '';
   const result = await generateConversationReply({
     content: '这方案做得跟用胶带修发动机一样',
@@ -859,9 +859,8 @@ test('战术卡要求回击但当前消息没有明确挑衅时，只降级为�
       },
     },
   });
-  assert.notEqual(result.mode, 'generated-attack');
-  assert.match(prompt, /本轮不升级人身辱骂/);
-  assert.doesNotMatch(prompt, /target=current_speaker，angle=absurdity/);
+  assert.match(prompt, /target=current_speaker，angle=absurdity/);
+  assert.doesNotMatch(prompt, /本轮不升级人身辱骂/);
 });
 
 test('战术卡的具体事实查询能补足攻击轮里被正则漏掉的检索', async () => {
@@ -1074,33 +1073,6 @@ test('战术卡判定明确求证时先给真假，再接现实锚点梗', async
   assert.match(prompt, /mode=verification/);
 });
 
-test('图片评价开启抽象联想层，初稿缺少具体联想时复用现有复核调用补齐', async () => {
-  const calls = [];
-  const result = await generateConversationReply({
-    content: '如何评价这张图',
-    currentQuestion: '如何评价这张图',
-    modelInput: '如何评价这张图',
-    hasImageContext: true,
-    webSearchEnabled: false,
-    chatClient: {
-      isConfigured: true,
-      async complete(history, input, options) {
-        calls.push({ history, input, options });
-        return calls.length === 1
-          ? '画面信息很密，重点是人物把局面弄得很乱。'
-          : '画面信息很密，重点是人物把局面弄得很乱，已经转职成亡灵骑士了。';
-      },
-    },
-  });
-
-  assert.equal(result.abstractAssociationRequested, true);
-  assert.equal(calls.length, 2);
-  assert.match(calls[0].options.additionalSystemPrompt, /本轮可自然使用抽象联想/);
-  assert.match(calls[1].options.revisionSystemPrompt, /自然接一个具体/);
-  assert.match(result.answer, /转职成亡灵骑士/);
-  assert.equal(result.review.valid, true);
-});
-
 test('视觉抽象候选进入回复上下文且不要求先确认主体', async () => {
   const calls = [];
   const result = await generateConversationReply({
@@ -1131,7 +1103,7 @@ test('视觉抽象候选进入回复上下文且不要求先确认主体', async
   assert.doesNotMatch(result.answer, /我不敢盖章|我认|你说得对/u);
 });
 
-test('技术深度问答不强制抽象联想，保持原有一次生成路径', async () => {
+test('技术深度问答也请求抽象联想，但不追加复核调用', async () => {
   const calls = [];
   const answer = '先备份配置，再检查服务日志和端口占用，最后重启对应进程。';
   const result = await generateConversationReply({
@@ -1147,7 +1119,7 @@ test('技术深度问答不强制抽象联想，保持原有一次生成路径',
     },
   });
 
-  assert.equal(result.abstractAssociationRequested, false);
+  assert.equal(result.abstractAssociationRequested, true);
   assert.equal(result.abstractAssociationReviewRequired, false);
   assert.equal(calls.length, 1);
   assert.equal(result.answer, answer);
@@ -1468,7 +1440,7 @@ test('攻击回合不把已保存口癖当固定开场', async () => {
   assert.equal(result.mode, 'generated-attack');
   assert.equal(result.attempts, 1);
   assert.doesNotMatch(calls[0].additionalSystemPrompt, new RegExp(savedPhrase));
-  assert.match(calls[0].additionalSystemPrompt, /不要调用已保存的攻击性口癖/);
+  assert.match(calls[0].additionalSystemPrompt, /不要连续两轮用同一句/);
 });
 
 test('@机器人后直接接“臭傻逼你妈死了”仍走临场对线，不退回说教式回答', async () => {
@@ -1534,30 +1506,6 @@ test('问题窗口内遭到攻击时仍先回答问题，再允许简短回击',
   assert.equal(calls.length, 1);
   assert.match(calls[0].stableSystemPrompt, /若当前发言者明确挑衅或攻击机器人/);
   assert.match(calls[0].stableSystemPrompt, /按全局人格可以用很过分的梗和龙图亲属梗互损/);
-});
-
-test('统一角色初稿把回击写成说教时，追加一次真正的临场对线句', async () => {
-  const calls = [];
-  const result = await generateConversationReply({
-    content: '你这个傻逼，P2 怎么抓？',
-    modelInput: '当前问题：你这个傻逼，P2 怎么抓？',
-    activeReply: true,
-    activeReplyPriority: 'must',
-    chatClient: {
-      isConfigured: true,
-      async complete(history, input, options) {
-        calls.push(options);
-        if (options.usageSource === 'attack-rebuttal-fallback') {
-          return '你这个傻逼，张嘴和错参数一样，先回炉重配去。';
-        }
-        return '先在链接后加 p=2；不要只会复读脏字。';
-      },
-    },
-    webSearchEnabled: false,
-  });
-  assert.ok(calls.some((call) => call.usageSource === 'attack-rebuttal-fallback'));
-  assert.match(result.answer, /你这个傻逼，张嘴和错参数一样/);
-  assert.equal(result.review.valid, true);
 });
 
 test('模型复述群聊历史的内部回复标签时只保留答案正文', async () => {
@@ -2683,4 +2631,170 @@ test('最终回复会用检索证据收敛模型自行扩写的新闻影响范�
   assert.match(result.answer, /PHP2Shell/);
   assert.match(result.answer, /不少网站/);
   assert.doesNotMatch(result.answer, /银行|通信/);
+});
+
+test('回合规划判定对线时，不在固定骂词表里的骂法也进入攻击回合', async () => {
+  const calls = [];
+  await generateConversationReply({
+    content: '就这水平还好意思叫龙图？丢人现眼的东西',
+    modelInput: '就这水平还好意思叫龙图？丢人现眼的东西',
+    turnPlan: normalizeTurnPlan({
+      current_task: '回击当前发言者',
+      speech_act: 'insult',
+      attack: { decision: 'reply', target: 'current_speaker', angle: 'behavior', timing: 'standalone', intensity: 0.9 },
+    }),
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        return '你这嘴是批发的？一拳打飞你妈，就你还配点评龙图。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  const prompt = calls.map((options) => [options.stableSystemPrompt, options.additionalSystemPrompt].filter(Boolean).join('\n')).join('\n');
+  assert.match(prompt, /target=current_speaker/);
+});
+
+test('回击和联想不再按固定词表复核，模型初稿原样保留且只调用一次', async () => {
+  const calls = [];
+  const draft = '就你这水平，龙图看了都想申请退群。';
+  const result = await generateConversationReply({
+    content: '你个傻逼，昨天那个漏洞到底怎么回事',
+    modelInput: '你个傻逼，昨天那个漏洞到底怎么回事',
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options.usageSource);
+        return draft;
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.equal(result.answer, draft);
+  assert.ok(!calls.includes('attack-rebuttal-fallback'));
+  assert.ok(!result.review?.issues?.includes('missing-direct-rebuttal'));
+  assert.ok(!result.review?.issues?.includes('missing-abstract-association'));
+});
+
+test('普通和正经回复也带纯攻击性语料风格，敏感求助不带', async () => {
+  const promptFor = async (content) => {
+    let prompt = '';
+    await generateConversationReply({
+      content,
+      modelInput: content,
+      chatClient: {
+        isConfigured: true,
+        async complete(_history, _input, options) {
+          prompt = [options.stableSystemPrompt, options.additionalSystemPrompt].filter(Boolean).join('\n');
+          return '行。';
+        },
+      },
+      webSearchEnabled: false,
+    });
+    return prompt;
+  };
+  assert.match(await promptFor('今天适合跑步吗'), /纯攻击性语料/);
+  assert.doesNotMatch(await promptFor('我妈刚去世，心里很难受'), /纯攻击性语料/);
+});
+
+test('角色沉浸模式在用户消息末尾附官方指令，并以思考模式生成', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '今天适合跑步吗',
+    modelInput: '今天适合跑步吗',
+    roleplayImmersion: true,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, input, options) {
+        calls.push({ input, options });
+        return '跑你妈，外面雾霾都能拿来糊墙。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  const main = calls.find((call) => call.options.usageSource === 'conversation-reply');
+  assert.ok(main);
+  assert.match(String(main.input), /今天适合跑步吗\n\n【角色沉浸要求】/);
+  assert.equal(main.options.thinking?.type, 'enabled');
+  assert.equal(result.roleplayImmersion, true);
+});
+
+test('角色沉浸模式关闭时不附指令', async () => {
+  const calls = [];
+  await generateConversationReply({
+    content: '今天适合跑步吗',
+    modelInput: '今天适合跑步吗',
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, input, options) {
+        calls.push({ input, options });
+        return '能跑。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.ok(calls.every((call) => !/角色沉浸要求/.test(String(call.input))));
+});
+
+test('角色沉浸的攻击回合用思考模式，思考返回空内容时退回快速模式', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '你个傻逼',
+    modelInput: '你个傻逼',
+    roleplayImmersion: true,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, input, options) {
+        calls.push({ input, options });
+        if (options.thinking?.type === 'enabled') throw new Error('大模型返回了空内容');
+        return '傻逼骂谁呢，你妈没教你照镜子？';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  const attackCalls = calls.filter((call) => call.options.usageSource === 'attack-reply');
+  assert.equal(attackCalls[0]?.options.thinking?.type, 'enabled');
+  assert.ok(attackCalls[0].options.maxTokens >= 8000);
+  assert.equal(attackCalls[1]?.options.thinking?.type, 'disabled');
+  assert.match(result.answer, /照镜子/);
+});
+
+test('角色沉浸的内心独白混进正文时被剥掉，只剩独白则退回快速模式重写', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '今天适合跑步吗',
+    modelInput: '今天适合跑步吗',
+    roleplayImmersion: true,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        if (options.thinking?.type === 'enabled') {
+          return '（心想：这接龙都从KTV唱到劝人出坑了，我得顺着这情歌的壳子抖落出来。）';
+        }
+        return '跑你妈，外面雾霾都能拿来糊墙。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.doesNotMatch(result.answer, /心想/);
+  assert.match(result.answer, /雾霾/);
+  assert.ok(calls.some((options) => options.thinking?.type === 'disabled'));
+});
+
+test('角色沉浸正文里夹带的内心独白会被删掉，其余保留', async () => {
+  const result = await generateConversationReply({
+    content: '今天适合跑步吗',
+    modelInput: '今天适合跑步吗',
+    roleplayImmersion: true,
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        return '(内心OS：先损他一句) 跑你妈，外面雾霾都能拿来糊墙。';
+      },
+    },
+    webSearchEnabled: false,
+  });
+  assert.equal(result.answer, '跑你妈，外面雾霾都能拿来糊墙。');
 });

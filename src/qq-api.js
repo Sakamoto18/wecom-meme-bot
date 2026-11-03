@@ -773,6 +773,10 @@ export async function createQqRuntime() {
     false,
   );
   const jevActive = jevEnabled && jevOutputEnabled;
+  const roleplayImmersion = parseBoolean(
+    process.env.LLM_ROLEPLAY_IMMERSION_ENABLED,
+    true,
+  );
   let jevRuntime = null;
   let jevGate = null;
   let jevResponseModeMemory = null;
@@ -1038,6 +1042,7 @@ export async function createQqRuntime() {
     activeReplyDecider,
     jevGate,
     jevOutputEnabled,
+    roleplayImmersion,
     jevResponseModeMemory,
     jevResponseRoutingEnabled: parseBoolean(
       process.env.LONGTU_QQ_JEV_RESPONSE_ROUTING_ENABLED,
