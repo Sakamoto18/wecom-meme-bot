@@ -2279,6 +2279,7 @@ export class QqBotService {
     this.activeReplyDecider = options.activeReplyDecider ?? null;
     this.replyTurnPlanner = options.replyTurnPlanner ?? null;
     this.jevOutputEnabled = options.jevOutputEnabled === true;
+    this.roleplayImmersion = options.roleplayImmersion === true;
     this.jevGate = this.jevOutputEnabled ? (options.jevGate ?? null) : null;
     this.jevResponseModeMemory = options.jevResponseModeMemory ?? null;
     this.jevResponseRoutingEnabled = this.jevOutputEnabled
@@ -4059,6 +4060,7 @@ export class QqBotService {
         .join('\n\n');
       const generateReply = (input, blocks) => generateConversationReply({
         content,
+        roleplayImmersion: this.roleplayImmersion,
         currentQuestion: imageQuestion,
         modelInput: input,
         imageBlocks: blocks,
@@ -4269,6 +4271,7 @@ export class QqBotService {
       this.logger.log(
         `QQ 对话回复模式：${generated.mode}`
         + `，thinking=${Boolean(generated.thinkingEnabled)}`
+        + `，immersion=${generated.roleplayImmersion ? 'on' : 'off'}`
         + `，attempts=${generated.attempts ?? 1}`
         + `，info_meme=${generated.informationMemeMode ? 'on' : 'off'}`
         + `，grounding_queries=${generated.groundingQueries?.length ?? 0}`

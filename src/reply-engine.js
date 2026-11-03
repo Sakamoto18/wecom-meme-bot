@@ -133,6 +133,29 @@ export const IMAGE_INPUT_SAFETY_PROMPT = [
   '遇到表格、宫格、清单、生肖/分类排列或带空白格的结构化图片，先按行列和标签逐格建立完整清单，再核对缺失项；用户问“少了哪个/缺了什么”时必须给出视觉核对结论，不要只凭常识猜，也不要因空白格而跳过这一项。',
 ].join('\n');
 
+// DeepSeek V4 roleplay immersion instruction, verbatim from
+// https://github.com/victorchen96/deepseek_v4_rolepaly_instruct. It only
+// takes effect in thinking mode and belongs at the end of the user message.
+const ROLEPLAY_IMMERSION_MARKER = [
+  '',
+  '',
+  '【角色沉浸要求】在你的思考过程（<think>标签内）中，请遵守以下规则：',
+  '1. 请以角色第一人称进行内心独白，用括号包裹内心活动，例如"（心想：……）"或"(内心OS：……)"',
+  '2. 用第一人称描写角色的内心感受，例如"我心想""我觉得""我暗自"等',
+  '3. 思考内容应沉浸在角色中，通过内心独白分析剧情和规划回复',
+].join('\n');
+const IMMERSION_THINKING_TIMEOUT_MS = 90_000;
+// The model sometimes copies the bracketed monologue into the visible reply.
+const IMMERSION_MONOLOGUE_PATTERN = /[（(]\s*(?:我?心想|内心\s*OS|内心独白|内心|OS)\s*[：:][^）)]*(?:[）)]|$)/giu;
+
+function stripImmersionMonologue(value) {
+  return String(value ?? '')
+    .replace(IMMERSION_MONOLOGUE_PATTERN, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+const IMMERSION_THINKING_MAX_TOKENS = 8_000;
+
 function buildMultimodalUserContent(modelInput, imageBlocks = [], videoBlocks = []) {
   if ((!Array.isArray(imageBlocks) || imageBlocks.length === 0)
     && (!Array.isArray(videoBlocks) || videoBlocks.length === 0)) return modelInput;
@@ -801,6 +824,7 @@ export async function generateConversationReply(options) {
     imageMemeClaim: inputImageMemeClaim = '',
     groundingQueryHint: inputGroundingQueryHint = '',
     recordSummary = false,
+    roleplayImmersion = false,
     videoBlocks = [],
     cultureCache = null,
     memeKnowledge = null,
@@ -852,7 +876,9 @@ export async function generateConversationReply(options) {
   ].filter(Boolean).join(' ').slice(0, 240);
 
   const turnNow = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
-  const userContent = buildMultimodalUserContent(modelInput, imageBlocks, videoBlocks);
+  const immersion = roleplayImmersion && !recordSummary;
+  const turnModelInput = immersion ? `${modelInput ?? ''}${ROLEPLAY_IMMERSION_MARKER}` : modelInput;
+  const userContent = buildMultimodalUserContent(turnModelInput, imageBlocks, videoBlocks);
   const relativeDateText = [content, currentQuestion, modelInput]
     .filter(Boolean).join('\n');
   const relativeDateFacts = extractRelativeDateFacts(turnNow, relativeDateText);
@@ -866,7 +892,7 @@ export async function generateConversationReply(options) {
     .slice(0, 120);
   // 图片只在首轮生成时上传一次；重写、质量复核和思考降级使用已经注入的
   // OCR/场景摘要，避免重复消耗视觉 Token 和请求体体积。
-  const revisionUserContent = modelInput;
+  const revisionUserContent = turnModelInput;
   const imageSafetyPrompt = [
     hasImageContext ? `${IMAGE_INPUT_SAFETY_PROMPT}\n\n${passiveImageComment ? PASSIVE_IMAGE_COMMENT_PROMPT : IMAGE_MEANING_PROMPT}` : '',
     hasImageContext && artAppraisal ? ART_APPRAISAL_REPLY_PROMPT : '',
@@ -944,8 +970,10 @@ export async function generateConversationReply(options) {
     content,
     interactionContext,
   );
+  // The planner reads the whole turn, so its judgment that the speaker is
+  // attacking the bot is trusted without matching a fixed insult list.
   const plannedTargetAllowed = plannedAttackCard?.target === 'current_speaker'
-    ? explicitDirectAttack && !interactionContext.hasThirdPartyTarget
+    ? (explicitDirectAttack || familyBanterAllowed) && !interactionContext.hasThirdPartyTarget
     : (plannedAttackCard?.target === 'mentioned_member'
       ? explicitThirdPartyAttack && interactionContext.targetLabels?.length > 0
       : (plannedAttackCard?.target === 'quoted_author'
@@ -1031,9 +1059,27 @@ export async function generateConversationReply(options) {
       ].filter(Boolean).join('\n\n'),
     },
   );
+  // Immersion needs thinking mode, whose reasoning shares max_tokens. Fall
+  // back to the caller's fast options if thinking returns no visible text.
+  const completeImmersive = async (historyInput, contentInput, options = {}) => {
+    if (!immersion) return completeWithPriority(historyInput, contentInput, options);
+    try {
+      const draft = stripImmersionMonologue(await completeWithPriority(historyInput, contentInput, {
+        ...options,
+        thinking: { type: 'enabled' },
+        maxTokens: Math.max(options.maxTokens ?? 0, IMMERSION_THINKING_MAX_TOKENS),
+        timeoutMs: Math.max(options.timeoutMs ?? 0, IMMERSION_THINKING_TIMEOUT_MS),
+        deadlineAt: Date.now() + IMMERSION_THINKING_TIMEOUT_MS,
+      }));
+      if (draft) return draft;
+    } catch (error) {
+      if (!/空内容/.test(error.message)) throw error;
+    }
+    return stripImmersionMonologue(await completeWithPriority(historyInput, contentInput, options));
+  };
 
   if (pureBotMention) {
-    const draft = await completeWithPriority(history, userContent, {
+    const draft = await completeImmersive(history, userContent, {
       cachePrefixSystemPrompt,
       additionalSystemPrompt: [
         buildCurrentTimePrompt(),
@@ -1309,7 +1355,7 @@ export async function generateConversationReply(options) {
       selectStyleAnchors(history, { currentContent: content, maxAnchors: 2 }),
       { mode: 'attack' },
     );
-      const firstDraft = await completeWithPriority(history, userContent, {
+      const firstDraft = await completeImmersive(history, userContent, {
       additionalSystemPrompt: [
         buildCurrentTimePrompt(),
         attackStyleAnchors,
@@ -1992,7 +2038,9 @@ export async function generateConversationReply(options) {
   const factEvidenceAvailable = Boolean(factSearchResult.context);
   const searchEvidenceAvailable = factEvidenceAvailable || cultureCardUsed;
   const hasAbstractSignals = Boolean(abstractImpressionText || abstractAssociationEntries.length > 0);
-  const abstractAssociationRequested = hasAbstractSignals || cultureGroundingRequired || (!factEvidenceAvailable && shouldInviteNaturalAssociation(content, {
+  // The global persona asks for an abstract association on every reply.
+  const abstractAssociationRequested = (familyBanterAllowed && !detailedAnswerRequested)
+    || hasAbstractSignals || cultureGroundingRequired || (!factEvidenceAvailable && shouldInviteNaturalAssociation(content, {
     currentQuestion,
     activeReply,
     activeReplyPriority,
@@ -2006,12 +2054,8 @@ export async function generateConversationReply(options) {
     attackStyle,
     attackDuringAnswer: attackStyle && !pureAttack,
   }));
-  // The association capability is always present in the persona prompt, but
-  // a missing association should only trigger the existing secondary review
-  // on turns where the user is actually asking to interpret visual/quoted
-  // material. Ordinary facts and technical answers keep their single
-  // generation budget; explicit social turns get a cheap existing style
-  // review when the first draft misses the concrete association.
+  // Every turn is asked for an association (see abstractAssociationRequested);
+  // only these turns pay for a second review call when the draft misses it.
   const associationReviewText = [content, currentQuestion].filter(Boolean).join('\n');
   const abstractAssociationReviewRequired = abstractAssociationRequested
     && !informationMemeMode
@@ -2320,7 +2364,10 @@ export async function generateConversationReply(options) {
   // 艾特意图判定的调用次数算进去，于是凡是走过意图判定的轮次（被 @ 的提问是
   // 主要场景）attempts 一开始就是 2，复核重写被整体跳过。
   let qualityRewriteUsed = false;
-  const responseTimeoutMs = thinkingEnabled
+  // Review heuristics keep using thinkingEnabled; immersion only changes the
+  // generation call.
+  const modelThinking = thinkingEnabled || immersion;
+  const responseTimeoutMs = modelThinking
     ? 120_000
     : (factEvidenceAvailable ? 75_000 : 60_000);
   try {
@@ -2329,10 +2376,10 @@ export async function generateConversationReply(options) {
       cachePrefixSystemPrompt,
       ...cacheLayoutOptions,
       additionalSystemPrompt,
-      maxTokens: thinkingEnabled ? 20_000 : responseMaxTokens,
+      maxTokens: modelThinking ? 20_000 : responseMaxTokens,
       usageSource: activeReply ? 'active-reply' : 'conversation-reply',
       timeoutMs: responseTimeoutMs,
-      thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
+      thinking: { type: modelThinking ? 'enabled' : 'disabled' },
       tools: turnWebSearchTools,
       onToolCall: runTool,
       maxToolRounds: turnWebSearchTools ? 2 : 0,
@@ -2340,7 +2387,7 @@ export async function generateConversationReply(options) {
       deadlineAt: Date.now() + responseTimeoutMs,
     });
   } catch (error) {
-    if (!thinkingEnabled || !/空内容/.test(error.message)) throw error;
+    if (!modelThinking || !/空内容/.test(error.message)) throw error;
     thinkingFallback = true;
     attempts += 1;
     answer = await completeWithPriority(history, revisionUserContent, {
@@ -2358,6 +2405,25 @@ export async function generateConversationReply(options) {
       maxToolCalls: turnWebSearchTools ? 3 : 0,
       deadlineAt: Date.now() + responseTimeoutMs,
     });
+  }
+
+  if (immersion) {
+    answer = stripImmersionMonologue(answer);
+    if (!answer) {
+      thinkingFallback = true;
+      attempts += 1;
+      answer = stripImmersionMonologue(await completeWithPriority(history, revisionUserContent, {
+        stableSystemPrompt,
+        cachePrefixSystemPrompt,
+        ...cacheLayoutOptions,
+        additionalSystemPrompt,
+        maxTokens: responseMaxTokens,
+        usageSource: activeReply ? 'active-reply-thinking-fallback' : 'conversation-thinking-fallback',
+        timeoutMs: responseTimeoutMs,
+        thinking: { type: 'disabled' },
+        deadlineAt: Date.now() + responseTimeoutMs,
+      })) || buildNormalReplyFallback();
+    }
   }
 
   if (detailedAnswerRequested && thinkingEnabled && !thinkingFallback && isThinSeriousReply(answer)) {
@@ -2705,79 +2771,7 @@ export async function generateConversationReply(options) {
     }
   }
 
-  // A unified role prompt should produce the whole answer, but a model can
-  // still turn a direct insult into a lecture about the insult. Keep that
-  // answer instead of switching personas; only add a generated, grounded
-  // second-person comeback. If that generation fails, leave the answer alone
-  // rather than appending a hard-coded insult from a local template.
-  if (attackStyle && !pureAttack
-    && review.issues.includes('missing-direct-rebuttal')) {
-    try {
-      const rebuttalStyleAnchors = buildStyleAnchorPrompt(
-        selectStyleAnchors(history, { currentContent: content, maxAnchors: 2 }),
-        { mode: 'attack' },
-      );
-      const rebuttalDraft = await completeWithPriority(
-        history,
-        '只输出最后一句直接回击，不重复前面的答案。',
-        {
-          stableSystemPrompt,
-          cachePrefixSystemPrompt,
-          ...cacheLayoutOptions,
-          additionalSystemPrompt: [
-            rebuttalStyleAnchors,
-            imageSafetyPrompt,
-            protectedIdentityContext,
-            memoryContext,
-            personaContextForAttack,
-            buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
-            buildAttackPrompt(content, {
-              history,
-              interactionContext,
-              activeReply: true,
-              jevAttackStrategy,
-              plannedAttack,
-            }),
-          ].filter(Boolean).join('\n\n'),
-          revisionSystemPrompt: [
-            '前面的统一角色回答已经完成问题，只补最后一句临场回击。',
-            '禁止解释骂人、评价词穷、劝对方文明或复述脏字；必须直接对当前攻击者说话，冲一点，短句收住。',
-          ].join('\n'),
-          maxTokens: 160,
-          usageSource: 'attack-rebuttal-fallback',
-          timeoutMs: 45_000,
-          thinking: { type: 'disabled' },
-        },
-      );
-      const cleanRebuttal = removeInternalReplyMetadata(
-        removeInternalParticipantIds(removeLiteralLatinMa(rebuttalDraft)),
-      );
-      const redactedRebuttal = redactSensitivePoliticalNames(cleanRebuttal);
-      const rebuttalReview = reviewNormalReply(cleanRebuttal, {
-        attackDuringAnswer: true,
-      });
-      const rebuttal = redactedRebuttal && !rebuttalReview.issues.includes('missing-direct-rebuttal')
-        ? redactedRebuttal
-        : '';
-      if (rebuttal) {
-        answer = `${answer}\n${rebuttal}`.trim();
-        review = reviewNormalReply(answer, {
-          thinkingEnabled,
-          compactResponse,
-          requiredIdentityRole,
-          activeReply,
-          activeReplyPriority,
-          passiveImageComment,
-          searchEvidenceAvailable,
-          suppressSearchNarration,
-          attackDuringAnswer: true,
-        });
-      }
-    } catch {
-      // Keep the answered question if the optional rebuttal call fails.
-    }
-  }
-
+  if (immersion) answer = stripImmersionMonologue(answer) || buildNormalReplyFallback();
   const finalAnswer = redactSensitivePoliticalNames((!attackStyle && !requiredIdentityRole)
     ? (removeLeadingModelMention(answer) || buildNormalReplyFallback())
     : answer);
@@ -2832,6 +2826,7 @@ export async function generateConversationReply(options) {
     searchGateReason: retrievalPolicy.reason,
     searchPolicy: retrievalPolicy,
     thinkingEnabled,
+    roleplayImmersion: immersion,
     thinkingFallback,
     detailedAnswerRequested,
     compactResponse: !detailedAnswerRequested && !recordSummary && !passiveImageComment,

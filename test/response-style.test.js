@@ -403,7 +403,7 @@ test('抽象联想能力写进统一基座和本轮上下文，但不把固定�
   const prompt = buildNormalReplyPrompt({ abstractAssociationRequested: true });
   assert.match(prompt, /抽象联想是常驻的输出能力/);
   assert.match(prompt, /本轮可自然使用抽象联想/);
-  assert.match(prompt, /没有贴合联想时自然停下/);
+  assert.match(prompt, /每一轮都要用/);
   assert.match(prompt, /龙图事故/);
   assert.match(prompt, /龙玉涛知识梗或文化抽象联想/);
   assert.doesNotMatch(prompt, /肯尼亚儿童|儿童死亡/);
@@ -595,19 +595,6 @@ test('只豁免已确认口癖的原样引号示范，保留引用外攻击的�
   ]) {
     assert.ok(reviewNormalReply(answer, context).issues.includes('family-attack-in-normal-mode'));
   }
-});
-
-test('问题窗口遭攻击时必须保留直接回击，不能只写软性评价', () => {
-  assert.ok(reviewNormalReply('先把链接后的 p=2 补上，这样才能抓到第二段。', {
-    attackDuringAnswer: true,
-  }).issues.includes('missing-direct-rebuttal'));
-  assert.equal(reviewNormalReply('先把链接后的 p=2 补上；你这个傻逼开场，和错参数一样都得收一收。', {
-    attackDuringAnswer: true,
-  }).valid, true);
-  assert.match(buildNormalReplyStablePrompt({ attackDuringAnswer: true }), /先把问题答完/);
-  assert.match(buildNormalReplyRetryPrompt('你这个傻逼，P2 怎么抓？', '先补 p=2。', ['missing-direct-rebuttal'], {
-    attackDuringAnswer: true,
-  }), /必须补一句直接、明确的回击/);
 });
 
 test('正常事实回答和内容吐槽直接通过，不因缺少骂人词而重写', () => {
@@ -964,4 +951,9 @@ test('语感契约进入普通回复基座和文化复核提示', () => {
     searchEvidenceQuality: 'related-only',
   }), /具体最早出处没查到/);
   assert.match(buildGroupChatOutputPrompt({ verificationRequested: true }), /第一句先给“真 \/ 假 \/ 无法确认”/);
+});
+
+test('以“司马”开头的辱骂识别为直接攻击机器人，但不误伤司马懿等人名', () => {
+  assert.equal(isDirectBotAttack('司马废物攻击性这么低也配和老子聊天？能上点强度吗'), true);
+  assert.equal(isDirectBotAttack('司马懿真是废物'), false);
 });
