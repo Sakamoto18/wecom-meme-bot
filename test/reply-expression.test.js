@@ -1,10 +1,64 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { stripReplyActing, REPLY_EXPRESSION_PROMPT } from '../src/reply-expression.js';
+import { stripReplyActing, REPLY_EXPRESSION_PROMPT, hasReplyProcessNarration, removeReplyProcessNarration } from '../src/reply-expression.js';
 import { generateConversationReply } from '../src/reply-engine.js';
 import { buildMessages } from '../src/chat-client.js';
 import { normalizeTurnPlan } from '../src/reply-turn-planner.js';
 import { buildModelInput, getGroupInteractionContext } from '../src/message-utils.js';
+
+const screenshotDraft = '“女拳”标签上，那我得先拆开：各人有各人的成名路，节目只是把这四个嘴上功夫厉害的凑一桌。';
+
+test('截图分析旁白和思考标签被识别，引用、代码和实际步骤保留', () => {
+  for (const text of [screenshotDraft, '让我想想该怎么回。', '我先分析一下你的话。', '这句我要接什么梗呢？', '先判断用户意图。', '<think>准备接梗</think>直接回复。']) {
+    assert.equal(hasReplyProcessNarration(text), true, text);
+    assert.equal(hasReplyProcessNarration(removeReplyProcessNarration(text)), false, text);
+  }
+  for (const text of ['“那我得先拆开”这句是旁白。', '`我先分析一下`', '> 我先分析一下。', '先断电，再拆开机箱。', '我觉得这个说法没依据。', '结论有两个原因：数据少，样本也有偏差。']) {
+    assert.equal(hasReplyProcessNarration(text), false, text);
+    assert.equal(removeReplyProcessNarration(text), text);
+  }
+  assert.equal(removeReplyProcessNarration(screenshotDraft + '不能仅凭这个标签判断。'), '不能仅凭这个标签判断。');
+});
+
+for (const scenario of [
+  { content: '那你就说这四个出圈不是因为女拳的事情？吓哭了', hasImageContext: true },
+  { content: '你个傻逼' },
+  { content: '今天又加班', activeReply: true },
+  { content: '@机器人', pureBotMention: true },
+  { content: '许飞和厉娜是什么', turnPlan: normalizeTurnPlan({ search: { culture_needed: true, culture_queries: ['许飞 厉娜'] } }), videoLearningGate: () => ({ action: 'remind', topic: '许飞 厉娜' }) },
+]) {
+  test(`分析旁白在发出前整句修复：${scenario.content}`, async () => {
+    let repairs = 0;
+    const result = await generateConversationReply({
+      ...scenario, modelInput: scenario.content, webSearchEnabled: false,
+      chatClient: { isConfigured: true, async complete(_history, _input, options) {
+        if (options.usageSource === 'reply-expression-repair') {
+          repairs++;
+          assert.equal(options.thinking.type, 'disabled');
+          assert.equal(options.tools, undefined);
+          return '不能仅凭这个标签判断。';
+        }
+        return screenshotDraft;
+      } },
+    });
+    assert.ok(repairs > 0);
+    assert.ok(result.answer.trim());
+    assert.doesNotMatch(result.answer, /先拆开|标签上/);
+  });
+}
+
+test('修复失败或仍输出旁白时，不发送原草稿或残句', async () => {
+  for (const fail of [true, false]) {
+    const result = await generateConversationReply({
+      content: '那你就说这四个出圈不是因为女拳的事情？', modelInput: '说说这个节目', webSearchEnabled: false,
+      chatClient: { isConfigured: true, async complete(_history, _input, options) {
+        if (fail && options.usageSource === 'reply-expression-repair') throw new Error('timeout');
+        return screenshotDraft + '不能仅凭这个标签判断。';
+      } },
+    });
+    assert.equal(result.answer, '不能仅凭这个标签判断。');
+  }
+});
 
 test('去掉截图中的表情、星号动作和内心戏，保留真正的台词', () => {
   for (const direction of ['（笑）', '(冷笑)', '*翻白眼*', '**摊手**', '（微微挑眉）', '（内心OS：先接话）']) {
