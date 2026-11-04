@@ -86,8 +86,13 @@ export async function selectLearnedAssociation({ text, store, corpus, chatClient
     const card = cards.find((item) => item.id === String(selected.id));
     if (!card || selected.confidence !== 'high') return null;
     const short = (value) => typeof value === 'string' && value.trim().length >= 2 && value.length <= 240;
+    const evidenceParts = typeof selected.evidence === 'string'
+      ? selected.evidence.split(/\s+[\/／|]\s+/u).map((part) => part.trim()).filter(Boolean) : [];
+    const evidenceMatches = short(selected.evidence) && (card.material.includes(selected.evidence)
+      || (evidenceParts.length > 1 && evidenceParts.length <= 4
+        && evidenceParts.every((part) => part.length >= 2 && card.material.includes(part))));
     if (!short(selected.anchor) || !scene.includes(selected.anchor)
-      || !short(selected.evidence) || !card.material.includes(selected.evidence)
+      || !evidenceMatches
       || !short(selected.mapping) || !short(selected.angle)) return null;
     return { entry: card.entry, anchor: selected.anchor, mapping: selected.mapping, angle: selected.angle };
   } catch { return null; }

@@ -92,7 +92,7 @@ test('没有原梗关键词的新场景也能选中已学关系；选择阶段�
         if (options.usageSource === 'association-transfer') {
           const payload = JSON.parse(input);
           const card = payload.candidates.find((item) => item.material.includes('修桥把桥拆了'));
-          return JSON.stringify({ id: card.id, anchor: '新增了三小时效率培训', evidence: '补救动作扩大原先的问题',
+          return JSON.stringify({ id: card.id, anchor: '新增了三小时效率培训', evidence: '修桥把桥拆了 / 补救动作扩大原先的问题',
             mapping: '减少加班的措施反而增加加班，符合补救扩大问题的关系', angle: '把效率培训接成越修越坏的桥', confidence: 'high' });
         }
         return '这效率培训，桥没修好先把下班的路拆了。';
@@ -116,6 +116,7 @@ test('选择器拒绝未知候选、编造证据、低置信选择，空素材�
   assert.equal(calls, 0);
   const store = { listAssociationCandidates: () => [{ target: '某梗', mechanism: '补救扩大问题' }] };
   for (const selected of [
+    { id: '1', confidence: 'high', anchor: '新的场景', evidence: '补救扩大问题 / 编造关系', mapping: '关系相同', angle: '接话方向' },
     { id: 'none' }, { id: '99', confidence: 'high' },
     { id: '1', confidence: 'high', anchor: '新的场景', evidence: '不存在的证据', mapping: '关系相同', angle: '接话方向' },
     { id: '1', confidence: 'low', anchor: '新的场景', evidence: '补救扩大问题', mapping: '关系相同', angle: '接话方向' },
