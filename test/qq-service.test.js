@@ -25,6 +25,7 @@ import {
   splitReplyText,
 } from '../src/qq-service.js';
 import { ActiveReplyDecider } from '../src/active-reply.js';
+import { ReplyTurnPlanner } from '../src/reply-turn-planner.js';
 
 function createMeme(filename = 'longtu.png') {
   return {
@@ -940,6 +941,28 @@ test('成功回看但最近无人讨论时不重新带入陈旧会话', async ()
   });
   assert.deepEqual(calls[0].history, []);
   assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /这次点名之前有群聊语境/);
+});
+
+test('下一次无引用艾特先筛选完整历史，保留蛇柜图片摘要和回答，排除电竞插话', async () => {
+  const conversationStore = new ConversationStore();
+  conversationStore.appendExchange('group:recall-linked', 'cobra能源行业应用\n【当时图片摘要】眼镜蛇盘在电池柜中', '开柜前先找捕蛇的。');
+  conversationStore.appendExchange('group:recall-linked', 'S8决赛八周年', '电竞讨论。');
+  const planner = new ReplyTurnPlanner({ chatClient: { isConfigured: true, async complete(_h, input, options) {
+    if (options.usageSource === 'reply-context-relevance') {
+      const { candidates } = JSON.parse(input);
+      return JSON.stringify({ ids: candidates.filter(c => c.messages.some(m => m.content.includes('【当时图片摘要】'))).map(c => c.id) });
+    }
+    return '{}';
+  } } });
+  const { service, calls } = createService({ conversationStore, replyTurnPlanner: planner });
+  await service.handleMessage({ message_type: 'group', group_id: 'recall-linked', message_id: 'followup',
+    user_id: 'u1', bot_user_id: 'bot', mentions: [{ user_id: 'bot' }], text: '电工打开会不会当场去世',
+    recent_group_context: { group_id: 'recall-linked', messages: [{ message_id: 'old-human', user_id: 'u1', text: 'cobra能源行业应用' }] },
+  });
+  const history = calls.at(-1).history.map(row => row.content).join('\n');
+  assert.match(history, /眼镜蛇盘在电池柜中/);
+  assert.match(history, /捕蛇/);
+  assert.doesNotMatch(history, /S8|电竞/);
 });
 
 test('群聊回看过滤异群、自身和当前消息，引用原消息时不使用额外回看图片', async () => {

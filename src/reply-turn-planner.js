@@ -1,4 +1,5 @@
 import { recentRelativeDateHint, shanghaiDateString } from './relative-time.js';
+import { selectRelevantReplyHistory } from './recent-group-context.js';
 
 const MODES = new Set([
   'banter', 'judgment', 'explanation', 'verification', 'support', 'culture', 'attack',
@@ -301,6 +302,11 @@ function buildPlannerContext(input = {}) {
 }
 
 export class ReplyTurnPlanner {
+  async selectHistory(input) {
+    if (!this.enabled) return null;
+    return selectRelevantReplyHistory({ ...input, chatClient: this.chatClient });
+  }
+
   constructor(options = {}) {
     this.chatClient = options.chatClient ?? null;
     this.timeoutMs = Math.max(2_000, Number(options.timeoutMs ?? 8_000) || 8_000);
