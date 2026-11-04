@@ -404,7 +404,8 @@ test('抽象联想能力写进统一基座和本轮上下文，但不把固定�
   const prompt = buildNormalReplyPrompt({ abstractAssociationRequested: true });
   assert.match(prompt, /抽象联想是常驻的输出能力/);
   assert.match(prompt, /本轮可自然使用抽象联想/);
-  assert.match(prompt, /每一轮都要用/);
+  assert.doesNotMatch(prompt, /每一轮都要用|每次回击都必须带|每轮都要带攻击/);
+  assert.match(prompt, /不是每轮输出配额/);
   assert.match(prompt, /龙图事故/);
   assert.match(prompt, /龙玉涛知识梗或文化抽象联想/);
   assert.doesNotMatch(prompt, /肯尼亚儿童|儿童死亡/);
@@ -984,4 +985,15 @@ test('口癖拆开拼进别的句子也算用过', () => {
     ['简直是半夜上厕所，找屎！'],
   );
   assert.match(prompt, /已用过的口癖：简直是半夜上厕所，找屎！/);
+});
+
+
+test('普通和攻击提示均不要求每轮造联想，已有双关可以结束', () => {
+  const normal = buildNormalReplyPrompt({ familyBanterAllowed: true });
+  const attack = buildAttackPrompt('你这都关联不起来吗');
+  for (const prompt of [normal, attack]) {
+    assert.doesNotMatch(prompt, /每一轮都要用|每次回击都必须带一个抽象联想|每轮都要带攻击/);
+  }
+  assert.match(normal, /不是每轮输出配额/);
+  assert.match(attack, /当前双关或反差已经成立就接住并停下/);
 });

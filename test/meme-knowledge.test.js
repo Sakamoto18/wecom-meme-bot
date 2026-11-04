@@ -60,6 +60,8 @@ test('抽象联想按触发印象持久化、召回并记录反馈', () => {
   const hit = store.lookupAssociations('弯腰双手前伸 恶臭姿势', { limit: 2 });
   assert.equal(hit.length, 1);
   assert.equal(hit[0].target, '野兽先辈 / 114514');
+  assert.equal(store.lookupAssociations('这个火柴人弯腰双手前伸你想到了什么')[0].target, entry.target);
+  assert.equal(store.lookupAssociations('今天天气怎么样').length, 0);
   assert.match(abstractAssociationPrompt(hit), /主观文化线索/u);
   assert.equal(store.recordAssociationFeedback({
     trigger: entry.trigger,

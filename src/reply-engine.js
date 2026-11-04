@@ -1,3 +1,4 @@
+import { ASSOCIATION_SCOPE, learnTextAssociation, taughtAssociationPrompt } from './association-learning.js';
 import {
   buildSourceScope,
   normalizeSourceCandidates,
@@ -904,6 +905,16 @@ export async function generateConversationReply(options) {
   ].filter(Boolean).join(' ').slice(0, 240);
 
   const turnNow = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const associationLearning = !recordSummary && !activeReply
+    ? await learnTextAssociation({ text: currentQuestion || content,
+      store: memeKnowledge, chatClient }) : null;
+  let taughtAssociations = [];
+  try {
+    taughtAssociations = !recordSummary
+      ? memeKnowledge?.lookupTaughtAssociations?.(ASSOCIATION_SCOPE, currentQuestion || content) || [] : [];
+  } catch { /* optional recall */ }
+  const taughtContext = taughtAssociationPrompt(taughtAssociations, associationLearning?.action);
+
   let learnedPhraseEntry = null;
   if (!recordSummary && memeKnowledge?.lookupPhrase) {
     try { learnedPhraseEntry = memeKnowledge.lookupPhrase(currentQuestion || content); } catch { /* optional recall */ }
@@ -1057,7 +1068,7 @@ export async function generateConversationReply(options) {
     && jevAttackStrategy.decision === 'none'
     && jevAttackStrategy.targetConfidence >= 0.7
     && !explicitStrongAttack;
-  const attackStyle = !recordSummary && !learnedLyricTurn && (
+  const attackStyle = !recordSummary && !learnedLyricTurn && !associationLearning && (
     explicitStrongAttack
     || (lexicalAttackStyle && !jevRejectsWeakAttack)
     || jevSemanticAttackEnabled(jevAttackStrategy, { interactionContext })
@@ -1101,6 +1112,7 @@ export async function generateConversationReply(options) {
           options.prioritySystemPrompt,
           priorityPersonaContext,
           learnedLyricTaskPrompt,
+          taughtContext,
           // Keep the outbound political-name policy after the administrator's
           // global persona so it remains the highest-priority instruction for
           // every draft, review, correction and fallback generation.
@@ -1427,6 +1439,7 @@ export async function generateConversationReply(options) {
         attackKnowledgePrompt,
         attackCorpusContext,
         attackLearnedContext,
+        taughtContext,
             buildAttackPrompt(content, {
           history,
           interactionContext,
@@ -1472,6 +1485,7 @@ export async function generateConversationReply(options) {
           attackKnowledgePrompt,
           attackCorpusContext,
           attackLearnedContext,
+          taughtContext,
           buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
           buildAttackRetryPrompt(
             content,
@@ -1692,9 +1706,9 @@ export async function generateConversationReply(options) {
       // The dedicated knowledge store is best effort; live retrieval remains available.
     }
   }
-  if (memeKnowledge && (abstractImpressionText || imageSemanticFrame)) {
+  if (memeKnowledge?.lookupAssociations && (abstractImpressionText || imageSemanticFrame || currentQuestion || content)) {
     try {
-      const impression = [abstractImpressionText, imageSemanticFrame].filter(Boolean).join(' ').slice(0, 900);
+      const impression = [currentQuestion || content, abstractImpressionText, imageSemanticFrame].filter(Boolean).join(' ').slice(0, 900);
       const recalled = memeKnowledge.lookupAssociations(impression, { limit: 4 });
       if (recalled.length > 0) {
         abstractAssociationEntries = [...abstractAssociationEntries, ...recalled].slice(0, 6);
@@ -2446,6 +2460,7 @@ export async function generateConversationReply(options) {
       ? ['【图片整体抽象印象】', abstractImpressionText, '这是主观联想素材，不是主体身份；允许顺着印象发散，但不要把它写成事实。'].join('\n')
       : '',
     abstractAssociationContext,
+    taughtContext,
     imageSearch && queries.length === 0 && textFactQueries.length === 0
       ? '本轮没有合适的公开检索线索或用户要求不联网，未进行图片联网查询；按可见证据回答当前问题，不要声称已搜索，也不必为了说明没搜索而另起一段。' : '',
     protectedIdentityContext,
@@ -2980,6 +2995,8 @@ export async function generateConversationReply(options) {
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     abstractAssociations: abstractAssociationEntries,
+    taughtAssociationsUsed: taughtAssociations.length,
+    associationLearningAction: associationLearning?.action || '',
     cultureRecallUsed: cultureRecall.used,
     styleSignals,
     activeReply,

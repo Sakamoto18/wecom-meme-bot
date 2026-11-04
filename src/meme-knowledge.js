@@ -270,6 +270,15 @@ export class MemeKnowledgeStore {
         last_used_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS meme_association_target ON meme_association(target);
+      CREATE TABLE IF NOT EXISTS taught_association (
+        scope TEXT NOT NULL,
+        trigger_key TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        evidence_text TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(scope, trigger_key, target_key)
+      );
     `);
     const associationColumns = new Set(
       this.database.prepare('PRAGMA table_info(meme_association)').all()
@@ -459,17 +468,61 @@ export class MemeKnowledgeStore {
     const db = this.ensureOpen();
     const tokens = [...new Set(query.split(/[^\p{L}\p{N}]+/u).filter((token) => token.length >= 2))].slice(0, 8);
     if (!tokens.length) return [];
-    const clauses = tokens.map(() => '(lower(trigger_text) LIKE ? OR lower(target) LIKE ? OR lower(mechanism) LIKE ? OR lower(register_text) LIKE ?)').join(' OR ');
-    const params = tokens.flatMap((token) => [`%${token}%`, `%${token}%`, `%${token}%`, `%${token}%`]);
-    const rows = db.prepare(`
-      SELECT * FROM meme_association
-      WHERE ${clauses}
-      ORDER BY (positive_count - negative_count) DESC, confidence DESC, last_used_at DESC
-      LIMIT ?
-    `).all(...params, limit);
+    const normalizedQuery = phraseText(query);
+    const rows = db.prepare('SELECT * FROM meme_association').all()
+      .map((row) => {
+        const anchors = [row.trigger_text, row.target, ...list(read(row.aliases_json))];
+        let score = 0;
+        for (const value of anchors) {
+          const anchor = phraseText(value);
+          if (anchor.length < 2) continue;
+          if (normalizedQuery.includes(anchor)) score = Math.max(score, anchor.length + 10);
+          for (const token of tokens) {
+            if (token.length >= 2 && String(value).toLowerCase().includes(token)) score = Math.max(score, token.length);
+          }
+          const overlap = longestCommonRun(normalizedQuery, anchor);
+          if (overlap >= 4 && overlap / anchor.length >= 0.35) score = Math.max(score, overlap);
+        }
+        return { row, score };
+      }).filter((hit) => hit.score > 0)
+      .sort((a, b) => (b.row.positive_count - b.row.negative_count) - (a.row.positive_count - a.row.negative_count)
+        || b.score - a.score || b.row.last_used_at - a.row.last_used_at)
+      .slice(0, limit).map((hit) => hit.row);
     const now = this.now();
     rows.forEach((row) => db.prepare('UPDATE meme_association SET last_used_at = ? WHERE association_key = ?').run(now, row.association_key));
     return rows.map((row) => this.#associationRow(row));
+  }
+
+  saveTaughtAssociation(scope, entry, evidence) {
+    const normalized = buildAbstractAssociationEntry(entry);
+    if (!scope || !normalized || normalized.confidence !== 'high') return false;
+    this.ensureOpen().prepare(`INSERT INTO taught_association VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(scope, trigger_key, target_key) DO UPDATE SET
+      entry_json=excluded.entry_json, evidence_text=excluded.evidence_text, updated_at=excluded.updated_at`)
+      .run(text(scope, 180), phraseText(normalized.trigger), phraseText(normalized.target),
+        JSON.stringify(normalized), text(evidence, 600), this.now());
+    return true;
+  }
+
+  forgetTaughtAssociation(scope, trigger, target) {
+    return this.ensureOpen().prepare(`DELETE FROM taught_association
+      WHERE scope = ? AND trigger_key = ? AND target_key = ?`)
+      .run(text(scope, 180), phraseText(trigger), phraseText(target)).changes > 0;
+  }
+
+  lookupTaughtAssociations(scope, message) {
+    if (!scope) return [];
+    const query = phraseText(message);
+    if (query.length < 2) return [];
+    return this.ensureOpen().prepare('SELECT entry_json FROM taught_association WHERE scope = ? ORDER BY updated_at DESC')
+      .all(text(scope, 180)).map((row) => read(row.entry_json)).map((entry) => {
+        // Match stored anchors inside a complete sentence, not the complete
+        // incoming Chinese sentence inside the stored phrase.
+        const anchors = [entry.trigger, ...list(entry.aliases)];
+        const hits = anchors.map(phraseText).filter((anchor) => anchor.length >= 2 && query.includes(anchor));
+        return { entry, score: Math.max(0, ...hits.map((hit) => hit.length)) };
+      }).filter((hit) => hit.score > 0).sort((a, b) => b.score - a.score)
+      .slice(0, 4).map((hit) => hit.entry);
   }
 
   putAssociation(entry, options = {}) {
