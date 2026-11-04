@@ -1,12 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { stripReplyActing, REPLY_EXPRESSION_PROMPT, hasReplyProcessNarration, removeReplyProcessNarration } from '../src/reply-expression.js';
+import { stripReplyActing, REPLY_EXPRESSION_PROMPT, hasReplyProcessNarration, removeReplyProcessNarration, guardFinalReply } from '../src/reply-expression.js';
 import { generateConversationReply } from '../src/reply-engine.js';
 import { buildMessages } from '../src/chat-client.js';
 import { normalizeTurnPlan } from '../src/reply-turn-planner.js';
 import { buildModelInput, getGroupInteractionContext } from '../src/message-utils.js';
 
 const screenshotDraft = '“女拳”标签上，那我得先拆开：各人有各人的成名路，节目只是把这四个嘴上功夫厉害的凑一桌。';
+
+test('带引号、嵌套括号和代码片段的内心戏必须整体移除，不能留下截图尾巴', () => {
+  const answer = '竞争对手也可能在某些产品上存在供应关系。';
+  for (const inner of [
+    '（心想：不能直接说“欣旺达买宁德电芯”，得说实话。）',
+    '(内心OS：不能直接说"欣旺达买宁德电芯"，得说实话。)',
+    '（心想：要核实（采购的是哪类产品），`不能乱说`。）',
+    '（心想：先看“客户”指什么。\n再回答。）',
+  ]) assert.equal(guardFinalReply(inner + '\n' + answer), answer);
+  assert.equal(guardFinalReply('“欣旺达买宁德电芯”，得说实话。)'), '');
+  assert.equal(guardFinalReply('（心想：没写完“引用”'), '');
+  assert.equal(guardFinalReply('“（心想：引用原文。）”是心理描写。'), '“（心想：引用原文。）”是心理描写。');
+  assert.equal(guardFinalReply('```js\ntext = "（心想：原文）";\n```'), '```js\ntext = "（心想：原文）";\n```');
+});
+
+test('沉浸指令不再要求括号独白，原截图残句触发完整重写', async () => {
+  const calls = [];
+  const result = await generateConversationReply({
+    content: '欣旺达为什么也是宁德时代客户', modelInput: '欣旺达为什么也是宁德时代客户',
+    roleplayImmersion: true, webSearchEnabled: false,
+    chatClient: { isConfigured: true, async complete(_history, input, options) {
+      calls.push(options.usageSource);
+      assert.doesNotMatch(String(input), /请以角色第一人称进行内心独白|用括号包裹内心活动/);
+      return options.usageSource === 'reply-expression-repair' ? '客户和竞争对手这两种关系可以同时存在，具体采购关系还要核实。' : '“欣旺达买宁德电芯”，得说实话。)';
+    } },
+  });
+  assert.ok(calls.includes('reply-expression-repair'));
+  assert.doesNotMatch(result.answer, /得说实话|[)）]/);
+});
 
 test('截图分析旁白和思考标签被识别，引用、代码和实际步骤保留', () => {
   for (const text of [screenshotDraft, '让我想想该怎么回。', '我先分析一下你的话。', '这句我要接什么梗呢？', '先判断用户意图。', '<think>准备接梗</think>直接回复。']) {

@@ -33,9 +33,35 @@ export function removeReplyProcessNarration(value) {
 }
 
 export function stripReplyActing(value) {
+  // Parse outer spans first. Protecting quotes before removing an enclosing
+  // monologue used to split “（心想：...“quoted text”...）” and leak its tail.
+  const input = String(value ?? '');
+  let withoutMonologues = '';
+  for (let i = 0; i < input.length;) {
+    const rest = input.slice(i);
+    const quoted = rest.match(/^(?:```[\s\S]*?```|`[^`\n]*`|“[^”\n]*”|「[^」\n]*」|『[^』\n]*』|"[^"\n]*")/u);
+    const blockQuote = (i === 0 || input[i - 1] === '\n') && rest.match(/^\s*>[^\n]*/u);
+    if (quoted || blockQuote) {
+      const span = (quoted || blockQuote)[0];
+      withoutMonologues += span;
+      i += span.length;
+      continue;
+    }
+    if ((input[i] === '（' || input[i] === '(') && INNER.test(rest.slice(1).trimStart())) {
+      let depth = 1;
+      i++;
+      while (i < input.length && depth) {
+        if (input[i] === '(' || input[i] === '（') depth++;
+        if (input[i] === ')' || input[i] === '）') depth--;
+        i++;
+      }
+      continue;
+    }
+    withoutMonologues += input[i++];
+  }
   // Protect source quotations and code: “（笑）是什么意思” is legitimate
   // content, not the bot acting. Only recognized standalone directions go.
-  return String(value ?? '').split(PROTECTED_PARTS).map((part, index) => {
+  return withoutMonologues.split(PROTECTED_PARTS).map((part, index) => {
     if (index % 2) return part;
     return part
       .replace(/[（(]([^（）()\n]*)[）)]/gu, (whole, body) => (
@@ -46,4 +72,21 @@ export function stripReplyActing(value) {
       ))
       .replace(/(^|\n)\s*(?:[（(]\s*)?(?:内心\s*OS|内心独白|我?心想)\s*[：:][^\n]*$/gimu, '$1');
   }).join('').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+export function hasBrokenReplyParentheses(value) {
+  const text = String(value ?? '').split(PROTECTED_PARTS).filter((_part, index) => !(index % 2)).join('');
+  let depth = 0;
+  for (const char of text) {
+    if (char === '(' || char === '（') depth++;
+    if ((char === ')' || char === '）') && --depth < 0) return true;
+  }
+  return depth !== 0;
+}
+
+export function guardFinalReply(value) {
+  const text = removeReplyProcessNarration(stripReplyActing(value));
+  // Never patch a broken tail into something that merely looks grammatical.
+  // Reject the incomplete reply so the caller can use its nonempty fallback.
+  return hasBrokenReplyParentheses(text) ? '' : text;
 }

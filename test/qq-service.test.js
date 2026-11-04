@@ -782,6 +782,24 @@ test('QQ 普通对话复用回复引擎、昵称和独立会话记忆，未匹�
   assert.equal(second.messages[0].text, '这是 QQ 回答，别把问题绕复杂了。');
 });
 
+test('QQ 发送和历史回写前整体剥离含引文的内心戏，不把残尾拆成第一条消息', async () => {
+  const conversationStore = new ConversationStore();
+  const answer = '客户和竞争对手可以同时存在，具体采购关系需要证据。';
+  const { service } = createService({
+    conversationStore, roleplayImmersion: true,
+    chatClient: { isConfigured: true, async complete() {
+      return '（心想：不能直接说“欣旺达买宁德电芯”，得说实话。）\n' + answer;
+    } },
+  });
+  const result = await service.handleMessage({ message_id: 'monologue-quote-1', message_type: 'group',
+    group_id: 'monologue-quote', user_id: 'tester', text: '欣旺达为什么也是宁德时代客户' });
+  const sent = result.messages.filter((message) => message.type === 'text').map((message) => message.text);
+  assert.deepEqual(sent, [answer]);
+  const stored = conversationStore.get('group:monologue-quote').filter((message) => message.role === 'assistant');
+  assert.equal(stored.length, 1);
+  assert.doesNotMatch(stored[0].content, /得说实话|心想|欣旺达买宁德电芯/);
+});
+
 test('用户纠正上一答时，重复草稿会触发一次切题重写', async () => {
   const conversationStore = new ConversationStore();
   const previous = '端口先检查监听地址，再确认防火墙规则，别一直盯着旧日志打转。';
@@ -2494,14 +2512,16 @@ test('普通群消息经读空气判定命中后复用现有人格回复引擎',
 
 test('话题未定时旁观消息不进入主动插话判定', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'qq-service-topic-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   const groupMemory = new QqGroupMemory({
     databaseFilePath: path.join(directory, 'group-memory.sqlite'),
     enabledGroups: ['g-topic-ambiguous'],
     now: () => 10_000,
     logger: { log() {}, warn() {} },
   });
-  t.after(() => groupMemory.close());
+  t.after(async () => {
+    groupMemory.close();
+    await rm(directory, { recursive: true, force: true });
+  });
   let decisions = 0;
   const { service } = createService({
     groupMemory,
@@ -2530,7 +2550,6 @@ test('话题未定时旁观消息不进入主动插话判定', async (t) => {
 
 test('话题未定时明确艾特仍用回退语境回复', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'qq-service-topic-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   const currentTime = 20_000;
   const groupMemory = new QqGroupMemory({
     databaseFilePath: path.join(directory, 'group-memory.sqlite'),
@@ -2538,7 +2557,10 @@ test('话题未定时明确艾特仍用回退语境回复', async (t) => {
     now: () => currentTime,
     logger: { log() {}, warn() {} },
   });
-  t.after(() => groupMemory.close());
+  t.after(async () => {
+    groupMemory.close();
+    await rm(directory, { recursive: true, force: true });
+  });
   const { service, calls } = createService({
     groupMemory,
     now: () => currentTime,
@@ -2571,7 +2593,6 @@ test('话题未定时明确艾特仍用回退语境回复', async (t) => {
 
 test('话题回退为空时不会重新灌入旧的长会话历史', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'qq-service-topic-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   const currentTime = 25_000;
   const conversationStore = new ConversationStore({ now: () => currentTime });
   conversationStore.appendExchange(
@@ -2585,7 +2606,10 @@ test('话题回退为空时不会重新灌入旧的长会话历史', async (t) =
     now: () => currentTime,
     logger: { log() {}, warn() {} },
   });
-  t.after(() => groupMemory.close());
+  t.after(async () => {
+    groupMemory.close();
+    await rm(directory, { recursive: true, force: true });
+  });
   const { service, calls } = createService({
     conversationStore,
     groupMemory,
@@ -2610,7 +2634,6 @@ test('话题回退为空时不会重新灌入旧的长会话历史', async (t) =
 
 test('已匹配话题只把本话题历史交给主动接话判定', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'qq-service-topic-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
   let currentTime = 30_000;
   const groupMemory = new QqGroupMemory({
     databaseFilePath: path.join(directory, 'group-memory.sqlite'),
@@ -2618,7 +2641,10 @@ test('已匹配话题只把本话题历史交给主动接话判定', async (t) =
     now: () => currentTime,
     logger: { log() {}, warn() {} },
   });
-  t.after(() => groupMemory.close());
+  t.after(async () => {
+    groupMemory.close();
+    await rm(directory, { recursive: true, force: true });
+  });
   const contexts = [];
   const { service } = createService({
     groupMemory,

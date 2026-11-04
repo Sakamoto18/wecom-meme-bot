@@ -17,6 +17,7 @@ import {
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
 import { QqUsageLimitError, isDeepSeekPeakTime } from './qq-usage-tracker.js';
 import { generateConversationReply } from './reply-engine.js';
+import { guardFinalReply } from './reply-expression.js';
 import {
   isAdminStopCommand,
   isExplicitEngagementEnd,
@@ -4307,6 +4308,13 @@ export class QqBotService {
         );
       }
 
+      // Validate the complete text before persistence and before QQ splitting.
+      // No malformed inner-monologue tail may become a standalone first send.
+      if (generated.answer) {
+        const guarded = guardFinalReply(generated.answer);
+        if (guarded !== generated.answer) this.logger.warn('QQ 最终表达检查拦截了旁白或残句');
+        generated.answer = guarded || '这条暂时没答好，你再问一句。';
+      }
       if (generated.mode === 'learning-pending') {
         this.logger.log(`QQ 对话回复模式：learning-pending，task=${generated.learningTaskKey || '-'}，reminder=${generated.answer ? 'yes' : 'no'}`);
         if (generated.answer) {
