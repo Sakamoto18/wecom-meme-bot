@@ -1,4 +1,5 @@
 import { ASSOCIATION_SCOPE, learnTextAssociation, taughtAssociationPrompt, selectLearnedAssociation, associationTransferPrompt } from './association-learning.js';
+import { REPLY_EXPRESSION_PROMPT, stripReplyActing } from './reply-expression.js';
 import {
   buildSourceScope,
   normalizeSourceCandidates,
@@ -148,15 +149,7 @@ const ROLEPLAY_IMMERSION_MARKER = [
   '3. 思考内容应沉浸在角色中，通过内心独白分析剧情和规划回复',
 ].join('\n');
 const IMMERSION_THINKING_TIMEOUT_MS = 90_000;
-// The model sometimes copies the bracketed monologue into the visible reply.
-const IMMERSION_MONOLOGUE_PATTERN = /[（(]\s*(?:(?:我?心想|内心\s*OS|内心独白)\s*[：:]?|(?:内心|OS)\s*[：:])[^）)]*(?:[）)]|$)/giu;
-
-function stripImmersionMonologue(value) {
-  return String(value ?? '')
-    .replace(IMMERSION_MONOLOGUE_PATTERN, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
+const stripImmersionMonologue = stripReplyActing;
 
 // The immersion instruction only belongs on thinking calls; without thinking
 // the model writes the monologue into the visible reply.
@@ -1116,6 +1109,7 @@ export async function generateConversationReply(options) {
       immersion && !thinking ? withoutImmersionMarker(contentInput) : contentInput,
       {
         ...options,
+        revisionSystemPrompt: [options.revisionSystemPrompt, REPLY_EXPRESSION_PROMPT].filter(Boolean).join('\n\n'),
         prioritySystemPrompt: [
           options.prioritySystemPrompt,
           priorityPersonaContext,
@@ -1129,8 +1123,8 @@ export async function generateConversationReply(options) {
         ].filter(Boolean).join('\n\n'),
       },
     );
-    // Every generated text passes through here, so no monologue reaches QQ.
-    return immersion && typeof result === 'string' ? stripImmersionMonologue(result) : result;
+    // Apply in every mode, including rewrites and early-return reply paths.
+    return typeof result === 'string' ? stripReplyActing(result) : result;
   };
   // Immersion needs thinking mode, whose reasoning shares max_tokens. Fall
   // back to the caller's fast options if thinking returns no visible text.
@@ -1227,7 +1221,7 @@ export async function generateConversationReply(options) {
     if (mentionReply) {
       const answer = redactSensitivePoliticalNames(removeInternalParticipantIds(
         removeForbiddenProtectedRoleSentences(
-          removeInternalReplyMetadata(mentionReply), forbiddenProtectedRoleTerms,
+          stripReplyActing(removeInternalReplyMetadata(mentionReply)), forbiddenProtectedRoleTerms,
         ),
       ));
       if (answer) {
@@ -2573,7 +2567,7 @@ export async function generateConversationReply(options) {
     });
   }
 
-  if (immersion) {
+  if (immersion || !String(answer ?? '').trim()) {
     answer = stripImmersionMonologue(answer);
     if (!answer) {
       thinkingFallback = true;
@@ -2937,7 +2931,7 @@ export async function generateConversationReply(options) {
     }
   }
 
-  if (immersion) answer = stripImmersionMonologue(answer) || buildNormalReplyFallback();
+  answer = stripReplyActing(answer) || buildNormalReplyFallback();
   const finalAnswer = redactSensitivePoliticalNames((!attackStyle && !requiredIdentityRole)
     ? (removeLeadingModelMention(answer) || buildNormalReplyFallback())
     : answer);
