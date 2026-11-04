@@ -525,3 +525,20 @@ test('视频发现失败会将保留名额还给群聊；不会丢掉已选候�
     assert.deepEqual(run.items.map((item) => item.term), ['甲梗', '乙梗', '丙梗']);
   } finally { f.close(); }
 });
+
+
+test('视频学习把关系机制写入全局联想库，供新场景迁移使用', async () => {
+  const f = fixture();
+  try {
+    const associations = [];
+    f.coordinator.memeKnowledge.putAssociation = (entry) => { associations.push(entry); return true; };
+    f.coordinator.tick = async () => {};
+    f.coordinator.gate({ term: '似了', question: '似了是什么梗', waiter: groupWaiter });
+    await f.coordinator.processTask(f.store.nextQueuedTask());
+    assert.equal(associations.length, 1);
+    assert.equal(associations[0].target, '似了');
+    assert.equal(associations[0].mechanism, '谐音');
+    assert.match(associations[0].trigger, /遇到糟心事/);
+    assert.ok(associations[0].sourceUrls.length > 0);
+  } finally { f.close(); }
+});

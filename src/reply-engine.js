@@ -1,4 +1,4 @@
-import { ASSOCIATION_SCOPE, learnTextAssociation, taughtAssociationPrompt } from './association-learning.js';
+import { ASSOCIATION_SCOPE, learnTextAssociation, taughtAssociationPrompt, selectLearnedAssociation, associationTransferPrompt } from './association-learning.js';
 import {
   buildSourceScope,
   normalizeSourceCandidates,
@@ -928,6 +928,14 @@ export async function generateConversationReply(options) {
     memeKnowledgePrompt(learnedPhraseEntry, 'cache', { intent: learnedPhraseIntent, now: turnNow }),
     '当前用户在抛已学的歌词或改词梗。第一句先接住这个节奏和当前场景，不要先评价用户嘴碎、抽象或唱得差；角色口吻只修饰接话。只回一两句，不播报识别或学习过程。',
   ].join('\n') : '';
+  const associationSelection = !recordSummary && !learnedLyricTurn && !associationLearning
+    && !['support', 'explanation'].includes(turnPlan?.mode)
+    && !/(?:认真回答|别开玩笑|不要玩梗|详细|步骤|急救|自杀|去世)/u.test(currentQuestion || content)
+    ? await selectLearnedAssociation({
+      text: [currentQuestion || content, imageMemeClaim, imageSemanticFrame].filter(Boolean).join('\n'),
+      store: memeKnowledge, corpus: memeCorpus, chatClient,
+    }) : null;
+  const associationTransferContext = associationTransferPrompt(associationSelection);
   const immersion = roleplayImmersion && !recordSummary;
   const turnModelInput = immersion ? `${modelInput ?? ''}${ROLEPLAY_IMMERSION_MARKER}` : modelInput;
   const userContent = buildMultimodalUserContent(turnModelInput, imageBlocks, videoBlocks);
@@ -1113,6 +1121,7 @@ export async function generateConversationReply(options) {
           priorityPersonaContext,
           learnedLyricTaskPrompt,
           taughtContext,
+          associationTransferContext,
           // Keep the outbound political-name policy after the administrator's
           // global persona so it remains the highest-priority instruction for
           // every draft, review, correction and fallback generation.
@@ -1537,6 +1546,7 @@ export async function generateConversationReply(options) {
       searchMode: attackKnowledgeSearchAttempted ? 'meme' : '',
       attackKnowledgeSearchAttempted,
       attackKnowledgeSearchError,
+      associationTransferUsed: Boolean(associationSelection),
       memeCorpusUsed: Boolean(attackCorpusContext),
       memeCorpusCharacters: attackCorpusContext.length,
       cultureRecallUsed: cultureRecall.used,
@@ -2995,6 +3005,7 @@ export async function generateConversationReply(options) {
     abstractAssociationRequested,
     abstractAssociationReviewRequired,
     abstractAssociations: abstractAssociationEntries,
+    associationTransferUsed: Boolean(associationSelection),
     taughtAssociationsUsed: taughtAssociations.length,
     associationLearningAction: associationLearning?.action || '',
     cultureRecallUsed: cultureRecall.used,

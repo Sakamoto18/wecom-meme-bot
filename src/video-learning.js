@@ -68,7 +68,7 @@ const BROWSE_PROMPT = [
 ].join('\n');
 const BROWSE_KEYWORDS = Object.freeze(['梗百科', '是什么梗', '梗知识']);
 
-const REUSABLE_MEME_PROMPT = '除了含义，还要保留能用于聊天的接法：reply_hooks 给出 1～3 条与证据对应的短句或改词结构，usage 说明什么时候接、接哪个点；材料不支持就留空。歌曲/鬼畜优先保留有辨识度的重复副歌和相邻短句，并逐句标注置信度；不要只写“用于调侃”，不要杜撰原作台词。';
+const REUSABLE_MEME_PROMPT = '除了含义，还要学习可迁移的关系：mechanism 写原场景中哪两个动作、角色、因果或词义怎样错位，usage 写不依赖原人物姓名也成立的新场景条件，avoid 写哪些情况下不能套。不能只把它标成“抽象/反差/谐音”。保留能用于聊天的接法：reply_hooks 给出 1～3 条与证据对应的短句或改词结构，usage 说明什么时候接、接哪个点；材料不支持就留空。歌曲/鬼畜优先保留有辨识度的重复副歌和相邻短句，并逐句标注置信度；不要只写“用于调侃”，不要杜撰原作台词。';
 
 const MERGE_PROMPT = [
   REUSABLE_MEME_PROMPT,
@@ -674,6 +674,14 @@ export class VideoLearningCoordinator {
       if (entry && merged.confidence === 'high') {
         try {
           this.memeKnowledge?.put?.(entry, { ttlMs: KNOWLEDGE_TTL_MS });
+          if (merged.mechanism && merged.usage?.length) {
+            this.memeKnowledge?.putAssociation?.({
+              trigger: merged.usage.join('；').slice(0, 240), target: entry.term,
+              mechanism: merged.mechanism, usage: entry.replyHooks?.length ? entry.replyHooks : merged.usage,
+              aliases: entry.aliases, confidence: 'high', factConfidence: 'low',
+              sourceUrls: entry.sourceUrls, sourceDomains: entry.sourceDomains,
+            });
+          }
         } catch (error) {
           this.logger.warn?.(`视频学梗：写入梗库失败：${error.message}`);
         }

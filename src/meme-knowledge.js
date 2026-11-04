@@ -493,6 +493,39 @@ export class MemeKnowledgeStore {
     return rows.map((row) => this.#associationRow(row));
   }
 
+  listAssociationCandidates(limit = 48, query = '') {
+    const db = this.ensureOpen();
+    const count = Math.max(3, Math.min(72, Number(limit) || 48));
+    const perSource = Math.ceil(count / 3);
+    const matched = query ? [
+      ...this.lookupTaughtAssociations('global', query),
+      ...this.lookupAssociations(query, { limit: 8 }),
+    ] : [];
+    const taught = db.prepare(`SELECT entry_json FROM taught_association
+      WHERE scope = 'global' ORDER BY updated_at DESC LIMIT ?`).all(perSource)
+      .map((row) => ({ ...read(row.entry_json), source: 'teaching' }));
+    const associations = db.prepare(`SELECT * FROM meme_association
+      WHERE negative_count <= positive_count AND confidence = 'high'
+      ORDER BY (positive_count - negative_count) DESC, updated_at DESC LIMIT ?`).all(perSource)
+      .map((row) => ({ ...this.#associationRow(row), source: 'association' }));
+    // Existing video entries become usable without waiting for a migration or
+    // another viewing pass; meaning/usage already preserve their mechanism.
+    const videos = db.prepare(`SELECT * FROM meme_knowledge
+      WHERE confidence = 'high' AND expires_at > ? ORDER BY updated_at DESC LIMIT ?`)
+      .all(this.now(), perSource).map((row) => {
+        const entry = this.#row(row);
+        return { trigger: entry.term, target: entry.term, mechanism: entry.meaning,
+          usage: [...entry.usage, ...entry.replyHooks], source: 'learned-meme' };
+      });
+    const seen = new Set();
+    return [...matched, ...taught, ...associations, ...videos].filter((entry) => {
+      const key = `${entry.target}::${entry.mechanism}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, count);
+  }
+
   saveTaughtAssociation(scope, entry, evidence) {
     const normalized = buildAbstractAssociationEntry(entry);
     if (!scope || !normalized || normalized.confidence !== 'high') return false;

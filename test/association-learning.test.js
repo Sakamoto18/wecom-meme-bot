@@ -76,3 +76,51 @@ test('群里教学后另一个用户私聊无历史仍召回，当前教学不�
     assert.match(generation.prioritySystemPrompt, /不追加笑点评分、训人或无关比喻/);
   } finally { f.close(); }
 });
+
+test('没有原梗关键词的新场景也能选中已学关系；选择阶段不接收人格案例', async () => {
+  const f = fixture();
+  try {
+    f.store.saveTaughtAssociation('global', { trigger: '给系统修补反而造成更大故障', target: '修桥把桥拆了',
+      mechanism: '补救动作扩大原先的问题', usage: ['好心修补却适得其反'], confidence: 'high' }, '教学');
+    const scene = '为了让大家准时下班，领导新增了三小时效率培训';
+    const calls = [];
+    const result = await generateConversationReply({ content: scene, currentQuestion: scene, modelInput: scene,
+      memeKnowledge: f.store, webSearchEnabled: false,
+      priorityPersonaContext: '人格案例：半夜上厕所，找屎。',
+      chatClient: { isConfigured: true, async complete(_history, input, options) {
+        calls.push({ input, options });
+        if (options.usageSource === 'association-transfer') {
+          const payload = JSON.parse(input);
+          const card = payload.candidates.find((item) => item.material.includes('修桥把桥拆了'));
+          return JSON.stringify({ id: card.id, anchor: '新增了三小时效率培训', evidence: '补救动作扩大原先的问题',
+            mapping: '减少加班的措施反而增加加班，符合补救扩大问题的关系', angle: '把效率培训接成越修越坏的桥', confidence: 'high' });
+        }
+        return '这效率培训，桥没修好先把下班的路拆了。';
+      } },
+    });
+    assert.equal(result.associationTransferUsed, true);
+    const selector = calls.find((call) => call.options.usageSource === 'association-transfer');
+    assert.doesNotMatch(selector.input + selector.options.systemPrompt, /半夜上厕所|找屎/);
+    assert.equal(selector.options.prioritySystemPrompt, undefined);
+    const reply = calls.find((call) => call.options.usageSource === 'conversation-reply');
+    assert.match(reply.options.prioritySystemPrompt, /修桥把桥拆了/);
+    assert.match(reply.options.prioritySystemPrompt, /不从人格案例、口癖例句里再拆词/);
+  } finally { f.close(); }
+});
+
+test('选择器拒绝未知候选、编造证据、低置信选择，空素材不调用模型', async () => {
+  const { selectLearnedAssociation } = await import('../src/association-learning.js');
+  let calls = 0;
+  const client = { isConfigured: true, complete: async () => { calls++; return '{}'; } };
+  assert.equal(await selectLearnedAssociation({ text: '新的场景', store: {}, chatClient: client }), null);
+  assert.equal(calls, 0);
+  const store = { listAssociationCandidates: () => [{ target: '某梗', mechanism: '补救扩大问题' }] };
+  for (const selected of [
+    { id: 'none' }, { id: '99', confidence: 'high' },
+    { id: '1', confidence: 'high', anchor: '新的场景', evidence: '不存在的证据', mapping: '关系相同', angle: '接话方向' },
+    { id: '1', confidence: 'low', anchor: '新的场景', evidence: '补救扩大问题', mapping: '关系相同', angle: '接话方向' },
+  ]) {
+    client.complete = async () => JSON.stringify(selected);
+    assert.equal(await selectLearnedAssociation({ text: '新的场景', store, chatClient: client }), null);
+  }
+});
