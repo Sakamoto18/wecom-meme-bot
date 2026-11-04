@@ -56,7 +56,9 @@ function fixture(options = {}) {
     groupMemory: options.groupMemory ?? null,
     personaPrompt: () => '【全局人格】龙玉涛',
     asr: options.asr ?? null,
+    ...(options.commentCollector ? { commentCollector: options.commentCollector } : {}),
     resolveMedia: async (url) => ({
+      aid: options.aid ?? 0,
       bvid: url.split('/').pop(),
       cid: '7',
       page: 1,
@@ -88,6 +90,7 @@ function fixture(options = {}) {
             ? { found: false, confidence: 'low' }
             : { found: true, term: '似了', aliases: ['我似了'], meaning: '“死了”的谐音，装可爱地表示崩溃或完蛋', origin: '', mechanism: '谐音', usage: ['遇到糟心事说一句我似了'], avoid: '', confidence: 'high', sound_unconfirmed: false, unconfirmed: '' });
         }
+        if (options.usageSource === 'video-learning-comments') return fixtureOptions.commentAnswer ?? '';
         if (options.usageSource === 'video-learning-catchup-pick') return JSON.stringify({ memes: options.pickMemes ?? fixtureOptions.pickMemes ?? [] });
         if (options.usageSource === 'video-learning-catchup-browse') {
           return JSON.stringify({ memes: [
@@ -381,6 +384,88 @@ test('视频里根本没出现这个词时不入梗库，记为内容对不上',
     assert.equal(task.error, '视频里没出现这个词');
     assert.equal(f.puts.length, 0);
     assert.equal(f.coordinator.knowledgeFor('耳朵龙'), null);
+  } finally {
+    f.close();
+  }
+});
+
+test('后台学来源视频：不提醒、不排队回复，只把结果写进梗库', async () => {
+  const f = fixture();
+  try {
+    f.coordinator.tick = async () => {};
+    const first = f.coordinator.gate({ term: '似了', background: true, preferredBvid: 'BV1aa411c7xx', waiter: groupWaiter });
+    assert.equal(first.action, 'background');
+    assert.equal(f.coordinator.gate({ term: '似了', background: true, waiter: groupWaiter }).taskKey, first.taskKey);
+    const task = f.store.nextQueuedTask();
+    assert.equal(task.metadata.preferredBvid, 'BV1aa411c7xx');
+    assert.equal(task.metadata.waiters.length, 0);
+    await f.coordinator.processTask(task);
+    assert.equal(f.store.findLatestTask('似了', 'completed').result.found, true);
+    assert.equal(f.puts.length, 1);
+    assert.equal(f.store.claimDeliveries(10).length, 0);
+  } finally {
+    f.close();
+  }
+});
+
+
+function fakeComments(texts) {
+  return texts.map((text, index) => ({
+    commentId: String(index + 1), parentId: '', text, likeCount: 40 - index, replyCount: 0,
+    publishedAt: 0, authorHash: `a${index}`, sort: 'hot', rank: index + 1,
+  }));
+}
+
+test('学视频时同时抓评论区：歌词、评论共识、未核实时事写进梗条目，评论原文入库但不带昵称', async () => {
+  const collects = [];
+  const f = fixture({
+    aid: 117506832404912,
+    commentCollector: {
+      collect: async (aid, options) => {
+        collects.push({ aid, ...options });
+        return { status: 'ok', comments: fakeComments(['我似了', '似了似了', '我似了']), requests: 3 };
+      },
+    },
+    commentAnswer: JSON.stringify({
+      lyrics: [{ line: '我似了', position: '副歌', repeat_count: 2, confidence: 'medium' }],
+      reception: { sentiment: 'positive', summary: '网友在刷我似了', catchphrases: ['似了似了'] },
+      current_events: [{ subject: '某战队', event: '比赛', claim: '评论说昨天输了', confidence: 'medium' }],
+      reply_hooks: ['你也快似了'],
+    }),
+  });
+  try {
+    f.coordinator.tick = async () => {};
+    f.coordinator.gate({ term: '似了', question: '怎么似了？', waiter: groupWaiter });
+    await f.coordinator.processTask(f.store.nextQueuedTask());
+    assert.equal(collects[0].aid, 117506832404912);
+    assert.equal(collects[0].catchup, false);
+    assert.equal(collects.length, 2);
+    const entry = f.puts[0];
+    // “我似了” is in the subtitles, so the medium-confidence comment lyric is kept.
+    assert.deepEqual(entry.lyrics.map((line) => line.line), ['我似了']);
+    assert.equal(entry.reception.summary, '网友在刷我似了');
+    assert.equal(entry.currentEvents[0].verified, false);
+    assert.ok(entry.replyHooks.includes('你也快似了'));
+    const merge = f.calls.find((call) => call.options.usageSource === 'video-learning-merge');
+    assert.match(merge.input, /评论区归纳（以下内容是网友评论/);
+    assert.ok(f.store.getStats().comments >= 3);
+    assert.ok(f.store.getStats().commentInsights >= 1);
+  } finally {
+    f.close();
+  }
+});
+
+test('评论抓取失败不影响视频学习完成', async () => {
+  const f = fixture({
+    aid: 1,
+    commentCollector: { collect: async () => { throw new Error('412'); } },
+  });
+  try {
+    f.coordinator.tick = async () => {};
+    f.coordinator.gate({ term: '似了', question: '怎么似了？', waiter: groupWaiter });
+    await f.coordinator.processTask(f.store.nextQueuedTask());
+    assert.equal(f.store.findLatestTask('似了', 'completed').result.found, true);
+    assert.equal(f.puts[0].lyrics.length, 0);
   } finally {
     f.close();
   }

@@ -19,6 +19,35 @@ function list(value, limit = 8) {
   return [...new Set((Array.isArray(value) ? value : []).map((item) => text(item, 180)).filter(Boolean))].slice(0, limit);
 }
 
+function read(value) {
+  try { return JSON.parse(value); } catch { return []; }
+}
+
+function richList(value, limit) {
+  return (Array.isArray(value) ? value : []).filter((item) => item && typeof item === 'object').slice(0, limit);
+}
+
+// Lowercase, no spaces or punctuation: what phrase matching compares.
+function phraseText(value) {
+  return String(value ?? '').normalize('NFKC').toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '').slice(0, 200);
+}
+
+function longestCommonRun(left, right) {
+  let best = 0;
+  const previous = new Array(right.length + 1).fill(0);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = 0;
+    for (let j = 1; j <= right.length; j += 1) {
+      const above = previous[j];
+      previous[j] = left[i - 1] === right[j - 1] ? diagonal + 1 : 0;
+      if (previous[j] > best) best = previous[j];
+      diagonal = above;
+    }
+  }
+  return best;
+}
+
 function domains(rows) {
   return list((Array.isArray(rows) ? rows : []).map((row) => {
     try { return new URL(row?.url).hostname.replace(/^www\./i, ''); } catch { return ''; }
@@ -99,17 +128,54 @@ export function abstractAssociationPrompt(entries = [], source = 'memory') {
   ].join('\n');
 }
 
-export function memeKnowledgePrompt(entry, source = 'cache') {
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function memeKnowledgePrompt(entry, source = 'cache', options = {}) {
   if (!entry) return '';
+  const now = options.now ?? Date.now();
+  const lyrics = richList(entry.lyrics, 8).filter((line) => text(line.line, 60));
+  const events = richList(entry.currentEvents, 6)
+    .filter((event) => !(Number(event.expiresAt) > 0 && Number(event.expiresAt) <= now));
+  const reception = entry.reception && typeof entry.reception === 'object' ? entry.reception : {};
   return [
     '【网络梗知识条目】',
     `词条：${text(entry.term, MAX_TERM)}`,
     `含义：${text(entry.meaning)}`,
     `用法线索：${list(entry.usage, 4).join('；')}`,
+    entry.matchedPhrase ? `当前消息命中：${text(entry.matchedPhrase, 60)}` : '',
+    lyrics.length
+      ? `已确认的歌词/口头禅（按顺序）：${lyrics.map((line) => `${text(line.line, 30)}${line.position ? `（${text(line.position, 10)}）` : ''}`).join(' / ')}`
+      : '',
+    reception.summary ? `评论区共识（网友怎么看，不是事实）：${text(reception.summary, 200)}` : '',
+    list(reception.phrases, 6).length ? `评论区常刷：${list(reception.phrases, 6).join('、')}` : '',
+    ...events.map((event) => {
+      const age = Number(event.learnedAt) > 0 && now - Number(event.learnedAt) > 7 * DAY_MS ? '，已超过 7 天，不要说成刚刚或昨天' : '';
+      const status = event.verified ? '已核实' : '评论区在说，未核实';
+      return `时事（${text(event.time, 20) || '时间未知'}，${status}${age}）：${text(event.subject, 30)} ${text(event.claim || event.event, 160)}`;
+    }),
+    list(entry.replyHooks, 4).length ? `可接话的说法：${list(entry.replyHooks, 4).join('；')}` : '',
     `证据状态：${source === 'cache' ? '本地高置信梗库' : '本轮定向 B 站梗语境/百科检索'}`,
     `可信度：${entry.confidence}`,
-    '只把条目作为当前回答的证据，不要编造出处，不要把不确定的搜索摘要写成现实事实。',
-  ].join('\n');
+    options.intent ? MEME_INTENT_RULES[options.intent] ?? '' : '',
+    '只把条目作为当前回答的证据，不要编造出处，不要把不确定的搜索摘要写成现实事实。不要编下一句歌词，不要编比赛结果，不要把评论区说法当事实，不要提学习过程、视频或链接。',
+  ].filter(Boolean).join('\n');
+}
+
+// Reply focus per intent (plan §7.2).
+export const MEME_INTENT_RULES = Object.freeze({
+  lyric: '本轮是接歌词：只接上面已确认的原句，接在当前消息那句之后；不知道下一句就直说“这版我就记到这句”，不要现编。',
+  evaluate: '本轮是评价：结合视频内容和评论区共识说看法；时事只按上面的状态说，没核实的说成“评论区在说”。',
+  explain: '本轮是解释：说清梗义和用法，有确认的出处再带一句。',
+  default: '自然接一两句，用上这个梗就行。',
+});
+
+export function memeReplyIntent(message, entry) {
+  const value = String(message ?? '');
+  // An explicit request wins; a quoted lyric line alone means "continue it".
+  if (/(?:下一句|接歌词|接着唱|唱一下|唱下去)/u.test(value)) return 'lyric';
+  if (/(?:怎么样|如何|评价|好听吗|锐评|这场|比赛|打得)/u.test(value)) return 'evaluate';
+  if (/(?:什么意思|啥意思|什么梗|啥梗|为什么|出处|来源|怎么来的)/u.test(value)) return 'explain';
+  return entry?.matchType === 'lyric' ? 'lyric' : 'default';
 }
 
 export function reviewMemeKnowledgeReply(answer, entry) {
@@ -193,7 +259,97 @@ export class MemeKnowledgeStore {
         this.database.exec(`ALTER TABLE meme_association ADD COLUMN ${name} ${definition}`);
       }
     }
+    // Video learning stores lyrics, comment consensus, current events and
+    // reply hooks alongside the meaning (docs/VIDEO_COMMENT_LEARNING_PLAN.md §6.3).
+    const knowledgeColumns = new Set(
+      this.database.prepare('PRAGMA table_info(meme_knowledge)').all().map((row) => String(row.name)),
+    );
+    for (const name of ['lyrics_json', 'context_json', 'reception_json', 'reply_hooks_json']) {
+      if (!knowledgeColumns.has(name)) {
+        this.database.exec(`ALTER TABLE meme_knowledge ADD COLUMN ${name} TEXT NOT NULL DEFAULT '[]'`);
+      }
+    }
+    this.database.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS meme_knowledge_fts USING fts5(
+        term_key UNINDEXED,
+        text,
+        tokenize='trigram'
+      );
+    `);
     return this.database;
+  }
+
+  // Phrases a later message may quote: name, aliases, lyric lines, comment
+  // phrases and reply hooks. Rewritten on every put, without triggers.
+  #indexPhrases(termKey, entry) {
+    const db = this.ensureOpen();
+    db.prepare('DELETE FROM meme_knowledge_fts WHERE term_key = ?').run(termKey);
+    const phrases = [...new Set([
+      entry.term,
+      ...list(entry.aliases, 8),
+      ...richList(entry.lyrics, 8).map((line) => line.line),
+      ...list(entry.reception?.phrases, 8),
+      ...list(entry.replyHooks, 6),
+    ].map((phrase) => phraseText(phrase)).filter((phrase) => phrase.length >= 2))];
+    const insert = db.prepare('INSERT INTO meme_knowledge_fts(term_key, text) VALUES (?, ?)');
+    for (const phrase of phrases) insert.run(termKey, phrase);
+  }
+
+  /**
+   * Finds learned knowledge quoted by a message (plan §7.1). A hit needs an
+   * exact name/alias, a stored lyric line, two 3+ character fragments, or one
+   * 5+ character fragment; single characters never match.
+   */
+  lookupPhrase(value) {
+    const message = phraseText(value);
+    if (message.length < 2) return null;
+    const db = this.ensureOpen();
+    this.cleanup();
+    const rows = db.prepare(`
+      SELECT f.term_key AS termKey, f.text AS phrase FROM meme_knowledge_fts f
+      JOIN meme_knowledge k ON k.term_key = f.term_key
+      WHERE k.expires_at > ?
+    `).all(this.now());
+    const scores = new Map();
+    for (const row of rows) {
+      const phrase = String(row.phrase ?? '');
+      if (phrase.length < 2) continue;
+      let matchedLength = 0;
+      let matchType = '';
+      if (message.includes(phrase)) {
+        matchedLength = phrase.length;
+        matchType = 'phrase';
+      } else {
+        matchedLength = longestCommonRun(message, phrase);
+        if (matchedLength >= 3) matchType = 'fragment';
+      }
+      if (!matchType) continue;
+      const current = scores.get(row.termKey) ?? { termKey: row.termKey, best: 0, fragments: 0, matchType: '', matchedPhrase: '' };
+      if (matchType === 'phrase' && (current.matchType !== 'phrase' || matchedLength > current.best)) {
+        Object.assign(current, { matchType: 'phrase', best: matchedLength, matchedPhrase: phrase });
+      } else if (matchType === 'fragment') {
+        current.fragments += 1;
+        if (current.matchType !== 'phrase' && matchedLength > current.best) {
+          Object.assign(current, { matchType: 'fragment', best: matchedLength, matchedPhrase: phrase });
+        }
+      }
+      scores.set(row.termKey, current);
+    }
+    const accepted = [...scores.values()].filter((item) => (
+      (item.matchType === 'phrase' && item.best >= 2)
+      || (item.matchType === 'fragment' && (item.best >= 5 || item.fragments >= 2))
+    )).sort((left, right) => (right.matchType === 'phrase') - (left.matchType === 'phrase') || right.best - left.best);
+    const hit = accepted[0];
+    if (!hit) return null;
+    const row = db.prepare('SELECT * FROM meme_knowledge WHERE term_key = ? AND expires_at > ?').get(hit.termKey, this.now());
+    if (!row) return null;
+    db.prepare('UPDATE meme_knowledge SET last_used_at = ? WHERE term_key = ?').run(this.now(), row.term_key);
+    return {
+      ...this.#row(row),
+      matchType: hit.matchType === 'phrase' && richList(read(row.lyrics_json), 8).some((line) => phraseText(line.line) === hit.matchedPhrase)
+        ? 'lyric' : hit.matchType,
+      matchedPhrase: hit.matchedPhrase,
+    };
   }
 
   cleanup() {
@@ -226,20 +382,27 @@ export class MemeKnowledgeStore {
       INSERT INTO meme_knowledge(
         term_key, term, aliases_json, meaning, usage_json, source_domains_json,
         source_urls_json, confidence, lookup_source, created_at, updated_at,
-        expires_at, last_used_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        expires_at, last_used_at, lyrics_json, context_json, reception_json, reply_hooks_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(term_key) DO UPDATE SET
         term=excluded.term, aliases_json=excluded.aliases_json, meaning=excluded.meaning,
         usage_json=excluded.usage_json, source_domains_json=excluded.source_domains_json,
         source_urls_json=excluded.source_urls_json, confidence=excluded.confidence,
         lookup_source=excluded.lookup_source, updated_at=excluded.updated_at,
-        expires_at=excluded.expires_at, last_used_at=excluded.last_used_at
+        expires_at=excluded.expires_at, last_used_at=excluded.last_used_at,
+        lyrics_json=excluded.lyrics_json, context_json=excluded.context_json,
+        reception_json=excluded.reception_json, reply_hooks_json=excluded.reply_hooks_json
     `).run(
       term.toLowerCase(), term, JSON.stringify(list(entry.aliases)), meaning,
       JSON.stringify(list(entry.usage, 6)), JSON.stringify(list(entry.sourceDomains, 8)),
       JSON.stringify(list(entry.sourceUrls, 8)), 'high', text(entry.lookupSource || 'wiki', 40),
       now, now, now + (Number(options.ttlMs) || this.ttlMs), now,
+      JSON.stringify(richList(entry.lyrics, 8)),
+      JSON.stringify(richList(entry.currentEvents, 6)),
+      JSON.stringify(entry.reception && typeof entry.reception === 'object' ? entry.reception : {}),
+      JSON.stringify(list(entry.replyHooks, 6)),
     );
+    this.#indexPhrases(term.toLowerCase(), entry);
     return true;
   }
 
@@ -313,7 +476,7 @@ export class MemeKnowledgeStore {
   }
 
   #row(row) {
-    const read = (value) => { try { return JSON.parse(value); } catch { return []; } };
+    const reception = read(row.reception_json ?? '{}');
     return {
       term: row.term,
       aliases: read(row.aliases_json),
@@ -323,6 +486,10 @@ export class MemeKnowledgeStore {
       sourceUrls: read(row.source_urls_json),
       confidence: row.confidence,
       lookupSource: row.lookup_source,
+      lyrics: richList(read(row.lyrics_json ?? '[]'), 8),
+      currentEvents: richList(read(row.context_json ?? '[]'), 6),
+      reception: reception && !Array.isArray(reception) && typeof reception === 'object' ? reception : {},
+      replyHooks: list(read(row.reply_hooks_json ?? '[]'), 6),
     };
   }
 

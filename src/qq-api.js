@@ -1245,6 +1245,32 @@ export async function createQqRuntime() {
       memeCorpus,
       groupMemory,
       cookieProvider: bilibiliSessionProvider,
+      comments: {
+        enabled: parseBoolean(process.env.QQ_VIDEO_COMMENT_ENABLED, true),
+        catchupEnabled: parseBoolean(process.env.QQ_VIDEO_COMMENT_CATCHUP_ENABLED, true),
+        maxVideos: parsePositiveNumber(process.env.QQ_VIDEO_COMMENT_MAX_VIDEOS) ?? 2,
+        retentionMs: (parsePositiveNumber(process.env.QQ_VIDEO_COMMENT_RETENTION_DAYS) ?? 30) * 86_400_000,
+        eventTtlMs: (parsePositiveNumber(process.env.QQ_VIDEO_CURRENT_EVENT_TTL_DAYS) ?? 7) * 86_400_000,
+        batchSize: parsePositiveNumber(process.env.QQ_VIDEO_COMMENT_ANALYSIS_BATCH) ?? 40,
+        limits: {
+          timeoutMs: parsePositiveNumber(process.env.QQ_VIDEO_COMMENT_TIMEOUT_MS) ?? 10_000,
+          intervalMs: parsePositiveNumber(process.env.QQ_VIDEO_COMMENT_REQUEST_INTERVAL_MS) ?? 1_000,
+          onDemand: {
+            maxComments: parsePositiveNumber(process.env.QQ_VIDEO_COMMENT_MAX_PER_VIDEO) ?? 60,
+            hotPages: 2,
+            newPages: 1,
+            repliesPerRoot: parsePositiveNumber(process.env.QQ_VIDEO_COMMENT_MAX_REPLIES) ?? 3,
+            replyRoots: 5,
+          },
+          catchup: {
+            maxComments: parsePositiveNumber(process.env.QQ_VIDEO_COMMENT_CATCHUP_MAX) ?? 20,
+            hotPages: 1,
+            newPages: 0,
+            repliesPerRoot: 0,
+            replyRoots: 0,
+          },
+        },
+      },
       ffmpegCommand: process.env.QQ_MEDIA_FFMPEG_COMMAND?.trim() || 'ffmpeg',
       asr: videoLearningAsrPython
         ? {

@@ -75,7 +75,7 @@ methods = [n for n in bridge.body if getattr(n, 'name', '') in (
 ns = dict(asyncio=asyncio, base64=base64, logger=logging.getLogger('test'),
           datetime=datetime, timedelta=timedelta, datetime_time=datetime_time,
           REPORT_TIMEZONE=ZoneInfo('Asia/Shanghai'), render_usage_report=render_usage_report,
-          Comp=SimpleNamespace(Image=SimpleNamespace(fromBase64=lambda data: ('image', data))),
+          Comp=SimpleNamespace(Image=SimpleNamespace(fromBase64=lambda data: ('image', data)), Plain=lambda text: ('plain', text)),
           MessageChain=lambda chain: chain)
 exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(name='Bridge', bases=[],
     keywords=[], body=methods, decorator_list=[])], type_ignores=[])), '<bridge>', 'exec'), ns)
@@ -156,6 +156,20 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         b._group_catalog.side_effect = None
         b.context.send_message.return_value = False
         self.assertEqual(await b._send_usage_report({'report': sample()}, 'fallback', ['111']), 0)
+
+
+    async def test_image_rejected_for_one_account_falls_back_to_text_for_that_account(self):
+        b = self.setup_bridge()
+
+        async def send(target, chain):
+            if target.endswith(':222') and chain[0][0] == 'image':
+                raise RuntimeError("rich media transfer failed")
+            return True
+        b.context.send_message.side_effect = send
+        self.assertEqual(await b._send_usage_report({'report': sample()}, 'fallback text', ['111', '222']), 2)
+        sent = [(c.args[0], c.args[1][0][0]) for c in b.context.send_message.call_args_list]
+        self.assertIn(('qq:FriendMessage:111', 'image'), sent)
+        self.assertIn(('qq:FriendMessage:222', 'plain'), sent)
 
 
 if __name__ == '__main__':

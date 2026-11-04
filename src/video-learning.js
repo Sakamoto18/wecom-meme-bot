@@ -5,6 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildBilibiliWbiParams } from './bilibili-ai-summary.js';
 import { resolveBilibiliMedia } from './bilibili-provider.js';
+import { memeKnowledgePrompt, memeReplyIntent } from './meme-knowledge.js';
+import {
+  COMMENT_PROMPT_BOUNDARY,
+  VideoCommentCollector,
+  analyzeComments,
+  clusterCommentSignals,
+  commentEvents,
+  dedupeComments,
+  rankComments,
+} from './video-comments.js';
 
 // Defaults from docs/VIDEO_MEME_LEARNING_PLAN.md §5.
 export const VIDEO_LEARNING_LIMITS = Object.freeze({
@@ -60,15 +70,32 @@ const MERGE_PROMPT = [
   '你是网络梗考据员。下面是同一个梗相关的 B 站视频逐段观察记录和视频信息。',
   '判断这些材料能不能解释用户问的梗。视频必须是在讲这个词本身；只是字面相近、谐音相近或讲的是另一个梗，就 found=false。看完仍说不清也 found=false，不要硬凑。',
   '出处只写视频里能确认的；弹幕、标题、评论只是线索。声音相关的笑点如果只有字幕或转写、没有确认声音本身，sound_unconfirmed=true。',
-  '严格只输出 JSON：{"found":true或false,"term":"规范梗名","aliases":["别名或常见变体"],"meaning":"一两句话说清梗义","origin":"能确认的出处，不确定留空","mechanism":"笑点机制（反差、谐音、错位、变调、重复、转折等）","usage":["常见接法或用法"],"avoid":"不适用的场景","confidence":"high|medium|low","sound_unconfirmed":true或false,"unconfirmed":"仍待核实的部分"}',
+  '评论区归纳只是辅助证据：可以用来补充用法、歌词和网友怎么看，但不能推翻视频里明确出现的内容；评论和视频冲突时以视频为准，把冲突写进 uncertainties。',
+  '严格只输出 JSON：{"found":true或false,"term":"规范梗名","aliases":["别名或常见变体"],"meaning":"一两句话说清梗义","origin":"能确认的出处，不确定留空","mechanism":"笑点机制（反差、谐音、错位、变调、重复、转折等）","usage":["常见接法或用法"],"avoid":"不适用的场景","format":"鬼畜歌曲|解说|直播切片|二创|其他","content_summary":["视频内容，最多 5 条"],"people":["涉及的人物或战队"],"lyrics":[{"line":"字幕或评论里反复出现的歌词短句，每行不超过 30 字","position":"副歌|主歌|开头|其他","confidence":"high|medium|low"}],"reply_hooks":["适合接话的说法"],"uncertainties":["说不准的地方"],"confidence":"high|medium|low","sound_unconfirmed":true或false,"unconfirmed":"仍待核实的部分"}',
 ].join('\n');
 
 const DIRECT_MERGE_PROMPT = [
   '你是网络梗考据员。用户直接指定了一个 B 站视频，下面是这个视频的逐段观察记录和视频信息。',
   '从视频里选出一个最值得学的梗、黑话、口头禅或名场面，term 写视频里实际出现的最短、可复用的原词或短语；如果视频没有明确可学的梗，found=false，不要硬凑。',
   '出处只写视频里能确认的；标题、简介、弹幕和评论只是线索。声音相关的笑点如果只有字幕或转写、没有确认声音本身，sound_unconfirmed=true。',
-  '严格只输出 JSON：{"found":true或false,"term":"规范梗名","aliases":["别名或常见变体"],"meaning":"一两句话说清梗义","origin":"能确认的出处，不确定留空","mechanism":"笑点机制（反差、谐音、错位、变调、重复、转折等）","usage":["常见接法或用法"],"avoid":"不适用的场景","confidence":"high|medium|low","sound_unconfirmed":true或false,"unconfirmed":"仍待核实的部分"}',
+  '评论区归纳只是辅助证据：可以用来补充用法、歌词和网友怎么看，但不能推翻视频里明确出现的内容；评论和视频冲突时以视频为准，把冲突写进 uncertainties。',
+  '严格只输出 JSON：{"found":true或false,"term":"规范梗名","aliases":["别名或常见变体"],"meaning":"一两句话说清梗义","origin":"能确认的出处，不确定留空","mechanism":"笑点机制（反差、谐音、错位、变调、重复、转折等）","usage":["常见接法或用法"],"avoid":"不适用的场景","format":"鬼畜歌曲|解说|直播切片|二创|其他","content_summary":["视频内容，最多 5 条"],"people":["涉及的人物或战队"],"lyrics":[{"line":"字幕或评论里反复出现的歌词短句，每行不超过 30 字","position":"副歌|主歌|开头|其他","confidence":"high|medium|low"}],"reply_hooks":["适合接话的说法"],"uncertainties":["说不准的地方"],"confidence":"high|medium|low","sound_unconfirmed":true或false,"unconfirmed":"仍待核实的部分"}',
 ].join('\n');
+
+function commentMaterial(comments) {
+  const insight = comments?.insight;
+  if (!insight && !comments?.signals?.length) return [];
+  return [
+    `评论区归纳（${COMMENT_PROMPT_BOUNDARY}）：`,
+    insight?.contentSummary?.length ? `  网友对内容的概括：${insight.contentSummary.join('；')}` : '',
+    insight?.memeCandidates?.length
+      ? `  评论区在刷：${insight.memeCandidates.slice(0, 6).map((item) => `${item.phrase}${item.meaning ? `（${item.meaning}）` : ''}[${item.confidence}]`).join('；')}`
+      : '',
+    insight?.lyrics?.length ? `  评论里打出的歌词：${insight.lyrics.map((line) => line.line).join(' / ')}` : '',
+    insight?.reception?.summary ? `  网友怎么看：${insight.reception.summary}` : '',
+    comments?.signals?.length ? `  高频片段：${comments.signals.slice(0, 8).map((item) => `${item.phrase}(${item.comments})`).join('、')}` : '',
+  ].filter(Boolean);
+}
 
 export function learningTopic(value) {
   return String(value ?? '')
@@ -173,12 +200,33 @@ export class VideoLearningCoordinator {
     this.logger = options.logger ?? console;
     this.now = options.now ?? Date.now;
     this.groupMemory = options.groupMemory ?? null;
+    // Comment learning (docs/VIDEO_COMMENT_LEARNING_PLAN.md): on by default,
+    // never blocks video learning when B 站 refuses or times out.
+    this.comments = {
+      enabled: options.comments?.enabled !== false,
+      catchupEnabled: options.comments?.catchupEnabled !== false,
+      maxVideos: options.comments?.maxVideos ?? 2,
+      retentionMs: options.comments?.retentionMs ?? 30 * 24 * 60 * 60 * 1000,
+      eventTtlMs: options.comments?.eventTtlMs ?? 7 * 24 * 60 * 60 * 1000,
+      batchSize: options.comments?.batchSize ?? 40,
+    };
+    this.commentCollector = options.commentCollector ?? new VideoCommentCollector({
+      fetchImpl: this.fetchImpl,
+      headers: () => this.bilibiliHeaders(),
+      logger: this.logger,
+      limits: options.comments?.limits,
+    });
     this.running = false;
     this.timer = null;
     this.catchupRunning = false;
   }
 
   start(intervalMs = 15_000) {
+    try {
+      this.store.pruneComments(this.comments.retentionMs);
+    } catch (error) {
+      this.logger.warn?.(`视频评论：清理旧评论失败：${error.message}`);
+    }
     const recovered = this.store.requeueInterrupted();
     if (recovered) this.logger.log?.(`视频学梗：恢复 ${recovered} 个中断任务`);
     this.timer = setInterval(() => { void this.tick(); }, intervalMs);
@@ -225,6 +273,7 @@ export class VideoLearningCoordinator {
     preferredUrl = '',
     preferredBvid = '',
     directLink = false,
+    background = false,
   } = {}) {
     if (directLink) {
       return this.queueDirectLink({ question, waiter, preferredUrl, preferredBvid });
@@ -243,6 +292,20 @@ export class VideoLearningCoordinator {
       if (this.store.countTasksSince(dayStart) >= this.limits.dailyTasks
         || this.store.materialSecondsSince(dayStart) >= this.limits.dailyMaterialSeconds) return null;
     }
+    const bvid = /^BV[0-9A-Za-z]{10}$/u.test(String(preferredBvid ?? '')) ? String(preferredBvid) : '';
+    if (background) {
+      // The question is already answered from search; this only watches the
+      // source video so the meme store has it next time. Nobody waits.
+      const queued = active ?? this.store.createOrJoinTask({
+        topicKey: key,
+        topic,
+        question,
+        metadata: { waiters: [], background: true, preferredBvid: bvid },
+      }).task;
+      if (!active) this.logger.log?.(`视频学梗：后台学习来源视频 topic=${topic} bvid=${bvid || '-'} task=${queued.taskKey}`);
+      void this.tick();
+      return { action: 'background', taskKey: queued.taskKey, topic };
+    }
     const entry = { ...waiter, question: clean(question, 400), key: waiterKey(waiter) };
     const { task, joined } = this.store.createOrJoinTask({
       topicKey: key,
@@ -252,7 +315,7 @@ export class VideoLearningCoordinator {
       messageId: waiter.messageId,
       conversationId: waiter.conversationId,
       question,
-      metadata: { waiters: [] },
+      metadata: { waiters: [], ...(bvid ? { preferredBvid: bvid } : {}) },
     });
     const waiters = Array.isArray(task.metadata?.waiters) ? task.metadata.waiters : [];
     const sameChat = waiters.some((item) => item.chatType === waiter.chatType
@@ -500,7 +563,7 @@ export class VideoLearningCoordinator {
 
   async processTask(task) {
     // Catch-up tasks have nobody waiting, so they are not held to the wait limit.
-    const catchup = Boolean(task.metadata?.catchup);
+    const catchup = Boolean(task.metadata?.catchup || task.metadata?.background);
     const budget = { modelCalls: 0, deadline: (catchup ? this.now() : task.createdAt) + this.limits.waitMs };
     const materialLimit = Number(task.metadata?.materialLimitSeconds) || this.limits.taskMaterialSeconds;
     const started = this.now();
@@ -692,6 +755,8 @@ export class VideoLearningCoordinator {
     const directoryName = String(media.bvid || candidate.bvid || 'source').replace(/[^0-9A-Za-z_-]/gu, '') || 'source';
     const dir = path.join(workDir, directoryName);
     await mkdir(dir, { recursive: true });
+    // Comment collection runs alongside the download and frame analysis.
+    const commentsPromise = this.collectComments(task, media, budget);
     const headerText = Object.entries(media.requestHeaders ?? {}).map(([key, value]) => `${key}: ${value}\r\n`).join('');
     await this.runCommand(this.ffmpegCommand, [
       '-hide_banner', '-loglevel', 'error', '-y',
@@ -772,8 +837,11 @@ export class VideoLearningCoordinator {
       this.store.addObservation({ taskKey: task.taskKey, sourceKey, startSeconds: start, endSeconds: end, evidence });
       observations.push({ start, end, ...evidence });
     }
+    const reference = [media.title, media.description, ...transcript.map((line) => line.text)].join(' ');
+    const comments = await this.analyzeVideoComments(task, sourceKey, media, await commentsPromise, reference, budget);
     if (!observations.length) return null;
     return {
+      comments,
       bvid: media.bvid || candidate.bvid,
       title: media.title || candidate.title,
       description: clean(media.description, 300),
@@ -783,6 +851,60 @@ export class VideoLearningCoordinator {
       transcriptSource,
       observations,
     };
+  }
+
+  // Starts the comment fetch for one video; resolves to null when skipped.
+  collectComments(task, media, budget) {
+    const catchup = Boolean(task.metadata?.catchup);
+    const aid = Number(media?.aid) || 0;
+    budget.commentVideos = budget.commentVideos ?? 0;
+    if (!this.comments.enabled || !aid || (catchup && !this.comments.catchupEnabled)
+      || budget.commentVideos >= (catchup ? 1 : this.comments.maxVideos)) {
+      return Promise.resolve(null);
+    }
+    budget.commentVideos += 1;
+    return this.commentCollector.collect(aid, { catchup }).catch((error) => ({
+      status: 'failed', error: error.message, comments: [], requests: 0,
+    }));
+  }
+
+  async analyzeVideoComments(task, sourceKey, media, collected, reference, budget) {
+    if (!collected) return { status: 'skipped' };
+    const summary = { status: collected.status, collected: collected.comments.length, requests: collected.requests };
+    if (!collected.comments.length) return { ...summary, error: collected.error };
+    try {
+      this.store.saveComments(task.taskKey, sourceKey, collected.comments);
+    } catch (error) {
+      this.logger.warn?.(`视频评论：保存失败：${error.message}`);
+    }
+    const ranked = rankComments(dedupeComments(collected.comments), { reference });
+    const signals = clusterCommentSignals(ranked);
+    const batches = Math.min(2, Math.ceil(ranked.length / this.comments.batchSize));
+    if (!ranked.length || budget.modelCalls + batches > this.limits.maxModelCalls - 2) {
+      return { ...summary, usable: ranked.length, signals };
+    }
+    budget.modelCalls += batches;
+    const insight = await analyzeComments(this.chatClient, {
+      ranked,
+      signals,
+      video: { title: media.title, description: media.description },
+      batchSize: this.comments.batchSize,
+      maxBatches: 2,
+    });
+    if (insight) {
+      try {
+        this.store.saveCommentInsights(task.taskKey, sourceKey, [
+          ...insight.memeCandidates.map((item) => ({ ...item, summary: item.meaning })),
+          ...insight.lyrics.map((line) => ({ kind: 'lyric', phrase: line.line, summary: line.position, frequency: line.repeatCount, confidence: line.confidence })),
+          ...(insight.reception.summary ? [{ kind: 'reception', phrase: insight.reception.sentiment || 'reception', summary: insight.reception.summary, confidence: 'medium' }] : []),
+          ...insight.currentEvents.map((event) => ({ kind: 'event', phrase: `${event.subject} ${event.event}`.trim(), summary: event.claim, confidence: event.confidence })),
+        ]);
+      } catch (error) {
+        this.logger.warn?.(`视频评论：保存归纳失败：${error.message}`);
+      }
+    }
+    this.logger.log?.(`视频评论：${collected.status} bvid=${media.bvid || '-'} comments=${collected.comments.length} usable=${ranked.length} insight=${insight ? 'yes' : 'no'}`);
+    return { ...summary, usable: ranked.length, signals, insight };
   }
 
   mentionsTopic(topic, watched) {
@@ -809,6 +931,7 @@ export class VideoLearningCoordinator {
         item.soundDependent ? '  （笑点依赖声音）' : '',
         item.uncertain ? `  不确定：${item.uncertain}` : '',
       ].filter(Boolean).join('\n')),
+      ...commentMaterial(video.comments),
     ].filter(Boolean).join('\n')).join('\n\n');
     const answer = await this.chatClient.complete([], [
       directLink ? '任务：从用户指定的视频里找出最值得学的网络梗。' : `用户问的梗：${task.topic}`,
@@ -837,6 +960,14 @@ export class VideoLearningCoordinator {
       mechanism: clean(parsed.mechanism, 200),
       usage: list(parsed.usage, 5),
       avoid: clean(parsed.avoid, 200),
+      format: clean(parsed.format, 20),
+      contentSummary: list(parsed.content_summary, 5),
+      people: list(parsed.people, 6),
+      lyrics: (Array.isArray(parsed.lyrics) ? parsed.lyrics : [])
+        .map((line) => ({ line: clean(line?.line, 30), position: clean(line?.position, 10), confidence: ['high', 'medium', 'low'].includes(line?.confidence) ? line.confidence : 'low' }))
+        .filter((line) => line.line).slice(0, 8),
+      replyHooks: list(parsed.reply_hooks, 6),
+      uncertainties: list(parsed.uncertainties, 4),
       confidence: ['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'low',
       // ASR gives words, not pitch or sound effects.
       soundUnconfirmed: parsed.sound_unconfirmed === true || soundDependent || noAudio,
@@ -864,8 +995,43 @@ export class VideoLearningCoordinator {
       lookupSource: 'video',
       verified: merged.confidence === 'high',
       unconfirmed: merged.unconfirmed,
+      ...this.richFields(merged, watched),
     };
   }
+
+  // Lyrics, comment consensus, current events and reply hooks (plan §6.2).
+  // Video evidence wins: a lyric is kept when the merge rated it high, or
+  // when it appears in the subtitles; comment events stay unverified.
+  richFields(merged, watched) {
+    const transcript = watched.flatMap((video) => video.observations.map((item) => item.transcript)).join(' ');
+    const norm = (value) => String(value ?? '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+    const insights = watched.map((video) => video.comments?.insight).filter(Boolean);
+    const lyrics = [...merged.lyrics, ...insights.flatMap((insight) => insight.lyrics)]
+      .filter((line) => line.confidence === 'high' || norm(transcript).includes(norm(line.line)))
+      .filter((line, index, all) => all.findIndex((other) => norm(other.line) === norm(line.line)) === index)
+      .slice(0, 8)
+      .map((line) => ({ line: line.line, position: line.position || '', confidence: line.confidence }));
+    const reception = insights.find((insight) => insight.reception?.summary)?.reception ?? null;
+    const now = this.now();
+    return {
+      lyrics,
+      reception: reception
+        ? {
+          sentiment: reception.sentiment,
+          summary: reception.summary,
+          phrases: reception.phrases.slice(0, 8),
+          counterpoints: reception.counterpoints.slice(0, 4),
+        }
+        : {},
+      currentEvents: insights.flatMap((insight) => commentEvents(insight, now))
+        .map((event) => ({ ...event, expiresAt: now + this.comments.eventTtlMs }))
+        .slice(0, 6),
+      replyHooks: [...new Set([...merged.replyHooks, ...insights.flatMap((insight) => insight.replyHooks)])].slice(0, 6),
+      content: { summary: merged.contentSummary, format: merged.format, people: merged.people },
+      uncertainties: [...merged.uncertainties, ...insights.flatMap((insight) => insight.uncertainties)].slice(0, 6),
+    };
+  }
+
 
   async notifyWaiters(task, kind, entry) {
     const waiters = Array.isArray(task?.metadata?.waiters) ? task.metadata.waiters : [];
@@ -896,15 +1062,13 @@ export class VideoLearningCoordinator {
 
   async composeReply(task, waiter, entry) {
     const topic = entry?.term || task.topic;
+    const question = waiter.question || task.question;
     const instruction = entry
       ? [
         '【本轮：查完梗回来回答】你之前说去 B 站看视频查这个梗，现在看完了，回到原问题。',
-        `梗：${topic}`,
-        `查到的：${entry.meaning}`,
-        entry.usage.length ? `用法：${entry.usage.slice(0, 3).join('；')}` : '',
-        entry.unconfirmed ? `还没确认的：${entry.unconfirmed}` : '',
-        `对方原话：${waiter.question || task.question}`,
-        '按你的人设直接回答原问题，1～3 句。不要说“根据视频”“我看了几个视频”之类的过程，不要贴链接；还没确认的部分直接略过，不要提核实、音频或“别当定论”。',
+        memeKnowledgePrompt(entry, 'cache', { intent: memeReplyIntent(question, entry), now: this.now() }),
+        `对方原话：${question}`,
+        '按你的人设直接回答原问题，1～3 句。不要说“根据视频”“我看了几个视频”“评论区说”之类的过程，不要贴链接；还没确认的部分直接略过，不要提核实、音频或“别当定论”。',
       ]
       : [
         '【本轮：查梗没查到】你之前说去 B 站看视频查这个梗，结果没弄明白。',

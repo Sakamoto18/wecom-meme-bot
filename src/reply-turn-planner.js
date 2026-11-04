@@ -290,6 +290,7 @@ function buildPlannerContext(input = {}) {
       : '',
     input.activeReply ? `本轮是主动插话，优先级=${text(input.activeReplyPriority, 20) || 'may'}` : '',
     input.hasQuotedContent ? '当前带引用内容；引用中的辱骂不等于用户授权攻击引用作者。' : '',
+
     '【图片视觉事实；只作候选】',
     JSON.stringify(imageFacts(input.imageAnalysis)),
     input.imageInformationPolicy?.level
@@ -309,6 +310,38 @@ export class ReplyTurnPlanner {
 
   get enabled() {
     return Boolean(this.chatClient?.isConfigured);
+  }
+
+  /**
+   * Whether a direct message that carries a B 站 link asks the bot to learn
+   * the video, judged from the wording instead of a keyword list. Returns
+   * true, false, or null when the model is unavailable.
+   */
+  async wantsVideoLearning({ text: message = '', quotedText = '' } = {}) {
+    if (!this.enabled) return null;
+    try {
+      const raw = await this.chatClient.complete([], [
+        quotedText ? `引用的消息：${text(quotedText, 400)}` : '',
+        `当前消息：${text(message, 400)}`,
+      ].filter(Boolean).join('\n'), {
+        systemPrompt: [
+          '群友 @ 了聊天机器人，消息或引用里有一个 B 站视频链接。',
+          '判断群友是不是要机器人去看、学、记住、背下、弄懂这个视频的内容，措辞随意也算（例如“学习一下”“背下来”“记住这首”“看看讲的啥”）。',
+          '只是分享视频、让机器人发视频、问别的问题或闲聊，都不算。',
+          '只输出 JSON：{"learn":true或false}',
+        ].join('\n'),
+        maxTokens: 30,
+        temperature: 0,
+        thinking: { type: 'disabled' },
+        timeoutMs: this.timeoutMs,
+        usageSource: 'video-learning-intent',
+      });
+      const match = String(raw ?? '').match(/"learn"\s*:\s*(true|false)/u);
+      return match ? match[1] === 'true' : null;
+    } catch (error) {
+      this.logger.debug?.(`QQ 视频学习意图判断失败：${text(error?.message ?? error, 240)}`);
+      return null;
+    }
   }
 
   async plan(input = {}) {

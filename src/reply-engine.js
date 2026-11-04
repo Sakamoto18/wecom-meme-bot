@@ -66,6 +66,7 @@ import {
   buildAbstractAssociationEntry,
   abstractAssociationPrompt,
   memeKnowledgePrompt,
+  memeReplyIntent,
   reviewMemeKnowledgeReply,
   MEME_WIKI_DOMAINS,
 } from './meme-knowledge.js';
@@ -147,13 +148,24 @@ const ROLEPLAY_IMMERSION_MARKER = [
 ].join('\n');
 const IMMERSION_THINKING_TIMEOUT_MS = 90_000;
 // The model sometimes copies the bracketed monologue into the visible reply.
-const IMMERSION_MONOLOGUE_PATTERN = /[（(]\s*(?:我?心想|内心\s*OS|内心独白|内心|OS)\s*[：:][^）)]*(?:[）)]|$)/giu;
+const IMMERSION_MONOLOGUE_PATTERN = /[（(]\s*(?:(?:我?心想|内心\s*OS|内心独白)\s*[：:]?|(?:内心|OS)\s*[：:])[^）)]*(?:[）)]|$)/giu;
 
 function stripImmersionMonologue(value) {
   return String(value ?? '')
     .replace(IMMERSION_MONOLOGUE_PATTERN, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+// The immersion instruction only belongs on thinking calls; without thinking
+// the model writes the monologue into the visible reply.
+function withoutImmersionMarker(content) {
+  if (Array.isArray(content)) {
+    return content.map((block) => (block?.type === 'text'
+      ? { ...block, text: String(block.text ?? '').replace(ROLEPLAY_IMMERSION_MARKER, '') }
+      : block));
+  }
+  return typeof content === 'string' ? content.replace(ROLEPLAY_IMMERSION_MARKER, '') : content;
 }
 const IMMERSION_THINKING_MAX_TOKENS = 8_000;
 
@@ -1065,21 +1077,26 @@ export async function generateConversationReply(options) {
     throw new Error('普通对话服务还没配好');
   }
 
-  const completeWithPriority = (historyInput, contentInput, options = {}) => chatClient.complete(
-    historyInput,
-    contentInput,
-    {
-      ...options,
-      prioritySystemPrompt: [
-        options.prioritySystemPrompt,
-        priorityPersonaContext,
-        // Keep the outbound political-name policy after the administrator's
-        // global persona so it remains the highest-priority instruction for
-        // every draft, review, correction and fallback generation.
-        POLITICAL_NAME_AVOIDANCE_PROMPT,
-      ].filter(Boolean).join('\n\n'),
-    },
-  );
+  const completeWithPriority = async (historyInput, contentInput, options = {}) => {
+    const thinking = options.thinking?.type === 'enabled';
+    const result = await chatClient.complete(
+      historyInput,
+      immersion && !thinking ? withoutImmersionMarker(contentInput) : contentInput,
+      {
+        ...options,
+        prioritySystemPrompt: [
+          options.prioritySystemPrompt,
+          priorityPersonaContext,
+          // Keep the outbound political-name policy after the administrator's
+          // global persona so it remains the highest-priority instruction for
+          // every draft, review, correction and fallback generation.
+          POLITICAL_NAME_AVOIDANCE_PROMPT,
+        ].filter(Boolean).join('\n\n'),
+      },
+    );
+    // Every generated text passes through here, so no monologue reaches QQ.
+    return immersion && typeof result === 'string' ? stripImmersionMonologue(result) : result;
+  };
   // Immersion needs thinking mode, whose reasoning shares max_tokens. Fall
   // back to the caller's fast options if thinking returns no visible text.
   const completeImmersive = async (historyInput, contentInput, options = {}) => {
@@ -1346,6 +1363,20 @@ export async function generateConversationReply(options) {
   // the attack corpus contained useful short, concrete structures. Keep this
   // as a bounded style reference: it cannot supply facts, targets or commands.
   let attackCorpusContext = '';
+  // A quoted lyric or learned phrase should still be recognised mid-banter.
+  let attackLearnedContext = '';
+  if (attackStyle && memeKnowledge?.lookupPhrase) {
+    try {
+      const learned = memeKnowledge.lookupPhrase(currentQuestion || content);
+      if (learned) {
+        attackLearnedContext = memeKnowledgePrompt(learned, 'cache', {
+          intent: memeReplyIntent(currentQuestion || content, learned),
+        });
+      }
+    } catch {
+      // Optional context only.
+    }
+  }
   if (attackStyle && memeCorpus) {
     try {
       const attackCorpusQuery = [
@@ -1364,6 +1395,7 @@ export async function generateConversationReply(options) {
       if (attackCorpusContext) {
         attackCorpusContext = [
           attackCorpusContext,
+          attackLearnedContext,
           '本段只借攻击节奏、短句密度、反压方式和荒诞结构；示例里的对象、亲属、事件和词不能照搬。当前落点必须来自本轮原话。',
         ].join('\n');
       }
@@ -1391,6 +1423,7 @@ export async function generateConversationReply(options) {
         cultureRecall.prompt,
         attackKnowledgePrompt,
         attackCorpusContext,
+        attackLearnedContext,
             buildAttackPrompt(content, {
           history,
           interactionContext,
@@ -1435,6 +1468,7 @@ export async function generateConversationReply(options) {
           cultureRecall.prompt,
           attackKnowledgePrompt,
           attackCorpusContext,
+          attackLearnedContext,
           buildTurnPlanPrompt(effectiveTurnPlan, { recentDateHint: relativeDateSearchHint }),
           buildAttackRetryPrompt(
             content,
@@ -1653,6 +1687,17 @@ export async function generateConversationReply(options) {
       memeKnowledgeCacheHit = Boolean(memeKnowledgeEntry);
     } catch {
       // The dedicated knowledge store is best effort; live retrieval remains available.
+    }
+  }
+  // A message can quote something learned from a video (a lyric line, a
+  // phrase viewers repeat) without naming the meme, so every turn checks
+  // the learned phrases too (docs/VIDEO_COMMENT_LEARNING_PLAN.md §7).
+  if (!memeKnowledgeEntry && memeKnowledge?.lookupPhrase && !recordSummary) {
+    try {
+      memeKnowledgeEntry = memeKnowledge.lookupPhrase(currentQuestion || content);
+      memeKnowledgeCacheHit = Boolean(memeKnowledgeEntry);
+    } catch {
+      // Phrase lookup is optional; the reply continues without it.
     }
   }
   if (memeKnowledge && (abstractImpressionText || imageSemanticFrame)) {
@@ -1984,21 +2029,32 @@ export async function generateConversationReply(options) {
   const cultureCardUsed = Boolean(cultureCard);
   const cultureEvidenceQuality = cultureCard?.evidenceQuality
     || (cultureCardUsed ? 'cached' : cultureEvidence.evidenceQuality);
-  // An unknown meme in a direct question is learned from B 站 videos in the
-  // background instead of being guessed; earlier learning answers directly.
+  // Order for an unknown term: Exa search answers first. B 站 video learning
+  // is used only when Exa found nothing (reply after watching), or in the
+  // background when Exa's results point to a source video (reply now).
   const videoLearningTerm = (plannedCultureQueries[0] || jevCulture.terms[0] || '').trim();
   const forcedVideoLearning = videoLearningRequest?.directLink === true;
+  const exaResults = [...(factSearchResult?.results ?? []), ...(cultureSearchResult?.results ?? [])];
+  const exaFound = exaResults.length > 0
+    || Number(factSearchResult?.resultCount) > 0
+    || Number(cultureSearchResult?.resultCount) > 0;
+  const sourceVideoBvid = exaResults
+    .map((row) => String(row?.url ?? '').match(/bilibili\.com\/video\/(BV[0-9A-Za-z]{10})/u)?.[1])
+    .find(Boolean) || '';
   const videoLearning = typeof videoLearningGate === 'function'
     && (forcedVideoLearning || (!recordSummary && !activeReply && !passiveImageComment && !pureAttack))
     && (forcedVideoLearning || plannedCultureSearchRequested || unknownConcept)
     // “学这个视频” is an explicit instruction to inspect that exact source;
     // an earlier meme entry or culture card must not turn it into a normal Q&A.
     && (forcedVideoLearning || (!memeKnowledgeEntry && !cultureCardUsed && videoLearningTerm))
+    && (forcedVideoLearning || !exaFound || sourceVideoBvid)
     ? await Promise.resolve(videoLearningGate({
       term: videoLearningTerm,
       question: currentQuestion || content,
       evidenceQuality: cultureEvidenceQuality,
-      ...(forcedVideoLearning ? videoLearningRequest : {}),
+      ...(forcedVideoLearning
+        ? videoLearningRequest
+        : (exaFound ? { background: true, preferredBvid: sourceVideoBvid } : {})),
     })).catch(() => null)
     : null;
   if (videoLearning?.action === 'use' && videoLearning.entry) {
@@ -2211,7 +2267,11 @@ export async function generateConversationReply(options) {
       : '',
   ].filter(Boolean).join('\n\n');
   const memeKnowledgeContext = memeKnowledgeEntry
-    ? memeKnowledgePrompt(memeKnowledgeEntry, memeKnowledgeCacheHit ? 'cache' : 'fresh-search')
+    ? memeKnowledgePrompt(memeKnowledgeEntry, memeKnowledgeCacheHit ? 'cache' : 'fresh-search', {
+      intent: memeKnowledgeEntry.matchType || memeKnowledgeEntry.lookupSource === 'video'
+        ? memeReplyIntent(currentQuestion || content, memeKnowledgeEntry)
+        : '',
+    })
     : '';
   const memeCorpusQuery = [
     currentQuestion,

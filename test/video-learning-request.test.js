@@ -4,7 +4,7 @@ import { buildVideoLearningLinkRequest } from '../src/video-learning-request.js'
 
 const bili = (url = 'https://www.bilibili.com/video/BV1aa411c7xx') => [{ provider: 'bilibili', url }];
 
-test('明确的“学这个视频 + B站链接”才进入指定链接学习', () => {
+test('B站链接 + 用户的话会生成候选，并规范成标准视频地址', () => {
   assert.deepEqual(buildVideoLearningLinkRequest({
     text: '学一下这个视频 https://www.bilibili.com/video/BV1aa411c7xx',
     candidates: bili(),
@@ -31,15 +31,15 @@ test('明确的“学这个视频 + B站链接”才进入指定链接学习', (
   });
 });
 
-test('普通分享、普通提问和非 B 站链接不劫持媒体流程', () => {
+test('只有链接和分享标题的普通分享不算候选；带任何话的都交给模型判断', () => {
   assert.equal(buildVideoLearningLinkRequest({
-    text: '看看这个视频',
+    text: '【TES先锋赛单曲1.0《突然的陀螺》】 https://www.bilibili.com/video/BV1aa411c7xx',
     candidates: bili(),
   }), null);
-  assert.equal(buildVideoLearningLinkRequest({
-    text: '这个视频是什么梗',
-    candidates: bili(),
-  }), null);
+  assert.equal(buildVideoLearningLinkRequest({ text: '', candidates: bili() }), null);
+  for (const text of ['看看这个视频', '学习一下，全文背诵', '背下来']) {
+    assert.equal(buildVideoLearningLinkRequest({ text, candidates: bili() }).preferredBvid, 'BV1aa411c7xx', text);
+  }
   assert.equal(buildVideoLearningLinkRequest({
     text: '学一下这个视频 https://www.xiaohongshu.com/explore/abc',
     candidates: [{ provider: 'xiaohongshu', url: 'https://www.xiaohongshu.com/explore/abc' }],

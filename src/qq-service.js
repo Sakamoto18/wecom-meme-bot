@@ -5727,10 +5727,21 @@ export class QqBotService {
         richSegments: payload.richSegments,
       }).filter((candidate) => candidate.provider === 'bilibili'
         && (!allowedProviders || allowedProviders.has('bilibili')));
-    const directLearningRequest = this.videoLearning && !mediaExcluded
+    const directLearningCandidate = this.videoLearning && !mediaExcluded
       && (payload.messageType === 'private' || this.isDirectHumanEngagementTrigger(payload))
       ? buildVideoLearningLinkRequest({ text: payload.text, candidates: directLearningCandidates })
       : null;
+    // The wording decides; a share or an unrelated question keeps the normal path.
+    const directLearningRequest = directLearningCandidate
+      && await this.replyTurnPlanner?.wantsVideoLearning?.({
+        text: payload.text,
+        quotedText: payload.quotedText,
+      }) === true
+      ? directLearningCandidate
+      : null;
+    if (directLearningCandidate) {
+      this.logger.log?.(`QQ 视频学习意图：bvid=${directLearningCandidate.preferredBvid || '-'} learn=${directLearningRequest ? 'yes' : 'no'}`);
+    }
     if (
       payload.mediaShare
       && supportedCandidates.length > 0

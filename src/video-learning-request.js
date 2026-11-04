@@ -1,15 +1,20 @@
 import { extractBilibiliPage, extractBilibiliVideoId } from './bilibili-provider.js';
 
-// A plain share card must keep using the normal media path.  Only an explicit
-// learning instruction turns a Bilibili link into a video-learning task.
-const LINK_LEARNING_PATTERN = /(?:学|学习|学会|记住|记一下|记下|补课|拆解|分析|研究|弄懂|看懂|讲解|总结)[^。！？!?\n]{0,20}(?:视频|链接|这条|这个|该视频|BV|b站|bilibili|里面|梗|笑点|名场面|黑话|口头禅)|(?:视频|链接|这条|这个|该视频|BV|b站|bilibili|里面|梗|笑点|名场面|黑话|口头禅)[^。！？!?\n]{0,20}(?:学|学习|学会|记住|记一下|记下|补课|拆解|分析|研究|弄懂|看懂|讲解|总结)/iu;
-
+// Any B 站 link in a direct message or its quote is only a candidate; the
+// turn planner decides from the wording whether the user asked to learn it.
+// A fixed keyword list missed phrasings like “学习一下，全文背诵”.
 export function buildVideoLearningLinkRequest({ text = '', candidates = [] } = {}) {
   const candidate = (Array.isArray(candidates) ? candidates : [])
     .find((item) => item?.provider === 'bilibili' && item?.url);
   if (!candidate) return null;
-  const instruction = String(text ?? '').replace(/https?:\/\/[^\s<>"'`]+/giu, ' ').trim();
-  if (!LINK_LEARNING_PATTERN.test(instruction)) return null;
+  // A bare share (link plus its 【title】) is not an instruction; it keeps
+  // the normal media path. Anything else the user wrote goes to the planner.
+  const instruction = String(text ?? '')
+    .replace(/https?:\/\/[^\s<>"'`]+/giu, ' ')
+    .replace(/【[^】]*】/gu, ' ')
+    .replace(/@\S+/gu, ' ')
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+  if (!instruction) return null;
   let bvid = '';
   let page = 1;
   try {

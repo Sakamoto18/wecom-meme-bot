@@ -138,6 +138,38 @@ export class VideoLearningStore {
       CREATE INDEX IF NOT EXISTS video_learning_observations_task
         ON video_learning_observations(task_key, source_key, start_seconds);
 
+      CREATE TABLE IF NOT EXISTS video_learning_comments (
+        comment_id TEXT PRIMARY KEY,
+        task_key TEXT NOT NULL,
+        source_key TEXT NOT NULL,
+        parent_id TEXT NOT NULL DEFAULT '',
+        text TEXT NOT NULL,
+        like_count INTEGER NOT NULL DEFAULT 0,
+        reply_count INTEGER NOT NULL DEFAULT 0,
+        published_at INTEGER NOT NULL DEFAULT 0,
+        author_hash TEXT NOT NULL DEFAULT '',
+        sort TEXT NOT NULL DEFAULT '',
+        rank INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS video_learning_comments_task ON video_learning_comments(task_key, source_key);
+      CREATE INDEX IF NOT EXISTS video_learning_comments_created ON video_learning_comments(created_at);
+
+      CREATE TABLE IF NOT EXISTS video_learning_comment_insights (
+        insight_id TEXT PRIMARY KEY,
+        task_key TEXT NOT NULL,
+        source_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        phrase TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        frequency INTEGER NOT NULL DEFAULT 0,
+        likes INTEGER NOT NULL DEFAULT 0,
+        confidence TEXT NOT NULL,
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS video_learning_comment_insights_task ON video_learning_comment_insights(task_key);
+
       CREATE TABLE IF NOT EXISTS video_learning_catchup_runs (
         day TEXT PRIMARY KEY,
         run_json TEXT NOT NULL,
@@ -409,6 +441,90 @@ export class VideoLearningStore {
     return Boolean(this.getSource(sourceKey));
   }
 
+  saveComments(taskKey, sourceKey, comments = []) {
+    const db = this.ensureOpen();
+    const insert = db.prepare(`
+      INSERT INTO video_learning_comments(
+        comment_id, task_key, source_key, parent_id, text, like_count, reply_count,
+        published_at, author_hash, sort, rank, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(comment_id) DO UPDATE SET
+        task_key=excluded.task_key, like_count=excluded.like_count,
+        reply_count=excluded.reply_count, created_at=excluded.created_at
+    `);
+    const now = this.now();
+    for (const comment of comments) {
+      insert.run(
+        text(comment.commentId, 40), text(taskKey, 320).toLowerCase(), text(sourceKey, 240),
+        text(comment.parentId, 40), text(comment.text, 1_000),
+        positiveInteger(comment.likeCount), positiveInteger(comment.replyCount),
+        positiveInteger(comment.publishedAt), text(comment.authorHash, 80),
+        text(comment.sort, 10), positiveInteger(comment.rank), now,
+      );
+    }
+    return comments.length;
+  }
+
+  listComments(taskKey, limit = 100) {
+    return this.ensureOpen().prepare(`
+      SELECT * FROM video_learning_comments WHERE task_key = ?
+      ORDER BY like_count DESC, rank ASC LIMIT ?
+    `).all(text(taskKey, 320).toLowerCase(), Math.max(1, Math.min(500, positiveInteger(limit, 100)))).map((row) => ({
+      commentId: row.comment_id,
+      sourceKey: row.source_key,
+      parentId: row.parent_id,
+      text: row.text,
+      likeCount: row.like_count,
+      replyCount: row.reply_count,
+      publishedAt: row.published_at,
+      authorHash: row.author_hash,
+      sort: row.sort,
+      rank: row.rank,
+    }));
+  }
+
+  saveCommentInsights(taskKey, sourceKey, insights = []) {
+    const db = this.ensureOpen();
+    const key = text(taskKey, 320).toLowerCase();
+    db.prepare('DELETE FROM video_learning_comment_insights WHERE task_key = ? AND source_key = ?').run(key, text(sourceKey, 240));
+    const insert = db.prepare(`
+      INSERT INTO video_learning_comment_insights(
+        insight_id, task_key, source_key, kind, phrase, summary, frequency, likes,
+        confidence, evidence_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const now = this.now();
+    for (const insight of insights) {
+      insert.run(
+        randomUUID(), key, text(sourceKey, 240), text(insight.kind, 20), text(insight.phrase, 200),
+        text(insight.summary, 500), positiveInteger(insight.frequency), positiveInteger(insight.likes),
+        text(insight.confidence, 10) || 'low', JSON.stringify(Array.isArray(insight.evidence) ? insight.evidence.slice(0, 10) : []), now,
+      );
+    }
+    return insights.length;
+  }
+
+  getCommentInsights(taskKey) {
+    return this.ensureOpen().prepare(`
+      SELECT * FROM video_learning_comment_insights WHERE task_key = ? ORDER BY likes DESC, frequency DESC
+    `).all(text(taskKey, 320).toLowerCase()).map((row) => ({
+      sourceKey: row.source_key,
+      kind: row.kind,
+      phrase: row.phrase,
+      summary: row.summary,
+      frequency: row.frequency,
+      likes: row.likes,
+      confidence: row.confidence,
+      evidence: (() => { try { return JSON.parse(row.evidence_json); } catch { return []; } })(),
+    }));
+  }
+
+  // Raw comments are kept for a limited time; insights stay (plan §6.1).
+  pruneComments(retentionMs) {
+    return Number(this.ensureOpen().prepare('DELETE FROM video_learning_comments WHERE created_at < ?')
+      .run(this.now() - Math.max(0, Number(retentionMs) || 0)).changes);
+  }
+
   getCatchupRun(day) {
     const row = this.ensureOpen().prepare(
       'SELECT run_json FROM video_learning_catchup_runs WHERE day = ?',
@@ -440,6 +556,8 @@ export class VideoLearningStore {
       pendingDeliveries: count('video_learning_deliveries', " WHERE status IN ('pending','leased')"),
       sources: count('video_learning_sources'),
       observations: count('video_learning_observations'),
+      comments: count('video_learning_comments'),
+      commentInsights: count('video_learning_comment_insights'),
     };
   }
 

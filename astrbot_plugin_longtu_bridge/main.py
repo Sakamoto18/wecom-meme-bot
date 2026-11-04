@@ -1196,11 +1196,25 @@ class LongtuQqBridge(Star):
                         break
                 if complete:
                     delivered += 1
-                else:
-                    logger.warning(f"日报图片未全部送达：{recipient}")
+                    continue
+                logger.warning(f"日报图片未全部送达：{recipient}")
             except Exception as error:
                 logger.warning(f"日报图片发送失败：{recipient}：{error}")
-        logger.info(f"图片日报已推送给 {delivered}/{len(recipients)} 个收件账号")
+            # Some accounts reject image transfer ("rich media transfer
+            # failed"); the text report still reaches them.
+            try:
+                sent = await self.context.send_message(
+                    f"{platform.meta().id}:FriendMessage:{recipient}",
+                    MessageChain(chain=[Comp.Plain(report_text)]),
+                )
+                if sent:
+                    delivered += 1
+                    logger.info(f"日报已改用文字发送：{recipient}")
+                else:
+                    logger.warning(f"日报文字回退也未送达：{recipient}")
+            except Exception as error:
+                logger.warning(f"日报文字回退发送失败：{recipient}：{error}")
+        logger.info(f"日报已推送给 {delivered}/{len(recipients)} 个收件账号")
         return delivered
 
     async def _send_usage_report_text(

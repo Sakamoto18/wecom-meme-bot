@@ -4036,6 +4036,7 @@ test('指定 B站链接学习时绕过普通媒体解析，并把链接传给学
   let resolveCalls = 0;
   const gateCalls = [];
   const { service } = createService({
+    replyTurnPlanner: { enabled: false, wantsVideoLearning: async () => true },
     mediaResolver: {
       enabled: true,
       async resolve() {
@@ -4078,6 +4079,7 @@ test('群聊引用 Bot 后发 B站链接学习，也能进入指定链接任务'
   let resolveCalls = 0;
   const gateCalls = [];
   const { service } = createService({
+    replyTurnPlanner: { enabled: false, wantsVideoLearning: async () => true },
     mediaResolver: {
       enabled: true,
       async resolve() {
@@ -4121,6 +4123,7 @@ test('合并转发里的 B站链接也能按明确学习指令进入任务', asy
   let resolveCalls = 0;
   const gateCalls = [];
   const { service } = createService({
+    replyTurnPlanner: { enabled: false, wantsVideoLearning: async () => true },
     mediaResolver: {
       enabled: true,
       async resolve() {
@@ -4662,4 +4665,48 @@ test('会话只存用户原话和短图片摘要，不再存整段视觉提示�
   assert.match(stored, /解释一下/);
   assert.match(stored, /当时图片摘要/);
   assert.doesNotMatch(stored, /图片角色边界|data:image|当前消息：/);
+});
+
+
+test('带 B站链接的 @ 消息：判断为学习就学，不是学习就照常发视频', async () => {
+  const intents = [];
+  let resolveCalls = 0;
+  const build = (learn) => createService({
+    replyTurnPlanner: {
+      enabled: false,
+      wantsVideoLearning: async (input) => { intents.push(input); return learn; },
+    },
+    mediaResolver: {
+      enabled: true,
+      async resolve() {
+        resolveCalls += 1;
+        throw new Error('媒体解析失败（测试）');
+      },
+    },
+    videoLearning: {
+      gate: () => ({ action: 'remind', taskKey: 'k', topic: 'B 站视频 BV1h5QaY5EaH', directLink: true, topicExplicit: false }),
+    },
+  }).service;
+  const message = {
+    message_id: 'm1',
+    message_type: 'private',
+    user_id: '1079175957',
+    text: '学习一下，全文背诵',
+    quoted_text: '【TES先锋赛单曲1.0《突然的陀螺》】 https://www.bilibili.com/video/BV1h5QaY5EaH/',
+    media_share: true,
+  };
+  const learned = await build(true).handleMessage(message);
+  assert.equal(learned.mode, 'learning-pending');
+  assert.equal(intents[0].text, '学习一下，全文背诵');
+  assert.match(intents[0].quotedText, /BV1h5QaY5EaH/);
+  assert.equal(resolveCalls, 0);
+
+  const shared = await build(false).handleMessage({ ...message, message_id: 'm2', text: '看看这个视频 https://www.bilibili.com/video/BV1h5QaY5EaH/', quoted_text: '' });
+  assert.notEqual(shared.mode, 'learning-pending');
+  assert.equal(resolveCalls, 1);
+
+  // A bare share card never asks the model at all.
+  intents.length = 0;
+  await build(true).handleMessage({ ...message, message_id: 'm3', text: '【突然的陀螺】 https://www.bilibili.com/video/BV1h5QaY5EaH/', quoted_text: '' });
+  assert.equal(intents.length, 0);
 });

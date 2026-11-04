@@ -2975,3 +2975,146 @@ test('视频学过的梗直接作为梗知识用于回答', async () => {
   const main = calls.find((options) => options.usageSource === 'conversation-reply');
   assert.match(main.additionalSystemPrompt, /词条：似了/);
 });
+
+function learningTurn({ results = [], gate, reply = '许飞和厉娜是 2005 年超女的选手。' } = {}) {
+  const calls = [];
+  const gateCalls = [];
+  return generateConversationReply({
+    content: '许飞和厉娜是什么',
+    modelInput: '许飞和厉娜是什么',
+    turnPlan: normalizeTurnPlan({
+      current_task: '解释许飞和厉娜',
+      search: { fact_needed: true, culture_needed: true, fact_queries: ['许飞 厉娜'], culture_queries: ['许飞 厉娜 梗'] },
+    }),
+    videoLearningGate: (info) => {
+      gateCalls.push(info);
+      return gate ? gate(info) : { action: 'remind', taskKey: 'task-1', topic: '许飞 厉娜' };
+    },
+    webSearch: {
+      async search() {
+        return {
+          context: results.map((row) => `${row.title}：${row.description}`).join('\n'),
+          resultCount: results.length,
+          results,
+          endpoint: 'https://api.exa.ai/search',
+        };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        calls.push(options);
+        return options.usageSource === 'video-learning-reminder' ? '行，我去瞅瞅。' : reply;
+      },
+    },
+  }).then((result) => ({ result, calls, gateCalls }));
+}
+
+test('Exa 搜到了就直接按搜索结果回答，不去 B 站', async () => {
+  const { result, calls, gateCalls } = await learningTurn({
+    results: [{ title: '许飞', description: '2005 超级女声选手', url: 'https://baike.baidu.com/item/许飞' }],
+  });
+  assert.notEqual(result.mode, 'learning-pending');
+  assert.equal(gateCalls.length, 0);
+  assert.ok(calls.some((options) => options.usageSource === 'conversation-reply'));
+});
+
+test('Exa 结果指向 B 站来源视频时，先按搜索回答，同时后台去看那条视频', async () => {
+  const { result, gateCalls } = await learningTurn({
+    results: [{ title: '许飞厉娜名场面', description: '超女决赛片段', url: 'https://www.bilibili.com/video/BV1aa411c7xx' }],
+    gate: () => ({ action: 'background', taskKey: 'task-2', topic: '许飞 厉娜' }),
+  });
+  assert.notEqual(result.mode, 'learning-pending');
+  assert.equal(gateCalls[0].background, true);
+  assert.equal(gateCalls[0].preferredBvid, 'BV1aa411c7xx');
+  assert.match(result.answer, /超女/);
+});
+
+test('Exa 什么都没搜到才先提醒再去 B 站学', async () => {
+  const { result, gateCalls } = await learningTurn({ results: [] });
+  assert.equal(result.mode, 'learning-pending');
+  assert.equal(gateCalls[0].background, undefined);
+});
+
+test('沉浸模式下提醒和改写这类不开思考的调用不带沉浸指令，输出里也不会出现内心独白', async () => {
+  const inputs = [];
+  const result = await generateConversationReply({
+    content: '许飞和厉娜是什么',
+    modelInput: '许飞和厉娜是什么',
+    roleplayImmersion: true,
+    turnPlan: normalizeTurnPlan({
+      current_task: '解释许飞和厉娜',
+      search: { culture_needed: true, culture_queries: ['许飞 厉娜'] },
+    }),
+    videoLearningGate: () => ({ action: 'remind', taskKey: 'task-3', topic: '许飞 厉娜' }),
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, input, options) {
+        inputs.push({ input: String(input), options });
+        return '（心想：这俩名字我真没印象，装懂就露馅了，先去看一眼再回来损他。）行，我去瞅瞅这俩到底什么来头。';
+      },
+    },
+  });
+  const reminder = inputs.find((call) => call.options.usageSource === 'video-learning-reminder');
+  assert.doesNotMatch(reminder.input, /角色沉浸要求/);
+  assert.equal(result.answer, '行，我去瞅瞅这俩到底什么来头。');
+});
+
+function learnedKnowledge() {
+  const entry = {
+    term: '滔博的大腿',
+    meaning: 'TES 胜利单曲里夸选手的一句歌词。',
+    usage: ['夸人能 carry'],
+    confidence: 'high',
+    lookupSource: 'video',
+    sourceUrls: ['https://www.bilibili.com/video/BV1hznR6oETN'],
+    lyrics: [{ line: '九妹九妹 滔博的大腿', position: '副歌' }, { line: '九妹九妹 上路的堡垒', position: '副歌' }],
+    reception: { summary: '网友在刷副歌，夸 TES', phrases: ['九妹九妹'] },
+    currentEvents: [],
+    replyHooks: [],
+  };
+  return {
+    lookup: () => null,
+    lookupPhrase: (text) => (/九妹九妹/u.test(text) ? { ...entry, matchType: 'lyric', matchedPhrase: '九妹九妹上路的堡垒' } : null),
+    lookupAssociations: () => [],
+    putAssociation: () => true,
+    put: () => true,
+  };
+}
+
+async function promptFor(content) {
+  let prompt = '';
+  await generateConversationReply({
+    content,
+    modelInput: content,
+    memeKnowledge: learnedKnowledge(),
+    webSearchEnabled: false,
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, _input, options) {
+        if (options.usageSource === 'conversation-reply' || options.usageSource === 'attack-reply') {
+          prompt = String(options.additionalSystemPrompt ?? '');
+        }
+        return '九妹九妹，滔博的大腿！';
+      },
+    },
+  });
+  return prompt;
+}
+
+test('歌词片段命中已学的视频条目：注入歌词并按接歌词意图回复，不编下一句', async () => {
+  const prompt = await promptFor('九妹九妹 上路的堡垒');
+  assert.match(prompt, /已确认的歌词\/口头禅（按顺序）：九妹九妹 滔博的大腿（副歌） \/ 九妹九妹 上路的堡垒/);
+  assert.match(prompt, /本轮是接歌词/);
+  assert.match(prompt, /不知道下一句就直说/);
+  assert.match(prompt, /评论区共识（网友怎么看，不是事实）/);
+});
+
+test('无关消息不注入已学的视频条目', async () => {
+  assert.doesNotMatch(await promptFor('今天中午吃啥'), /滔博的大腿/);
+});
+
+test('对线时引用歌词也能认出已学条目', async () => {
+  assert.match(await promptFor('你个傻逼，九妹九妹 上路的堡垒'), /已确认的歌词/);
+});
