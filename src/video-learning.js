@@ -28,6 +28,8 @@ export const VIDEO_LEARNING_LIMITS = Object.freeze({
   segmentSeconds: 27,
   tileSeconds: 9,
   dailyCatchupTasks: 3,
+  catchupBrowseSlots: 1,
+  enrichmentCooldownMs: 7 * 24 * 60 * 60 * 1000,
   dailyCatchupSeconds: 10 * 60,
   catchupHour: 3,
 });
@@ -66,7 +68,10 @@ const BROWSE_PROMPT = [
 ].join('\n');
 const BROWSE_KEYWORDS = Object.freeze(['梗百科', '是什么梗', '梗知识']);
 
+const REUSABLE_MEME_PROMPT = '除了含义，还要保留能用于聊天的接法：reply_hooks 给出 1～3 条与证据对应的短句或改词结构，usage 说明什么时候接、接哪个点；材料不支持就留空。歌曲/鬼畜优先保留有辨识度的重复副歌和相邻短句，并逐句标注置信度；不要只写“用于调侃”，不要杜撰原作台词。';
+
 const MERGE_PROMPT = [
+  REUSABLE_MEME_PROMPT,
   '你是网络梗考据员。下面是同一个梗相关的 B 站视频逐段观察记录和视频信息。',
   '判断这些材料能不能解释用户问的梗。视频必须是在讲这个词本身；只是字面相近、谐音相近或讲的是另一个梗，就 found=false。看完仍说不清也 found=false，不要硬凑。',
   '出处只写视频里能确认的；弹幕、标题、评论只是线索。声音相关的笑点如果只有字幕或转写、没有确认声音本身，sound_unconfirmed=true。',
@@ -75,6 +80,7 @@ const MERGE_PROMPT = [
 ].join('\n');
 
 const DIRECT_MERGE_PROMPT = [
+  REUSABLE_MEME_PROMPT,
   '你是网络梗考据员。用户直接指定了一个 B 站视频，下面是这个视频的逐段观察记录和视频信息。',
   '从视频里选出一个最值得学的梗、黑话、口头禅或名场面，term 写视频里实际出现的最短、可复用的原词或短语；如果视频没有明确可学的梗，found=false，不要硬凑。',
   '出处只写视频里能确认的；标题、简介、弹幕和评论只是线索。声音相关的笑点如果只有字幕或转写、没有确认声音本身，sound_unconfirmed=true。',
@@ -244,6 +250,27 @@ export class VideoLearningCoordinator {
     if (!key) return null;
     const task = this.store.findLatestTask(key, 'completed');
     return task?.result?.found ? task.result.entry : null;
+  }
+
+  needsCatchup(topic) {
+    const key = topicKey(topic);
+    if (this.store.findActiveTask(key)
+      || this.store.findLatestTask(key, 'failed', this.now() - this.limits.failureCooldownMs)) return false;
+    const task = this.store.findLatestTask(key, 'completed');
+    let cached = null;
+    try { cached = this.memeKnowledge?.lookup?.(topic); } catch { /* optional cache */ }
+    const entry = cached || (task?.result?.found ? task.result.entry : null);
+    const hasHooks = entry?.replyHooks?.some((hook) => String(hook).trim());
+    const hasLyrics = entry?.lyrics?.some((line) => line.line && line.confidence !== 'low');
+    const song = /歌曲|鬼畜|歌词|副歌/u.test(String(
+      entry?.content?.format || task?.result?.entry?.content?.format || entry?.meaning || '',
+    ));
+    if (hasLyrics || (hasHooks && !song)) return false;
+    // A dictionary definition is not a usable reply. Enrich incomplete
+    // entries at most weekly, including unsuccessful enrichment attempts
+    // that still produced a valid definition.
+    if (task && task.updatedAt >= this.now() - this.limits.enrichmentCooldownMs) return false;
+    return true;
   }
 
   corpusKnows(topic) {
@@ -421,16 +448,16 @@ export class VideoLearningCoordinator {
       if (picked.length >= this.limits.dailyCatchupTasks) break;
       const key = topicKey(item.term);
       if (picked.some((other) => topicKey(other.term) === key)) continue;
-      if (this.knowledgeFor(item.term) || this.corpusKnows(item.term) || this.store.findActiveTask(key)) continue;
-      if (this.store.findLatestTask(key, 'failed', this.now() - this.limits.failureCooldownMs)) continue;
+      if (!this.needsCatchup(item.term)) continue;
       picked.push(item);
     }
     return { picked, candidates };
   }
 
-  // Fallback when group chat has nothing: browse recent B 站 meme-explainer
-  // videos and pick widely used memes that are not known yet.
-  async browseCatchupTopics(limit) {
+  // Discover recent B 站 meme explainers independently of the group queue.
+  // Incomplete definitions are eligible for periodic enrichment too.
+  async browseCatchupTopics(limit, excluded = []) {
+    if (limit <= 0) return [];
     const headers = await this.bilibiliHeaders();
     const seen = new Set();
     const videos = [];
@@ -465,19 +492,19 @@ export class VideoLearningCoordinator {
       if (picked.length >= limit) break;
       const term = learningTopic(item?.term);
       const key = topicKey(term);
-      if (key.length < 2 || picked.some((other) => topicKey(other.term) === key)) continue;
-      if (this.knowledgeFor(term) || this.corpusKnows(term) || this.store.findActiveTask(key)) continue;
-      if (this.store.findLatestTask(key, 'failed', this.now() - this.limits.failureCooldownMs)) continue;
+      if (key.length < 2 || excluded.some((other) => topicKey(other.term) === key)
+        || picked.some((other) => topicKey(other.term) === key) || !this.needsCatchup(term)) continue;
       const video = videos.find((row) => row.bvid === String(item?.bvid ?? ''));
-      picked.push({ term, source: 'bilibili', bvid: video?.bvid || '', play: video?.play || 0 });
+      if (!video) continue;
+      picked.push({ term, source: 'bilibili', bvid: video.bvid, play: video.play || 0 });
     }
     return picked;
   }
 
   /**
    * Daily catch-up (plan §5): after 03:00 Beijing time, learn up to 3 public
-   * memes that recurred in group chat over the last 24 hours and are not yet
-   * known, within 10 minutes of material. Results only go to the meme store
+   * memes from group chat and a reserved explainer-discovery slot, within
+   * 10 minutes of material. Results only go to the meme store
    * and the admin daily report; nothing is posted to groups.
    */
   async runCatchup(day = this.catchupDue()) {
@@ -487,18 +514,38 @@ export class VideoLearningCoordinator {
     const run = { day, startedAt: started, items: [], candidates: [] };
     try {
       this.store.saveCatchupRun(day, { ...run, status: 'running' });
-      const { picked, candidates } = await this.pickCatchupTopics(started - 24 * 60 * 60 * 1000);
-      run.candidates = candidates.map((item) => item.term).slice(0, 8);
-      picked.forEach((item) => { item.source = 'group'; });
-      if (picked.length < this.limits.dailyCatchupTasks) {
-        picked.push(...await this.browseCatchupTopics(this.limits.dailyCatchupTasks - picked.length));
+      let group = { picked: [], candidates: [] };
+      try {
+        group = await this.pickCatchupTopics(started - 24 * 60 * 60 * 1000);
+      } catch (error) {
+        this.logger.warn?.(`群聊补课选题失败，继续梗视频发现：${error.message}`);
+      }
+      run.candidates = group.candidates.map((item) => item.term).slice(0, 8);
+      group.picked.forEach((item) => { item.source = 'group'; });
+      const total = this.limits.dailyCatchupTasks;
+      const reserved = Math.min(this.limits.catchupBrowseSlots, Math.max(0, total - 1));
+      const groupSlots = Math.max(0, total - reserved);
+      const picked = group.picked.slice(0, groupSlots);
+      let browsed = [];
+      try {
+        browsed = await this.browseCatchupTopics(total - picked.length, picked);
+      } catch (error) {
+        this.logger.warn?.(`梗视频选题失败，继续群聊补课：${error.message}`);
+      }
+      // Give discovery a real slot before the shared material budget runs out.
+      picked.unshift(...browsed.slice(0, reserved));
+      picked.push(...browsed.slice(reserved));
+      for (const item of group.picked.slice(groupSlots)) {
+        if (picked.length >= total) break;
+        if (!picked.some((other) => topicKey(other.term) === topicKey(item.term))) picked.push(item);
       }
       let seconds = 0;
       for (const item of picked) {
         const remaining = this.limits.dailyCatchupSeconds - seconds;
         if (remaining < 20) break;
         const dayStart = startOfShanghaiDay(this.now());
-        if (this.store.materialSecondsSince(dayStart) >= this.limits.dailyMaterialSeconds) break;
+        const dailyRemaining = this.limits.dailyMaterialSeconds - this.store.materialSecondsSince(dayStart);
+        if (dailyRemaining < 20 || this.store.countTasksSince(dayStart) >= this.limits.dailyTasks) break;
         const { task } = this.store.createOrJoinTask({
           topicKey: topicKey(item.term),
           topic: item.term,
@@ -506,7 +553,7 @@ export class VideoLearningCoordinator {
           metadata: {
             waiters: [],
             catchup: day,
-            materialLimitSeconds: Math.min(this.limits.taskMaterialSeconds, remaining),
+            materialLimitSeconds: Math.min(this.limits.taskMaterialSeconds, remaining, dailyRemaining),
             // The explainer that surfaced the meme is watched first.
             preferredBvid: item.bvid || '',
           },
@@ -940,7 +987,7 @@ export class VideoLearningCoordinator {
       material.slice(0, 12_000),
     ].filter(Boolean).join('\n'), {
       systemPrompt: directLink ? DIRECT_MERGE_PROMPT : MERGE_PROMPT,
-      maxTokens: 900,
+      maxTokens: 1_800,
       temperature: 0.1,
       timeoutMs: 90_000,
       thinking: { type: 'disabled' },

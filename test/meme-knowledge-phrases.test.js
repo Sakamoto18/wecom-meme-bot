@@ -82,7 +82,7 @@ test('提示词带上歌词、评论共识和未核实时事；7 天后不再当
   assert.match(prompt, /评论区共识（网友怎么看，不是事实）：网友在刷副歌/);
   assert.match(prompt, /时事（2026-11-02，评论区在说，未核实）/);
   assert.match(prompt, /不知道下一句就直说“这版我就记到这句”/);
-  assert.match(prompt, /不要编下一句歌词，不要编比赛结果/);
+  assert.match(prompt, /不要编下一句歌词，不要把即兴改词冒充原作，不要编比赛结果/);
   const later = memeKnowledgePrompt(tesEntry, 'cache', { now: 1_800_000_000_000 + 8 * 86_400_000 });
   assert.doesNotMatch(later, /时事/);
 });
@@ -94,4 +94,32 @@ test('回复意图：接歌词、评价、解释、默认', () => {
   assert.equal(memeReplyIntent('这歌怎么样 滔博的大腿', { matchType: 'lyric' }), 'evaluate');
   assert.equal(memeReplyIntent('滔博的大腿是什么梗', {}), 'explain');
   assert.equal(memeReplyIntent('哈哈', {}), 'default');
+});
+
+
+test('截图改词通过已学副歌结构召回；不需要评论区另存相同短语', () => {
+  const f = fixture();
+  try {
+    f.store.put({ ...tesEntry, lyrics: [tesEntry.lyrics[0]], reception: {}, replyHooks: [] });
+    const hit = f.store.lookupPhrase('九妹九妹 打瓦的妹妹');
+    assert.equal(hit.term, tesEntry.term);
+    assert.equal(hit.matchType, 'lyric-template');
+    assert.equal(memeReplyIntent('九妹九妹 打瓦的妹妹', hit), 'lyric-template');
+    assert.equal(memeReplyIntent('九妹九妹 下一句是啥', hit), 'lyric');
+    assert.equal(f.store.lookupPhrase('九妹今天打瓦吗'), null);
+    assert.equal(f.store.lookupPhrase('妹妹妹妹 今天吃啥'), null);
+    f.store.put({ ...tesEntry, term: '另一个九妹版本', aliases: [], lyrics: [{ line: '九妹九妹 另一首歌', confidence: 'high' }], reception: {}, replyHooks: [] });
+    assert.equal(f.store.lookupPhrase('九妹九妹 打瓦的妹妹'), null, '共享副歌不能猜版本');
+    assert.equal(f.store.lookupPhrase('九妹九妹 滔博的大腿').term, tesEntry.term);
+  } finally { f.close(); }
+});
+
+test('完整歌词优先于另一行的共同副歌；普通重复不凭空当歌词', () => {
+  const f = fixture();
+  try {
+    f.store.put(tesEntry);
+    assert.equal(f.store.lookupPhrase('九妹九妹 上路的堡垒').matchType, 'lyric');
+    f.store.put({ ...tesEntry, term: '笑声', aliases: [], lyrics: [{ line: '哈哈哈哈 世界真美好' }], reception: {}, replyHooks: [] });
+    assert.equal(f.store.lookupPhrase('哈哈哈哈 今天吃饭'), null);
+  } finally { f.close(); }
 });

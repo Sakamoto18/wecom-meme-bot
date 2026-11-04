@@ -470,3 +470,58 @@ test('评论抓取失败不影响视频学习完成', async () => {
     f.close();
   }
 });
+
+
+test('已有词典释义仍可补学；缺接法旧任务每周补一次，完整条目跳过', () => {
+  const f = fixture({ memeCorpus: { search: () => [{ terms: '似了' }] } });
+  try {
+    assert.equal(f.coordinator.needsCatchup('似了'), true);
+    const { task } = f.store.createOrJoinTask({ topic: '似了', topicKey: '似了' });
+    f.store.updateTask(task.taskKey, { status: 'completed', result: { found: true, entry: { term: '似了', meaning: '死了的谐音' } } });
+    assert.equal(f.coordinator.needsCatchup('似了'), false);
+    f.advance(8 * 86_400_000);
+    assert.equal(f.coordinator.needsCatchup('似了'), true);
+    f.coordinator.memeKnowledge.lookup = () => ({ replyHooks: ['我似了'] });
+    assert.equal(f.coordinator.needsCatchup('似了'), false);
+  } finally { f.close(); }
+});
+
+test('群聊候选满额时仍给科普视频一个名额，同名候选去重', async () => {
+  const f = fixture();
+  try {
+    f.coordinator.pickCatchupTopics = async () => ({ picked: [{ term: '似了' }, { term: '群聊第二个' }, { term: '群聊第三个' }], candidates: [] });
+    f.coordinator.processTask = async (task) => {
+      f.store.updateTask(task.taskKey, { status: 'completed', result: { materialSeconds: 10 } });
+    };
+    const run = await f.coordinator.runCatchup('2026-11-03');
+    assert.equal(run.items.length, 3);
+    assert.deepEqual(run.items.map((item) => item.source), ['bilibili', 'group', 'group']);
+    const picks = await f.coordinator.browseCatchupTopics(2, [{ term: '黑猫鼓掌' }]);
+    assert.deepEqual(picks.map((item) => item.term), ['限定词冠军']);
+  } finally { f.close(); }
+});
+
+test('群聊选题失败仍能自动发现视频；每日总任务预算也约束补课', async () => {
+  const f = fixture();
+  try {
+    f.coordinator.pickCatchupTopics = async () => { throw new Error('picker unavailable'); };
+    f.coordinator.limits.dailyTasks = 1;
+    const run = await f.coordinator.runCatchup('2026-11-03');
+    assert.equal(run.items.length, 1);
+    assert.equal(run.items[0].source, 'bilibili');
+  } finally { f.close(); }
+});
+
+
+test('视频发现失败会将保留名额还给群聊；不会丢掉已选候选', async () => {
+  const f = fixture();
+  try {
+    f.coordinator.pickCatchupTopics = async () => ({ picked: [{ term: '甲梗' }, { term: '乙梗' }, { term: '丙梗' }], candidates: [] });
+    f.coordinator.browseCatchupTopics = async () => { throw new Error('browse unavailable'); };
+    f.coordinator.processTask = async (task) => {
+      f.store.updateTask(task.taskKey, { status: 'completed', result: { materialSeconds: 10 } });
+    };
+    const run = await f.coordinator.runCatchup('2026-11-03');
+    assert.deepEqual(run.items.map((item) => item.term), ['甲梗', '乙梗', '丙梗']);
+  } finally { f.close(); }
+});

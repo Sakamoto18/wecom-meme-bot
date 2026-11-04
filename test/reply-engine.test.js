@@ -1,3 +1,7 @@
+import { MemeKnowledgeStore } from '../src/meme-knowledge.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeTurnPlan } from '../src/reply-turn-planner.js';
@@ -3117,4 +3121,53 @@ test('无关消息不注入已学的视频条目', async () => {
 
 test('对线时引用歌词也能认出已学条目', async () => {
   assert.match(await promptFor('你个傻逼，九妹九妹 上路的堡垒'), /已确认的歌词/);
+});
+
+
+test('真实梗库召回截图改词后走接梗任务，不被攻击路由抢走或重复搜索', async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'reply-lyric-'));
+  const store = new MemeKnowledgeStore({ databaseFilePath: path.join(directory, 'knowledge.sqlite') });
+  try {
+    store.put({ term: '滔博的大腿', meaning: '胜利单曲副歌', confidence: 'high',
+      sourceUrls: ['https://www.bilibili.com/video/BV1hznR6oETN'], sourceDomains: ['bilibili.com'],
+      lookupSource: 'video', lyrics: [{ line: '九妹九妹 滔博的大腿', confidence: 'high' }] });
+    for (const content of ['九妹九妹 打瓦的妹妹', '你个傻逼，九妹九妹 打瓦的妹妹']) {
+      const calls = [];
+      let searches = 0;
+      const result = await generateConversationReply({
+        content, currentQuestion: content, modelInput: content, memeKnowledge: store,
+        webSearchEnabled: true,
+        webSearch: { async search() { searches += 1; return { context: '', results: [] }; } },
+        chatClient: { isConfigured: true, async complete(_history, _input, options) {
+          calls.push(options);
+          return '九妹九妹，闪光先闪队友！';
+        } },
+      });
+      assert.equal(searches, 0);
+      assert.equal(result.memeKnowledgeUsed, true);
+      assert.ok(calls.some((call) => call.usageSource === 'conversation-reply'));
+      assert.ok(calls.every((call) => !call.usageSource.startsWith('attack-reply')));
+      const prompt = calls.find((call) => call.usageSource === 'conversation-reply').additionalSystemPrompt;
+      assert.match(prompt, /本轮是接改词梗/);
+      assert.match(prompt, /本轮接梗任务；优先于通用互怼/);
+      assert.match(prompt, /不是原作下一句/);
+      assert.ok(calls.every((call) => /本轮接梗任务/.test(call.prioritySystemPrompt)), '重写也保留接梗任务');
+    }
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test('歌词召回不覆盖当前图片的具体接话锚点', async () => {
+  const content = '九妹九妹 上路的堡垒';
+  const calls = [];
+  await generateConversationReply({
+    content, currentQuestion: content, modelInput: content,
+    hasImageContext: true, imageMemeClaim: '猫把键盘当床睡', imageSemanticFrame: '猫霸占键盘让人无法打游戏',
+    memeKnowledge: learnedKnowledge(), webSearchEnabled: false,
+    chatClient: { isConfigured: true, async complete(_history, _input, options) {
+      calls.push(options);
+      return '猫先把键盘占点了，你还打什么瓦。';
+    } },
+  });
+  assert.ok(calls.every((call) => !/本轮接梗任务；优先于通用互怼/.test(call.prioritySystemPrompt)));
 });

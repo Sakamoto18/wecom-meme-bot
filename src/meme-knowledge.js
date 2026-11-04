@@ -33,6 +33,29 @@ function phraseText(value) {
     .replace(/[\s\p{P}\p{S}]+/gu, '').slice(0, 200);
 }
 
+// Reuse a learned lyric's structure, never a global list of meme names.
+function matchLearnedLyric(message, lyrics) {
+  const confirmed = richList(lyrics, 8).filter((item) => item.confidence !== 'low');
+  for (const item of confirmed) {
+    const line = phraseText(item.line);
+    if (line.length >= 4 && message.includes(line)) {
+      return { matchType: 'lyric', matchedPhrase: line, length: line.length };
+    }
+  }
+  for (const item of confirmed) {
+    const line = phraseText(item.line);
+    if (line.length < 4) continue;
+    // A distinctive repeated opening can survive replacement of the rest of
+    // the line. Single-character laughter/repetition is not a lyric signal.
+    const opening = line.match(/^([\p{Script=Han}]{2,4})\1/u);
+    if (opening && new Set(opening[1]).size > 1 && message.length <= 80
+      && message.includes(opening[0])) {
+      return { matchType: 'lyric-template', matchedPhrase: line, length: opening[0].length };
+    }
+  }
+  return null;
+}
+
 function longestCommonRun(left, right) {
   let best = 0;
   const previous = new Array(right.length + 1).fill(0);
@@ -157,16 +180,17 @@ export function memeKnowledgePrompt(entry, source = 'cache', options = {}) {
     `证据状态：${source === 'cache' ? '本地高置信梗库' : '本轮定向 B 站梗语境/百科检索'}`,
     `可信度：${entry.confidence}`,
     options.intent ? MEME_INTENT_RULES[options.intent] ?? '' : '',
-    '只把条目作为当前回答的证据，不要编造出处，不要把不确定的搜索摘要写成现实事实。不要编下一句歌词，不要编比赛结果，不要把评论区说法当事实，不要提学习过程、视频或链接。',
+    '只把条目作为当前回答的证据，不要编造出处，不要把不确定的搜索摘要写成现实事实。不要编下一句歌词，不要把即兴改词冒充原作，不要编比赛结果，不要把评论区说法当事实，不要提学习过程、视频或链接。',
   ].filter(Boolean).join('\n');
 }
 
 // Reply focus per intent (plan §7.2).
 export const MEME_INTENT_RULES = Object.freeze({
+  'lyric-template': '本轮是接改词梗：用户借用了已学副歌的重复结构。先接住用户替换的新场景，可以沿相同节奏接一小句即兴改词；这是本轮二创，不是原作下一句，不得声称出自原视频。不要把旧版本的队伍或人物硬套到当前场景，不要用泛泛互怼盖过接梗，也不用解释梗义。',
   lyric: '本轮是接歌词：只接上面已确认的原句，接在当前消息那句之后；不知道下一句就直说“这版我就记到这句”，不要现编。',
   evaluate: '本轮是评价：结合视频内容和评论区共识说看法；时事只按上面的状态说，没核实的说成“评论区在说”。',
   explain: '本轮是解释：说清梗义和用法，有确认的出处再带一句。',
-  default: '自然接一两句，用上这个梗就行。',
+  default: '本轮是自然接梗：从可接话的说法、用法线索中选一个贴合当前场景的落点，顺着用户接一两句，不要复述梗义或宣布识别成功。例句只借结构，不照搬旧人物、队伍和事件；不贴题就不硬塞。',
 });
 
 export function memeReplyIntent(message, entry) {
@@ -175,7 +199,8 @@ export function memeReplyIntent(message, entry) {
   if (/(?:下一句|接歌词|接着唱|唱一下|唱下去)/u.test(value)) return 'lyric';
   if (/(?:怎么样|如何|评价|好听吗|锐评|这场|比赛|打得)/u.test(value)) return 'evaluate';
   if (/(?:什么意思|啥意思|什么梗|啥梗|为什么|出处|来源|怎么来的)/u.test(value)) return 'explain';
-  return entry?.matchType === 'lyric' ? 'lyric' : 'default';
+  if (entry?.matchType === 'lyric-template') return 'lyric-template';
+  return ['lyric', 'lyric-fragment'].includes(entry?.matchType) ? 'lyric' : 'default';
 }
 
 export function reviewMemeKnowledgeReply(answer, entry) {
@@ -306,7 +331,7 @@ export class MemeKnowledgeStore {
     const db = this.ensureOpen();
     this.cleanup();
     const rows = db.prepare(`
-      SELECT f.term_key AS termKey, f.text AS phrase FROM meme_knowledge_fts f
+      SELECT f.term_key AS termKey, f.text AS phrase, k.lyrics_json AS lyrics FROM meme_knowledge_fts f
       JOIN meme_knowledge k ON k.term_key = f.term_key
       WHERE k.expires_at > ?
     `).all(this.now());
@@ -335,20 +360,41 @@ export class MemeKnowledgeStore {
       }
       scores.set(row.termKey, current);
     }
+    const lyricMatches = new Map();
+    const checkedLyrics = new Set();
+    for (const row of rows) {
+      if (checkedLyrics.has(row.termKey)) continue;
+      checkedLyrics.add(row.termKey);
+      const match = matchLearnedLyric(message, read(row.lyrics));
+      if (!match) continue;
+      lyricMatches.set(row.termKey, match);
+      const score = scores.get(row.termKey);
+      if (!score || score.best < match.length) {
+        scores.set(row.termKey, { termKey: row.termKey, best: match.length,
+          fragments: 0, matchType: match.matchType, matchedPhrase: match.matchedPhrase });
+      }
+    }
     const accepted = [...scores.values()].filter((item) => (
-      (item.matchType === 'phrase' && item.best >= 2)
+      lyricMatches.has(item.termKey)
+      || (item.matchType === 'phrase' && item.best >= 2)
       || (item.matchType === 'fragment' && (item.best >= 5 || item.fragments >= 2))
     )).sort((left, right) => (right.matchType === 'phrase') - (left.matchType === 'phrase') || right.best - left.best);
     const hit = accepted[0];
     if (!hit) return null;
+    // The same refrain can belong to several remixes. Without a stronger
+    // match, don't pick an unrelated version just because it was stored first.
+    if (lyricMatches.get(hit.termKey)?.matchType === 'lyric-template'
+      && accepted.some((other) => other.termKey !== hit.termKey && other.best === hit.best
+        && lyricMatches.get(other.termKey)?.matchType === 'lyric-template')) return null;
     const row = db.prepare('SELECT * FROM meme_knowledge WHERE term_key = ? AND expires_at > ?').get(hit.termKey, this.now());
     if (!row) return null;
     db.prepare('UPDATE meme_knowledge SET last_used_at = ? WHERE term_key = ?').run(this.now(), row.term_key);
     return {
       ...this.#row(row),
-      matchType: hit.matchType === 'phrase' && richList(read(row.lyrics_json), 8).some((line) => phraseText(line.line) === hit.matchedPhrase)
-        ? 'lyric' : hit.matchType,
-      matchedPhrase: hit.matchedPhrase,
+      matchType: lyricMatches.get(hit.termKey)?.matchType
+        || (richList(read(row.lyrics_json), 8).some((line) => phraseText(line.line) === hit.matchedPhrase)
+          ? 'lyric-fragment' : hit.matchType),
+      matchedPhrase: lyricMatches.get(hit.termKey)?.matchedPhrase || hit.matchedPhrase,
     };
   }
 
