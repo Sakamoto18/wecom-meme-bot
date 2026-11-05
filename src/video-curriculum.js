@@ -127,7 +127,10 @@ export class VideoCurriculum {
       state.last ? `学到：${state.last.title}（${state.last.bvid}）` : '还没有完成首个视频。',
       state.queue.length ? `下次继续：${state.queue[0].title}` : `下次读取主页第 ${state.nextPage} 页，跳过已处理 BV。`,
     ].filter(Boolean);
-    for (const userId of this.recipients) this.store.enqueueDailyReport(`curriculum-report:${this.mid}:${run.day}:${userId}`, {
+    // A manually resumed failed run can finish later that day. Deliver its new
+    // result once instead of treating the earlier failure receipt as success.
+    const revision = run.finishedAt || run.startedAt || 0;
+    for (const userId of this.recipients) this.store.enqueueDailyReport(`curriculum-report:${this.mid}:${run.day}:${userId}:${revision}`, {
       chatType: 'private', userId, text: lines.join('\n'),
     });
   }
