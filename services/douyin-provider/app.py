@@ -595,10 +595,12 @@ class BilibiliWatchRequest(BaseModel):
 async def bilibili_watch(body: BilibiliWatchRequest, request: Request):
     try:
         watch_url(body.url)
-        status = await bilibili_login_state()
-        if not status['logged_in']:
-            return JSONResponse({'error': 'provider 的 B站登录态已失效'}, status_code=401)
-        return await watch_page(await get_bilibili_context(), body.url, body.seconds, request.is_disconnected)
+        # Use the saved browser session directly. Public videos can still play
+        # when nav temporarily rejects it; only actual player progress is evidence.
+        result = await watch_page(await get_bilibili_context(), body.url, body.seconds, request.is_disconnected)
+        with suppress(Exception):
+            await save_bilibili_state()
+        return result
     except (ValueError, PlaywrightError, TimeoutError) as error:
         logger.warning('Bilibili browser watch failed: %s', str(error)[:300])
         return JSONResponse({'error': str(error)[:300] or '网页观看超时'}, status_code=502)
