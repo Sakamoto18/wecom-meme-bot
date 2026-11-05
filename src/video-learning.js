@@ -1,3 +1,4 @@
+import { requestBrowserWatch } from './browser-watch-client.js';
 import { VideoCurriculum } from './video-curriculum.js';
 import { createHash } from 'node:crypto';
 import { Jimp } from 'jimp';
@@ -174,14 +175,7 @@ export class VideoLearningCoordinator {
     this.browserProviderUrl = String(options.browserProviderUrl ?? '').replace(/\/(?:resolve)?$/u, '');
     this.browserWatch = options.browserWatch ?? (async (url, seconds) => {
       if (!this.browserProviderUrl) throw new Error('未配置已登录的网页 provider，禁止回退下载');
-      const response = await this.fetchImpl(`${this.browserProviderUrl}/bilibili-watch`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ url, seconds: Math.max(2, Math.floor(seconds)) }),
-        signal: AbortSignal.timeout((seconds + 190) * 1000),
-      });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error || `网页观看失败 HTTP ${response.status}`);
-      return body;
+      return requestBrowserWatch(this.browserProviderUrl, url, seconds);
     });
     this.limits = { ...VIDEO_LEARNING_LIMITS, ...(options.limits ?? {}) };
     this.logger = options.logger ?? console;
