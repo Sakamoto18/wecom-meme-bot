@@ -1239,6 +1239,13 @@ export async function createQqRuntime() {
   const videoLearningAsrPython = process.env.QQ_VIDEO_LEARNING_ASR_PYTHON?.trim() || '';
   const videoLearning = parseBoolean(process.env.QQ_VIDEO_LEARNING_ENABLED, true)
     ? new VideoLearningCoordinator({
+      curriculum: {
+        mid: process.env.QQ_VIDEO_CURRICULUM_MID,
+        recipients: parseIdentifierSet(process.env.QQ_VIDEO_CURRICULUM_REPORT_USERS),
+        dailyVideos: parsePositiveInteger(process.env.QQ_VIDEO_CURRICULUM_DAILY_VIDEOS) ?? 3,
+        dailySeconds: parsePositiveInteger(process.env.QQ_VIDEO_CURRICULUM_DAILY_SECONDS) ?? 600,
+        hour: parseNonnegativeInteger(process.env.QQ_VIDEO_CURRICULUM_HOUR, 3),
+      },
       store: videoLearningStore,
       chatClient,
       memeKnowledge,

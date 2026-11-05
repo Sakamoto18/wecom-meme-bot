@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { VideoCurriculum } from './video-curriculum.js';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -225,6 +226,7 @@ export class VideoLearningCoordinator {
     this.running = false;
     this.timer = null;
     this.catchupRunning = false;
+    this.curriculum = new VideoCurriculum(this, options.curriculum);
   }
 
   start(intervalMs = 15_000) {
@@ -587,7 +589,7 @@ export class VideoLearningCoordinator {
 
   // Latest finished catch-up run within the report window, for the daily report.
   catchupReport(startAt, endAt) {
-    const run = this.store.latestCatchupRun();
+    const run = this.store.latestCatchupRun(startAt, endAt);
     if (!run || run.startedAt < startAt || run.startedAt >= endAt) return null;
     return run;
   }
@@ -600,6 +602,7 @@ export class VideoLearningCoordinator {
         await this.processTask(task);
       }
       // On-demand learning goes first; catch-up runs once the queue is empty.
+      await this.curriculum.tick();
       if (this.catchupDue()) await this.runCatchup();
     } catch (error) {
       this.logger.warn?.(`视频学梗调度失败：${error.message}`);

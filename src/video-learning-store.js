@@ -175,6 +175,11 @@ export class VideoLearningStore {
         run_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS video_learning_progress (
+        source_key TEXT PRIMARY KEY,
+        progress_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `);
     return this.database;
   }
@@ -418,7 +423,8 @@ export class VideoLearningStore {
 
   countTasksSince(since) {
     return Number(this.ensureOpen().prepare(
-      'SELECT COUNT(*) AS count FROM video_learning_tasks WHERE created_at >= ?',
+      `SELECT COUNT(*) AS count FROM video_learning_tasks WHERE created_at >= ?
+       AND COALESCE(json_extract(metadata_json, '$.report'), 0) <> 1`,
     ).get(Number(since) || 0).count);
   }
 
@@ -539,11 +545,42 @@ export class VideoLearningStore {
     `).run(text(day, 20), jsonText(run), this.now());
   }
 
-  latestCatchupRun() {
+  latestCatchupRun(startAt = 0, endAt = Number.MAX_SAFE_INTEGER) {
     const row = this.ensureOpen().prepare(
-      'SELECT run_json FROM video_learning_catchup_runs ORDER BY day DESC LIMIT 1',
-    ).get();
+      `SELECT run_json FROM video_learning_catchup_runs
+       WHERE CAST(json_extract(run_json, '$.startedAt') AS INTEGER) >= ?
+         AND CAST(json_extract(run_json, '$.startedAt') AS INTEGER) < ?
+       ORDER BY day DESC LIMIT 1`,
+    ).get(startAt, endAt);
     return row ? json(row.run_json) : null;
+  }
+
+  getProgress(sourceKey) {
+    const row = this.ensureOpen().prepare('SELECT progress_json FROM video_learning_progress WHERE source_key = ?').get(sourceKey);
+    return row ? json(row.progress_json) : null;
+  }
+
+  saveProgress(sourceKey, progress) {
+    this.ensureOpen().prepare(`INSERT INTO video_learning_progress VALUES (?, ?, ?)
+      ON CONFLICT(source_key) DO UPDATE SET progress_json=excluded.progress_json, updated_at=excluded.updated_at`)
+      .run(sourceKey, jsonText(progress), this.now());
+  }
+
+  enqueueDailyReport(reportKey, payload) {
+    // Include sent receipts in deduplication: restarting after send must not
+    // enqueue the same report again. The bridge retries failed deliveries.
+    const existing = this.ensureOpen().prepare(`SELECT delivery_id, status, updated_at, attempts FROM video_learning_deliveries
+      WHERE json_extract(payload_json, '$.waiterKey') = ? LIMIT 1`).get(reportKey);
+    if (existing) {
+      if (existing.status === 'failed' && existing.attempts < 5 && this.now() - existing.updated_at >= 60_000) {
+        this.ensureOpen().prepare("UPDATE video_learning_deliveries SET status='pending', updated_at=? WHERE delivery_id=?")
+          .run(this.now(), existing.delivery_id);
+      }
+      return this.getDelivery(existing.delivery_id);
+    }
+    const { task } = this.createOrJoinTask({ topicKey: reportKey, topic: '每日主页学习报告', metadata: { report: true } });
+    this.updateTask(task.taskKey, { status: 'completed' });
+    return this.enqueueDelivery(task.taskKey, 'result', { ...payload, waiterKey: reportKey });
   }
 
   getStats() {

@@ -758,3 +758,22 @@ Exa 价格依据 <https://exa.ai/docs/admin/pricing>（核对 2026-10-25）。
 `QQ_USAGE_USD_TO_CNY=7.2` 为可配置预算汇率，非实时外汇牌价；每次请求保存使用的汇率、美元/人民币金额和价格版本。
 更新配置不改变历史搜索金额。新版本首次启动会自动为用量 SQLite 添加搜索计价字段，保留原记录。
 部署需同时更新 Node 与 Bridge 的 `main.py`、`usage_report_card.py`，后者复用现有 Pillow/中文字体。
+
+
+### 按 UP 主页每日续学与独立报告
+
+配置 `QQ_VIDEO_CURRICULUM_MID` 为 B 站 UP 的数字 UID，
+`QQ_VIDEO_CURRICULUM_REPORT_USERS` 为明确接收报告的 QQ 号（逗号分隔）；两项齐全才启用。
+默认北京时间 03:00 后运行，每天最多 3 个视频、10 分钟材料，可通过
+`QQ_VIDEO_CURRICULUM_DAILY_VIDEOS`、`QQ_VIDEO_CURRICULUM_DAILY_SECONDS`、
+`QQ_VIDEO_CURRICULUM_HOUR` 调整。点播队列优先，主页学习使用现有每日学习总预算。
+
+从主页最新投稿第一页向旧视频逐页读取。待学 BV 队列、已处理 BV、当前页、当日任务与累计成功/失败数
+保存在 `qq-video-learning.sqlite` 的 `video_learning_progress` 中。
+每条完成后保存，次日继续；同一 BV 不重复排入。遇到删除/风控/证据不足会在报告里记为失败，
+不当作已学会。扫到末页后回到第一页发现新投稿，跳过已经处理的视频。
+
+报告列出视频链接、学到的梗和含义、失败原因、累计进度、下一条，学完即通过现有学习投递队列私聊发送。
+重启不会重复创建同一天同一接收人的报告；发送失败至少隔一分钟重试，最多五次。
+主页请求失败或当日预算耗尽也会报告，并保留未处理队列。
+原用量日报的补课栏按报告日期窗口查找记录，不再被当天凌晨的新记录覆盖。
