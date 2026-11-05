@@ -90,7 +90,7 @@ export class VideoCurriculum {
         const learned = done?.status === 'completed' && done?.result?.entry?.verified === true;
         const item = { bvid: video.bvid, title: video.title, taskKey: task.taskKey,
           status: learned ? 'learned' : 'failed', term: done?.result?.entry?.term || '',
-          meaning: String(done?.result?.entry?.meaning || '').slice(0, 180),
+          meaning: String(done?.result?.entry?.meaning || '').slice(0, 2000),
           usage: done?.result?.merged?.usage || [],
           replyHooks: done?.result?.entry?.replyHooks || [],
           error: done?.error || (learned ? '' : '证据未达到高置信入库要求'),
@@ -137,7 +137,9 @@ export class VideoCurriculum {
     // result once instead of treating the earlier failure receipt as success.
     const revision = run.finishedAt || run.startedAt || 0;
     for (const userId of this.recipients) this.store.enqueueDailyReport(`curriculum-report:${this.mid}:${run.day}:${userId}:${revision}`, {
-      chatType: 'private', userId, text: lines.join('\n'), reportImage: true,
+      chatType: 'private', userId,
+      text: run.items.map(item => `${item.title}\nhttps://www.bilibili.com/video/${item.bvid}`).join('\n\n') || `梗百科主页\nhttps://space.bilibili.com/${this.mid}`,
+      reportText: lines.join('\n'), reportItems: run.items, reportImage: true,
     });
   }
 }

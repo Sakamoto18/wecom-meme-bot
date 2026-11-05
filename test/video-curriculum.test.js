@@ -33,7 +33,9 @@ test('逐个学习，重启同日不重复，次日从队列续学，报告附�
   const [delivery] = f.store.claimDeliveries();
   assert.match(delivery.payload.text, /第一个梗/);
   assert.equal(delivery.payload.reportImage, true);
-  assert.match(delivery.payload.text, /下次继续：第二个梗/);
+  assert.equal(delivery.payload.text, '第一个梗\nhttps://www.bilibili.com/video/BV1aa411c7xx');
+  assert.equal(delivery.payload.reportItems[0].bvid, 'BV1aa411c7xx');
+  assert.match(delivery.payload.reportText, /下次继续：第二个梗/);
   f.store.completeDelivery(delivery.deliveryId, { sent: true });
   await f.make().tick();
   assert.equal(f.watched.length, 1);
@@ -51,7 +53,7 @@ test('分页失败也给报告，保留游标；投递失败有界重试', async
   await curriculum.tick();
   assert.equal(f.store.getProgress(curriculum.key).nextPage, 1);
   let [delivery] = f.store.claimDeliveries();
-  assert.match(delivery.payload.text, /B站风控/);
+  assert.match(delivery.payload.reportText, /B站风控/);
   f.store.completeDelivery(delivery.deliveryId, { sent: false });
   f.advance(61000);
   await curriculum.tick();

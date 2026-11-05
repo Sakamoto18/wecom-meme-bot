@@ -27,6 +27,12 @@ def watch_url(url):
     raise ValueError('只允许 B站视频或 b23 分享网页')
 
 
+def playback_complete(state, target):
+    # B站 may revise duration after loading the final segment (e.g. 137 -> 136.97).
+    duration = float(state.get('duration') or target)
+    return bool(state.get('ended')) or float(state['time']) >= min(target, duration) - 0.25
+
+
 async def watch_page(context, url, seconds, disconnected):
     """One page per request; restart at zero, then play continuously at normal speed."""
     watch_url(url)
@@ -78,11 +84,16 @@ async def watch_page(context, url, seconds, disconnected):
             last_progress = time.monotonic()
             initial = start
             target = min(float(state['duration'] or seconds), start + seconds)
+            last_log = -30
+            resumed_at = None
             while True:
                 if await disconnected():
                     raise ValueError('学习请求已断开')
                 state = await page.evaluate(STATE)
                 current = float(state['time'])
+                if current - last_log >= 30:
+                    print(f'Bilibili watch {metadata.get("bvid")} time={current:.2f} duration={state["duration"]} frames={len(frames)} paused={state["paused"]}', flush=True)
+                    last_log = current
                 if current >= last_time + 0.95 and current < target:
                     box = await page.evaluate("""() => {
                       const v = document.querySelector('.bpx-player-video-area') || document.querySelector('video, bwp-video');
@@ -95,10 +106,14 @@ async def watch_page(context, url, seconds, disconnected):
                                    'caption': ' '.join(captions)[:500]})
                     last_time = current
                     last_progress = time.monotonic()
-                if state['ended'] or current >= target:
+                if playback_complete(state, target):
                     break
-                if time.monotonic() - last_progress > 15:
-                    raise ValueError('网页播放器超过15秒未前进（缓冲、暂停或验证）；未完成观看')
+                if time.monotonic() - last_progress > 5 and state['paused'] and resumed_at != last_time:
+                    # A site overlay may pause playback; resume once per stall.
+                    await page.evaluate("() => { document.querySelector('video, bwp-video').play().catch(() => {}); }")
+                    resumed_at = last_time
+                if time.monotonic() - last_progress > 30:
+                    raise ValueError(f'网页播放器停滞30秒：time={current:.2f}/{state["duration"]} paused={state["paused"]} ended={state["ended"]} ready={state["ready"]} frames={len(frames)}；未完成观看')
                 await asyncio.sleep(0.05)
             if len(frames) < 2 or current - initial < min(1, seconds):
                 raise ValueError('网页没有实际连续播放，不能记为已观看')

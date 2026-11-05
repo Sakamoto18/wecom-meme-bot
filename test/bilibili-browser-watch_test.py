@@ -21,6 +21,11 @@ class WatchTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 watch.watch_url(url)
 
+    def test_dynamic_duration_and_rounding_do_not_stall_at_end(self):
+        self.assertTrue(watch.playback_complete({'time': 136.9, 'duration': 136.97, 'ended': False}, 137))
+        self.assertTrue(watch.playback_complete({'time': 224, 'duration': 224, 'ended': True}, 300))
+        self.assertFalse(watch.playback_complete({'time': 90, 'duration': 137, 'ended': False}, 137))
+
     async def test_navigation_failure_closes_page_and_releases_slot(self):
         page = AsyncMock()
         page.goto.side_effect = ValueError('navigation failed')

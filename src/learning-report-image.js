@@ -3,14 +3,15 @@ export function createLearningReportRenderer(providerUrl, fetchImpl = fetch) {
   let cachedText = '';
   let cachedImage;
   const root = String(providerUrl || '').replace(/\/(?:resolve)?$/u, '');
-  return async text => {
+  return async (text, items = []) => {
+    const key = JSON.stringify({ text, items });
     if (!root) throw new Error('学习报告图片未配置网页 provider');
-    if (text !== cachedText || !cachedImage) {
-      cachedText = text;
+    if (key !== cachedText || !cachedImage) {
+      cachedText = key;
       cachedImage = (async () => {
         const response = await fetchImpl(`${root}/learning-report.png`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ text }), signal: AbortSignal.timeout(25_000),
+          body: key, signal: AbortSignal.timeout(175_000),
         });
         if (!response.ok) throw new Error(`学习报告图片生成失败 HTTP ${response.status}`);
         const image = Buffer.from(await response.arrayBuffer());

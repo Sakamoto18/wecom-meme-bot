@@ -573,15 +573,29 @@ async def bilibili_save_session():
     return {'logged_in': True, 'saved': True, 'state_file': str(state)}
 
 
+class LearningReportItem(BaseModel):
+    bvid: str = Field(pattern=r'^BV[0-9A-Za-z]{10}$')
+    title: str = Field(max_length=300)
+    status: str = Field(max_length=20)
+    term: str = Field(default='', max_length=100)
+    meaning: str = Field(default='', max_length=4000)
+    usage: list[str] = Field(default_factory=list, max_length=10)
+    replyHooks: list[str] = Field(default_factory=list, max_length=10)
+    error: str = Field(default='', max_length=1000)
+    seconds: float = Field(default=0, ge=0, le=10000)
+    audioStatus: str = Field(default='', max_length=1000)
+
+
 class LearningReportRequest(BaseModel):
+    items: list[LearningReportItem] = Field(default_factory=list, max_length=10)
     text: str = Field(min_length=1, max_length=30000)
 
 
 @app.post('/learning-report.png')
 async def learning_report(body: LearningReportRequest):
-    await get_bilibili_context()
+    ctx = await get_bilibili_context()
     try:
-        return Response(await render_report(bilibili_browser, body.text), media_type='image/png')
+        return Response(await render_report(bilibili_browser, body.text, [item.model_dump() for item in body.items], ctx), media_type='image/png')
     except (ValueError, PlaywrightError, TimeoutError) as error:
         return JSONResponse({'error': str(error) or '报告图片生成超时'}, status_code=502)
 

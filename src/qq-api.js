@@ -344,13 +344,13 @@ export function createQqApiServer(options) {
         const leaseMs = Number(url.searchParams.get('lease_ms'));
         const claimed = videoLearningStore.claimDeliveries(
           Number.isInteger(limit) && limit > 0 ? limit : 10,
-          Number.isInteger(leaseMs) && leaseMs > 0 ? Math.max(leaseMs, 120_000) : 120_000,
+          Number.isInteger(leaseMs) && leaseMs > 0 ? Math.max(leaseMs, 600_000) : 600_000,
         );
         const deliveries = [];
         for (const delivery of claimed) {
           try {
             if (delivery.payload.reportImage) {
-              delivery.payload.imageFile = await renderLearningReport(delivery.payload.text);
+              delivery.payload.imageFile = await renderLearningReport(delivery.payload.reportText || delivery.payload.text, delivery.payload.reportItems || []);
             }
             deliveries.push(delivery);
           } catch (error) {

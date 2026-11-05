@@ -25,3 +25,15 @@ test('图片失败不缓存错误，下次投递可重试', async () => {
   assert.match(await render('报告'), /^base64:/);
   assert.equal(calls, 2);
 });
+
+test('封面卡片数据传入渲染器且参与缓存键', async () => {
+  const bodies = [];
+  const render = createLearningReportRenderer('http://provider', async (_url, options) => {
+    bodies.push(JSON.parse(options.body));
+    return new Response(createSmileyPng(8, 8));
+  });
+  await render('日报', [{ bvid: 'BV1W44w62ExZ', title: '黑猫鼓掌', status: 'failed' }]);
+  await render('日报', [{ bvid: 'BV1W44w62ExZ', title: '黑猫鼓掌', status: 'learned' }]);
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[1].items[0].status, 'learned');
+});
