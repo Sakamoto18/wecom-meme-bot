@@ -1,11 +1,7 @@
-import { spawn } from 'node:child_process';
 import { VideoCurriculum } from './video-curriculum.js';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+import { Jimp } from 'jimp';
 import { buildBilibiliWbiParams } from './bilibili-ai-summary.js';
-import { resolveBilibiliMedia } from './bilibili-provider.js';
 import { memeKnowledgePrompt, memeReplyIntent } from './meme-knowledge.js';
 import {
   COMMENT_PROMPT_BOUNDARY,
@@ -160,29 +156,9 @@ function waiterKey(waiter = {}) {
   return [waiter.chatType || '', waiter.groupId || '', waiter.userId || '', waiter.messageId || ''].join(':');
 }
 
-export function runCommand(command, args, { timeoutMs = 120_000, env } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { windowsHide: true, env: env ? { ...process.env, ...env } : process.env });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-4_000); });
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`${path.basename(command)} 超时（${timeoutMs}ms）`));
-    }, timeoutMs);
-    child.on('error', (error) => { clearTimeout(timer); reject(error); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(stdout);
-      else reject(new Error(`${path.basename(command)} 退出码 ${code}：${stderr.trim().slice(-300)}`));
-    });
-  });
-}
-
 /**
  * Finds unknown memes in direct questions, queues a learning task, watches
- * B 站 videos in the background (1 fps frames, subtitles or local ASR, a
+ * B 站 videos in the background (1 fps browser screenshots and visible captions, a
  * vision model per segment), stores the result as long-term meme knowledge
  * and queues a persona reply to every asker for the Bridge to deliver.
  */
@@ -195,14 +171,18 @@ export class VideoLearningCoordinator {
     this.personaPrompt = options.personaPrompt ?? (() => '');
     this.cookieProvider = options.cookieProvider ?? null;
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.ffmpegCommand = options.ffmpegCommand || 'ffmpeg';
-    this.asr = options.asr ?? null; // { command, args: [script], env }
-    this.runCommand = options.runCommand ?? runCommand;
-    this.resolveMedia = options.resolveMedia ?? ((url) => resolveBilibiliMedia(url, {
-      fetchImpl: this.fetchImpl,
-      bilibiliCookieProvider: this.cookieProvider,
-      timeoutMs: 15_000,
-    }));
+    this.browserProviderUrl = String(options.browserProviderUrl ?? '').replace(/\/(?:resolve)?$/u, '');
+    this.browserWatch = options.browserWatch ?? (async (url, seconds) => {
+      if (!this.browserProviderUrl) throw new Error('未配置已登录的网页 provider，禁止回退下载');
+      const response = await this.fetchImpl(`${this.browserProviderUrl}/bilibili-watch`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url, seconds: Math.max(2, Math.floor(seconds)) }),
+        signal: AbortSignal.timeout((seconds + 190) * 1000),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || `网页观看失败 HTTP ${response.status}`);
+      return body;
+    });
     this.limits = { ...VIDEO_LEARNING_LIMITS, ...(options.limits ?? {}) };
     this.logger = options.logger ?? console;
     this.now = options.now ?? Date.now;
@@ -617,7 +597,6 @@ export class VideoLearningCoordinator {
     const budget = { modelCalls: 0, deadline: (catchup ? this.now() : task.createdAt) + this.limits.waitMs };
     const materialLimit = Number(task.metadata?.materialLimitSeconds) || this.limits.taskMaterialSeconds;
     const started = this.now();
-    let workDir = '';
     try {
       if (this.now() > budget.deadline) throw new Error('排队超过等待上限');
       this.store.updateTask(task.taskKey, { status: 'searching' });
@@ -646,25 +625,26 @@ export class VideoLearningCoordinator {
           : found;
       }
       if (!candidates.length) throw new Error('B 站没有搜到相关视频');
-      workDir = await mkdtemp(path.join(os.tmpdir(), 'video-learning-'));
       this.store.updateTask(task.taskKey, { status: 'watching' });
       const watched = [];
+      const failures = [];
       let material = 0;
       for (const candidate of candidates.slice(0, this.limits.maxSources)) {
         const remaining = materialLimit - material;
         if (remaining < 10 || budget.modelCalls >= this.limits.maxModelCalls - 2) break;
         if (this.now() > budget.deadline) break;
         try {
-          const result = await this.watchVideo(task, candidate, remaining, budget, workDir);
+          const result = await this.watchVideo(task, candidate, remaining, budget);
           if (result) {
             watched.push(result);
             material += result.seconds;
           }
         } catch (error) {
+          failures.push(`${candidate.bvid || candidate.url}：${error.message}`);
           this.logger.warn?.(`视频学梗：${candidate.bvid} 观看失败：${error.message}`);
         }
       }
-      if (!watched.length) throw new Error('相关视频都没能看成');
+      if (!watched.length) throw new Error(`网页观看失败：${failures.join('；') || '没有有效画面'}`);
       this.store.updateTask(task.taskKey, { status: 'reviewing' });
       const merged = await this.mergeKnowledge(task, watched, budget);
       // A video that never says the term is about something else, however
@@ -694,7 +674,7 @@ export class VideoLearningCoordinator {
         entry,
         merged,
         materialSeconds: material,
-        sources: watched.map((item) => ({ bvid: item.bvid, title: item.title, seconds: item.seconds, transcript: item.transcriptSource })),
+        sources: watched.map((item) => ({ bvid: item.bvid, title: item.title, seconds: item.seconds, transcript: item.transcriptSource, audioStatus: item.audioStatus })),
         modelCalls: budget.modelCalls,
         elapsedMs: this.now() - started,
       };
@@ -711,8 +691,6 @@ export class VideoLearningCoordinator {
       this.logger.warn?.(`视频学梗：任务失败 topic=${task.topic}：${error.message}`);
       this.store.updateTask(task.taskKey, { status: 'failed', error: error.message });
       await this.notifyWaiters(this.store.getTask(task.taskKey), 'failure', null);
-    } finally {
-      if (workDir) await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 
@@ -764,72 +742,41 @@ export class VideoLearningCoordinator {
       .slice(0, 8);
   }
 
-  async fetchSubtitles(bvid, cid) {
-    try {
-      const headers = await this.bilibiliHeaders();
-      const url = await this.wbiUrl('https://api.bilibili.com/x/player/wbi/v2', { bvid, cid }, headers);
-      const tracks = (await this.getJson(url, headers))?.data?.subtitle?.subtitles ?? [];
-      const track = tracks.find((item) => /zh/iu.test(String(item.lan ?? ''))) ?? tracks[0];
-      if (!track?.subtitle_url) return [];
-      const subtitleUrl = String(track.subtitle_url).replace(/^\/\//u, 'https://');
-      const body = await this.fetchImpl(subtitleUrl, { headers, signal: AbortSignal.timeout(10_000) }).then((response) => response.json());
-      return (body?.body ?? []).map((line) => ({
-        start: Number(line.from) || 0,
-        end: Number(line.to) || 0,
-        text: clean(line.content, 200),
-      })).filter((line) => line.text);
-    } catch (error) {
-      this.logger.warn?.(`视频学梗：字幕读取失败 ${bvid}：${error.message}`);
-      return [];
-    }
-  }
-
-  async transcribe(audioPath, timeoutMs) {
-    if (!this.asr?.command) return [];
-    try {
-      const output = await this.runCommand(this.asr.command, [...(this.asr.args ?? []), audioPath], {
-        timeoutMs: Math.max(30_000, timeoutMs),
-        env: this.asr.env,
-      });
-      const rows = JSON.parse(output);
-      return (Array.isArray(rows) ? rows : []).map((row) => ({
-        start: Number(row.start) || 0,
-        end: Number(row.end) || 0,
-        text: clean(row.text, 200),
-      })).filter((row) => row.text);
-    } catch (error) {
-      this.logger.warn?.(`视频学梗：语音识别失败：${error.message}`);
-      return [];
-    }
-  }
-
-  async watchVideo(task, candidate, maxSeconds, budget, workDir) {
+  async watchVideo(task, candidate, maxSeconds, budget) {
     const sourceUrl = candidate.url || `https://www.bilibili.com/video/${candidate.bvid}`;
-    const media = await this.resolveMedia(sourceUrl);
+    const available = Math.min(maxSeconds, 300, Math.floor((budget.deadline - this.now() - 100_000) / 1000));
+    if (available < 2) throw new Error('网页播放时间预算不足');
+    const media = await this.browserWatch(sourceUrl, available);
+    if (media.mode !== 'browser-screenshots' || !Array.isArray(media.frames) || media.frames.length < 2
+      || !(media.endTime > media.startTime) || !(media.seconds > 0)) {
+      throw new Error('provider 未返回实际播放的逐秒网页截图');
+    }
+    if (media.frames.some((frame, i) => !Number.isFinite(frame.time) || !frame.image || (i && frame.time <= media.frames[i - 1].time))) {
+      throw new Error('网页截图时间轴没有连续前进');
+    }
     const sourceKey = [media.bvid || candidate.bvid, media.cid, media.page || 1].join(':');
-    // ffmpeg stops at the end of the stream, so an unknown length is safe.
-    const duration = Number(media.duration) || candidate.duration || maxSeconds;
-    const seconds = Math.max(1, Math.min(duration, maxSeconds));
-    const directoryName = String(media.bvid || candidate.bvid || 'source').replace(/[^0-9A-Za-z_-]/gu, '') || 'source';
-    const dir = path.join(workDir, directoryName);
-    await mkdir(dir, { recursive: true });
-    // Comment collection runs alongside the download and frame analysis.
+    const duration = Number(media.duration) || media.seconds;
+    const seconds = media.seconds;
     const commentsPromise = this.collectComments(task, media, budget);
-    const headerText = Object.entries(media.requestHeaders ?? {}).map(([key, value]) => `${key}: ${value}\r\n`).join('');
-    await this.runCommand(this.ffmpegCommand, [
-      '-hide_banner', '-loglevel', 'error', '-y',
-      ...(headerText ? ['-headers', headerText] : []),
-      '-t', String(seconds), '-i', media.mediaUrl,
-      '-map', '0:v:0', '-vf', `fps=1,scale=320:-2,tile=3x${this.limits.tileSeconds / 3}`, '-q:v', '5',
-      path.join(dir, 'tile_%03d.jpg'),
-      '-map', '0:a:0?', '-ac', '1', '-ar', '16000', path.join(dir, 'audio.wav'),
-    ], { timeoutMs: 180_000 });
-    const tiles = (await readdir(dir)).filter((name) => name.startsWith('tile_')).sort();
-    let transcript = await this.fetchSubtitles(media.bvid || candidate.bvid, media.cid);
-    let transcriptSource = transcript.length ? 'subtitle' : 'none';
-    if (!transcript.length) {
-      transcript = await this.transcribe(path.join(dir, 'audio.wav'), budget.deadline - this.now());
-      if (transcript.length) transcriptSource = 'asr';
+    const captions = media.frames.filter(frame => frame.caption).map(frame => ({
+      start: frame.time, end: frame.time + 1, text: clean(frame.caption, 500),
+    }));
+    const audioLearned = media.audio?.status === 'transcribed' && media.audio.transcript?.length > 0;
+    const transcript = audioLearned ? media.audio.transcript.map(line => ({ start: Number(line.start), end: Number(line.end), text: clean(line.text, 500) })) : captions;
+    const transcriptSource = audioLearned ? 'browser-audio-asr' : (captions.length ? 'browser-caption' : 'browser-frames');
+    const audioStatus = audioLearned ? '已学习网页音频转写（音色、语调未核实）' : (media.audio?.error || '本次未学习音频');
+    const tiles = [];
+    for (let i = 0; i < media.frames.length; i += this.limits.tileSeconds) {
+      const frames = media.frames.slice(i, i + this.limits.tileSeconds);
+      const grid = new Jimp({ width: 1440, height: Math.ceil(frames.length / 3) * 270, color: 0x000000ff });
+      for (const [offset, frame] of frames.entries()) {
+        const picture = await Jimp.read(Buffer.from(frame.image, 'base64'));
+        picture.contain({ w: 480, h: 270 });
+        grid.composite(picture, offset % 3 * 480, Math.floor(offset / 3) * 270);
+      }
+      tiles.push({ image: await grid.getBuffer('image/jpeg', { quality: 80 }),
+        start: frames[0].time, end: frames.at(-1).time,
+        times: frames.map(frame => formatSeconds(frame.time)).join('、') });
     }
     this.store.rememberSource({
       sourceKey,
@@ -839,14 +786,14 @@ export class VideoLearningCoordinator {
       url: media.sourceUrl,
       title: media.title || candidate.title,
       durationSeconds: duration,
-      metadata: { transcriptSource, analyzedSeconds: seconds },
+      metadata: { transcriptSource, analyzedSeconds: seconds, mode: media.mode, frameCount: media.frames.length, audioObserved: false, audioStatus },
     });
     const observations = [];
     const tilesPerSegment = Math.max(1, Math.round(this.limits.segmentSeconds / this.limits.tileSeconds));
     for (let index = 0; index < tiles.length; index += tilesPerSegment) {
       if (budget.modelCalls >= this.limits.maxModelCalls - 2 || this.now() > budget.deadline) break;
-      const start = index * this.limits.tileSeconds;
-      const end = Math.min(seconds, start + tilesPerSegment * this.limits.tileSeconds);
+      const start = tiles[index].start;
+      const end = tiles[Math.min(tiles.length - 1, index + tilesPerSegment - 1)].end + 1;
       const lines = transcript.filter((line) => line.end >= start && line.start < end)
         .map((line) => `[${formatSeconds(line.start)}] ${line.text}`);
       const blocks = [{
@@ -859,16 +806,15 @@ export class VideoLearningCoordinator {
           media.description ? `简介：${clean(media.description, 300)}` : '',
           task.metadata?.directLink && task.question ? `用户原话：${clean(task.question, 200)}` : '',
           `本段：${formatSeconds(start)}-${formatSeconds(end)}`,
+          `网页每秒截图；${audioStatus}。不得凭画面推断语调或音效。`,
           lines.length
-            ? `${transcriptSource === 'asr' ? '语音转写（可能有错字）' : 'B 站字幕'}：\n${lines.join('\n')}`
-            : '本段没有字幕或语音转写。',
+            ? `${audioLearned ? '网页音频转写（可能有错字）' : '网页可见字幕'}：\n${lines.join('\n')}`
+            : '本段没有可读取的网页字幕；只看截图里的画面和文字。',
         ].filter(Boolean).join('\n'),
       }];
-      for (const [offset, tile] of tiles.slice(index, index + tilesPerSegment).entries()) {
-        const tileStart = start + offset * this.limits.tileSeconds;
-        const image = await readFile(path.join(dir, tile));
-        blocks.push({ type: 'text', text: `网格 ${formatSeconds(tileStart)}-${formatSeconds(tileStart + this.limits.tileSeconds)}` });
-        blocks.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image.toString('base64')}` } });
+      for (const tile of tiles.slice(index, index + tilesPerSegment)) {
+        blocks.push({ type: 'text', text: `网页截图网格，各格实际播放时间：${tile.times}` });
+        blocks.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${tile.image.toString('base64')}` } });
       }
       budget.modelCalls += 1;
       const answer = await this.chatClient.complete([], blocks, {
@@ -889,7 +835,7 @@ export class VideoLearningCoordinator {
         joke: clean(parsed.joke, 300),
         keep: list(parsed.keep),
         soundDependent: parsed.sound_dependent === true,
-        uncertain: clean(parsed.uncertain, 200),
+        uncertain: clean([parsed.uncertain, audioStatus].filter(Boolean).join('；'), 200),
         transcript: lines.join(' ').slice(0, 800),
       };
       this.store.addObservation({ taskKey: task.taskKey, sourceKey, startSeconds: start, endSeconds: end, evidence });
@@ -907,6 +853,7 @@ export class VideoLearningCoordinator {
       url: media.sourceUrl,
       seconds,
       transcriptSource,
+      audioStatus,
       observations,
     };
   }
@@ -979,7 +926,7 @@ export class VideoLearningCoordinator {
     budget.modelCalls += 1;
     const directLink = task.metadata?.directLink === true;
     const material = watched.map((video, index) => [
-      `视频${index + 1}：${video.title}（${video.bvid}，看了 ${video.seconds} 秒，${video.transcriptSource === 'subtitle' ? '有字幕' : (video.transcriptSource === 'asr' ? '用语音转写' : '没有字幕和转写')}）`,
+      `视频${index + 1}：${video.title}（${video.bvid}，看了 ${video.seconds} 秒，${video.audioStatus || '本次未学习音频'}）`,
       video.description ? `简介：${video.description}` : '',
       video.aiSummary ? `B 站 AI 总结：${video.aiSummary}` : '',
       ...video.observations.map((item) => [
@@ -1007,7 +954,7 @@ export class VideoLearningCoordinator {
     const parsed = parseJson(answer);
     if (!parsed) return null;
     const soundDependent = watched.some((video) => video.observations.some((item) => item.soundDependent));
-    const noAudio = watched.every((video) => video.transcriptSource === 'none');
+    const noAudio = watched.every((video) => video.transcriptSource !== 'browser-audio-asr');
     const term = clean(parsed.term, 60) || (directLink ? '' : task.topic);
     return {
       found: parsed.found === true && clean(parsed.meaning).length >= 4,

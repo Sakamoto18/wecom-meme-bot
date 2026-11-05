@@ -9,10 +9,12 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
+from learning_report import render_report
+from bilibili_watch import watch_page, watch_url
 from profile_guard import acquire_profile
 from runtime_config import browser_options, data_path, douyin_profile_path
 from xhs_content import clean_author_name, is_note_url, normalize_note, parse_public_note
@@ -569,6 +571,37 @@ async def bilibili_save_session():
         return JSONResponse(status | {'saved': False}, status_code=409)
     state = await save_bilibili_state()
     return {'logged_in': True, 'saved': True, 'state_file': str(state)}
+
+
+class LearningReportRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=30000)
+
+
+@app.post('/learning-report.png')
+async def learning_report(body: LearningReportRequest):
+    await get_bilibili_context()
+    try:
+        return Response(await render_report(bilibili_browser, body.text), media_type='image/png')
+    except (ValueError, PlaywrightError, TimeoutError) as error:
+        return JSONResponse({'error': str(error) or '报告图片生成超时'}, status_code=502)
+
+
+class BilibiliWatchRequest(BaseModel):
+    url: str
+    seconds: int = Field(default=27, ge=2, le=300)
+
+
+@app.post('/bilibili-watch')
+async def bilibili_watch(body: BilibiliWatchRequest, request: Request):
+    try:
+        watch_url(body.url)
+        status = await bilibili_login_state()
+        if not status['logged_in']:
+            return JSONResponse({'error': 'provider 的 B站登录态已失效'}, status_code=401)
+        return await watch_page(await get_bilibili_context(), body.url, body.seconds, request.is_disconnected)
+    except (ValueError, PlaywrightError, TimeoutError) as error:
+        logger.warning('Bilibili browser watch failed: %s', str(error)[:300])
+        return JSONResponse({'error': str(error)[:300] or '网页观看超时'}, status_code=502)
 
 
 @app.get('/bilibili-cookie')

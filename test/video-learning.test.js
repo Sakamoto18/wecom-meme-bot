@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Jimp } from 'jimp';
 import { VideoLearningStore } from '../src/video-learning-store.js';
 import { VideoLearningCoordinator, learningTopic } from '../src/video-learning.js';
 
@@ -38,6 +39,8 @@ function fakeBilibili({ subtitles = true } = {}) {
   };
 }
 
+const screenshot = (await new Jimp({ width: 48, height: 27, color: 0xffcc00ff }).getBuffer('image/jpeg')).toString('base64');
+
 function fixture(options = {}) {
   const fixtureOptions = options;
   const directory = mkdtempSync(path.join(tmpdir(), 'video-learning-'));
@@ -55,29 +58,17 @@ function fixture(options = {}) {
     memeCorpus: options.memeCorpus ?? null,
     groupMemory: options.groupMemory ?? null,
     personaPrompt: () => '【全局人格】龙玉涛',
-    asr: options.asr ?? null,
     ...(options.commentCollector ? { commentCollector: options.commentCollector } : {}),
-    resolveMedia: async (url) => ({
-      aid: options.aid ?? 0,
-      bvid: url.split('/').pop(),
-      cid: '7',
-      page: 1,
-      duration: 18,
-      title: '视频标题',
-      description: '简介',
-      sourceUrl: url,
-      mediaUrl: 'https://upos.example/video.mp4',
-      requestHeaders: { referer: 'https://www.bilibili.com/' },
-    }),
-    runCommand: async (command, args) => {
-      commands.push({ command, args });
-      if (command === 'ffmpeg') {
-        const tilePattern = args.find((arg) => arg.endsWith('tile_%03d.jpg'));
-        writeFileSync(tilePattern.replace('%03d', '001'), 'jpg1');
-        writeFileSync(tilePattern.replace('%03d', '002'), 'jpg2');
-        return '';
-      }
-      return JSON.stringify([{ start: 0, end: 4, text: '转写的话' }]);
+    browserWatch: async (url, seconds) => {
+      commands.push({ command: 'browser-screenshots', url, seconds });
+      return {
+        aid: options.aid ?? 0, bvid: url.split('/').pop(), cid: '7', page: 1,
+        duration: 18, seconds: Math.min(18, seconds), startTime: 0, endTime: Math.min(18, seconds),
+        title: '视频标题', description: '简介', sourceUrl: url,
+        mode: 'browser-screenshots', audioObserved: false,
+        frames: Array.from({ length: Math.min(18, seconds) }, (_, i) => ({ time: i, image: screenshot,
+          caption: options.subtitles === false ? '' : (i === 1 ? '我似了' : i === 10 ? '似了似了' : '') })),
+      };
     },
     chatClient: {
       async complete(_history, input, options) {
@@ -238,15 +229,12 @@ test('看视频：1 秒一帧拼网格、读字幕、分段分析后入梗库，
     f.coordinator.gate({ term: '似了', question: '似了？', waiter: { chatType: 'private', userId: '555', messageId: '9' } });
     await f.coordinator.processTask(f.store.nextQueuedTask());
 
-    const ffmpeg = f.commands.find((item) => item.command === 'ffmpeg');
-    assert.ok(ffmpeg.args.includes('fps=1,scale=320:-2,tile=3x3'));
-    assert.ok(ffmpeg.args.includes('-headers'));
-    assert.equal(f.commands.some((item) => item.command !== 'ffmpeg'), false);
+    assert.ok(f.commands.every(item => item.command === 'browser-screenshots'));
 
     const watch = f.calls.filter((call) => call.options.usageSource === 'video-learning-watch');
     assert.ok(watch.length >= 1);
     assert.ok(watch[0].input.filter((block) => block.type === 'image_url').length >= 1);
-    assert.match(watch[0].input[0].text, /B 站字幕：\n\[00:01\] 我似了/);
+    assert.match(watch[0].input[0].text, /网页可见字幕：\n\[00:01\] 我似了/);
 
     const task = f.store.findLatestTask('似了', 'completed');
     assert.equal(task.result.found, true);
@@ -268,7 +256,7 @@ test('看视频：1 秒一帧拼网格、读字幕、分段分析后入梗库，
   }
 });
 
-test('没有字幕时用本地语音识别；看完仍说不清就记失败、回复没查到并冷却 24 小时', async () => {
+test('没有字幕时只观察画面，不下载音频；看完仍说不清就记失败、回复没查到并冷却 24 小时', async () => {
   const f = fixture({ subtitles: false, asr: { command: 'python', args: ['asr.py'] } });
   try {
     f.coordinator.tick = async () => {};
@@ -277,9 +265,9 @@ test('没有字幕时用本地语音识别；看完仍说不清就记失败、�
     f.coordinator.gate({ term: '怪梗', question: '怪梗啥意思', waiter: groupWaiter });
     await f.coordinator.processTask(f.store.nextQueuedTask());
 
-    assert.ok(f.commands.some((item) => item.command === 'python'));
+    assert.ok(f.commands.every(item => item.command === 'browser-screenshots'));
     const watch = f.calls.find((call) => call.options.usageSource === 'video-learning-watch');
-    assert.match(watch.input[0].text, /语音转写（可能有错字）/);
+    assert.match(watch.input[0].text, /本段没有可读取的网页字幕/);
     assert.ok(f.store.findLatestTask('怪梗', 'failed'));
     assert.equal(f.puts.length, 0);
     assert.equal(f.store.claimDeliveries(10)[0].kind, 'failure');
@@ -541,4 +529,43 @@ test('视频学习把关系机制写入全局联想库，供新场景迁移使�
     assert.match(associations[0].trigger, /遇到糟心事/);
     assert.ok(associations[0].sourceUrls.length > 0);
   } finally { f.close(); }
+});
+
+test('网页播放失败保留原因，不回退媒体下载，也不写入知识', async () => {
+  const f = fixture();
+  try {
+    f.coordinator.tick = async () => {};
+    f.coordinator.browserWatch = async () => { throw new Error('网页播放器超过15秒未前进'); };
+    f.coordinator.gate({ term: '似了', waiter: groupWaiter });
+    await f.coordinator.processTask(f.store.nextQueuedTask());
+    assert.match(f.store.findLatestTask('似了', 'failed').error, /超过15秒未前进/);
+    assert.equal(f.puts.length, 0);
+    assert.equal(f.calls.some(call => call.options.usageSource === 'video-learning-watch'), false);
+  } finally { f.close(); }
+});
+
+test('没有网页provider配置时失败，不调用媒体解析下载', async () => {
+  let requested = false;
+  const coordinator = new VideoLearningCoordinator({ fetchImpl: async () => { requested = true; } });
+  await assert.rejects(coordinator.browserWatch('https://www.bilibili.com/video/BV1Epx96EEBG', 3), /禁止回退下载/);
+  assert.equal(requested, false);
+});
+
+test('音频转写成功纳入观察，失败仍学习画面并记录未学习音频', async () => {
+  for (const success of [true, false]) {
+    const f = fixture();
+    try {
+      f.coordinator.tick = async () => {};
+      const original = f.coordinator.browserWatch;
+      f.coordinator.browserWatch = async (...args) => ({ ...await original(...args), audio: success
+        ? { status: 'transcribed', transcript: [{start: 1, end: 3, text: '我似了'}] }
+        : {status: 'unavailable', error: '本次未学习音频：音频获取失败'} });
+      f.coordinator.gate({ term: '似了', waiter: groupWaiter });
+      await f.coordinator.processTask(f.store.nextQueuedTask());
+      const result = f.store.findLatestTask('似了', 'completed').result;
+      assert.match(result.sources[0].audioStatus, success ? /已学习网页音频转写/ : /本次未学习音频/);
+      const watch = f.calls.find(call => call.options.usageSource === 'video-learning-watch');
+      assert.match(watch.input[0].text, success ? /网页音频转写（可能有错字）/ : /本次未学习音频/);
+    } finally { f.close(); }
+  }
 });

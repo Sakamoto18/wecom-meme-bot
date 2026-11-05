@@ -45,6 +45,16 @@ class LearningDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(learning_delivery_message({'chatType': 'group', 'groupId': 'x', 'text': 'a'}))
         self.assertIsNone(learning_delivery_message({'chatType': 'private', 'userId': '1', 'text': ''}))
 
+    def test_daily_report_sends_one_complete_image_with_text(self):
+        payload = {'chatType': 'private', 'userId': '555', 'text': '每日学习报告',
+                   'reportImage': True, 'imageFile': 'base64://abc'}
+        action, target, message = learning_delivery_message(payload)
+        self.assertEqual(action, 'send_private_msg')
+        self.assertEqual([part['type'] for part in message], ['text', 'image'])
+        self.assertEqual(message[1]['data']['file'], 'base64://abc')
+        payload.pop('imageFile')
+        self.assertIsNone(learning_delivery_message(payload))
+
     async def test_claimed_deliveries_are_sent_and_receipted(self):
         b = namespace['Bridge']()
         b._api_url = lambda: 'http://127.0.0.1:8787/v1/qq/message'

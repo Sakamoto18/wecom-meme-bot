@@ -91,8 +91,11 @@ export class VideoCurriculum {
         const item = { bvid: video.bvid, title: video.title, taskKey: task.taskKey,
           status: learned ? 'learned' : 'failed', term: done?.result?.entry?.term || '',
           meaning: String(done?.result?.entry?.meaning || '').slice(0, 180),
+          usage: done?.result?.merged?.usage || [],
+          replyHooks: done?.result?.entry?.replyHooks || [],
           error: done?.error || (learned ? '' : '证据未达到高置信入库要求'),
-          seconds: Number(done?.result?.materialSeconds) || 0 };
+          seconds: Number(done?.result?.materialSeconds) || 0,
+          audioStatus: done?.result?.sources?.map(source => source.audioStatus || '本次未学习音频').join('；') || '' };
         run.items.push(item);
         run.seconds += item.seconds;
         state[learned ? 'learned' : 'failed']++;
@@ -119,6 +122,9 @@ export class VideoCurriculum {
       ...run.items.flatMap(item => [
         `${item.status === 'learned' ? '学会' : '未学会'}：${item.title}`,
         item.status === 'learned' ? `${item.term}：${item.meaning}` : `原因：${item.error}`,
+        item.usage?.length ? `用法：${item.usage.join('；')}` : '',
+        item.replyHooks?.length ? `接法：${item.replyHooks.join('；')}` : '',
+        item.audioStatus ? `音频：${item.audioStatus}` : '',
         `https://www.bilibili.com/video/${item.bvid}`,
       ]),
       run.error ? `本轮中断原因：${run.error}；未处理视频明天继续。` : '',
@@ -131,7 +137,7 @@ export class VideoCurriculum {
     // result once instead of treating the earlier failure receipt as success.
     const revision = run.finishedAt || run.startedAt || 0;
     for (const userId of this.recipients) this.store.enqueueDailyReport(`curriculum-report:${this.mid}:${run.day}:${userId}:${revision}`, {
-      chatType: 'private', userId, text: lines.join('\n'),
+      chatType: 'private', userId, text: lines.join('\n'), reportImage: true,
     });
   }
 }

@@ -32,6 +32,7 @@ import { CultureCache } from './culture-cache.js';
 import { MemeKnowledgeStore } from './meme-knowledge.js';
 import { MemeCorpusStore } from './meme-corpus.js';
 import { VideoLearningStore } from './video-learning-store.js';
+import { createLearningReportRenderer } from './learning-report-image.js';
 import { VideoLearningCoordinator } from './video-learning.js';
 import { JevAtmosphereGate, JevRuntimeState } from './jev-atmosphere-gate.js';
 import { JevResponseModeMemory } from './jev-response-mode.js';
@@ -261,6 +262,9 @@ function isAuthorized(request, expectedToken) {
 }
 
 export function createQqApiServer(options) {
+  const renderLearningReport = options.renderLearningReport ?? createLearningReportRenderer(
+    process.env.BILIBILI_PROVIDER_URL || process.env.DOUYIN_PROVIDER_URL,
+  );
   const { service, apiToken } = options;
   const health = options.health ?? (() => ({ ok: true }));
   const usageTracker = options.usageTracker;
@@ -338,13 +342,23 @@ export function createQqApiServer(options) {
         }
         const limit = Number(url.searchParams.get('limit'));
         const leaseMs = Number(url.searchParams.get('lease_ms'));
-        sendJson(response, 200, {
-          ok: true,
-          deliveries: videoLearningStore.claimDeliveries(
-            Number.isInteger(limit) && limit > 0 ? limit : 10,
-            Number.isInteger(leaseMs) && leaseMs > 0 ? leaseMs : 30_000,
-          ),
-        });
+        const claimed = videoLearningStore.claimDeliveries(
+          Number.isInteger(limit) && limit > 0 ? limit : 10,
+          Number.isInteger(leaseMs) && leaseMs > 0 ? Math.max(leaseMs, 120_000) : 120_000,
+        );
+        const deliveries = [];
+        for (const delivery of claimed) {
+          try {
+            if (delivery.payload.reportImage) {
+              delivery.payload.imageFile = await renderLearningReport(delivery.payload.text);
+            }
+            deliveries.push(delivery);
+          } catch (error) {
+            // Keep a failed receipt so the durable report retry can regenerate it.
+            videoLearningStore.completeDelivery(delivery.deliveryId, { sent: false, error: error.message });
+          }
+        }
+        sendJson(response, 200, { ok: true, deliveries });
         return;
       }
 
@@ -1236,7 +1250,6 @@ export async function createQqRuntime() {
       false,
     ),
   });
-  const videoLearningAsrPython = process.env.QQ_VIDEO_LEARNING_ASR_PYTHON?.trim() || '';
   const videoLearning = parseBoolean(process.env.QQ_VIDEO_LEARNING_ENABLED, true)
     ? new VideoLearningCoordinator({
       curriculum: {
@@ -1278,17 +1291,7 @@ export async function createQqRuntime() {
           },
         },
       },
-      ffmpegCommand: process.env.QQ_MEDIA_FFMPEG_COMMAND?.trim() || 'ffmpeg',
-      asr: videoLearningAsrPython
-        ? {
-          command: videoLearningAsrPython,
-          args: [path.join(projectRoot, 'scripts/asr_transcribe.py')],
-          env: {
-            ASR_MODEL: process.env.QQ_VIDEO_LEARNING_ASR_MODEL?.trim() || 'small',
-            ...(process.env.HF_ENDPOINT ? { HF_ENDPOINT: process.env.HF_ENDPOINT } : {}),
-          },
-        }
-        : null,
+      browserProviderUrl: process.env.BILIBILI_PROVIDER_URL?.trim() || process.env.DOUYIN_PROVIDER_URL?.trim(),
       personaPrompt: () => service.personaManager?.priorityContextFor?.({}) ?? '',
     })
     : null;

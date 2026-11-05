@@ -164,6 +164,11 @@ def learning_delivery_message(payload: dict):
     if message_id.lstrip("-").isdigit():
         message.append({"type": "reply", "data": {"id": message_id}})
     message.append({"type": "text", "data": {"text": text}})
+    if payload.get("reportImage"):
+        image_file = str(payload.get("imageFile") or "")
+        if not image_file.startswith("base64://"):
+            return None
+        message.append({"type": "image", "data": {"file": image_file}})
     if payload.get("chatType") == "group":
         return "send_group_msg", {"group_id": int(target)}, message
     return "send_private_msg", {"user_id": int(target)}, message

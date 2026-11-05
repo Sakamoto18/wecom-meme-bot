@@ -32,6 +32,7 @@ test('逐个学习，重启同日不重复，次日从队列续学，报告附�
   assert.deepEqual(f.watched, ['BV1aa411c7xx']);
   const [delivery] = f.store.claimDeliveries();
   assert.match(delivery.payload.text, /第一个梗/);
+  assert.equal(delivery.payload.reportImage, true);
   assert.match(delivery.payload.text, /下次继续：第二个梗/);
   f.store.completeDelivery(delivery.deliveryId, { sent: true });
   await f.make().tick();
