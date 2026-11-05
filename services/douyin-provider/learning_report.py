@@ -85,7 +85,7 @@ def report_html(text, items=None, covers=None):
             if bvid not in covers:
                 raise ValueError(f'{bvid} 缺少封面，不能发送缺图日报')
             learned = item.get('status') == 'learned'
-            rows = [('学到的梗', item.get('term')), ('含义与出处', item.get('meaning')),
+            rows = [('学到的梗' if learned else '候选梗（待核实）', item.get('term')), ('含义与出处' if learned else '候选解释（未确认）', item.get('meaning')),
                     ('适用场景', '；'.join(item.get('usage') or [])),
                     ('可以怎样接', '；'.join(item.get('replyHooks') or [])),
                     ('未确认原因', item.get('error') if not learned else ''),
