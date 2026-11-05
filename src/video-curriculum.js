@@ -18,7 +18,10 @@ export class VideoCurriculum {
 
   async page(pn) {
     const c = this.coordinator;
-    const headers = await c.bilibiliHeaders();
+    const headers = await c.bilibiliHeaders({
+      referer: `https://space.bilibili.com/${this.mid}`,
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    });
     const url = await c.wbiUrl('https://api.bilibili.com/x/space/wbi/arc/search', {
       mid: this.mid, pn, ps: 30, order: 'pubdate', platform: 'web',
     }, headers);
