@@ -28,14 +28,28 @@ async def load_cover(context, bvid):
         raise ValueError('报告 BV 号无效')
     if bvid in COVERS:
         return COVERS[bvid]
-    page = await context.new_page()
+    page = None
     try:
-        async with asyncio.timeout(30):
-            await page.goto(f'https://www.bilibili.com/video/{bvid}', wait_until='domcontentloaded', timeout=20000)
-            await page.wait_for_function("""() => window.__INITIAL_STATE__?.videoData?.pic ||
-              document.querySelector('meta[property="og:image"]')?.content""", timeout=8000)
-            url = await page.evaluate("""() => window.__INITIAL_STATE__?.videoData?.pic ||
-              document.querySelector('meta[property="og:image"]').content""")
+        async with asyncio.timeout(40):
+            url = ''
+            # Read only public cover metadata. This is never a video/media URL.
+            with suppress(Exception):
+                metadata = await context.request.get(
+                    f'https://api.bilibili.com/x/web-interface/view?bvid={bvid}',
+                    headers={'referer': f'https://www.bilibili.com/video/{bvid}'}, timeout=8000)
+                payload = await metadata.json()
+                if payload.get('code') == 0:
+                    url = payload.get('data', {}).get('pic', '')
+            if not url:
+                page = await context.new_page()
+                await page.goto(f'https://www.bilibili.com/video/{bvid}', wait_until='domcontentloaded', timeout=20000)
+                try:
+                    await page.wait_for_function("""() => window.__INITIAL_STATE__?.videoData?.pic ||
+                      document.querySelector('meta[property="og:image"]')?.content""", timeout=8000)
+                except Exception as error:
+                    raise ValueError(f'{bvid} 网页未返回封面：{(await page.title())[:80]}') from error
+                url = await page.evaluate("""() => window.__INITIAL_STATE__?.videoData?.pic ||
+                  document.querySelector('meta[property="og:image"]').content""")
             # Only a static cover image is read. No media URL/video is fetched.
             response = await context.request.get(cover_url(url), timeout=10000, max_redirects=0)
             mime = response.headers.get('content-type', '').split(';')[0]
@@ -50,8 +64,9 @@ async def load_cover(context, bvid):
             COVERS[bvid] = data
             return data
     finally:
-        with suppress(Exception):
-            await asyncio.wait_for(page.close(), 3)
+        if page is not None:
+            with suppress(Exception):
+                await asyncio.wait_for(page.close(), 3)
 
 
 def esc(value):
