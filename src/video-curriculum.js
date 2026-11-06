@@ -88,17 +88,19 @@ export class VideoCurriculum {
         if (!['completed', 'failed', 'cancelled'].includes(task.status)) await c.processTask(task);
         const done = this.store.getTask(task.taskKey);
         const learned = done?.status === 'completed' && done?.result?.entry?.verified === true;
+        const candidate = done?.status === 'completed' && done?.result?.entry?.confidence === 'medium';
         const item = { bvid: video.bvid, title: video.title, taskKey: task.taskKey,
-          status: learned ? 'learned' : 'failed', term: done?.result?.entry?.term || '',
+          status: learned ? 'learned' : candidate ? 'candidate' : 'failed', term: done?.result?.entry?.term || '',
           meaning: String(done?.result?.entry?.meaning || '').slice(0, 2000),
           usage: done?.result?.merged?.usage || [],
           replyHooks: done?.result?.entry?.replyHooks || [],
-          error: done?.error || (learned ? '' : '证据未达到高置信入库要求'),
+          error: done?.error || (learned ? '' : candidate ? '已存全局候选记忆，可用于接梗；事实待核实' : '证据未达到高置信入库要求'),
           seconds: Number(done?.result?.materialSeconds) || 0,
           audioStatus: done?.result?.sources?.map(source => source.audioStatus || '本次未学习音频').join('；') || '' };
         run.items.push(item);
         run.seconds += item.seconds;
-        state[learned ? 'learned' : 'failed']++;
+        const counter = learned ? 'learned' : candidate ? 'candidate' : 'failed';
+        state[counter] = (Number(state[counter]) || 0) + 1;
         state.last = { bvid: video.bvid, title: video.title, status: item.status };
         state.seen.push(video.bvid);
         state.queue.shift();
@@ -118,9 +120,9 @@ export class VideoCurriculum {
     const lines = [
       `每日梗百科学习报告 ${run.day}`,
       `主页：https://space.bilibili.com/${this.mid}`,
-      `今天处理 ${run.items.length} 个视频，学会 ${run.items.filter(i => i.status === 'learned').length} 个，材料 ${(run.seconds / 60).toFixed(1)} 分钟。`,
+      `今天处理 ${run.items.length} 个视频，学会 ${run.items.filter(i => i.status === 'learned').length} 个，候选 ${run.items.filter(i => i.status === 'candidate').length} 个，材料 ${(run.seconds / 60).toFixed(1)} 分钟。`,
       ...run.items.flatMap(item => [
-        `${item.status === 'learned' ? '学会' : '未学会'}：${item.title}`,
+        `${item.status === 'learned' ? '学会' : item.status === 'candidate' ? '候选可接梗' : '未学会'}：${item.title}`,
         item.status === 'learned' ? `${item.term}：${item.meaning}` : `原因：${item.error}`,
         item.usage?.length ? `用法：${item.usage.join('；')}` : '',
         item.replyHooks?.length ? `接法：${item.replyHooks.join('；')}` : '',
@@ -129,7 +131,7 @@ export class VideoCurriculum {
       ]),
       run.error ? `本轮中断原因：${run.error}；未处理视频明天继续。` : '',
       run.note || '',
-      `累计处理 ${state.seen.length}/${state.total || '?'}，学会 ${state.learned}，未确认 ${state.failed}（记录保留，不算学会）。`,
+      `累计处理 ${state.seen.length}/${state.total || '?'}，学会 ${state.learned}，候选 ${state.candidate || 0}，未确认 ${state.failed}（记录保留，不算学会）。`,
       state.last ? `学到：${state.last.title}（${state.last.bvid}）` : '还没有完成首个视频。',
       state.queue.length ? `下次继续：${state.queue[0].title}` : `下次读取主页第 ${state.nextPage} 页，跳过已处理 BV。`,
     ].filter(Boolean);

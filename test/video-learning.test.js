@@ -552,20 +552,44 @@ test('没有网页provider配置时失败，不调用媒体解析下载', async 
 });
 
 test('音频转写成功纳入观察，失败仍学习画面并记录未学习音频', async () => {
-  for (const success of [true, false]) {
+  for (const state of ['transcribed', 'partial', 'unavailable']) {
+    const success = state !== 'unavailable';
     const f = fixture();
     try {
       f.coordinator.tick = async () => {};
       const original = f.coordinator.browserWatch;
       f.coordinator.browserWatch = async (...args) => ({ ...await original(...args), audio: success
-        ? { status: 'transcribed', transcript: [{start: 1, end: 3, text: '我似了'}] }
+        ? { status: state, error: state === 'partial' ? '仅学习部分音频：转写到 3/18 秒' : '', transcript: [{start: 1, end: 3, text: '我似了'}] }
         : {status: 'unavailable', error: '本次未学习音频：音频获取失败'} });
       f.coordinator.gate({ term: '似了', waiter: groupWaiter });
       await f.coordinator.processTask(f.store.nextQueuedTask());
       const result = f.store.findLatestTask('似了', 'completed').result;
-      assert.match(result.sources[0].audioStatus, success ? /已学习网页音频转写/ : /本次未学习音频/);
+      assert.match(result.sources[0].audioStatus, state === 'partial' ? /仅学习部分音频/ : success ? /已学习网页音频转写/ : /本次未学习音频/);
       const watch = f.calls.find(call => call.options.usageSource === 'video-learning-watch');
       assert.match(watch.input[0].text, success ? /网页音频转写（可能有错字）/ : /本次未学习音频/);
     } finally { f.close(); }
   }
+});
+
+
+test('中置信视频保留候选记忆，排除未核实出处和原句', async () => {
+  const f = fixture();
+  try {
+    f.coordinator.mergeKnowledge = async () => ({ found: true, term: '似了', aliases: ['我似了'],
+      confidence: 'medium', meaning: '谐音表示崩溃', origin: '未经核实的来源', mechanism: '死与似的谐音',
+      usage: ['倒霉时自嘲'], lyrics: [{ line: '未经核实原句', confidence: 'high' }], replyHooks: ['评论套话'],
+      uncertainties: ['出处待查'], unconfirmed: '出处待查' });
+    const candidates = [];
+    f.coordinator.memeKnowledge.putCandidate = entry => { candidates.push(entry); return true; };
+    f.coordinator.tick = async () => {};
+    f.coordinator.gate({ term: '似了', waiter: groupWaiter });
+    await f.coordinator.processTask(f.store.nextQueuedTask());
+    assert.equal(f.puts.length, 0);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].confidence, 'medium');
+    assert.equal(candidates[0].verified, false);
+    assert.doesNotMatch(candidates[0].meaning, /未经核实的来源/);
+    assert.deepEqual(candidates[0].lyrics, []);
+    assert.deepEqual(candidates[0].replyHooks, []);
+  } finally { f.close(); }
 });

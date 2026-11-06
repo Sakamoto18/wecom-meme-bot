@@ -93,3 +93,20 @@ test('昨日学习报告按窗口找记录，不被今天凌晨记录覆盖', t 
   assert.equal(f.store.latestCatchupRun(50, 150).day, '2026-11-04');
   assert.equal(f.store.latestCatchupRun(150, 250).day, '2026-11-05');
 });
+
+test('中置信候选单独计数，日报说明可接梗但事实待核实', async t => {
+  const f = fixture(t);
+  f.coordinator.processTask = async task => f.store.updateTask(task.taskKey, {
+    status: 'completed', result: { materialSeconds: 30,
+      entry: { term: '候选梗', meaning: '梗义候选', confidence: 'medium', verified: false } },
+  });
+  await f.make().tick();
+  const state = f.store.getProgress('bilibili-space:123');
+  assert.equal(state.candidate, 1);
+  assert.equal(state.failed, 0);
+  assert.equal(state.learned, 0);
+  const [delivery] = f.store.claimDeliveries();
+  assert.equal(delivery.payload.reportItems[0].status, 'candidate');
+  assert.match(delivery.payload.reportText, /候选可接梗/);
+  assert.match(delivery.payload.reportText, /事实待核实/);
+});

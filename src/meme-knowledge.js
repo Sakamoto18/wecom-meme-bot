@@ -177,8 +177,9 @@ export function memeKnowledgePrompt(entry, source = 'cache', options = {}) {
       return `时事（${text(event.time, 20) || '时间未知'}，${status}${age}）：${text(event.subject, 30)} ${text(event.claim || event.event, 160)}`;
     }),
     list(entry.replyHooks, 4).length ? `可接话的说法：${list(entry.replyHooks, 4).join('；')}` : '',
-    `证据状态：${source === 'cache' ? '本地高置信梗库' : '本轮定向 B 站梗语境/百科检索'}`,
+    `证据状态：${entry.confidence === 'medium' ? '全局候选梗记忆（事实待核实）' : source === 'cache' ? '本地高置信梗库' : '本轮定向 B 站梗语境/百科检索'}`,
     `可信度：${entry.confidence}`,
+    entry.confidence === 'medium' ? '候选只可借用梗义、反差和适用场景自然接话；不能据此断言出处、人物身份、原句或现实事件。被问到来源时明确尚未核实，不播报内部学习过程。' : '',
     options.intent ? MEME_INTENT_RULES[options.intent] ?? '' : '',
     '只把条目作为当前回答的证据，不要编造出处，不要把不确定的搜索摘要写成现实事实。不要编下一句歌词，不要把即兴改词冒充原作，不要编比赛结果，不要把评论区说法当事实，不要提学习过程、视频或链接。',
   ].filter(Boolean).join('\n');
@@ -419,7 +420,7 @@ export class MemeKnowledgeStore {
     const row = db.prepare(`
       SELECT * FROM meme_knowledge
       WHERE (term_key = ? OR aliases_json LIKE ?) AND expires_at > ?
-      ORDER BY confidence DESC, last_used_at DESC LIMIT 1
+      ORDER BY (confidence = 'high') DESC, last_used_at DESC LIMIT 1
     `).get(key, `%${key}%`, this.now());
     if (!row) return null;
     db.prepare('UPDATE meme_knowledge SET last_used_at = ? WHERE term_key = ?').run(this.now(), row.term_key);
@@ -428,6 +429,22 @@ export class MemeKnowledgeStore {
 
   put(entry, options = {}) {
     if (!entry || entry.confidence !== 'high') return false;
+    return this.#putKnowledge(entry, options);
+  }
+
+  // Explicit video-only candidate path: ordinary search still requires high confidence.
+  putCandidate(entry, options = {}) {
+    if (!entry || entry.confidence !== 'medium' || entry.verified !== false
+      || entry.lookupSource !== 'video' || !entry.sourceUrls?.length) return false;
+    const current = this.ensureOpen().prepare('SELECT confidence, expires_at FROM meme_knowledge WHERE term_key = ?')
+      .get(text(entry.term, MAX_TERM).toLowerCase());
+    if (current?.confidence === 'high' && current.expires_at > this.now()) return false;
+    return this.#putKnowledge({ ...entry, lookupSource: 'video-candidate',
+      lyrics: [], currentEvents: [], reception: {}, replyHooks: [] },
+    { ...options, ttlMs: Math.min(Number(options.ttlMs) || 30 * DAY_MS, 30 * DAY_MS) });
+  }
+
+  #putKnowledge(entry, options) {
     const term = text(entry.term, MAX_TERM);
     const meaning = text(entry.meaning);
     if (!term || meaning.length < 4 || !entry.sourceDomains?.length) return false;
@@ -450,7 +467,7 @@ export class MemeKnowledgeStore {
     `).run(
       term.toLowerCase(), term, JSON.stringify(list(entry.aliases)), meaning,
       JSON.stringify(list(entry.usage, 6)), JSON.stringify(list(entry.sourceDomains, 8)),
-      JSON.stringify(list(entry.sourceUrls, 8)), 'high', text(entry.lookupSource || 'wiki', 40),
+      JSON.stringify(list(entry.sourceUrls, 8)), entry.confidence, text(entry.lookupSource || 'wiki', 40),
       now, now, now + (Number(options.ttlMs) || this.ttlMs), now,
       JSON.stringify(richList(entry.lyrics, 8)),
       JSON.stringify(richList(entry.currentEvents, 6)),
@@ -497,7 +514,13 @@ export class MemeKnowledgeStore {
     const db = this.ensureOpen();
     const count = Math.max(3, Math.min(72, Number(limit) || 48));
     const perSource = Math.ceil(count / 3);
+    const asCandidate = (entry) => ({ trigger: entry.term, target: entry.term, mechanism: entry.meaning,
+      usage: [...entry.usage, ...entry.replyHooks], confidence: entry.confidence,
+      factConfidence: entry.confidence === 'medium' ? 'low' : entry.confidence,
+      source: entry.confidence === 'medium' ? 'video-candidate' : 'learned-meme' });
+    const direct = query ? this.lookupPhrase(query) : null;
     const matched = query ? [
+      ...(direct ? [asCandidate(direct)] : []),
       ...this.lookupTaughtAssociations('global', query),
       ...this.lookupAssociations(query, { limit: 8 }),
     ] : [];
@@ -511,11 +534,10 @@ export class MemeKnowledgeStore {
     // Existing video entries become usable without waiting for a migration or
     // another viewing pass; meaning/usage already preserve their mechanism.
     const videos = db.prepare(`SELECT * FROM meme_knowledge
-      WHERE confidence = 'high' AND expires_at > ? ORDER BY updated_at DESC LIMIT ?`)
+      WHERE confidence IN ('high', 'medium') AND expires_at > ? ORDER BY updated_at DESC LIMIT ?`)
       .all(this.now(), perSource).map((row) => {
         const entry = this.#row(row);
-        return { trigger: entry.term, target: entry.term, mechanism: entry.meaning,
-          usage: [...entry.usage, ...entry.replyHooks], source: 'learned-meme' };
+        return asCandidate(entry);
       });
     const seen = new Set();
     return [...matched, ...taught, ...associations, ...videos].filter((entry) => {
@@ -617,6 +639,7 @@ export class MemeKnowledgeStore {
       sourceDomains: read(row.source_domains_json),
       sourceUrls: read(row.source_urls_json),
       confidence: row.confidence,
+      verified: row.confidence === 'high',
       lookupSource: row.lookup_source,
       lyrics: richList(read(row.lyrics_json ?? '[]'), 8),
       currentEvents: richList(read(row.context_json ?? '[]'), 6),

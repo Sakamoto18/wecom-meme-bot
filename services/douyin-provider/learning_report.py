@@ -93,7 +93,7 @@ def report_html(text, items=None, covers=None):
             details = ''.join(f'<div class="detail"><b>{esc(label)}</b><p>{esc(value)}</p></div>'
                               for label, value in rows if value)
             cards.append(f'''<section><div class="video"><img src="{esc(covers[bvid])}">
-            <div><span class="badge {'ok' if learned else 'fail'}">{'已学会' if learned else '未确认'}</span>
+            <div><span class="badge {'ok' if learned else 'fail'}">{'已学会' if learned else '候选可接梗' if item.get('status') == 'candidate' else '未确认'}</span>
             <h2>{esc(item.get('title'))}</h2><div class="duration">观看 {float(item.get('seconds') or 0):.0f} 秒</div></div></div>
             {details}<div class="url">https://www.bilibili.com/video/{esc(bvid)}</div></section>''')
         content = f'<div class="intro">{esc(chr(10).join(lines[1:3]))}</div>' + ''.join(cards)

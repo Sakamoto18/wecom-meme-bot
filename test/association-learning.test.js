@@ -125,3 +125,36 @@ test('选择器拒绝未知候选、编造证据、低置信选择，空素材�
     assert.equal(await selectLearnedAssociation({ text: '新的场景', store, chatClient: client }), null);
   }
 });
+
+
+test('候选梗的事实置信度贯穿选择和回复提示', async () => {
+  const { selectLearnedAssociation, associationTransferPrompt } = await import('../src/association-learning.js');
+  const f = fixture();
+  try {
+    f.store.putCandidate({ term: '灭建国', aliases: [], meaning: '外国英雄与中式土名的反差', usage: ['洋人起土名'],
+      confidence: 'medium', verified: false, lookupSource: 'video', sourceDomains: ['bilibili.com'], sourceUrls: ['https://www.bilibili.com/video/BV1Epx96EEBG'] });
+    const selected = await selectLearnedAssociation({ text: '钢铁侠改名王富贵了', store: f.store,
+      chatClient: { isConfigured: true, complete: async (_history, input, options) => {
+        const card = JSON.parse(input).candidates.find(c => c.material.includes('灭建国'));
+        assert.match(card.material, /video-candidate/);
+        assert.match(card.material, /"factConfidence":"low"/);
+        assert.match(options.systemPrompt, /关系匹配 high 不等于事实已核实/);
+        return JSON.stringify({ id: card.id, confidence: 'high', anchor: '钢铁侠改名王富贵',
+          evidence: '外国英雄与中式土名的反差', mapping: '超级英雄与中式名字的落差', angle: '按给英雄起土名的关系接话' });
+      } } });
+    assert.ok(selected);
+    assert.match(associationTransferPrompt(selected), /禁止断言出处/);
+  } finally { f.close(); }
+});
+
+
+test('关系证据允许省略号连接真实短句，仍拒绝夹带编造片段', async () => {
+  const { selectLearnedAssociation } = await import('../src/association-learning.js');
+  const store = { listAssociationCandidates: () => [{ target: '灭建国', mechanism: '外国英雄改土名，产生名字错位的反差' }] };
+  for (const [evidence, accepted] of [['外国英雄改土名……名字错位的反差', true], ['外国英雄改土名……捏造出处', false]]) {
+    const result = await selectLearnedAssociation({ text: '钢铁侠改名王富贵', store,
+      chatClient: { isConfigured: true, complete: async () => JSON.stringify({ id: '1', confidence: 'high',
+        anchor: '钢铁侠改名王富贵', evidence, mapping: '英雄的土名反差', angle: '接灭建国的土名梗' }) } });
+    assert.equal(Boolean(result), accepted);
+  }
+});

@@ -663,6 +663,10 @@ export class VideoLearningCoordinator {
           this.logger.warn?.(`视频学梗：写入梗库失败：${error.message}`);
         }
       }
+      if (entry && merged.confidence === 'medium') {
+        try { this.memeKnowledge?.putCandidate?.(entry); }
+        catch (error) { this.logger.warn?.(`视频学梗：写入候选记忆失败：${error.message}`); }
+      }
       const result = {
         found: Boolean(entry),
         entry,
@@ -755,10 +759,12 @@ export class VideoLearningCoordinator {
     const captions = media.frames.filter(frame => frame.caption).map(frame => ({
       start: frame.time, end: frame.time + 1, text: clean(frame.caption, 500),
     }));
-    const audioLearned = media.audio?.status === 'transcribed' && media.audio.transcript?.length > 0;
-    const transcript = audioLearned ? media.audio.transcript.map(line => ({ start: Number(line.start), end: Number(line.end), text: clean(line.text, 500) })) : captions;
+    const audioLearned = ['transcribed', 'partial'].includes(media.audio?.status) && media.audio.transcript?.length > 0;
+    const audioLines = audioLearned ? media.audio.transcript.map(line => ({ start: Number(line.start), end: Number(line.end), text: clean(line.text, 500) })) : [];
+    const transcript = audioLearned ? [...audioLines, ...(media.audio.status === 'partial'
+      ? captions.filter(line => !audioLines.some(audio => audio.start <= line.start && audio.end >= line.start)) : [])] : captions;
     const transcriptSource = audioLearned ? 'browser-audio-asr' : (captions.length ? 'browser-caption' : 'browser-frames');
-    const audioStatus = audioLearned ? '已学习网页音频转写（音色、语调未核实）' : (media.audio?.error || '本次未学习音频');
+    const audioStatus = audioLearned ? (media.audio.status === 'partial' ? media.audio.error : '已学习网页音频转写（音色、语调未核实）') : (media.audio?.error || '本次未学习音频');
     const tiles = [];
     for (let i = 0; i < media.frames.length; i += this.limits.tileSeconds) {
       const frames = media.frames.slice(i, i + this.limits.tileSeconds);
@@ -780,7 +786,7 @@ export class VideoLearningCoordinator {
       url: media.sourceUrl,
       title: media.title || candidate.title,
       durationSeconds: duration,
-      metadata: { transcriptSource, analyzedSeconds: seconds, mode: media.mode, frameCount: media.frames.length, audioObserved: false, audioStatus },
+      metadata: { transcriptSource, analyzedSeconds: seconds, mode: media.mode, frameCount: media.frames.length, audioObserved: false, audioStatus, audioDiagnostics: media.audio?.diagnostics },
     });
     const observations = [];
     const tilesPerSegment = Math.max(1, Math.round(this.limits.segmentSeconds / this.limits.tileSeconds));
@@ -978,7 +984,7 @@ export class VideoLearningCoordinator {
     if (merged.confidence === 'low') return null;
     const meaning = [
       merged.meaning,
-      merged.origin ? `出处：${merged.origin}` : '',
+      merged.confidence === 'high' && merged.origin ? `出处：${merged.origin}` : '',
       merged.mechanism ? `笑点：${merged.mechanism}` : '',
       merged.soundUnconfirmed ? '（声音因素未确认）' : '',
     ].filter(Boolean).join(' ');
@@ -990,11 +996,12 @@ export class VideoLearningCoordinator {
       usage: [...merged.usage, merged.avoid ? `不适用：${merged.avoid}` : ''].filter(Boolean),
       sourceDomains: ['bilibili.com'],
       sourceUrls: watched.map((video) => video.url).filter(Boolean),
-      confidence: 'high',
+      confidence: merged.confidence,
       lookupSource: 'video',
       verified: merged.confidence === 'high',
       unconfirmed: merged.unconfirmed,
       ...this.richFields(merged, watched),
+      ...(merged.confidence !== 'high' ? { lyrics: [], currentEvents: [], reception: {}, replyHooks: [] } : {}),
     };
   }
 

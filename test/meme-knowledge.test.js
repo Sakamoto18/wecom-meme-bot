@@ -111,3 +111,32 @@ test('新闻型抽象联想会保存现实锚点、梗改写和信息类型', ()
   assert.match(prompt, /信息类型：news/);
   store.close();
 });
+
+
+test('视频候选全局召回但不冒充高置信知识；可晋升且不可覆盖已核实条目', () => {
+  let now = Date.now();
+  const file = tempDatabase('video-candidate');
+  const store = new MemeKnowledgeStore({ databaseFilePath: file, now: () => now });
+  const entry = { term: '灭建国', aliases: ['建国灭霸'], meaning: '外国超级英雄配上中式年代人名的反差',
+    usage: ['给洋气角色配一个土气名字'], confidence: 'medium', verified: false, lookupSource: 'video',
+    sourceDomains: ['bilibili.com'], sourceUrls: ['https://www.bilibili.com/video/BV1Epx96EEBG'],
+    lyrics: [{ line: '未经核实的歌词' }], replyHooks: ['未经核实的原句'] };
+  assert.equal(store.put(entry), false);
+  assert.equal(store.putCandidate(entry), true);
+  store.close();
+  const hit = store.lookupPhrase('怎么又来建国灭霸了');
+  assert.equal(hit.confidence, 'medium');
+  assert.equal(hit.verified, false);
+  assert.deepEqual(hit.lyrics, []);
+  assert.deepEqual(hit.replyHooks, []);
+  assert.match(memeKnowledgePrompt(hit), /全局候选梗记忆（事实待核实）/);
+  assert.doesNotMatch(memeKnowledgePrompt(hit), /本地高置信梗库/);
+  assert.equal(store.listAssociationCandidates(48, '灭建国')[0].source, 'video-candidate');
+  assert.equal(store.put({ ...entry, confidence: 'high' }), true);
+  assert.equal(store.putCandidate(entry), false);
+  assert.equal(store.lookup('灭建国').confidence, 'high');
+  now += 400 * 86400000;
+  assert.equal(store.lookup('灭建国'), null);
+  assert.equal(store.listAssociationCandidates().length, 0);
+  store.close();
+});

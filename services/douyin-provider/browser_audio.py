@@ -4,6 +4,8 @@ import base64
 import json
 import os
 import tempfile
+import time
+import wave
 from pathlib import Path
 
 START_AUDIO = """async () => {
@@ -47,6 +49,9 @@ async def transcribe_recording(page, start):
     if not start.get('ok'):
         return {'status': 'unavailable', 'error': '本次未学习音频：网页音频录制不可用', 'transcript': []}
     process = None
+    started = time.monotonic()
+    stage = 'capture'
+    diagnostics = {}
     try:
         encoded = await asyncio.wait_for(page.evaluate(STOP_AUDIO), 10)
         if not encoded:
@@ -58,11 +63,24 @@ async def transcribe_recording(page, start):
             audio = Path(directory) / 'audio.wav'
             audio.write_bytes(base64.b64decode(encoded))
             script = Path(__file__).resolve().parents[2] / 'scripts' / 'asr_transcribe.py'
-            env = dict(os.environ, ASR_MODEL=os.getenv('QQ_VIDEO_LEARNING_ASR_MODEL', 'small'))
+            with wave.open(str(audio), 'rb') as wav:
+                duration = wav.getnframes() / wav.getframerate()
+            progress = Path(directory) / 'segments.jsonl'
+            # Stay within watch_page's playback + 180s total budget.
+            timeout = 120
+            diagnostics = {'audioSeconds': round(duration, 2), 'timeoutSeconds': timeout,
+                           'model': Path(os.getenv('QQ_VIDEO_LEARNING_ASR_MODEL', 'small')).name}
+            stage = 'asr'
+            env = dict(os.environ, ASR_MODEL=os.getenv('QQ_VIDEO_LEARNING_ASR_MODEL', 'small'),
+                       ASR_PROGRESS_PATH=str(progress))
             process = await asyncio.create_subprocess_exec(python, str(script), str(audio),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
+            timed_out = False
+            communication = asyncio.create_task(process.communicate())
             try:
-                output, _ = await asyncio.wait_for(process.communicate(), 90)
+                output, stderr = await asyncio.wait_for(asyncio.shield(communication), timeout)
+            except asyncio.TimeoutError:
+                timed_out = True
             finally:
                 if process.returncode is None:
                     if os.name == 'nt':
@@ -72,11 +90,41 @@ async def transcribe_recording(page, start):
                     else:
                         process.kill()
                     await process.wait()
+                output, stderr = await communication
+            diagnostics['elapsedSeconds'] = round(time.monotonic() - started, 2)
+            # stderr contains only structured stage/timing records on success.
+            stages = []
+            for line in stderr.decode('utf-8', errors='replace').splitlines():
+                try:
+                    record = json.loads(line)
+                    if isinstance(record, dict) and record.get('stage'):
+                        stages.append(record)
+                except ValueError:
+                    pass
+            diagnostics['stages'] = stages[-5:]
+            if timed_out:
+                rows = []
+                if progress.exists():
+                    for line in progress.read_text(encoding='utf-8').splitlines():
+                        try:
+                            row = json.loads(line)
+                            if row.get('text'):
+                                rows.append(row)
+                        except ValueError:
+                            pass
+                end = max((float(row.get('end', 0)) for row in rows), default=0)
+                diagnostics['transcribedUntilSeconds'] = end
+                if rows:
+                    return {'status': 'partial', 'transcript': rows, 'method': 'browser-web-audio',
+                            'error': f'仅学习部分音频：转写到 {end:.1f}/{duration:.1f} 秒，识别超过 {timeout} 秒',
+                            'diagnostics': diagnostics}
+                raise ValueError(f'音频已录制 {duration:.1f} 秒；语音识别超过 {timeout} 秒，尚无转写结果')
             if process.returncode != 0:
-                raise ValueError('音频转写进程失败')
+                raise ValueError(f'音频转写进程失败（退出码 {process.returncode}）')
             rows = json.loads(output)
             if not rows:
                 raise ValueError('未识别到语音')
-            return {'status': 'transcribed', 'transcript': rows, 'method': 'browser-web-audio'}
+            return {'status': 'transcribed', 'transcript': rows, 'method': 'browser-web-audio', 'diagnostics': diagnostics}
     except Exception as error:
-        return {'status': 'unavailable', 'error': '本次未学习音频：' + (str(error) or type(error).__name__)[:160], 'transcript': []}
+        diagnostics.update(stage=stage, elapsedSeconds=round(time.monotonic() - started, 2))
+        return {'status': 'unavailable', 'error': '本次未学习音频：' + (str(error) or type(error).__name__)[:160], 'transcript': [], 'diagnostics': diagnostics}
