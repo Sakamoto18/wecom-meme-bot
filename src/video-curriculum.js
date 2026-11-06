@@ -8,8 +8,8 @@ export class VideoCurriculum {
     this.store = coordinator.store;
     this.mid = String(options.mid ?? '').trim();
     this.recipients = [...(options.recipients ?? [])].filter(id => /^\d+$/u.test(id));
-    this.dailyVideos = Math.max(1, Math.min(10, Number(options.dailyVideos) || 3));
-    this.dailySeconds = Math.max(60, Math.min(3600, Number(options.dailySeconds) || 600));
+    this.dailyVideos = Math.max(1, Math.min(10, Number(options.dailyVideos) || 10));
+    this.dailySeconds = Math.max(60, Math.min(3600, Number(options.dailySeconds) || 3000));
     this.hour = Math.max(0, Math.min(23, Number(options.hour ?? 3)));
     this.key = `bilibili-space:${this.mid}`;
   }

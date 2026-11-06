@@ -1252,11 +1252,15 @@ export async function createQqRuntime() {
   });
   const videoLearning = parseBoolean(process.env.QQ_VIDEO_LEARNING_ENABLED, true)
     ? new VideoLearningCoordinator({
+      limits: {
+        dailyTasks: parsePositiveInteger(process.env.QQ_VIDEO_LEARNING_DAILY_TASKS) ?? 20,
+        dailyMaterialSeconds: parsePositiveInteger(process.env.QQ_VIDEO_LEARNING_DAILY_SECONDS) ?? 4800,
+      },
       curriculum: {
         mid: process.env.QQ_VIDEO_CURRICULUM_MID,
         recipients: parseIdentifierSet(process.env.QQ_VIDEO_CURRICULUM_REPORT_USERS),
-        dailyVideos: parsePositiveInteger(process.env.QQ_VIDEO_CURRICULUM_DAILY_VIDEOS) ?? 3,
-        dailySeconds: parsePositiveInteger(process.env.QQ_VIDEO_CURRICULUM_DAILY_SECONDS) ?? 600,
+        dailyVideos: parsePositiveInteger(process.env.QQ_VIDEO_CURRICULUM_DAILY_VIDEOS) ?? 10,
+        dailySeconds: parsePositiveInteger(process.env.QQ_VIDEO_CURRICULUM_DAILY_SECONDS) ?? 3000,
         hour: parseNonnegativeInteger(process.env.QQ_VIDEO_CURRICULUM_HOUR, 3),
       },
       store: videoLearningStore,

@@ -96,7 +96,7 @@ def report_html(text, items=None, covers=None):
             <div><span class="badge {'ok' if learned else 'fail'}">{'已学会' if learned else '候选可接梗' if item.get('status') == 'candidate' else '未确认'}</span>
             <h2>{esc(item.get('title'))}</h2><div class="duration">观看 {float(item.get('seconds') or 0):.0f} 秒</div></div></div>
             {details}<div class="url">https://www.bilibili.com/video/{esc(bvid)}</div></section>''')
-        content = f'<div class="intro">{esc(chr(10).join(lines[1:3]))}</div>' + ''.join(cards)
+        content = f'<div class="intro">{esc(chr(10).join(lines[1:3]))}</div>' + '<div class="cards">' + ''.join(cards) + '</div>'
         # The structured report keeps summary/progress separate from video cards.
         tail = [line for line in lines[3:] if line.startswith(('累计', '学到：', '下次', '本轮', '今日总', '重试', '说明：'))]
         content += '<div class="progress">' + esc('\n'.join(tail)) + '</div>'
@@ -104,19 +104,20 @@ def report_html(text, items=None, covers=None):
         content = '<div class="content">' + esc('\n'.join(lines[1:])) + '</div>'
     return '''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>
     *{box-sizing:border-box}body{margin:0;padding:36px;background:#eef2f6;color:#192a3c;
-    font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;width:1080px}
+    font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif;width:1600px}
     main{background:white;border:1px solid #d7e1eb;border-radius:20px;padding:36px}
     .label{font-size:18px;letter-spacing:2px;color:#416e90;margin-bottom:16px}
     h1{font-size:32px;line-height:1.5;margin:0 0 26px;border-bottom:3px solid #4e8bab;padding-bottom:22px}
     .content,.intro,.progress{white-space:pre-wrap;overflow-wrap:anywhere;font-size:22px;line-height:1.8}
     .intro{color:#52697d;margin-bottom:28px}.progress{padding-top:26px}
-    section{border:1px solid #d9e3ec;border-radius:14px;padding:24px;margin-top:24px;background:#fbfcfe}
-    .video{display:flex;gap:24px;align-items:center;margin-bottom:20px}
-    .video img{width:400px;height:225px;object-fit:contain;background:#e8eef4;border-radius:9px}
-    .video>div{flex:1}h2{font-size:24px;line-height:1.6;margin:12px 0;overflow-wrap:anywhere}
+    .cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;align-items:start}
+    section{min-width:0;border:1px solid #d9e3ec;border-radius:14px;padding:24px;margin:0;background:#fbfcfe}
+    .video{display:flex;flex-direction:column;gap:16px;align-items:stretch;margin-bottom:16px}
+    .video img{width:100%;aspect-ratio:16/9;object-fit:contain;background:#e8eef4;border-radius:9px}
+    .video>div{flex:1}h2{font-size:24px;line-height:1.5;margin:12px 0;overflow-wrap:anywhere}
     .badge{font-size:17px;border-radius:5px;padding:4px 10px}.ok{color:#146044;background:#e3f4ea}.fail{color:#925016;background:#fff0dc}
     .duration,.url{font-size:18px;color:#62758a}.url{margin-top:18px;overflow-wrap:anywhere}
-    .detail{margin-top:14px;font-size:22px;line-height:1.8}.detail b{font-size:18px;color:#416e90}
+    .detail{margin-top:12px;font-size:21px;line-height:1.6}.detail b{font-size:18px;color:#416e90}
     p{margin:3px 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
     footer{font-size:16px;color:#62758a;margin-top:30px;padding-top:20px;border-top:1px solid #d7e1eb}
     </style><main><div class="label">梗百科 · 每日学习记录</div><h1>''' + esc(title) + '</h1>' + content + '''
@@ -132,7 +133,7 @@ async def render_report(browser, text, items=None, source_context=None):
         async with slots:
             covers[item['bvid']] = await load_cover(source_context, item['bvid'])
     await asyncio.gather(*(get_cover(item) for item in items))
-    context = await browser.new_context(viewport={'width': 1080, 'height': 1000}, device_scale_factor=1)
+    context = await browser.new_context(viewport={'width': 1600, 'height': 1000}, device_scale_factor=1)
     try:
         async with asyncio.timeout(20):
             await context.route('**/*', lambda route: route.abort())
