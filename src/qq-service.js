@@ -1583,7 +1583,7 @@ function buildConversationContent(payload) {
   ].filter(Boolean).join('\n');
 }
 
-export function normalizeQqPayload(payload) {
+export function normalizeQqPayload(payload, { relationImport = false } = {}) {
   if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
     throw new TypeError('请求体必须是 JSON 对象');
   }
@@ -1615,7 +1615,9 @@ export function normalizeQqPayload(payload) {
     payload.forwarded_text,
     payload.quoted_forwarded_text,
   ].filter(Boolean).join('\n');
-  const quotedImageLimit = QUOTED_IMAGE_DETAIL_PATTERN.test(imageRequestText)
+  const importCommand = parseLongtuManagementCommand(payload.text)?.action === 'relation-import-start';
+  const importImages = relationImport || importCommand;
+  const quotedImageLimit = importImages ? MAX_SOURCE_IMAGE_COUNT : QUOTED_IMAGE_DETAIL_PATTERN.test(imageRequestText)
     ? MAX_EXPLICIT_QUOTED_IMAGE_COMPONENTS
     : MAX_QUOTED_IMAGE_COMPONENTS;
   const quotedImagesTrimmed = quotedImageBase64s.length > quotedImageLimit;
@@ -1666,6 +1668,13 @@ export function normalizeQqPayload(payload) {
     forwardImageBase64s: limitedImages.forwardImages,
     quotedForwardImageBase64s: limitedImages.quotedForwardImages,
     imageInputNotice: [
+      importImages ? normalizeString(payload.image_input_notice, 800) : '',
+      importImages && [payload.image_base64s, payload.quoted_image_base64s,
+        payload.forward_image_base64s, payload.quoted_forward_image_base64s]
+        .reduce((count, images) => count + (Array.isArray(images) ? images.length : 0), 0)
+        > limitedImages.images.length + limitedImages.quotedImages.length
+          + limitedImages.forwardImages.length + limitedImages.quotedForwardImages.length
+        ? '部分图片因单次 24 张、总大小或数据格式限制未导入，请分批重发。' : '',
       (
       (Array.isArray(payload.forward_image_base64s) ? payload.forward_image_base64s.length : 0)
       + (Array.isArray(payload.quoted_forward_image_base64s) ? payload.quoted_forward_image_base64s.length : 0)
@@ -1712,7 +1721,7 @@ export function normalizeQqPayload(payload) {
     ),
   };
   if (normalized.botUserId && normalized.quotedAuthor?.userId === normalized.botUserId
-    && !parseLongtuManagementCommand(normalized.text)) {
+    && !relationImport && !parseLongtuManagementCommand(normalized.text)) {
     // Older Bridge callers did not carry image subtype metadata, so retain the
     // old safe behavior for those payloads. The current Bridge marks every
     // accepted quoted image as 0 and filters only QQ sticker images (1) before
@@ -1738,7 +1747,7 @@ export function normalizeQqPayload(payload) {
       || normalized.quotedImageBase64s.length > 0
       || normalized.forwardImageBase64s.length > 0;
   }
-  if (normalized.quotedBotGeneratedImage && !parseLongtuManagementCommand(normalized.text)) {
+  if (normalized.quotedBotGeneratedImage && !relationImport && !parseLongtuManagementCommand(normalized.text)) {
     // A Bot-generated video/share card is already a rendered summary. It must
     // not be fed back into vision/search as if it were a new user image.
     // Keep current user images when a message contains both, but discard the
@@ -2281,6 +2290,7 @@ export class QqBotService {
     // image candidates; it never changes the model prompt or reply style.
     this.longtuTagRelations = options.longtuTagRelations ?? null;
     this.persistLongtuTagRelations = options.persistLongtuTagRelations ?? null;
+    this.longtuSemanticIndex = options.longtuSemanticIndex ?? null;
     this.personaManager = options.personaManager ?? null;
     this.adminUsers = options.adminUsers ?? new Set();
     this.protectedRoles = options.protectedRoles ?? new Map();
@@ -2526,6 +2536,7 @@ export class QqBotService {
     this.dedupeTtlMs = options.dedupeTtlMs ?? DEFAULT_DEDUPE_TTL_MS;
     this.processedMessageIds = new Set();
     this.managementTargets = new Map();
+    this.relationImportSessions = new Map();
     this.peerBotReplyStates = new Map();
     this.adminStoppedPeerGroups = new Map();
     this.groupStopRevisions = new Map();
@@ -4421,17 +4432,17 @@ export class QqBotService {
 
       try {
         const selectionOptions = {
-          allowedExtensions: ['.png', '.jpg'],
+          allowedExtensions: ['.png', '.jpg', '.gif'],
           selectionScope: this.selectionScope(message),
         };
-        const attachmentSha256s = Array.isArray(options.attachmentSha256s)
+        let attachmentSha256s = Array.isArray(options.attachmentSha256s)
           ? [...new Set(options.attachmentSha256s.filter(Boolean))]
           : (options.attachmentSha256 ? [options.attachmentSha256] : []);
         const forceMeme = generated.mode === 'generated-attack'
           || generated.roleReplyHadAttack === true
           || generated.mode === 'idle-mention'
           || generated.mode === 'pure-mention';
-        const sceneAliasMatches = attachmentSha256s.length > 0
+        let sceneAliasMatches = attachmentSha256s.length > 0
           ? []
           : matchLongtuSceneAliases(
             [
@@ -4442,11 +4453,24 @@ export class QqBotService {
               imageAnalysis?.scene,
             ].filter(Boolean).join('\n'),
             answer,
-            options.longtuAliases ?? this.longtuLibrary?.listAliases() ?? [],
+            options.longtuAliases ?? this.longtuLibrary?.listAliases({ limit: 5000 }) ?? [],
             { relationGroups: this.longtuTagRelations },
           );
-        const shouldAttachMeme = forceMeme || attachmentSha256s.length > 0
-          || sceneAliasMatches.length > 0;
+        let semanticDeclined = false;
+        if (this.longtuSemanticIndex && !recordSummary) {
+          const semanticShas = await this.longtuSemanticIndex.select({
+            content: options.imageQuestion || content, answer,
+            preferredShas: attachmentSha256s.length ? attachmentSha256s : sceneAliasMatches.map(entry => entry.sha256),
+            scope: this.selectionScope(message),
+          });
+          if (Array.isArray(semanticShas)) {
+            attachmentSha256s = semanticShas;
+            sceneAliasMatches = [];
+            semanticDeclined = semanticShas.length === 0;
+          }
+        }
+        const shouldAttachMeme = !semanticDeclined && (forceMeme || attachmentSha256s.length > 0
+          || sceneAliasMatches.length > 0);
         if (!shouldAttachMeme) {
           return {
             mode: generated.mode,
@@ -5020,6 +5044,102 @@ export class QqBotService {
     return buffer.length > 0 ? buffer : null;
   }
 
+  relationImportKey(payload) {
+    return JSON.stringify([payload.messageType, payload.messageType === 'group' ? payload.groupId : '', payload.userId]);
+  }
+
+  getRelationImport(payload) {
+    const key = this.relationImportKey(payload);
+    const session = this.relationImportSessions.get(key);
+    if (session && session.expiresAt <= this.now()) {
+      this.relationImportSessions.delete(key);
+      return null;
+    }
+    return session ?? null;
+  }
+
+  async handleRelationImport(command, payload) {
+    const key = this.relationImportKey(payload);
+    let session = this.getRelationImport(payload);
+    const reply = (text, active = session) => ({
+      mode: 'management-relation-import',
+      relation_import: active ? { active: true, expires_at: active.expiresAt } : { active: false },
+      messages: [{ type: 'text', text }],
+    });
+    const progress = () => `本次累计新增关联 ${session.added} 张，已有关联 ${session.duplicates} 张，失败 ${session.failed} 张`;
+    if (command.action === 'relation-import-end') {
+      this.relationImportSessions.delete(key);
+      return reply(session ? `已结束词族“${session.relationId}”的批量导入；${progress()}。已导入图片保留。` : '当前没有进行中的批量导入。', null);
+    }
+    if (command.action === 'relation-import-status') {
+      return reply(session ? `正在导入词族“${session.relationId}”；${progress()}。发送 /rel-import-end 结束。` : '当前没有进行中的批量导入。发送 /rel-import 词族名 开始。');
+    }
+    if (command.action === 'relation-import-start') {
+      const relation = this.longtuTagRelations?.find(group => group.id === command.relationId);
+      if (!relation?.poolTerms?.length) return reply(`没有找到词族“${command.relationId}”，请先用 /rel-list 查看已有词族。`);
+      if (session && session.relationId !== relation.id) {
+        return reply(`当前正在导入“${session.relationId}”，请先 /rel-import-end，再选择其他词族。`);
+      }
+      if (!session) {
+        if (this.relationImportSessions.size >= MANAGEMENT_TARGET_MAX_ENTRIES) {
+          for (const [entryKey, entry] of this.relationImportSessions) {
+            if (entry.expiresAt <= this.now()) this.relationImportSessions.delete(entryKey);
+          }
+          if (this.relationImportSessions.size >= MANAGEMENT_TARGET_MAX_ENTRIES) return reply('当前导入会话过多，请稍后重试。', null);
+        }
+        session = { relationId: relation.id, added: 0, duplicates: 0, failed: 0 };
+        this.relationImportSessions.set(key, session);
+      }
+      session.expiresAt = this.now() + MANAGEMENT_TARGET_TTL_MS;
+    }
+    if (!session) return reply('导入模式已结束或超时，请重新发送 /rel-import 词族名。', null);
+    const relation = this.longtuTagRelations?.find(group => group.id === session.relationId);
+    if (!relation?.poolTerms?.length) {
+      this.relationImportSessions.delete(key);
+      return reply('目标词族已被删除，导入模式已结束；已入库图片保留。', null);
+    }
+    // Bind one existing pool term: every input term already shares this pool.
+    const alias = relation.poolTerms[0];
+    const images = [...payload.imageBase64s, ...payload.quotedImageBase64s,
+      ...payload.forwardImageBase64s, ...payload.quotedForwardImageBase64s];
+    if (!images.length) return reply(`已开启词族“${relation.id}”批量导入。直接连续发图、一次多图或合并转发即可，无需重复输入词族；每批最多 24 张，每张 JPG/PNG/GIF 不超过 10MB。15 分钟无导入操作自动退出，服务重启也会退出。发送 /rel-import-end 或“结束导入”结束。${payload.hasImage ? '本条未取得可用图片，请重发。' : ''}${payload.imageInputNotice || ''}`);
+    const counts = { added: 0, duplicates: 0, failed: 0 };
+    const errors = [];
+    for (const [index, base64] of images.entries()) {
+      try {
+        const buffer = Buffer.from(base64, 'base64');
+        let candidates = await this.memeStore.getLongtuCandidates();
+        let sha256 = await this.longtuLibrary.resolveShaByBuffer(buffer, candidates);
+        if (!sha256) {
+          const added = await this.longtuLibrary.reviewAndAdd(buffer, {
+            force: true, actor: `qq:${payload.userId}`, referenceCandidates: candidates, skipAutoOcr: true,
+          });
+          sha256 = added.sha256;
+          this.memeStore.invalidateLongtuCandidates();
+          candidates = await this.memeStore.getLongtuCandidates();
+        }
+        if (!candidates.some(candidate => candidate.sha256 === sha256)) throw new Error('图片在图库中不可用');
+        const existing = this.longtuLibrary.listAliasesBySha(sha256, { source: 'manual' });
+        const alreadyRelated = existing.some(entry => relation.poolTerms.includes(entry.alias));
+        if (!alreadyRelated) this.longtuLibrary.bindAlias(alias, sha256, { actor: `qq:${payload.userId}` });
+        const verified = this.longtuLibrary.listAliasesBySha(sha256, { source: 'manual' });
+        if (!verified.some(entry => relation.poolTerms.includes(entry.alias))) throw new Error('关联写入后回查失败');
+        const semantics = this.longtuLibrary.getImageSemantics?.(sha256);
+        if (semantics) this.longtuLibrary.saveImageSemantics(sha256, {
+          ...semantics, familyIds: [...new Set([...(semantics.familyIds ?? []), relation.id])],
+        });
+        counts[alreadyRelated ? 'duplicates' : 'added'] += 1;
+      } catch (error) {
+        counts.failed += 1;
+        errors.push(`第 ${index + 1} 张：${error.message}`);
+      }
+    }
+    for (const name of Object.keys(counts)) session[name] += counts[name];
+    session.expiresAt = this.now() + MANAGEMENT_TARGET_TTL_MS;
+    return reply([`词族“${relation.id}”：本批新增关联 ${counts.added} 张，已有关联 ${counts.duplicates} 张，失败 ${counts.failed} 张。`,
+      ...errors, payload.imageInputNotice, `${progress()}。继续发图或 /rel-import-end 结束。`].filter(Boolean).join('\n'));
+  }
+
   async handleJevCommand(command, payload) {
     if (!isLongtuAdministrator(payload.userId, this.adminUsers)) {
       return { mode: 'jev-denied', messages: [{ type: 'text', text: '你没有切换 Jev 门控的权限。' }] };
@@ -5086,6 +5206,15 @@ export class QqBotService {
     }
 
     try {
+      if (command.action === 'relation-index-status') {
+        const status = await this.longtuSemanticIndex?.status();
+        return { mode: 'management-index-status', messages: [{ type: 'text', text: status
+          ? `图库语义索引：${status.indexed}/${status.total} 张已识别，${status.pending} 张待识别，${status.unclassified} 张尚未确定词族。后台会识别图片文字与场景，优先关联已有词族；高置信且无合适词族时自动创建。`
+          : '当前未启用图库语义索引。' }] };
+      }
+      if (command.action.startsWith('relation-import-')) {
+        return await this.runGroupExclusive('longtu-import-write', () => this.handleRelationImport(command, payload));
+      }
       const actor = `qq:${payload.userId}`;
       const selectionScope = this.selectionScope(message);
       if (command.action === 'status') {
@@ -5115,7 +5244,7 @@ export class QqBotService {
             type: 'text',
             text: relations.length > 0
               ? `当前词族 ${relations.length} 组：${relations.map((group) => (
-                `${group.id}=[${group.poolTerms.join('、')}]`
+                `${group.id}=[${group.poolTerms.join('、')}]（自动归类 ${this.longtuLibrary.listImageSemantics?.().filter(row => row.familyIds?.includes(group.id)).length ?? 0} 张）`
               )).join('；')}`
               : '当前没有可用的词族关联。',
           }],
@@ -5465,7 +5594,15 @@ export class QqBotService {
   }
 
   async handleMessage(input) {
-    const payload = normalizeQqPayload(input);
+    if (!input || Array.isArray(input) || typeof input !== 'object') {
+      throw new TypeError('请求体必须是 JSON 对象');
+    }
+    const rawScope = { messageType: input.message_type === 'private' ? 'private' : 'group',
+      groupId: input.message_type === 'private' ? '' : String(input.group_id ?? '').trim(),
+      userId: String(input.user_id ?? '').trim() };
+    const relationImport = isLongtuAdministrator(rawScope.userId, this.adminUsers)
+      && Boolean(this.getRelationImport(rawScope));
+    const payload = normalizeQqPayload(input, { relationImport });
     if (payload.botUserId && (payload.messageType === 'private' || payload.mentions.length > 0)) {
       const selfMentioned = payload.mentions.some(
         (participant) => participant.userId === payload.botUserId,
@@ -5570,6 +5707,8 @@ export class QqBotService {
       };
       return payload.messageType === 'group'
         ? await this.runGroupExclusive(payload.groupId, processMessage)
+        : (this.getRelationImport(payload) || parseLongtuManagementCommand(payload.text)?.action?.startsWith('relation-import-'))
+          ? await this.runGroupExclusive(`relation-import:${this.relationImportKey(payload)}`, processMessage)
         : await processMessage();
     } catch (error) {
       if (dedupeKey) this.processedMessageIds.delete(dedupeKey);
@@ -5683,6 +5822,19 @@ export class QqBotService {
   }
 
   async handleNormalizedMessage(payload) {
+    const importCommand = parseLongtuManagementCommand(payload.text);
+    const importSession = this.getRelationImport(payload);
+    if (importCommand?.action?.startsWith('relation-import-')
+      || (!importCommand && importSession && payload.hasImage
+        && isLongtuAdministrator(payload.userId, this.adminUsers))) {
+      return this.handleManagementCommand(importCommand ?? { action: 'relation-import-images' },
+        payload, buildQqCompatibleMessage(payload));
+    }
+    if (['relation-upsert', 'relation-delete'].includes(importCommand?.action)) {
+      return this.runGroupExclusive('longtu-relations', () => this.handleManagementCommand(
+        importCommand, payload, buildQqCompatibleMessage(payload),
+      ));
+    }
     // A bare slash is an incomplete command. Drop it before media, history,
     // or LLM handling so it can never produce an authentication/error reply.
     if (String(payload.text ?? '').trim() === '/') {
@@ -6101,7 +6253,7 @@ export class QqBotService {
     let longtuAliases = [];
     let contextualAliasMatch = null;
     if (this.longtuLibrary && payload.text) {
-      longtuAliases = this.longtuLibrary.listAliases();
+      longtuAliases = this.longtuLibrary.listAliases({ limit: 5000 });
       const aliasMatch = matchLongtuAliasRequest(payload.text, longtuAliases, {
         relationGroups: this.longtuTagRelations,
         // Relation-only requests are available to both group @bot and private

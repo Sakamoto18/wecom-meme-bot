@@ -29,7 +29,7 @@ class ReplyDelayTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fresh_and_cached_media_and_error_notices_skip_random_delay(self):
         with patch.object(asyncio, 'sleep', new_callable=AsyncMock) as sleep:
-            for mode in ('media', 'media-gallery', 'media-unavailable'):
+            for mode in ('media', 'media-gallery', 'media-unavailable', 'management-relation-import'):
                 for cached in (False, True):
                     await self.bridge._sleep_before_reply(self.event, {
                         'mode': mode, 'cached': cached, 'messages': [{'type': 'text', 'text': 'result'}],

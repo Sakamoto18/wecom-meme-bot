@@ -68,3 +68,24 @@ test('场景匹配把关联词族交给候选池，而不是固定返回一个�
     [sha(1), sha(2), sha(3), sha(4)],
   );
 });
+
+test('鹿起来在普通句子中检索单字词族和共享标签词族，回复攻击词不抢占用户话题', () => {
+  const relationGroups = normalizeLongtuTagRelations([
+    { id: '鹿', terms: ['鹿', '撸', '🦌'] },
+    { id: '炉管', terms: ['炉管', '撸', '🦌'] },
+    { id: '回怼', terms: ['你妈', '飞妈'] },
+  ]);
+  const images = [
+    { alias: '鹿', sha256: sha(1), source: 'manual' },
+    { alias: '炉管', sha256: sha(2), source: 'manual' },
+    { alias: '🦌', sha256: sha(3), source: 'manual' },
+    { alias: '你妈', sha256: sha(4), source: 'manual' },
+    { alias: '鹿', sha256: sha(5), source: 'ocr' },
+  ];
+  const found = matchLongtuSceneAliases('鹿起来！', '你妈是待机程序啊', images, { relationGroups });
+  assert.deepEqual(found.map(row => row.sha256), [sha(1), sha(2), sha(3)]);
+  assert.equal(matchLongtuAliasRequest('鹿起来！', images, { relationGroups, allowRelatedDirect: true }), null);
+  assert.deepEqual(matchRelatedLongtuTags('ordinary sentence', images, {
+    relationGroups: normalizeLongtuTagRelations([{ id: 'a', terms: ['a', '鹿'] }]),
+  }), []);
+});

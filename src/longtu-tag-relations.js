@@ -78,10 +78,27 @@ function poolHit(binding, group) {
 export function matchRelatedLongtuTags(content, bindings, options = {}) {
   const text = longtuTagInput(content);
   if (!text) return [];
-  const groups = getGroups(options).filter((group) => (!group.hostile || options.allowHostile !== false)
-    && group.inputs.some((pattern, index) => group.inputTerms[index].length === 1
-      ? text === group.inputTerms[index] : pattern.test(text)));
+  // Explicitly configured Chinese keyword families also apply inside ordinary
+  // sentences (e.g. 鹿 -> 鹿起来). Single-letter Latin terms still need an exact
+  // match; single-character pool tags remain manual-only below.
+  const inputHit = (group, pattern, index) => group.inputTerms[index].length === 1
+    && !/^\p{Script=Han}$/u.test(group.inputTerms[index])
+    ? text === group.inputTerms[index] : pattern.test(text);
+  const available = getGroups(options).filter(group => !group.hostile || options.allowHostile !== false);
+  const groups = available.filter(group => group.inputs.some((pattern, index) => inputHit(group, pattern, index)));
   if (!groups.length) return [];
+  // Shared explicit tags connect admin-created families such as 鹿/炉管/开撸.
+  const matchedKeyword = groups[0].inputTerms.find((term, index) => inputHit(groups[0], groups[0].inputs[index], index));
+  const connectedTerms = new Set(groups.flatMap(group => [...group.inputTerms, ...group.poolTerms]));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const group of available) {
+      if (groups.includes(group) || ![...group.inputTerms, ...group.poolTerms].some(term => connectedTerms.has(term))) continue;
+      groups.push(group);
+      for (const term of [...group.inputTerms, ...group.poolTerms]) connectedTerms.add(term);
+      changed = true;
+    }
+  }
   const unique = new Map();
   for (const binding of Array.isArray(bindings) ? bindings : []) {
     if (!binding?.sha256 || !binding?.alias) continue;
@@ -92,12 +109,9 @@ export function matchRelatedLongtuTags(content, bindings, options = {}) {
       ...(previous?.relationIds ?? []),
       ...matchedGroups.map((group) => group.id),
     ])];
-    const matchedKeyword = previous?.matchedKeyword
-      ?? matchedGroups[0].inputTerms.find((term) => matcher(term).test(text))
-      ?? matchedGroups[0].id;
     unique.set(binding.sha256, {
       ...binding,
-      matchedKeyword,
+      matchedKeyword: previous?.matchedKeyword ?? matchedKeyword,
       relationId: relationIds[0],
       relationIds,
       matchType: 'tag-relation',

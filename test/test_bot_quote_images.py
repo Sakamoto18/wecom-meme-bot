@@ -18,6 +18,7 @@ names = {
     '_reply_chains_from_backend', '_recent_image_cache_key',
     '_remember_outbound_image', '_outbound_images_for_quote',
     '_outbound_images_for_reference',
+    '_relation_import_key', '_relation_import_active', '_update_relation_import',
     'on_qq_message',
 }
 methods = [n for n in bridge.body if getattr(n, 'name', '') in names]
@@ -35,7 +36,7 @@ class Forward: pass
 
 namespace = {'Comp': SimpleNamespace(Plain=Plain, Image=Image, Reply=Reply, Forward=Forward),
              'asyncio': asyncio, 'contextlib': contextlib, 're': re, 'time': time,
-             'logger': logging.getLogger('test'), 'MAX_IMAGE_COMPONENTS': 12,
+             'logger': logging.getLogger('test'), 'MAX_IMAGE_COMPONENTS': 12, 'MAX_FORWARD_IMAGE_COMPONENTS': 24,
              'MAX_QUOTED_REPLY_DEPTH': 3,
              'OUTBOUND_IMAGE_MAX_BASE64_CHARACTERS': 100000,
              'OUTBOUND_IMAGE_CACHE_MAX_TOTAL_BASE64_CHARACTERS': 100000,
@@ -93,7 +94,7 @@ class QuoteImageTests(unittest.IsolatedAsyncioTestCase):
         visual = Bridge._quoted_visual_chain(event, quoted, chain, '解释一下这张图')
         self.assertEqual(len(visual), 1)
 
-    async def run_message(self, author='bot', current_image=False, text='你刚刚这句什么意思', fetched_author=None, quoted_sub_type='1'):
+    async def run_message(self, author='bot', current_image=False, text='你刚刚这句什么意思', fetched_author=None, quoted_sub_type='1', importing=False):
         quoted = Reply(author, [Plain('原来的文字回答'), Image('quoted-meme')])
         quoted._longtu_quoted_image_sub_types = [str(quoted_sub_type)]
         components = [Plain(text), quoted] + ([Image('new-user-image')] if current_image else [])
@@ -103,9 +104,12 @@ class QuoteImageTests(unittest.IsolatedAsyncioTestCase):
             message_obj=SimpleNamespace(message_id='new-message'), message_str=text,
             stop_event=Mock())
         instance = Bridge(); instance.config = {}; instance.media_status_cache = {}
+        if importing:
+            instance._update_relation_import(event, {'relation_import': {'active': True, 'expires_at': time.time() * 1000 + 900000}})
+        instance._group_is_allowed = lambda _event: True
         instance._is_slash_command = lambda _event: False
         instance._is_allowed_bridge_slash_command = lambda _event: False
-        instance._should_reply = lambda _event: True
+        instance._should_reply = lambda _event: not importing
         instance._raw_text = lambda _event: text
         async def hydrate(_event, reply, chain):
             if fetched_author: reply._longtu_quoted_user_id = fetched_author
@@ -135,6 +139,27 @@ class QuoteImageTests(unittest.IsolatedAsyncioTestCase):
         async for _ in instance.on_qq_message(event): pass
         event.stop_event.assert_called_once()
         return instance._request_backend.call_args.args[0], read_images, instance
+
+    async def test_active_import_wakes_group_image_without_at_and_keeps_quoted_sticker(self):
+        payload, downloads, instance = await self.run_message(importing=True, current_image=True, text='')
+        self.assertFalse(payload['observe_only'])
+        self.assertEqual(downloads, ['new-user-image', 'quoted-meme'])
+        self.assertEqual(payload['quoted_image_base64s'], ['quoted-meme'])
+        instance._recent_images_for_reference.assert_not_called()
+
+    def test_import_state_is_scoped_to_sender_and_group_and_expires(self):
+        instance = Bridge()
+        def event(group='g1', sender='admin', private=False):
+            return SimpleNamespace(is_private_chat=lambda:private, get_group_id=lambda:group, get_sender_id=lambda:sender)
+        instance._update_relation_import(event(), {'relation_import': {'active': True, 'expires_at': time.time()*1000 + 900000}})
+        self.assertTrue(instance._relation_import_active(event()))
+        self.assertFalse(instance._relation_import_active(event('g2')))
+        self.assertFalse(instance._relation_import_active(event(sender='other')))
+        self.assertFalse(instance._relation_import_active(event(private=True)))
+        instance._update_relation_import(event(), {'relation_import': {'active': False}})
+        self.assertFalse(instance._relation_import_active(event()))
+        instance._update_relation_import(event(), {'relation_import': {'active': True, 'expires_at': 1}})
+        self.assertFalse(instance._relation_import_active(event()))
 
     async def test_bot_quote_keeps_text_without_downloading_or_recaching_its_meme(self):
         payload, downloads, bridge = await self.run_message()

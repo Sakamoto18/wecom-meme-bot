@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import { RepeatDetector } from './repeat-detector.js';
 import { PeerBotContinuationDecider } from './peer-bot-gate.js';
 import { MemeStore } from './meme-store.js';
 import { LongtuLibrary } from './longtu-library.js';
+import { LongtuSemanticIndex } from './longtu-semantic.js';
 import { parseAdminUsers, parseProtectedRoles } from './longtu-management.js';
 import {
   DEFAULT_LONGTU_TAG_RELATIONS,
@@ -1104,10 +1105,11 @@ export async function createQqRuntime() {
     persistLongtuTagRelations: async (groups) => {
       await mkdir(path.dirname(longtuTagRelationsOverridesPath), { recursive: true });
       await writeFile(
-        longtuTagRelationsOverridesPath,
+        `${longtuTagRelationsOverridesPath}.tmp`,
         `${JSON.stringify({ version: 1, override: true, groups }, null, 2)}\n`,
         'utf8',
       );
+      await rename(`${longtuTagRelationsOverridesPath}.tmp`, longtuTagRelationsOverridesPath);
     },
     adminUsers,
     personaManager: new QqPersonaManager({
@@ -1300,6 +1302,25 @@ export async function createQqRuntime() {
     })
     : null;
   service.videoLearning = videoLearning;
+  if (parseBoolean(process.env.LONGTU_SEMANTIC_ENABLED, true) && chatClient.isConfigured) {
+    service.longtuSemanticIndex = new LongtuSemanticIndex({
+      library: longtuLibrary, memeStore, chatClient,
+      getRelations: () => service.longtuTagRelations,
+      addFamily: (name, terms) => service.runGroupExclusive('longtu-relations', async () => {
+        const groups = service.longtuTagRelations ?? [];
+        const existing = groups.find(group => group.id === name
+          || group.poolTerms.some(term => terms.includes(term)));
+        if (existing) return existing.id;
+        if (groups.length >= 128) return '';
+        const group = normalizeLongtuTagRelations([{ id: name, terms }])[0];
+        if (!group) return '';
+        const next = [...groups, group];
+        await service.persistLongtuTagRelations(next);
+        service.longtuTagRelations = next;
+        return group.id;
+      }),
+    });
+  }
 
   return {
     service,
@@ -1425,6 +1446,7 @@ export async function startQqApi() {
     ? `QQ 群级语感卡已启用：${[...runtime.groupMemory.styleGroups].join(',')}`
     : 'QQ 群级语感卡未启用');
   runtime.groupMemory.startStyleRefresh();
+  runtime.service.longtuSemanticIndex?.start();
 
   let shuttingDown = false;
   const shutdown = async (signal) => {
@@ -1433,6 +1455,7 @@ export async function startQqApi() {
     console.log(`收到 ${signal}，正在关闭 QQ Bot API……`);
     server.closeIdleConnections?.();
     await new Promise((resolve) => server.close(resolve));
+    await runtime.service.longtuSemanticIndex?.stop();
     await runtime.conversationStore.flush();
     runtime.conversationStore.close();
     runtime.personaStore.close();

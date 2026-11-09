@@ -162,6 +162,12 @@ export class LongtuLibrary {
         PRIMARY KEY(alias, sha256)
       );
 
+      CREATE TABLE IF NOT EXISTS longtu_semantics (
+        sha256 TEXT PRIMARY KEY,
+        data_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS longtu_selections_scope_pool_cycle
         ON longtu_selections(scope, pool_key, cycle);
       CREATE INDEX IF NOT EXISTS longtu_selections_scope_id
@@ -337,6 +343,25 @@ export class LongtuLibrary {
     }));
   }
 
+  getImageSemantics(sha256) {
+    const row = this.ensureOpen().prepare('SELECT data_json FROM longtu_semantics WHERE sha256 = ?').get(sha256);
+    return row ? JSON.parse(row.data_json) : null;
+  }
+
+  saveImageSemantics(sha256, data) {
+    if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error('Invalid image hash');
+    this.ensureOpen().prepare(`INSERT INTO longtu_semantics(sha256, data_json, updated_at)
+      VALUES (?, ?, ?) ON CONFLICT(sha256) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at`)
+      .run(sha256, JSON.stringify(data), this.now());
+  }
+
+  listImageSemantics() {
+    return this.ensureOpen().prepare(`SELECT s.sha256, s.data_json FROM longtu_semantics s
+      WHERE NOT EXISTS (SELECT 1 FROM longtu_blocklist b WHERE b.sha256=s.sha256)
+      AND NOT EXISTS (SELECT 1 FROM longtu_assets a WHERE a.sha256=s.sha256 AND a.deleted_at IS NOT NULL)`)
+      .all().map(row => ({ sha256: row.sha256, ...JSON.parse(row.data_json) }));
+  }
+
   isBlocked(sha256) {
     if (!sha256) return false;
     return Boolean(this.ensureOpen().prepare(
@@ -450,7 +475,8 @@ export class LongtuLibrary {
       throw error;
     }
     this.referenceFeatures.set(sha256, candidateFeatures);
-    const autoOcr = await this.autoTagAssetByText(sha256, filename);
+    const autoOcr = options.skipAutoOcr ? { status: 'deferred', aliases: [] }
+      : await this.autoTagAssetByText(sha256, filename);
     return {
       sha256,
       shortId,

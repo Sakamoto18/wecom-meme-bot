@@ -30,6 +30,7 @@ const SCENE_ALIAS_STOPWORDS = new Set([
 const SLASH_COMMAND_PATTERN = /^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]*))?$/i;
 const ALLOWED_SLASH_COMMANDS = new Set([
   'add', 'tag', 'del', 'rel', 'rel-list', 'rel-del',
+  'rel-import', 'rel-import-status', 'rel-import-end', 'rel-index-status',
 ]);
 const SHORT_ID_EXACT_PATTERN = /^LT-[A-F0-9]{8}$/i;
 
@@ -83,6 +84,10 @@ export function parseLongtuSlashCommand(content) {
   if (!ALLOWED_SLASH_COMMANDS.has(command)) {
     return { action: 'ignored-slash', force: false, shortId: '', alias: '' };
   }
+  if (command === 'rel-index-status') {
+    return argument ? { action: 'invalid-slash', force: false, shortId: '', alias: '', message: '用法：/rel-index-status' }
+      : { action: 'relation-index-status', force: false, shortId: '', alias: '' };
+  }
   if (command === 'add') {
     return argument
       ? {
@@ -105,6 +110,20 @@ export function parseLongtuSlashCommand(content) {
         alias: '',
         message: '用法：/tag 标记名（请在同一条消息附图、引用图片，或先使用 /add）',
       };
+  }
+  if (command.startsWith('rel-import')) {
+    const relationId = parseRelationId(argument);
+    const action = {
+      'rel-import': 'relation-import-start',
+      'rel-import-status': 'relation-import-status',
+      'rel-import-end': 'relation-import-end',
+    }[command];
+    if ((command === 'rel-import' && !relationId)
+      || (command !== 'rel-import' && argument)) {
+      return { action: 'invalid-slash', force: false, shortId: '', alias: '',
+        message: '用法：/rel-import 已有词族名；/rel-import-status 查看进度；/rel-import-end 结束导入。' };
+    }
+    return { action, force: false, shortId: '', alias: '', relationId };
   }
   if (command === 'rel-list') {
     return argument
@@ -184,6 +203,9 @@ export function parseJevCommand(content) {
 export function parseLongtuManagementCommand(content) {
   const text = String(content ?? '').replace(/\s+/g, ' ').trim();
   if (!text) return null;
+  if (/^结束(?:导入|关联)$/u.test(text)) {
+    return { action: 'relation-import-end', force: false, shortId: '', alias: '' };
+  }
   const slashCommand = parseLongtuSlashCommand(text);
   if (slashCommand) return slashCommand;
   const shortId = text.match(SHORT_ID_PATTERN)?.[0]?.toUpperCase() ?? '';
@@ -368,6 +390,13 @@ export function matchLongtuContextAlias(content, bindings = [], options = {}) {
  * 这是本地字符串匹配，不调用模型，也不会改变“发张龙图”的随机路径。
  */
 export function matchLongtuSceneAliases(content, answer, bindings = [], options = {}) {
+  // First search the user's topic, including complete keyword-family pools.
+  // Reply-generated insults or filler must not widen an already relevant pool.
+  if (!options.singleSource) {
+    const userMatches = matchLongtuSceneAliases(content, '', bindings, { ...options, singleSource: true });
+    if (userMatches.length > 0) return userMatches;
+    return matchLongtuSceneAliases('', answer, bindings, { ...options, singleSource: true });
+  }
   const contentText = longtuTagInput(content);
   const answerText = longtuTagInput(answer);
   if (!contentText && !answerText) return [];

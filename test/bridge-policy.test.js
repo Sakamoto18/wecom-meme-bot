@@ -41,6 +41,9 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(source, /"\/指令"/);
   assert.match(source, /if raw_text == "\/指令":/);
   assert.match(source, /"\/persona"/);
+  for (const command of ['/rel-import', '/rel-import-status', '/rel-import-end', '/rel-index-status']) {
+    assert.ok(source.includes(`"${command}"`));
+  }
   assert.match(handler, /self\._send_current_usage_report/);
   assert.match(handler, /self\._send_requested_usage_report/);
   assert.match(source, /_usage_report_period/);
