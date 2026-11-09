@@ -1940,10 +1940,47 @@ test('32 条合并转发中的 19 张图片全部提取并与原文一起汇总�
   assert.match(result.messages[0].text, /周五执行/);
 });
 
+test('引用聊天记录无需特定关键词，也会读完图片并按记录顺序交给回复模型', async () => {
+  const png = (await createPng()).toString('base64');
+  const calls = [];
+  const { service } = createService({
+    chatClient: {
+      isConfigured: true,
+      async complete(_history, input, options) {
+        calls.push({ input, options });
+        if (options.usageSource === 'image-understanding') {
+          const index = Number(input[0].text.match(/第 (\d+) 张图片/u)[1]);
+          return JSON.stringify({ description: `事项${index}`, visible_text: [`记录正文${index}结束`], search_queries: [] });
+        }
+        return '最后一张提到了周五执行。';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_type: 'private', user_id: 'quoted-record-user', text: '看看这个',
+    quoted_forwarded_text: Array.from({ length: 19 }, (_, i) => `甲：[图片#${i + 1}]`).join('\n'),
+    quoted_forward_image_base64s: Array(19).fill(png),
+  });
+  assert.equal(calls.filter(call => call.options.usageSource === 'image-understanding').length, 19);
+  const final = calls.find(call => call.options.usageSource === 'conversation-reply');
+  assert.ok(final);
+  const finalText = Array.isArray(final.input)
+    ? final.input.filter(block => block.type === 'text').map(block => block.text).join('\n')
+    : final.input;
+  let previousPosition = -1;
+  for (let index = 1; index <= 19; index += 1) {
+    const position = finalText.indexOf(`记录正文${index}结束`);
+    assert.ok(position > previousPosition, `第 ${index} 张图片正文应按顺序进入最终回复上下文`);
+    assert.ok(finalText.includes(`图片来源：引用合并转发图片 ${index}`));
+    previousPosition = position;
+  }
+  assert.match(result.messages[0].text, /周五执行/);
+});
+
 test('引用转发记录的图片保留引用来源，超出图片预算时明确提示不完整', async () => {
   const png = (await createPng()).toString('base64');
   const payload = normalizeQqPayload({
-    message_type: 'private', user_id: 'quote-user', text: '总结聊天记录',
+    message_type: 'private', user_id: 'quote-user', text: '看看这个',
     quoted_forwarded_text: '甲：[图片#1]\n乙：最后的内容',
     quoted_forward_image_base64s: Array(25).fill(png),
   });
