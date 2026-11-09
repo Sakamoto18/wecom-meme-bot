@@ -67,6 +67,7 @@ CRAZY_THURSDAY_SLOTS = (
 )
 ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
+    "/rel-import", "/rel-import-status", "/rel-import-end", "/rel-index-status",
     "/stop", "/usage-report", "/persona", "/jev", "/crazy-thursday", "/crazy-thursday-add",
     "/crazy-thursday-list", "/crazy-thursday-del", "/指令",
 }
@@ -2594,7 +2595,7 @@ class LongtuQqBridge(Star):
             return list(chain or [])
         # Keep the original bytes available for explicit library operations.
         # The Node management branch handles them without calling vision.
-        if re.match(r"^(?:/(?:add|tag|del)(?:\s|$)|(?:检查|查看|查询|确认)|(?:这张|这个).*(?:图库|标记|标签|关键词))", str(text or "").strip()):
+        if re.match(r"^(?:/(?:add|tag|del|rel-import)(?:\s|$)|(?:检查|查看|查询|确认)|(?:这张|这个).*(?:图库|标记|标签|关键词))", str(text or "").strip()):
             return list(chain or [])
         image_sub_types = list(
             getattr(reply_component, "_longtu_quoted_image_sub_types", []) or [],
@@ -2650,7 +2651,11 @@ class LongtuQqBridge(Star):
         images = []
         for component in components:
             if isinstance(component, Comp.Image):
-                image = await cls._image_base64(component)
+                try:
+                    image = await cls._image_base64(component)
+                except Exception as error:
+                    logger.warning(f"QQ 单张图片读取失败，继续后续图片：{type(error).__name__}")
+                    continue
                 if image:
                     images.append(image)
                 if len(images) >= limit:
@@ -2664,7 +2669,7 @@ class LongtuQqBridge(Star):
 
     @staticmethod
     def _is_image_management_text(text: str) -> bool:
-        if re.match(r"^/(?:add|tag|del)(?:\s|$)", str(text or "").strip(), re.IGNORECASE):
+        if re.match(r"^/(?:add|tag|del|rel-import)(?:\s|$)", str(text or "").strip(), re.IGNORECASE):
             return True
         normalized = str(text or "").replace(" ", "")
         library_management = (
@@ -3167,6 +3172,8 @@ class LongtuQqBridge(Star):
         # a "let me look it up" reminder should land before the lookup does.
         if response.get("mode") in {"repeat-reply", "learning-pending"}:
             return
+        if response.get("mode") == "management-relation-import":
+            return
         # Resolution, download and QQ upload already take time. Never hold a
         # ready media result behind the conversational delay, including cached
         # videos, galleries and failure/limit notices.
@@ -3183,6 +3190,35 @@ class LongtuQqBridge(Star):
             f"mode={response.get('mode', '')} delay_ms={int(delay * 1000)}",
         )
         await asyncio.sleep(delay)
+
+    @staticmethod
+    def _relation_import_key(event) -> tuple:
+        return ("private" if event.is_private_chat() else "group",
+                "" if event.is_private_chat() else str(event.get_group_id()),
+                str(event.get_sender_id()))
+
+    def _relation_import_active(self, event) -> bool:
+        sessions = getattr(self, "relation_import_sessions", {})
+        key = self._relation_import_key(event)
+        expires_at = sessions.get(key, 0)
+        if expires_at <= time.time() * 1000:
+            sessions.pop(key, None)
+            return False
+        return True
+
+    def _update_relation_import(self, event, response: dict) -> None:
+        state = response.get("relation_import")
+        if not isinstance(state, dict):
+            return
+        if not hasattr(self, "relation_import_sessions"):
+            self.relation_import_sessions = {}
+        key = self._relation_import_key(event)
+        if state.get("active"):
+            now = time.time() * 1000
+            self.relation_import_sessions = {k: v for k, v in self.relation_import_sessions.items() if v > now}
+            self.relation_import_sessions[key] = min(float(state.get("expires_at", 0)), now + 15 * 60 * 1000)
+        else:
+            self.relation_import_sessions.pop(key, None)
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
@@ -3308,6 +3344,10 @@ class LongtuQqBridge(Star):
                         )
                     return
             should_reply = self._should_reply(event)
+            import_lookup = getattr(self, '_relation_import_active', None)
+            importing = bool(callable(import_lookup) and import_lookup(event))
+            if importing and (event.is_private_chat() or self._group_is_allowed(event)):
+                should_reply = True
             observe_only = not should_reply and self._should_observe(event)
             if not should_reply and not observe_only:
                 return
@@ -3319,6 +3359,7 @@ class LongtuQqBridge(Star):
                 if self._is_allowed_bridge_slash_command(event) and raw_text
                 else event.message_str.strip()
             )
+            import_images = importing or bool(re.match(r"^/rel-import(?:\s|$)", text, re.IGNORECASE))
             reply_component = self._reply_component(components)
             quoted_chain = getattr(reply_component, "chain", None) or []
             if should_reply and reply_component:
@@ -3327,7 +3368,7 @@ class LongtuQqBridge(Star):
                     reply_component,
                     quoted_chain,
                 )
-            quoted_visual_chain = self._quoted_visual_chain(event, reply_component, quoted_chain, text)
+            quoted_visual_chain = self._quoted_visual_chain(event, reply_component, quoted_chain, '/rel-import' if import_images else text)
             outbound_quote_lookup = getattr(self, '_outbound_images_for_quote', None)
             cached_outbound_quote_images = (
                 outbound_quote_lookup(reply_component)
@@ -3476,15 +3517,25 @@ class LongtuQqBridge(Star):
             image_base64s = []
             quoted_image_base64s = []
             quoted_image_sub_types = []
+            import_image_notice = ""
             # 被动旁观消息不调用 Node/模型，但把最近一批图片短暂缓存在
             # AstrBot 插件内，支持“先发图、下一条再 @ 机器人评价”的消息习惯。
             # 缓存有严格的群数、图片数、总字节和 TTL 上限，不会进入旁观用量统计。
             if has_image:
                 try:
-                    image_base64s = await self._image_base64s(components)
-                    quoted_image_base64s = await self._image_base64s(quoted_visual_chain)
+                    if import_images:
+                        image_base64s = await self._image_base64s(components, limit=MAX_FORWARD_IMAGE_COMPONENTS)
+                        quoted_image_base64s = await self._image_base64s(quoted_visual_chain, limit=MAX_FORWARD_IMAGE_COMPONENTS)
+                        expected_images = sum(isinstance(item, Comp.Image) for item in [*components, *quoted_visual_chain])
+                        if expected_images > len(image_base64s) + len(quoted_image_base64s):
+                            import_image_notice = "部分图片读取失败或超过单次 24 张上限，请分批重发未导入图片。"
+                    else:
+                        image_base64s = await self._image_base64s(components)
+                        quoted_image_base64s = await self._image_base64s(quoted_visual_chain)
                 except Exception as error:
                     logger.warning(f"QQ 图片读取失败：{type(error).__name__}")
+                    if import_images:
+                        import_image_notice = "部分图片读取失败，请分批重发未导入图片。"
 
             # NapCat 回捞不到机器人自己刚发的普通图片时，使用发送回执对应
             # 的短时副本。龙图表情从不写入此缓存，因此仍保持静默。
@@ -3508,7 +3559,7 @@ class LongtuQqBridge(Star):
 
             # QQ 中常见的“上一条先发图，下一条再 @ 机器人”不会携带引用组件；
             # 用户明确指向上文图片时，把短时缓存的图片带入本轮视觉请求。
-            if should_reply and reply_component is None and not (
+            if should_reply and not import_images and reply_component is None and not (
                 image_base64s
                 or quoted_image_base64s
                 or forward_image_base64s
@@ -3574,6 +3625,7 @@ class LongtuQqBridge(Star):
                 "has_image": has_image,
                 "pure_bot_mention": pure_bot_mention,
                 "image_base64s": image_base64s,
+                "image_input_notice": import_image_notice,
                 "quoted_image_base64s": quoted_image_base64s,
                 "forward_image_base64s": forward_image_base64s,
                 "quoted_forward_image_base64s": quoted_forward_image_base64s,
@@ -3604,6 +3656,9 @@ class LongtuQqBridge(Star):
             try:
                 payload["recent_group_context"] = await self._recent_group_context(event, payload)
                 response = await self._request_backend(payload)
+                import_update = getattr(self, '_update_relation_import', None)
+                if callable(import_update):
+                    import_update(event, response)
             except Exception as error:
                 logger.error(f"龙图 QQ Bridge 请求失败：{error}")
                 if has_media_signal:

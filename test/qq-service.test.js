@@ -9,6 +9,7 @@ import { createQqApiServer } from '../src/qq-api.js';
 import { ConversationStore } from '../src/conversation-store.js';
 import { QqMemoryStore } from '../src/qq-memory-store.js';
 import { QqGroupMemory } from '../src/group-memory.js';
+import { LongtuLibrary } from '../src/longtu-library.js';
 import {
   calculateImageTileRegions,
   IMAGE_TILE_CORE_SIZE,
@@ -60,6 +61,7 @@ function createService(options = {}) {
     webSearch: options.webSearch,
     webSearchEnabled: options.webSearchEnabled ?? false,
     longtuLibrary: options.longtuLibrary,
+    longtuSemanticIndex: options.longtuSemanticIndex,
     longtuTagRelations: options.longtuTagRelations,
     persistLongtuTagRelations: options.persistLongtuTagRelations,
     adminUsers: options.adminUsers,
@@ -142,6 +144,9 @@ test('/指令只对超管返回完整斜杠指令清单', async () => {
   });
   assert.equal(allowed.mode, 'command-help');
   assert.match(allowed.messages[0].text, /\/usage-report/);
+  for (const command of ['/rel-import ', '/rel-import-status', '/rel-import-end', '/rel-index-status']) {
+    assert.ok(allowed.messages[0].text.includes(command));
+  }
   assert.match(allowed.messages[0].text, /\/crazy-thursday-add/);
   assert.match(allowed.messages[0].text, /未列出的 \/ 开头内容会被静默拦截/);
 
@@ -3776,6 +3781,78 @@ test('管理员可在群里手动维护词族并持久化', async () => {
   });
   assert.equal(removed.mode, 'management-relation-deleted');
   assert.equal(persisted.some((group) => group.id === '旧词族'), false);
+});
+
+test('词族批量导入多图、连续消息、失败隔离、重复去重并持久化；会话隔离且可结束', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'rel-import-'));
+  const config = { databaseFilePath: path.join(root, 'library.sqlite'), assetsDirectory: path.join(root, 'assets'), ocrCommand: '' };
+  const library = new LongtuLibrary(config);
+  await library.load();
+  t.after(async () => { library.close(); await rm(root, { recursive: true, force: true }); });
+  const memeStore = { getLongtuCandidates: async () => library.getDynamicCandidates(), invalidateLongtuCandidates() {} };
+  const { service, calls } = createService({ longtuLibrary: library, memeStore, adminUsers: new Set(['admin', 'other-admin']),
+    longtuTagRelations: [{ id: '鹿', inputTerms: ['鹿', '撸', '🦌'], poolTerms: ['鹿', '撸', '🦌'] }] });
+  const base = { message_type: 'group', group_id: 'g1', user_id: 'admin' };
+  const red = (await createPng(32, 32, 0xff0000ff)).toString('base64');
+  const green = (await createPng(32, 32, 0x00ff00ff)).toString('base64');
+  const blue = (await createPng(32, 32, 0x0000ffff)).toString('base64');
+  assert.equal((await service.handleMessage({ ...base, user_id: 'user', text: '/rel-import 鹿' })).mode, 'management-denied');
+  const missing = await service.handleMessage({ ...base, text: '/rel-import 不存在' });
+  assert.match(missing.messages[0].text, /没有找到词族/);
+  const start = await service.handleMessage({ ...base, text: '/rel-import 鹿', image_base64s: [red, Buffer.from('bad-image').toString('base64'), green] });
+  assert.equal(start.relation_import.active, true);
+  assert.match(start.messages[0].text, /新增关联 2 张，已有关联 0 张，失败 1 张/);
+  const next = await service.handleMessage({ ...base, text: '', observe_only: true, image_base64s: [red, blue] });
+  assert.match(next.messages[0].text, /新增关联 1 张，已有关联 1 张，失败 0 张/);
+  assert.equal(library.resolveAliases('鹿').length, 3);
+  for (const override of [{ group_id: 'g2' }, { user_id: 'other-admin' }, { message_type: 'private', group_id: '' }]) {
+    const status = await service.handleMessage({ ...base, ...override, text: '/rel-import-status' });
+    assert.equal(status.relation_import.active, false);
+  }
+  const ended = await service.handleMessage({ ...base, text: '结束导入' });
+  assert.equal(ended.relation_import.active, false);
+  assert.match(ended.messages[0].text, /累计新增关联 3 张/);
+  assert.equal(calls.length, 0);
+  library.close();
+  await library.load();
+  assert.equal(library.resolveAliases('鹿').length, 3);
+  await service.handleMessage({ ...base, text: '/rel-import 鹿' });
+  service.now = () => Date.now() + 16 * 60_000;
+  const expired = await service.handleMessage({ ...base, text: '/rel-import-status' });
+  assert.equal(expired.relation_import.active, false);
+});
+
+test('批量导入不会把引用多图缩到一张，超过预算明确提示', async () => {
+  const png = (await createPng()).toString('base64');
+  const payload = normalizeQqPayload({ message_type: 'private', user_id: 'admin',
+    text: '/rel-import 鹿', quoted_image_base64s: Array(25).fill(png) });
+  assert.equal(payload.quotedImageBase64s.length, 24);
+  assert.match(payload.imageInputNotice, /请分批重发/);
+  const continuing = normalizeQqPayload({ message_type: 'private', user_id: 'admin',
+    quoted_image_base64s: Array(8).fill(png) }, { relationImport: true });
+  assert.equal(continuing.quotedImageBase64s.length, 8);
+});
+
+test('自然对话先回复文字，再用语义候选发送 GIF；语义拒绝时不强塞随机图', async () => {
+  const selections = [];
+  let decline = false;
+  const { service } = createService({ longtuSemanticIndex: {
+    async select(input) { selections.push(input); return decline ? [] : ['a'.repeat(64)]; },
+  }, memeStore: {
+    async pickBySha(sha, options) {
+      assert.equal(sha, 'a'.repeat(64));
+      assert.ok(options.allowedExtensions.includes('.gif'));
+      return createMeme('deer.gif');
+    },
+    async pick() { throw new Error('不能随机发图'); },
+  } });
+  const reply = await service.handleMessage({ message_type: 'private', user_id: 'user', text: '鹿起来！' });
+  assert.equal(reply.messages[0].type, 'text');
+  assert.equal(reply.messages.at(-1).filename, 'deer.gif');
+  assert.equal(selections[0].content, '鹿起来！');
+  decline = true;
+  const none = await service.handleMessage({ message_type: 'private', user_id: 'user', text: '这事再说吧' });
+  assert.ok(none.messages.every(message => message.type === 'text'));
 });
 
 test('群聊 @bot 也能用关联词族选图，不局限于私聊', async () => {
