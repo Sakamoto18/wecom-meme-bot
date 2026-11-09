@@ -71,12 +71,12 @@ const MAX_TOTAL_IMAGE_BASE64_CHARACTERS = 42 * 1024 * 1024;
 // 原始图片与切片分开计算，合并转发最多接收 24 张原图。
 const MAX_SOURCE_IMAGE_COUNT = 24;
 // Ordinary quote replies almost always contain one reaction/meme image. Keep
-// the default multimodal request small; detailed image/record requests can
-// opt into a bounded larger set below.
+// the default multimodal request small; detailed image requests can opt into
+// a bounded larger set below. Forwarded records retain all images within the
+// shared source-image budget, including when the record is quoted.
 const MAX_QUOTED_IMAGE_COMPONENTS = 1;
 const MAX_EXPLICIT_QUOTED_IMAGE_COMPONENTS = 3;
 const QUOTED_IMAGE_DETAIL_PATTERN = /(?:识别|读图|看图|图里|图片里|解释(?:一下)?(?:这|该)?(?:张|组)?图|总结(?:一下)?(?:这|该)?(?:组|些)?图|逐张|出处|原图|原帖|核实|真假|什么梗|梗义)/u;
-const QUOTED_FORWARD_DETAIL_PATTERN = /(?:总结|梳理|概括|汇总|逐张|完整读取|聊天记录)/u;
 // 切片后真正送进视觉模型的图块总数。analyzeImages 逐块单独请求，所以这个
 // 数字等于一条消息最多触发多少次视觉调用，直接决定成本。
 const MAX_MODEL_IMAGE_COUNT = 32;
@@ -1618,18 +1618,13 @@ export function normalizeQqPayload(payload) {
   const quotedImageLimit = QUOTED_IMAGE_DETAIL_PATTERN.test(imageRequestText)
     ? MAX_EXPLICIT_QUOTED_IMAGE_COMPONENTS
     : MAX_QUOTED_IMAGE_COMPONENTS;
-  const quotedForwardImageLimit = QUOTED_FORWARD_DETAIL_PATTERN.test(imageRequestText)
-    ? MAX_SOURCE_IMAGE_COUNT
-    : MAX_QUOTED_IMAGE_COMPONENTS;
   const quotedImagesTrimmed = quotedImageBase64s.length > quotedImageLimit;
-  const quotedForwardImagesTrimmed = quotedForwardImageBase64s.length > quotedForwardImageLimit;
   const boundedQuotedImageBase64s = quotedImageBase64s.slice(0, quotedImageLimit);
-  const boundedQuotedForwardImageBase64s = quotedForwardImageBase64s.slice(0, quotedForwardImageLimit);
   const limitedImages = limitTotalImageBase64(
     imageBase64s,
     boundedQuotedImageBase64s,
     forwardImageBase64s,
-    boundedQuotedForwardImageBase64s,
+    quotedForwardImageBase64s,
   );
   const normalized = {
     messageId: normalizeIdentifier(payload.message_id, 'message_id', false),
@@ -1676,8 +1671,8 @@ export function normalizeQqPayload(payload) {
       + (Array.isArray(payload.quoted_forward_image_base64s) ? payload.quoted_forward_image_base64s.length : 0)
       > limitedImages.forwardImages.length + limitedImages.quotedForwardImages.length
       ) ? '合并转发中部分图片因数量、总大小或数据格式限制未进入本轮识别，不能将本轮结果视为全部图片的完整总结。' : '',
-      (quotedImagesTrimmed || quotedForwardImagesTrimmed)
-        ? '引用图片已按本轮任务收紧：默认最多读取 1 张；明确逐张/总结时仍有上限，未读取部分不能视为完整图片内容。'
+      quotedImagesTrimmed
+        ? '普通引用图片已按本轮任务收紧：默认最多读取 1 张；明确逐张/总结时仍有上限，未读取部分不能视为完整图片内容。'
         : '',
     ].filter(Boolean).join('；'),
     videoUrls: Array.isArray(payload.video_urls)
