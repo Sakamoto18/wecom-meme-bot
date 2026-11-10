@@ -141,6 +141,27 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('前几张', chains[0].chain[0].text)
         self.assertLessEqual(len(identity('1903660238', 'message', 'x' * 400)), 128)
 
+    async def test_text_bubbles_split_and_only_overflow_is_merged(self):
+        for private, limit in ((True, 4), (False, 5)):
+            for count in (3, 7):
+                bridge, event = self.fixture(private=private)
+                texts = [f'第{i}句' for i in range(count)]
+                bridge._request_backend.return_value = {'messages':[
+                    {'type':'text', 'text':text} for text in texts]}
+                await handle_official_message(bridge, event)
+                sent = [call.args[0].chain[0].text for call in event.send.call_args_list]
+                expected = texts if count <= limit else texts[:limit - 1] + ['\n'.join(texts[limit - 1:])]
+                self.assertEqual(sent, expected)
+
+    def test_split_text_reserves_media_slots_and_video_stays_two_messages(self):
+        media = [{'type':'image','base64':'YWJj'}, {'type':'video','url':'https://example/video'}]
+        chains = output_chains({'messages': media}, max_messages=3)
+        self.assertEqual([type(c.chain[0]) for c in chains], [Comp.Image, Comp.Video])
+        chains = output_chains({'messages':[
+            {'type':'text','text':str(i)} for i in range(4)] + media}, max_messages=5)
+        self.assertEqual([c.chain[0].text for c in chains[:3]], ['0','1','2\n3'])
+        self.assertEqual([type(c.chain[0]) for c in chains[3:]], [Comp.Image, Comp.Video])
+
     async def test_verified_identity_restores_admin_commands_and_raw_slash(self):
         bridge, event = self.fixture()
         bridge.config['official_trial_user_bindings'] = '{"user-openid":"1079175957"}'
