@@ -286,11 +286,11 @@ async def handle_official_message(bridge, event):
         bound_user = str(user_bindings(bridge.config).get(str(event.get_sender_id())) or '')
         from .main import ALLOWED_BRIDGE_SLASH_COMMANDS, REPORT_TIMEZONE, nearby_holiday_context, MEDIA_ACK_PATTERN
         rich = media_segments(raw)
-        # Full-message events use the same group intent as @ events. Allow
-        # direct supported shares in verified trial groups once Tencent delivers
-        # them; do not turn every ordinary group message into a forced reply.
+        # Full-message events use the same group intent as @ events. Once the
+        # group passes the optional allowlist, direct shares need no mention.
+        # Do not turn ordinary group messages into forced replies.
         if not private and not mentioned:
-            if not allowed or not MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)):
+            if not MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)):
                 return
             if getattr(getattr(raw, 'author', None), 'bot', False):
                 return
