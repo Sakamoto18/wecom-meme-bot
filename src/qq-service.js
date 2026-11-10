@@ -5874,6 +5874,11 @@ export class QqBotService {
     let supportedCandidates = candidates.filter((candidate) =>
       ['bilibili', 'xiaohongshu', 'douyin', 'kuaishou'].includes(candidate.provider));
     const groupId = String(payload.groupId ?? '').trim();
+    // Official bridge supplies this bot identity even for bound administrators.
+    // Skip artificial pacing per request; keep shared provider limits/cache intact.
+    const mediaResolveOptions = {
+      skipStartDelay: /^qqofficial:[^:]+:user:/.test(payload.botUserId || ''),
+    };
     // 按群的平台白名单比整群开关更精确，因此优先：命中的群只放行白名单里的
     // 平台，其余平台的链接当普通文本处理，和整群关闭时的表现一致。
     const allowedProviders = this.mediaGroupAllowedProviders.get(groupId);
@@ -5945,7 +5950,7 @@ export class QqBotService {
         for (const multiCandidate of supportedCandidates.slice(0, 4)) {
           const multiStartedAt = Date.now();
           try {
-            const multiResolved = await this.mediaResolver.resolve(multiCandidate);
+            const multiResolved = await this.mediaResolver.resolve(multiCandidate, mediaResolveOptions);
             this.mediaUsageTracker?.record({
               groupId: payload.messageType === 'group' ? payload.groupId : '',
               userId: payload.userId,
@@ -6002,7 +6007,7 @@ export class QqBotService {
       } catch { /* normalized candidates should already be valid */ }
       this.logger.info(`媒体解析开始：group=${payload.groupId || ''} provider=${candidate.provider} source=${candidateSummary}`);
       try {
-        const resolved = await this.mediaResolver.resolve(candidate);
+        const resolved = await this.mediaResolver.resolve(candidate, mediaResolveOptions);
         const sourceUrlHash = createHash('sha256')
           .update(candidate.url)
           .digest('hex');

@@ -154,3 +154,26 @@ test('媒体打散不超过十秒，关闭时缓存未命中也不等待', async
   await resolver.resolve(candidate('123'));
   assert.deepEqual(seen, [10_000]);
 });
+
+test('官方请求跳过随机等待但不修改 NapCat 延迟或并发限制', { timeout: 2000 }, async t => {
+  const started = Promise.withResolvers();
+  const finish = Promise.withResolvers();
+  const { resolver, sleeps } = await setup(t, { maxConcurrent: 1,
+    providerResolver: async ({ url }) => {
+      const id = new URL(url).pathname.split('/').at(-1);
+      if (id === '1') { started.resolve(); await finish.promise; }
+      return gallery(id);
+    },
+  });
+  const official = resolver.resolve(candidate('1'), { skipStartDelay: true });
+  await started.promise;
+  assert.equal(sleeps.calls.length, 0);
+  const legacy = resolver.resolve(candidate('2'));
+  await sleeps.reached(1);
+  assert.equal(resolver.active, 1);
+  sleeps.calls[0].resolve();
+  finish.resolve();
+  assert.deepEqual((await Promise.all([official, legacy])).map(x => x.sourceId), ['1', '2']);
+  assert.equal(sleeps.calls.length, 1);
+  assert.equal(resolver.startDelayMaxMs, 10_000);
+});

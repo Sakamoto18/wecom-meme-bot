@@ -733,7 +733,7 @@ export class MediaResolver {
     warmRemoteMedia(item, { logger: this.logger }).catch(() => {});
   }
 
-  async resolve(candidate) {
+  async resolve(candidate, { skipStartDelay = false } = {}) {
     if (!this.enabled) throw new Error('媒体解析未启用');
     // Share links carry per-user tracking parameters; normalize before cache
     // lookup so the same media is not resolved once per group/share URL.
@@ -770,7 +770,7 @@ export class MediaResolver {
     };
     const cached = readCached();
     if (cached) return cached;
-    if (this.startDelayMaxMs > 0) {
+    if (!skipStartDelay && this.startDelayMaxMs > 0) {
       // Each cold request draws independently: a later group with a shorter
       // delay may start first. Sleep outside both the slot and shared task.
       await this.waitBeforeResolve(provider);
