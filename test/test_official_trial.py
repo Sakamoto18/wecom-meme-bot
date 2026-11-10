@@ -145,6 +145,27 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(event.send.await_count + send.await_count,limit)
             self.assertIn('未全部发送',event.send.call_args.args[0].chain[0].text)
 
+    async def test_gallery_intro_precedes_originals_and_failure_keeps_originals(self):
+        for private in (True, False):
+            for outcome in ('success', 'empty', 'timeout'):
+                with self.subTest(private=private, outcome=outcome):
+                    bridge, event = self.fixture(private=private)
+                    event.get_messages = lambda: [Comp.Plain('https://v.douyin.com/example')]
+                    gallery = {'type': 'forward', 'provider': 'douyin',
+                               'title': '图文标题', 'description': '图文说明',
+                               'images': ['https://example/first', 'https://example/second']}
+                    bridge._request_backend.return_value = {'mode': 'media-gallery', 'messages': [gallery]}
+                    bridge._video_card = AsyncMock(return_value='YWJj' if outcome == 'success' else '')
+                    if outcome == 'timeout':
+                        bridge._video_card.side_effect = asyncio.TimeoutError()
+                    with patch('astrbot_plugin_longtu_bridge.official_trial.send_chain',
+                               new_callable=AsyncMock) as send:
+                        await handle_official_message(bridge, event)
+                    bridge._video_card.assert_awaited_once_with(gallery)
+                    expected = (['base64://YWJj'] if outcome == 'success' else []) + gallery['images']
+                    self.assertEqual([call.args[2].chain[0].file for call in send.call_args_list], expected)
+                    event.send.assert_not_awaited()
+
     def test_media_budget_and_opaque_identity_length(self):
         chains = output_chains({'messages': [{'type': 'forward', 'images': ['https://example/image'] * 18}]})
         self.assertEqual(len(chains), 5)
