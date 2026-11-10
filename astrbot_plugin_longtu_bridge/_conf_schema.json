@@ -1,9 +1,50 @@
 {
+  "official_trial_group_bindings": {
+    "description": "已核验的官方群身份与名称",
+    "type": "string",
+    "default": "{}",
+    "hint": "JSON：OpenID 对应 qq_group_id、name。用于日报显示，不自动合并不同平台记忆。"
+  },
+  "official_trial_user_bindings": {
+    "description": "已核验的官方用户 OpenID 到 QQ 账号映射",
+    "type": "string",
+    "default": "{}",
+    "hint": "JSON 对象。仅在管理员通过独立绑定码核验后配置，切勿按昵称推断；绑定后继承该 QQ 身份的权限。"
+  },
+  "official_trial_push_enabled": {
+    "description": "向官方已绑定管理员同步日报和学习结果",
+    "type": "bool",
+    "default": false,
+    "hint": "保留原 NapCat 投递，同时镜像到已绑定的官方私聊。受腾讯主动消息权限与配额限制。"
+  },
+  "official_trial_push_groups": {
+    "description": "官方定时推送目标群 OpenID",
+    "type": "string",
+    "default": "",
+    "hint": "英文逗号分隔。明确登记的群接收疯狂星期四推送；不自动推断旧 QQ 群与 OpenID 的对应关系。"
+  },
+  "official_trial_enabled": {
+    "description": "启用官方 QQ Bot 试用入口",
+    "type": "bool",
+    "default": false,
+    "hint": "仅处理指定 AppID 的群 @ 和私聊，复用现有对话与图库。关闭并重载插件即停止官方入口；NapCat 不受影响。"
+  },
+  "official_trial_appid": {
+    "description": "官方试用 AppID",
+    "type": "string",
+    "default": "1903660238"
+  },
+  "official_trial_groups": {
+    "description": "官方试用群 OpenID",
+    "type": "string",
+    "default": "",
+    "hint": "英文逗号分隔，留空接受官方平台允许的群 @。此处不是普通 QQ 群号。私聊不受此列表限制。"
+  },
   "transport_mode": {
     "description": "QQ 接入实现",
     "type": "string",
     "default": "legacy",
-    "hint": "legacy 保留原 NapCat 链路；adapter 使用独立适配层。修改后需重载插件，可用 LONGTU_QQ_TRANSPORT_MODE 覆盖。官方 Bot 尚未接入。"
+    "hint": "legacy 保留原 NapCat 链路；adapter 使用独立适配层。修改后需重载插件，可用 LONGTU_QQ_TRANSPORT_MODE 覆盖。官方试用由 official_trial_enabled 独立控制，可与 NapCat 并行。"
   },
   "api_url": {
     "description": "QQ Bot HTTP 接口",

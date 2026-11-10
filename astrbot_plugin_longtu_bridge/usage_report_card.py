@@ -139,7 +139,9 @@ def report_rows(report, names):
         rows.setdefault(str(group_id), {'groupId': str(group_id)})
     result = sorted(rows.values(), key=lambda row: (-total(row), str(row['groupId'])))
     for row in result:
-        row['label'] = names.get(str(row['groupId']), str(row['groupId']))
+        official = str(row['groupId']).startswith('qqofficial:')
+        row['label'] = names.get(str(row['groupId'])) or ('官方 QQ 群' if official else str(row['groupId']))
+        row['displayId'] = 'QQ 官方 Bot' if official else str(row['groupId'])
     private = dict(report.get('privateUsage') or {})
     if any(number(private.get(k)) for k in ('requests', 'llmCalls', 'searchCalls', 'jevCalls')) or total(private):
         result.append({**private, 'label': '私聊 / 未归属群', 'groupId': '独立统计'})
@@ -227,7 +229,7 @@ def render_usage_report(report, names=None):
         for i, row in enumerate(subset):
             y = 534 + i * 112
             text(56, y, row['label'], 24, width=1040)
-            text(56, y + 38, row['groupId'], 19, MUTED, 265)
+            text(56, y + 38, row.get('displayId', row['groupId']), 19, MUTED, 265)
             x = 342
             draw.rounded_rectangle((x, y + 39, 971, y + 60), radius=5, fill='#F0F3F8')
             for amount, color in zip(parts(row), COLORS):
