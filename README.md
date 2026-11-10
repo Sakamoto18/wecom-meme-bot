@@ -4,6 +4,8 @@
 
 Windows QQ + NapCat 的原生部署见 [Windows 部署与迁移](docs/WINDOWS_NATIVE_DEPLOYMENT.md)。Windows 和 Linux 共用业务代码，使用独立启动入口；原 Linux/Docker 部署方式继续保留。
 
+NapCat 接入隔离与 `legacy/adapter` 回滚方式见 [QQ 适配层说明](docs/QQ_TRANSPORT_ADAPTERS.md)；个人官方 Bot 的能力、权限申请待确认项与备用切换准备见 [官方 Bot 迁移准备](docs/QQ_OFFICIAL_BOT_READINESS.md)。默认继续使用原 NapCat 链路。
+
 QQ 版支持既有人格对话、群聊旁观与主动接话、单轮复读、龙图库管理，以及 B 站/小红书/抖音分享解析。视频正常输出为“独立简介卡片 + 视频”；图文正常输出为“独立简介卡片 + 只含图片的合并聊天记录”。QQ 记忆、图库和用量统计使用 SQLite，Node.js 要求 **22.5 或更新版本**。
 
 企业微信入口仍保留，使用官方 `@wecom/aibot-node-sdk` 管理长连接。两种入口不要混用：

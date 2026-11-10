@@ -207,6 +207,25 @@ class LongtuQqBridge(Star):
         self.get_image_failures = 0
         self.get_image_circuit_until = 0.0
 
+        self.transport_mode = (
+            os.getenv('LONGTU_QQ_TRANSPORT_MODE') or self.config.get('transport_mode', 'legacy')
+        ).strip()
+        if self.transport_mode not in ('legacy', 'adapter'):
+            raise ValueError('transport_mode must be legacy or adapter')
+        if self.transport_mode == 'adapter':
+            from .adapter_bridge import AdapterBridge
+            # Bind descriptors against this instance: all caches and scheduled
+            # jobs remain owned by the single registered Bridge.
+            for name, member in vars(AdapterBridge).items():
+                if name.startswith('__') or name in {
+                    'on_qq_message', 'rescue_pure_mention_before_default_llm',
+                    'initialize', 'terminate',
+                }:
+                    continue
+                if isinstance(member, (staticmethod, classmethod)) or callable(member):
+                    setattr(self, name, member.__get__(self, AdapterBridge))
+        logger.info(f'QQ Bridge transport mode: {self.transport_mode}')
+
     async def initialize(self):
         timeout_seconds = max(
             10,
@@ -3097,6 +3116,10 @@ class LongtuQqBridge(Star):
         event: AstrMessageEvent,
     ) -> None:
         """纯 At 未进入 Adapter handler 时，在默认 LLM 调用前改走 Node。"""
+        if getattr(self, 'transport_mode', 'legacy') == 'adapter':
+            from .adapter_bridge import AdapterBridge
+            await AdapterBridge.rescue_pure_mention_before_default_llm(self, event)
+            return
         if event.get_platform_name() != "aiocqhttp":
             return
         if event.is_private_chat() or not self._group_is_allowed(event):
@@ -3224,6 +3247,11 @@ class LongtuQqBridge(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def on_qq_message(self, event: AstrMessageEvent):
         """回复唤醒消息，并静默观察允许群中的普通消息。"""
+        if getattr(self, 'transport_mode', 'legacy') == 'adapter':
+            from .adapter_bridge import AdapterBridge
+            async for result in AdapterBridge.on_qq_message(self, event):
+                yield result
+            return
         # OneBot normally does not echo this account's own outbound messages,
         # but some NapCat versions do. Never feed our own messages back into
         # the media pipeline.
