@@ -374,10 +374,12 @@ async def handle_official_message(bridge, event):
         result_media_count = sum(1 if row.get('type') in ('video', 'image') else len(row.get('images', []))
                                  if row.get('type') == 'forward' else 0 for row in response.get('messages', []))
         card = ''
-        if media and (not media_receipt or media.get('type') == 'video' and result_media_count == 1):
+        if media and (not media_receipt or media.get('type') == 'forward'
+                      or media.get('type') == 'video' and result_media_count == 1):
             try:
                 card = await asyncio.wait_for(bridge._video_card(media), timeout=12)
-            except Exception:
+            except Exception as error:
+                logger.warning(f'官方分享简介卡生成失败：{type(error).__name__}')
                 card = ''
             if card:
                 response = {**response, 'messages': [{'type': 'image', 'base64': card}, *response['messages']]}
