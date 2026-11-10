@@ -4469,8 +4469,8 @@ export class QqBotService {
             semanticDeclined = semanticShas.length === 0;
           }
         }
-        const shouldAttachMeme = !semanticDeclined && (forceMeme || attachmentSha256s.length > 0
-          || sceneAliasMatches.length > 0);
+        const shouldAttachMeme = forceMeme || (!semanticDeclined && (attachmentSha256s.length > 0
+          || sceneAliasMatches.length > 0));
         if (!shouldAttachMeme) {
           return {
             mode: generated.mode,

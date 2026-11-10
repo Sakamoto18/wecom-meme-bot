@@ -3855,6 +3855,14 @@ test('自然对话先回复文字，再用语义候选发送 GIF；语义拒绝�
   assert.ok(none.messages.every(message => message.type === 'text'));
 });
 
+test('语义没有候选不取消原本纯 @ 的表情回复', async () => {
+  const { service } = createService({ longtuSemanticIndex: { async select() { return []; } } });
+  const result = await service.handleMessage({ message_type: 'group', group_id: 'g1', user_id: 'u1',
+    text: '@龙玉涛', bot_user_id: 'bot', mentions: [{ user_id: 'bot', name: '龙玉涛' }] });
+  assert.equal(result.mode, 'pure-mention');
+  assert.ok(result.messages.some(message => message.type === 'image'));
+});
+
 test('群聊 @bot 也能用关联词族选图，不局限于私聊', async () => {
   const shas = ['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)];
   const poolPicks = [];

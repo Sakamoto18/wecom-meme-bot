@@ -1,4 +1,10 @@
 {
+  "transport_mode": {
+    "description": "QQ 接入实现",
+    "type": "string",
+    "default": "legacy",
+    "hint": "legacy 保留原 NapCat 链路；adapter 使用独立适配层。修改后需重载插件，可用 LONGTU_QQ_TRANSPORT_MODE 覆盖。官方 Bot 尚未接入。"
+  },
   "api_url": {
     "description": "QQ Bot HTTP 接口",
     "type": "string",

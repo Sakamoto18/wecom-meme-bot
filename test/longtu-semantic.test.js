@@ -78,7 +78,7 @@ test('没有固定关键词也能按图片语义选图，轮换、排除删除�
   const { library, index, candidates } = await fixture(t, async (_history, input, options) => {
     assert.equal(options.usageSource, 'longtu-semantic-select');
     inputs.push(JSON.parse(input));
-    return JSON.stringify({ ids: [0, 999, '1'], confidence: 'high' });
+    return JSON.stringify({ ids: [0, 1, 999, '1'], confidence: 'high' });
   });
   for (const candidate of candidates) library.saveImageSemantics(candidate.sha256, {
     description: '累瘫在地上', visibleText: ['我不干了'], scenes: ['工作劳累想休息'], keywords: ['疲劳'], familyIds: [], confidence: 'high',
@@ -93,4 +93,37 @@ test('没有固定关键词也能按图片语义选图，轮换、排除删除�
   assert.deepEqual(await index.select({ content: '不相关' }), []);
   index.chatClient.complete = async () => { throw new Error('timeout'); };
   assert.equal(await index.select({ content: '好累' }), null);
+});
+
+test('近期用过的贴切图片仍可选择，不被不相关的新图挤掉；中置信可用、低置信不发', async t => {
+  let confidence = 'medium';
+  const { library, index, candidates } = await fixture(t, async (_history, input) => {
+    const rows = JSON.parse(input).candidates;
+    return JSON.stringify({ ids: rows.filter(row => row.description === '疲惫').map(row => row.id), confidence });
+  });
+  for (const [i, candidate] of candidates.entries()) library.saveImageSemantics(candidate.sha256, {
+    description: i ? '庆祝' : '疲惫', confidence: 'high',
+  });
+  for (let i = 0; i < 3; i++) {
+    assert.deepEqual(await index.select({ content: '加班累死了', scope: 'g' }), [candidates[0].sha256]);
+  }
+  confidence = 'low';
+  assert.deepEqual(await index.select({ content: '加班累死了', scope: 'g' }), []);
+});
+
+test('大图库词族检索空返回后仍会筛选图片场景，并禁用检索思考避免耗尽短输出预算', async t => {
+  const calls = [];
+  const { library, index, candidates } = await fixture(t, async (_history, input, options) => {
+    calls.push(options.usageSource);
+    assert.deepEqual(options.thinking, { type: 'disabled' });
+    if (options.usageSource === 'longtu-semantic-retrieve') throw new Error('大模型返回了空内容');
+    assert.equal(JSON.parse(input).candidates.length, 80);
+    return '{"ids":[0],"confidence":"medium"}';
+  });
+  while (candidates.length < 81) candidates.push({ sha256: candidates.length.toString(16).padStart(64, '0') });
+  for (const row of candidates) library.saveImageSemantics(row.sha256, {
+    description: '累了躺平', visibleText: ['累了'], scenes: ['疲劳'], keywords: ['加班'], confidence: 'high',
+  });
+  assert.equal((await index.select({ content: '加班到站不起来' })).length, 1);
+  assert.deepEqual(calls, ['longtu-semantic-retrieve', 'longtu-semantic-select']);
 });
