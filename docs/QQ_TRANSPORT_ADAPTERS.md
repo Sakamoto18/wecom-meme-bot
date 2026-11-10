@@ -49,6 +49,8 @@ C:\AstrBot\.venv\Scripts\python.exe -m unittest test.test_transport_adapters tes
 
 2026-11-10 在临时目录运行上述 45 项测试通过，模拟所有 QQ 请求；包括构造器绑定、注册 handler 分派、完整后端 payload/OneBot 参数对比、显式拒绝回退、未知结果不重发、真实 aiocqhttp 包装器超时及跨群视频复用。另有本地 72 项 Python 回归通过。未据此声称官方平台或候选路径真实 QQ 收发已经验收。
 
+完整 Node 回归 916/916、`npm run check` 通过。2026-11-10 17:48（上海时间）已部署代码 `db5bd43`，项目与实际插件目录均校验基线和安装后 SHA-256；备份在 `C:\migration-backup\transport-memes-20261110-174835`。仅重启 Backend/AstrBot，NapCat/Provider 监听 PID 保持不变；17:48:56 确认 `transport mode: legacy`，17:49:03 OneBot 连接成功，后端健康且新错误日志为空。未发送 QQ 测试消息，候选模式真实收发仍待验收。
+
 ## 同分支表情包减少修复
 
 线上 2026-11-09 20:30 启动后的统计：语义索引 284 张（268 high、16 medium）；词族检索 9 次仅 1 次成功，8 次失败均耗尽 180 输出 token，同时日志报告空内容。选图调用 23 次成功，但旧日志未保存具体置信度，无法反推每次拒绝原因。图库选图记录按上海日历为 11 月 9 日 47 次、11 月 10 日排查时 2 次；统计时长不同，仅说明减少，不能当作同比成功率。
