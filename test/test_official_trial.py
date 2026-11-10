@@ -49,6 +49,16 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         bridge._request_backend.assert_not_awaited()
         event.stop_event.assert_not_called()
 
+    async def test_only_sticker_images_use_compact_route_and_preparation_failure_falls_back(self):
+        for subtype, prepared in ((1,True),(1,False),(None,True)):
+            bridge,event=self.fixture()
+            bridge._request_backend.return_value={'messages':[{'type':'image','base64':'YWJj','sub_type':subtype}]}
+            with patch('astrbot_plugin_longtu_bridge.official_compact_image.send_compact_image',
+                       new_callable=AsyncMock,return_value=prepared) as compact:
+                await handle_official_message(bridge,event)
+            self.assertEqual(compact.await_count,1 if subtype==1 else 0)
+            self.assertEqual(event.send.await_count,0 if subtype==1 and prepared else 1)
+
     async def test_disable_wrong_app_and_unmentioned_groups_are_silent(self):
         for mode in ('disabled', 'wrong-app', 'ordinary', 'disallowed-group'):
             bridge, event = self.fixture(private=False)

@@ -385,8 +385,16 @@ async def handle_official_message(bridge, event):
         # an uncertain/partial upload failure. Successful sends stay silent.
         budget = (4 if private else 5) - (1 if media_receipt else 0)
         chains = output_chains(response, max_messages=budget, truncation_notice=not media_receipt)
+        stickers = {'base64://' + row['base64']: row['base64']
+                    for row in response.get('messages', [])
+                    if row.get('type') == 'image' and row.get('sub_type') == 1 and row.get('base64')}
         media_stage = 'send'
         for chain in chains:
+            component = chain.chain[0] if len(chain.chain) == 1 else None
+            if isinstance(component, Comp.Image) and component.file in stickers:
+                from .official_compact_image import send_compact_image
+                if await send_compact_image(event, stickers[component.file]):
+                    continue
             await send_chain(bridge, event, chain)
         if media_receipt:
             status = ''
