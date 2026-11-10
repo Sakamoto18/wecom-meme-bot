@@ -59,12 +59,11 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(compact.await_count,1 if subtype==1 else 0)
             self.assertEqual(event.send.await_count,0 if subtype==1 and prepared else 1)
 
-    async def test_disable_wrong_app_and_unmentioned_groups_are_silent(self):
-        for mode in ('disabled', 'wrong-app', 'ordinary', 'disallowed-group'):
+    async def test_disable_wrong_app_and_disallowed_groups_are_silent(self):
+        for mode in ('disabled', 'wrong-app', 'disallowed-group'):
             bridge, event = self.fixture(private=False)
             if mode == 'disabled': bridge.config['official_trial_enabled'] = False
             if mode == 'wrong-app': bridge.config['official_trial_appid'] = 'other'
-            if mode == 'ordinary': event.get_messages = lambda: [Comp.Plain('普通消息')]
             if mode == 'disallowed-group': bridge.config['official_trial_groups'] = 'another'
             await handle_official_message(bridge, event)
             event.send.assert_not_awaited()
@@ -80,24 +79,41 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         bridge._request_backend.assert_awaited_once()
 
     async def test_full_group_share_accepts_empty_allowlist_but_filters_chat_and_bots(self):
-        for kind in ('link', 'card', 'ordinary', 'bot', 'no-allowlist'):
+        for kind in ('link', 'card', 'bot', 'no-allowlist', 'web-link'):
             bridge, event = self.fixture(private=False)
             bridge.config['official_trial_groups'] = 'group-openid'
             event.get_messages = lambda: [Comp.Plain('https://b23.tv/example')]
             if kind == 'card':
                 event.get_messages = lambda: [Comp.Plain('[卡片消息]')]
                 event.message_obj.raw_message.raw_data = {'ark_data':{'fields':{'jump_url':'https://v.douyin.com/example/'}}}
-            if kind == 'ordinary': event.get_messages = lambda: [Comp.Plain('普通消息')]
+            if kind == 'web-link': event.get_messages = lambda: [Comp.Plain('https://example.com/article')]
             if kind == 'bot': event.message_obj.raw_message.author.bot = True
             if kind == 'no-allowlist': bridge.config['official_trial_groups'] = ''
             await handle_official_message(bridge, event)
-            if kind in ('link', 'card', 'no-allowlist'):
+            if kind in ('link', 'card', 'no-allowlist', 'web-link'):
                 payload = bridge._request_backend.call_args.args[0]
                 self.assertTrue(payload['media_share'])
                 self.assertFalse(payload['observe_only'])
                 self.assertEqual(payload['mentions'], [])
             else:
                 bridge._request_backend.assert_not_awaited()
+
+    async def test_unmentioned_chatter_uses_passive_decider_and_silent_failures(self):
+        for result in ('observe', 'reply', 'error'):
+            bridge, event = self.fixture(private=False)
+            event.get_messages = lambda: [Comp.Plain('今天大家聊什么')]
+            bridge._request_backend.return_value = {'messages': [] if result == 'observe' else [
+                {'type': 'text', 'text': '接话'}], 'active_reply': result == 'reply'}
+            if result == 'error': bridge._request_backend.side_effect = RuntimeError('backend failed')
+            await handle_official_message(bridge, event)
+            self.assertTrue(bridge._request_backend.call_args.args[0]['observe_only'])
+            self.assertEqual(event.send.await_count, 1 if result == 'reply' else 0)
+
+    async def test_bot_messages_are_filtered_even_when_mentioning_us(self):
+        bridge, event = self.fixture(private=False)
+        event.message_obj.raw_message.author.bot = True
+        await handle_official_message(bridge, event)
+        bridge._request_backend.assert_not_awaited()
 
     async def test_current_and_quote_images_forwarded_without_onebot(self):
         bridge, event = self.fixture(private=False)
@@ -132,20 +148,7 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(expected, texts[-1])
             self.assertLessEqual(event.send.await_count + send.await_count, 4)
 
-    async def test_gallery_receipts_respect_reply_budget_and_report_truncation(self):
-        for private, limit in ((True, 4), (False, 5)):
-            bridge, event = self.fixture(private=private)
-            bridge.config['official_trial_groups'] = 'group-openid'
-            event.get_messages = lambda: [Comp.Plain('https://v.douyin.com/example')]
-            bridge._request_backend.return_value = {'mode':'media-gallery','messages':[
-                {'type':'forward','images':['https://example/image'] * 10}]}
-            bridge._video_card = AsyncMock(return_value='YWJj')
-            with patch('astrbot_plugin_longtu_bridge.official_trial.send_chain',new_callable=AsyncMock) as send:
-                await handle_official_message(bridge,event)
-            self.assertLessEqual(event.send.await_count + send.await_count,limit)
-            self.assertIn('未全部发送',event.send.call_args.args[0].chain[0].text)
-
-    async def test_gallery_intro_precedes_originals_and_failure_keeps_originals(self):
+    async def test_gallery_content_is_one_message_after_separate_intro(self):
         for private in (True, False):
             for outcome in ('success', 'empty', 'timeout'):
                 with self.subTest(private=private, outcome=outcome):
@@ -153,18 +156,36 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
                     event.get_messages = lambda: [Comp.Plain('https://v.douyin.com/example')]
                     gallery = {'type': 'forward', 'provider': 'douyin',
                                'title': '图文标题', 'description': '图文说明',
-                               'images': ['https://example/first', 'https://example/second']}
+                               'images': [f'https://example/{i}' for i in range(18)]}
                     bridge._request_backend.return_value = {'mode': 'media-gallery', 'messages': [gallery]}
                     bridge._video_card = AsyncMock(return_value='YWJj' if outcome == 'success' else '')
                     if outcome == 'timeout':
                         bridge._video_card.side_effect = asyncio.TimeoutError()
-                    with patch('astrbot_plugin_longtu_bridge.official_trial.send_chain',
-                               new_callable=AsyncMock) as send:
+                    order = []
+                    event.send.side_effect = lambda *args: order.append('card')
+                    with patch('astrbot_plugin_longtu_bridge.official_gallery.send_gallery',
+                               new_callable=AsyncMock, side_effect=lambda *args: order.append('content')) as send:
                         await handle_official_message(bridge, event)
                     bridge._video_card.assert_awaited_once_with(gallery)
-                    expected = (['base64://YWJj'] if outcome == 'success' else []) + gallery['images']
-                    self.assertEqual([call.args[2].chain[0].file for call in send.call_args_list], expected)
-                    event.send.assert_not_awaited()
+                    send.assert_awaited_once_with(event, bridge, [gallery])
+                    self.assertEqual(order, ['card', 'content'] if outcome == 'success' else ['content'])
+                    if outcome == 'success':
+                        self.assertEqual(event.send.call_args.args[0].chain[0].file, 'base64://YWJj')
+
+    async def test_gallery_failure_never_falls_back_to_separate_images(self):
+        from astrbot_plugin_longtu_bridge.official_gallery import GalleryPreparationError
+        for error in (GalleryPreparationError('图集准备失败'), asyncio.TimeoutError(), RuntimeError('rejected')):
+            bridge, event = self.fixture(private=False)
+            event.get_messages = lambda: [Comp.Plain('https://v.douyin.com/example')]
+            bridge._video_card = AsyncMock(return_value='YWJj')
+            bridge._request_backend.return_value = {'mode':'media-gallery', 'messages':[
+                {'type':'forward','images':['https://example/image'] * 10}]}
+            with patch('astrbot_plugin_longtu_bridge.official_gallery.send_gallery',
+                       new_callable=AsyncMock, side_effect=error) as send:
+                await handle_official_message(bridge,event)
+            send.assert_awaited_once()
+            self.assertEqual(event.send.await_count, 2)
+            self.assertIsInstance(event.send.call_args.args[0].chain[0], Comp.Plain)
 
     def test_media_budget_and_opaque_identity_length(self):
         chains = output_chains({'messages': [{'type': 'forward', 'images': ['https://example/image'] * 18}]})
