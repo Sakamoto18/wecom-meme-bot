@@ -15,7 +15,7 @@ class GalleryTests(unittest.IsolatedAsyncioTestCase):
                    'images': [f'https://example/{i}' for i in range(count)]}
         return event, bridge, gallery
 
-    async def test_all_originals_and_card_in_one_send_without_truncation(self):
+    async def test_all_originals_in_one_send_without_intro_card_or_truncation(self):
         event, bridge, gallery = self.fixture()
         uploaded = []
         async def upload(http, encoded, ids, max_edge):
@@ -25,13 +25,14 @@ class GalleryTests(unittest.IsolatedAsyncioTestCase):
         with patch('astrbot_plugin_longtu_bridge.official_gallery.upload_markdown_image', side_effect=upload), \
              patch('astrbot_plugin_longtu_bridge.official_gallery.send_markdown_images', new_callable=AsyncMock) as send, \
              patch('astrbot_plugin_longtu_bridge.official_gallery.cleanup_materials', new_callable=AsyncMock) as cleanup:
-            await send_gallery(event, bridge, [gallery], base64.b64encode(b'card').decode())
-        self.assertEqual(uploaded, [b'card'] + [s.encode() for s in gallery['images']])
+            await send_gallery(event, bridge, [gallery])
+        self.assertEqual(uploaded, [s.encode() for s in gallery['images']])
         send.assert_awaited_once()
         content = send.call_args.args[1]
-        self.assertEqual(content.count('qqbot-media://'), 19)
+        self.assertEqual(content.count('qqbot-media://'), 18)
+        self.assertNotIn('![简介', content)
         self.assertLess(content.index('原图1 '), content.index('原图18 '))
-        self.assertEqual(len(cleanup.call_args.args[1]), 19)
+        self.assertEqual(len(cleanup.call_args.args[1]), 18)
 
     async def test_no_card_keeps_escaped_description_and_one_message(self):
         event, bridge, gallery = self.fixture(2)

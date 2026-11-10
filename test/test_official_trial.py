@@ -148,7 +148,7 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(expected, texts[-1])
             self.assertLessEqual(event.send.await_count + send.await_count, 4)
 
-    async def test_gallery_is_one_message_with_all_images_and_intro(self):
+    async def test_gallery_content_is_one_message_after_separate_intro(self):
         for private in (True, False):
             for outcome in ('success', 'empty', 'timeout'):
                 with self.subTest(private=private, outcome=outcome):
@@ -161,12 +161,16 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
                     bridge._video_card = AsyncMock(return_value='YWJj' if outcome == 'success' else '')
                     if outcome == 'timeout':
                         bridge._video_card.side_effect = asyncio.TimeoutError()
+                    order = []
+                    event.send.side_effect = lambda *args: order.append('card')
                     with patch('astrbot_plugin_longtu_bridge.official_gallery.send_gallery',
-                               new_callable=AsyncMock) as send:
+                               new_callable=AsyncMock, side_effect=lambda *args: order.append('content')) as send:
                         await handle_official_message(bridge, event)
                     bridge._video_card.assert_awaited_once_with(gallery)
-                    send.assert_awaited_once_with(event, bridge, [gallery], 'YWJj' if outcome == 'success' else '')
-                    event.send.assert_not_awaited()
+                    send.assert_awaited_once_with(event, bridge, [gallery])
+                    self.assertEqual(order, ['card', 'content'] if outcome == 'success' else ['content'])
+                    if outcome == 'success':
+                        self.assertEqual(event.send.call_args.args[0].chain[0].file, 'base64://YWJj')
 
     async def test_gallery_failure_never_falls_back_to_separate_images(self):
         from astrbot_plugin_longtu_bridge.official_gallery import GalleryPreparationError
@@ -180,7 +184,7 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
                        new_callable=AsyncMock, side_effect=error) as send:
                 await handle_official_message(bridge,event)
             send.assert_awaited_once()
-            event.send.assert_awaited_once()
+            self.assertEqual(event.send.await_count, 2)
             self.assertIsInstance(event.send.call_args.args[0].chain[0], Comp.Plain)
 
     def test_media_budget_and_opaque_identity_length(self):

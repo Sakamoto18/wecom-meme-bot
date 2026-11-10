@@ -390,8 +390,11 @@ async def handle_official_message(bridge, event):
                 from .official_gallery import send_gallery, GalleryPreparationError
                 galleries = [row for row in response['messages'] if row.get('type') == 'forward']
                 media_stage = 'send'
+                if card:
+                    await send_chain(bridge, event, output_chains(
+                        {'messages': [{'type': 'image', 'base64': card}]})[0])
                 try:
-                    await send_gallery(event, bridge, galleries, card)
+                    await send_gallery(event, bridge, galleries)
                 except GalleryPreparationError as error:
                     notice = MessageChain([Comp.Plain(str(error))])
                     notice.use_markdown_ = False
