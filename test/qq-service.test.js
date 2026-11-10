@@ -4881,3 +4881,23 @@ test('带 B站链接的 @ 消息：判断为学习就学，不是学习就照常
   await build(true).handleMessage({ ...message, message_id: 'm3', text: '【突然的陀螺】 https://www.bilibili.com/video/BV1h5QaY5EaH/', quoted_text: '' });
   assert.equal(intents.length, 0);
 });
+
+test('官方群与绑定管理员私聊的单链接和多链接跳过人为抓取延迟，NapCat 保留', async () => {
+  for (const official of [true, false]) {
+    for (const messageType of ['private', 'group']) {
+      for (const count of [1, 2]) {
+        const options = [];
+        const { service } = createService({ mediaResolver: { enabled: true,
+          async resolve(candidate, opts) { options.push(opts); return {url:'https://cdn.example/video.mp4'}; },
+        } });
+        const result = await service.handleMessage({message_id:`delay-${official}-${messageType}-${count}`,
+          message_type:messageType, group_id:messageType === 'group' ? '1109147947' : '',
+          user_id:'1079175957', bot_user_id:official ? 'qqofficial:1903660238:user:qq_official' : '2053160463',
+          media_share:true, text:['https://v.douyin.com/one/', 'https://v.douyin.com/two/'].slice(0,count).join(' ')});
+        assert.equal(result.mode,'media');
+        assert.equal(options.length,count);
+        assert.ok(options.every(o => o.skipStartDelay === official));
+      }
+    }
+  }
+});

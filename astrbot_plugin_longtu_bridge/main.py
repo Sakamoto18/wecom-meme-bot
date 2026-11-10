@@ -3204,6 +3204,8 @@ class LongtuQqBridge(Star):
 
     async def _sleep_before_reply(self, event: AstrMessageEvent, response: dict) -> None:
         """Pace conversation only; repeats and resolved media send immediately."""
+        if getattr(event, 'get_platform_name', lambda: '')() in ('qq_official', 'qq_official_webhook'):
+            return
         if not isinstance(response, dict) or not response.get("messages"):
             return
         # A +1 must join the ongoing repeat run before the group moves on, and

@@ -19,6 +19,13 @@ exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(
 
 
 class ReplyDelayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_official_chat_never_uses_napcat_delay(self):
+        with patch.object(asyncio, 'sleep', new_callable=AsyncMock) as sleep:
+            for platform in ('qq_official', 'qq_official_webhook'):
+                self.event.get_platform_name = lambda: platform
+                await self.bridge._sleep_before_reply(self.event, {'mode':'chat','messages':[{'type':'text'}]})
+            sleep.assert_not_awaited()
+
     def setUp(self):
         self.bridge = namespace['Bridge']()
         self.bridge.config = {}
