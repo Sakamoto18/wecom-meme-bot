@@ -1770,6 +1770,10 @@ export function normalizeQqPayload(payload, { relationImport = false } = {}) {
         || normalized.quotedForwardImageBase64s.length > 0;
     }
   }
+  if (normalized.quotedMessageId || normalized.quotedText || normalized.quotedAuthor
+    || normalized.forwardedText || normalized.quotedForwardedText || normalized.hasImage) {
+    normalized.pureBotMention = false;
+  }
   if (!normalized.pureBotMention && isRenderedPureBotMention(normalized)) {
     normalized.pureBotMention = true;
   }
@@ -3776,7 +3780,7 @@ export class QqBotService {
         );
       const recordContext = options.forwardedContext ?? '';
       const recordSummary = Boolean(recordContext
-        && /总结|概括|梳理|提炼|汇总/u.test(options.imageQuestion ?? content));
+        && /总结|概括|梳理|提炼|汇总|说(?:了)?(?:什么|啥)|什么内容|读一下|念一下/u.test(options.imageQuestion ?? content));
       const imageQuestion = options.imageQuestion ?? content;
       // A quoted screenshot often contains the title or the original question
       // that the user wants us to verify. Keep that text as search context,
@@ -3982,6 +3986,7 @@ export class QqBotService {
           activeReply: options.activeReply === true,
           activeReplyPriority: options.activeReplyPriority,
           hasQuotedContent: Boolean(message?.quote || recordContext),
+          quotedText: extractMessageText(message?.quote),
           imageAnalysis: searchImageAnalysis,
           imageInformationPolicy: searchImageInformationPolicy,
         });

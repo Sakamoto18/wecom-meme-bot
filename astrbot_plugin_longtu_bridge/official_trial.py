@@ -92,6 +92,32 @@ def media_segments(raw):
     return [{'type': 'json', 'data': {'url': url}} for url in urls[:24]]
 
 
+def quote_context(components, raw):
+    """Read only the quote actually supplied by QQ; never claim a full history fetch."""
+    quoted = next((c for c in components if isinstance(c, Comp.Reply)), None)
+    chain = getattr(quoted, 'chain', None) or []
+    text = ''.join(c.text for c in chain if isinstance(c, Comp.Plain))
+    text = text or str(getattr(quoted, 'message_str', '') or getattr(quoted, 'text', '') or '')
+    ref = getattr(raw, 'message_reference', None)
+    message_id = str(getattr(quoted, 'id', '') or
+                     (ref.get('message_id') if isinstance(ref, dict) else getattr(ref, 'message_id', '')) or '')
+    raw_data = getattr(raw, 'raw_data', {}) or {}
+    elements = getattr(raw, 'msg_elements', None) or raw_data.get('msg_elements', [])
+    kind = str(getattr(raw, 'message_type', '') or raw_data.get('message_type', ''))
+    author_id = author_name = ''
+    if kind == '103' and elements and isinstance(elements[0], dict):
+        row = elements[0]
+        text = text or str(row.get('content') or '')
+        message_id = message_id or str(row.get('id') or row.get('message_id') or '')
+        author = row.get('author') or {}
+        if isinstance(author, dict):
+            author_id = str(author.get('member_openid') or author.get('user_openid') or author.get('id') or '')
+            author_name = str(author.get('username') or '')
+    return {'present': bool(quoted is not None or message_id or text or kind == '103'),
+            'chain': chain, 'text': text, 'id': message_id,
+            'author_id': author_id, 'author_name': author_name}
+
+
 def output_chains(response, max_messages=5, truncation_notice=True):
     """Keep backend text bubbles separate, merging overflow within reply budget."""
     rows = response.get('messages') or []
@@ -287,6 +313,7 @@ async def handle_official_message(bridge, event):
         bound_user = str(user_bindings(bridge.config).get(str(event.get_sender_id())) or '')
         from .main import ALLOWED_BRIDGE_SLASH_COMMANDS, REPORT_TIMEZONE, nearby_holiday_context, MEDIA_ACK_PATTERN
         rich = media_segments(raw)
+        quote = quote_context(components, raw)
         # Full group messages feed the existing backend's passive decision gate.
         # A shared URL is a direct share; other chatter is observation only.
         # Never feed this bot's own output or another bot back into the loop.
@@ -295,7 +322,8 @@ async def handle_official_message(bridge, event):
             return
         has_link = bool(re.search(r'https?://', text, re.IGNORECASE)
                         or MEDIA_ACK_PATTERN.search(str(rich)))
-        observe_only = bool(not private and not mentioned and not has_link)
+        quoted_bot = bool(quote['author_id'] and quote['author_id'] == str(event.get_self_id()))
+        observe_only = bool(not private and not mentioned and not quoted_bot and not has_link)
         if observe_only and text.startswith('/'):
             return
         if text.startswith('/') and text.split()[0] not in ALLOWED_BRIDGE_SLASH_COMMANDS:
@@ -325,9 +353,15 @@ async def handle_official_message(bridge, event):
         importing = bool(bound_user and (text.startswith('/rel-import') or
                          getattr(bridge, '_relation_import_active', lambda e: False)(event)))
         images = await bridge._image_base64s(components, limit=24 if importing else 8)
-        quoted = next((c for c in components if isinstance(c, Comp.Reply)), None)
-        quote_chain = getattr(quoted, 'chain', None) or []
+        quote_chain = quote['chain']
         quote_images = await bridge._image_base64s(quote_chain, limit=24 if importing else 4)
+        quoted_record = '[群聊的聊天记录]' in quote['text'] or '=== 消息 ' in quote['text']
+        pure_mention = bool(mentioned and not text and not images and not quote['present'])
+        current_text = text
+        if not current_text and quote['present']:
+            current_text = '请回应我引用的这条消息。' if quote['text'] or quote_images else '我引用了一条消息，但本次没有附带可读正文。'
+        elif pure_mention:
+            current_text = '叫我有事？'
         payload = {
             'message_id': identity(appid, 'message', message_id),
             'message_type': 'private' if private else 'group',
@@ -335,13 +369,18 @@ async def handle_official_message(bridge, event):
             'user_id': bound_user or identity(appid, 'user', event.get_sender_id()),
             'sender_name': event.get_sender_name(),
             'bot_user_id': identity(appid, 'user', event.get_self_id()),
-            'text': text or ('叫我有事？' if mentioned and not images else ''),
-            'pure_bot_mention': mentioned and not text and not images,
+            'text': current_text,
+            'pure_bot_mention': pure_mention,
             'mentions': [{'user_id': identity(appid, 'user', c.qq), 'name': getattr(c, 'name', '')}
                          for c in components if isinstance(c, Comp.At)],
             'has_image': bool(images or quote_images), 'image_base64s': images,
             'quoted_image_base64s': quote_images,
-            'quoted_text': ''.join(c.text for c in quote_chain if isinstance(c, Comp.Plain)),
+            'quoted_text': '' if quoted_record else quote['text'],
+            'quoted_forwarded_text': quote['text'] if quoted_record else '',
+            'quoted_message_id': identity(appid, 'message', quote['id']),
+            'quoted_user_id': (str(user_bindings(bridge.config).get(quote['author_id']) or '')
+                               or identity(appid, 'user', quote['author_id'])),
+            'quoted_sender_name': quote['author_name'],
             'rich_segments': rich,
             'media_share': True,
             'observe_only': observe_only,
@@ -358,7 +397,8 @@ async def handle_official_message(bridge, event):
             elif command == '/crazy-thursday-list': payload['crazy_thursday_list'] = True
             elif command == '/crazy-thursday-del': payload['crazy_thursday_delete'] = argument
         logger.info(f'官方 QQ 试用收到消息：appid={appid} private={private} group={event.get_group_id()} '
-                    f'images={len(images)} observe={observe_only} link={has_link}')
+                    f'images={len(images)} observe={observe_only} link={has_link} '
+                    f'quote={quote["present"]} quote_chars={len(quote["text"])}')
         media_receipt = bool(not text.startswith('/') and MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)))
         response = await bridge._request_backend(payload)
         update = getattr(bridge, '_update_relation_import', None)

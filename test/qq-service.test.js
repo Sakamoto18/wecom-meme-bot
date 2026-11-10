@@ -390,7 +390,7 @@ test('QQ 请求字段会映射到现有消息模型且私聊无需 group_id', ()
   const message = buildQqCompatibleMessage(payload);
 
   assert.equal(payload.text, '你好');
-  assert.equal(payload.pureBotMention, true);
+  assert.equal(payload.pureBotMention, false, '引用正文不能被错误的纯艾特标志覆盖');
   assert.equal(payload.groupMemberLimit, null);
   assert.equal(message.chattype, 'single');
   assert.equal(message.from.userid, '20');
