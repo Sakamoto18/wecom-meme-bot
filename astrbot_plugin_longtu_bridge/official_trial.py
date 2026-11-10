@@ -93,9 +93,9 @@ def media_segments(raw):
 
 
 def output_chains(response, max_messages=5, truncation_notice=True):
-    """One text message plus bounded media, within passive reply budget."""
+    """Keep backend text bubbles separate, merging overflow within reply budget."""
     rows = response.get('messages') or []
-    texts = [str(row.get('text') or '') for row in rows if row.get('type') == 'text']
+    texts = [str(row['text']) for row in rows if row.get('type') == 'text' and row.get('text')]
     media = []
     for row in rows:
         kind = row.get('type')
@@ -116,7 +116,11 @@ def output_chains(response, max_messages=5, truncation_notice=True):
         reserve = 1
     chains = []
     if texts:
-        chains.append(MessageChain([Comp.Plain('\n'.join(texts)[:3500])]))
+        text_slots = max(1, max_messages - len(media))
+        if len(texts) > text_slots:
+            texts = texts[:text_slots - 1] + ['\n'.join(texts[text_slots - 1:])]
+        chains.extend(MessageChain([Comp.Plain(text[:3500])]) for text in texts)
+        reserve = len(texts)
     chains.extend(MessageChain([item]) for item in media[:max_messages - reserve])
     for chain in chains:
         chain.use_markdown_ = False
