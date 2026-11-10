@@ -69,7 +69,7 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         event.send.assert_awaited_once()
         bridge._request_backend.assert_awaited_once()
 
-    async def test_full_group_event_accepts_direct_share_only_in_verified_trial_group(self):
+    async def test_full_group_share_accepts_empty_allowlist_but_filters_chat_and_bots(self):
         for kind in ('link', 'card', 'ordinary', 'bot', 'no-allowlist'):
             bridge, event = self.fixture(private=False)
             bridge.config['official_trial_groups'] = 'group-openid'
@@ -81,7 +81,7 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
             if kind == 'bot': event.message_obj.raw_message.author.bot = True
             if kind == 'no-allowlist': bridge.config['official_trial_groups'] = ''
             await handle_official_message(bridge, event)
-            if kind in ('link', 'card'):
+            if kind in ('link', 'card', 'no-allowlist'):
                 payload = bridge._request_backend.call_args.args[0]
                 self.assertTrue(payload['media_share'])
                 self.assertFalse(payload['observe_only'])
