@@ -127,6 +127,46 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['quoted_text'], '引用内容')
         self.assertFalse(payload['pure_bot_mention'])
 
+    async def test_quote_with_only_mention_never_becomes_pure_mention(self):
+        for source in ('chain', 'fallback', 'raw', 'missing'):
+            with self.subTest(source=source):
+                bridge, event = self.fixture(private=False)
+                reply = Comp.Reply(id='quoted-id', chain=[Comp.Plain('周五发布，周四验收')] if source == 'chain' else [])
+                if source == 'fallback': reply.message_str = '周五发布，周四验收'
+                event.get_messages = lambda: [reply, Comp.At(qq='bot')]
+                if source == 'raw':
+                    event.message_obj.raw_message.message_type = 103
+                    event.message_obj.raw_message.raw_data = {'msg_elements': [{
+                        'content': '周五发布，周四验收', 'author': {'member_openid': 'bot', 'username': '龙玉涛'}}]}
+                await handle_official_message(bridge, event)
+                payload = bridge._request_backend.call_args.args[0]
+                self.assertFalse(payload['pure_bot_mention'])
+                self.assertNotEqual(payload['text'], '叫我有事？')
+                self.assertEqual(payload['quoted_message_id'], 'qqofficial:1903660238:message:quoted-id')
+                self.assertEqual(payload['quoted_text'], '' if source == 'missing' else '周五发布，周四验收')
+                if source == 'raw': self.assertEqual(payload['quoted_user_id'], payload['bot_user_id'])
+
+    async def test_quoting_bot_without_at_is_direct_not_passive(self):
+        bridge, event = self.fixture(private=False)
+        event.get_messages = lambda: [Comp.Plain('解释下')]
+        event.message_obj.raw_message.message_type = 103
+        event.message_obj.raw_message.raw_data = {'msg_elements': [{
+            'content': '已读文字', 'author': {'member_openid': 'bot'}}]}
+        await handle_official_message(bridge, event)
+        payload = bridge._request_backend.call_args.args[0]
+        self.assertFalse(payload['observe_only'])
+        self.assertEqual(payload['quoted_text'], '已读文字')
+
+    async def test_visible_forwarded_quote_is_preserved_as_record_text(self):
+        bridge, event = self.fixture(private=False)
+        record = '[群聊的聊天记录]\n=== 消息 1 ===\n[消息内容] 周五发布\n[发送者] 甲'
+        event.get_messages = lambda: [Comp.Reply(id='record', chain=[Comp.Plain(record)]), Comp.At(qq='bot')]
+        await handle_official_message(bridge, event)
+        payload = bridge._request_backend.call_args.args[0]
+        self.assertEqual(payload['quoted_forwarded_text'], record)
+        self.assertEqual(payload['quoted_text'], '')
+        self.assertFalse(payload['pure_bot_mention'])
+
     async def test_media_receipts_are_silent_on_success_and_explicit_on_failure(self):
         for mode in ('success', 'unavailable', 'timeout', 'send-failed'):
             bridge, event = self.fixture()
