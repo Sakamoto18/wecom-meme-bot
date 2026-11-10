@@ -92,7 +92,7 @@ def media_segments(raw):
     return [{'type': 'json', 'data': {'url': url}} for url in urls[:24]]
 
 
-def output_chains(response, max_messages=5):
+def output_chains(response, max_messages=5, truncation_notice=True):
     """One text message plus bounded media, within passive reply budget."""
     rows = response.get('messages') or []
     texts = [str(row.get('text') or '') for row in rows if row.get('type') == 'text']
@@ -111,7 +111,7 @@ def output_chains(response, max_messages=5):
             if url and str(url).startswith(('https://', 'http://')):
                 media.append(Comp.Video(file=url))
     reserve = 1 if texts else 0
-    if len(media) > max_messages - reserve:
+    if truncation_notice and len(media) > max_messages - reserve:
         texts.append('本次图片较多，先发送前几张。')
         reserve = 1
     chains = []
@@ -238,6 +238,8 @@ async def mirror_learning(bridge, payload):
 async def handle_official_message(bridge, event):
     # Dedicated entry must never fall through to a second LLM/personality.
     event.call_llm = True
+    media_receipt = False
+    media_stage = 'backend'
     try:
         if not enabled(bridge.config):
             return
@@ -348,26 +350,71 @@ async def handle_official_message(bridge, event):
             elif command == '/crazy-thursday-list': payload['crazy_thursday_list'] = True
             elif command == '/crazy-thursday-del': payload['crazy_thursday_delete'] = argument
         logger.info(f'官方 QQ 试用收到消息：appid={appid} private={private} images={len(images)}')
+        media_receipt = bool(not text.startswith('/') and MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)))
         response = await bridge._request_backend(payload)
         update = getattr(bridge, '_update_relation_import', None)
         if callable(update):
             update(event, response)
         logger.info(f'官方后端结果：mode={response.get("mode")} types={[row.get("type") for row in response.get("messages", [])]}')
+        if media_receipt and response.get('mode') in ('media-unavailable', 'media-disabled', 'media-excluded'):
+            notices = {'media-unavailable': '抓取失败：暂时无法获取这个分享，请检查链接或稍后重试。',
+                       'media-disabled': '未抓取：媒体解析服务当前未启用。',
+                       'media-excluded': '未抓取：当前群未开启这个来源的解析。'}
+            detail = '\n'.join(str(row.get('text') or '') for row in response.get('messages', [])
+                               if row.get('type') == 'text').strip()
+            notice = MessageChain([Comp.Plain(notices[response['mode']] + ('\n' + detail[:600] if detail else ''))])
+            notice.use_markdown_ = False
+            await event.send(notice)
+            return
         media = next((row for row in response.get('messages', []) if row.get('type') in ('video', 'forward')), None)
-        if media:
+        result_media_count = sum(1 if row.get('type') in ('video', 'image') else len(row.get('images', []))
+                                 if row.get('type') == 'forward' else 0 for row in response.get('messages', []))
+        card = ''
+        if media and (not media_receipt or media.get('type') == 'video' and result_media_count == 1):
             try:
                 card = await asyncio.wait_for(bridge._video_card(media), timeout=12)
             except Exception:
                 card = ''
             if card:
                 response = {**response, 'messages': [{'type': 'image', 'base64': card}, *response['messages']]}
-        for chain in output_chains(response):
+        # Tencent permits 4 C2C / 5 group passive replies. Keep a slot for
+        # an uncertain/partial upload failure. Successful sends stay silent.
+        budget = (4 if private else 5) - (1 if media_receipt else 0)
+        chains = output_chains(response, max_messages=budget, truncation_notice=not media_receipt)
+        media_stage = 'send'
+        for chain in chains:
             await send_chain(bridge, event, chain)
+        if media_receipt:
+            status = ''
+            if result_media_count:
+                delivered = sum(isinstance(c, (Comp.Image, Comp.Video)) for chain in chains for c in chain.chain)
+                expected = result_media_count + bool(media and card)
+                if delivered < expected:
+                    status = '内容未全部发送：达到官方单条回复数量限制。'
+            elif not chains:
+                status = '抓取失败：未返回可发送的内容，请稍后重试。'
+            if status:
+                receipt = MessageChain([Comp.Plain(status)])
+                receipt.use_markdown_ = False
+                await event.send(receipt)
         logger.info(f'官方 QQ 试用回复完成：appid={appid}')
     except Exception as error:
         # Unknown sends must not be blindly retried by this bridge.
         logger.warning(f'官方 QQ 试用失败：{type(error).__name__} code={getattr(error, "code", "")}')
-        if isinstance(error, (ValueError, PermissionError)):
+        if media_receipt:
+            if media_stage == 'send':
+                status = '解析已完成，但内容未全部确认发送；可能已有部分到达，请勿连续重复提交。'
+            elif isinstance(error, asyncio.TimeoutError):
+                status = '抓取等待超时，暂未拿到结果，请稍后重试。'
+            else:
+                status = '分享处理失败，未能完成抓取或发送，请稍后重试。'
+            try:
+                receipt = MessageChain([Comp.Plain(status)])
+                receipt.use_markdown_ = False
+                await event.send(receipt)
+            except Exception:
+                logger.warning('官方分享失败回执也未能发送')
+        elif isinstance(error, (ValueError, PermissionError)):
             await event.send(MessageChain([Comp.Plain(str(error)[:300])]))
         elif not isinstance(error, asyncio.TimeoutError):
             try:

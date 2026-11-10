@@ -101,6 +101,40 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['quoted_text'], '引用内容')
         self.assertFalse(payload['pure_bot_mention'])
 
+    async def test_media_receipts_are_silent_on_success_and_explicit_on_failure(self):
+        for mode in ('success', 'unavailable', 'timeout', 'send-failed'):
+            bridge, event = self.fixture()
+            event.get_messages = lambda: [Comp.Plain('https://b23.tv/example')]
+            bridge._video_card = AsyncMock(return_value='YWJj')
+            bridge._request_backend.return_value = {'mode':'media','messages':[{'type':'video','url':'https://example/video'}]}
+            if mode == 'unavailable': bridge._request_backend.return_value = {'mode':'media-unavailable','messages':[]}
+            if mode == 'timeout': bridge._request_backend.side_effect = asyncio.TimeoutError()
+            with patch('astrbot_plugin_longtu_bridge.official_trial.send_chain', new_callable=AsyncMock) as send:
+                if mode == 'send-failed': send.side_effect = RuntimeError('upload rejected')
+                await handle_official_message(bridge, event)
+            texts = [call.args[0].chain[0].text for call in event.send.call_args_list]
+            if mode == 'success':
+                self.assertEqual(texts, [])
+                self.assertEqual(send.await_count, 2)
+                continue
+            expected = {'unavailable':'抓取失败',
+                        'timeout':'抓取等待超时','send-failed':'未全部确认发送'}[mode]
+            self.assertIn(expected, texts[-1])
+            self.assertLessEqual(event.send.await_count + send.await_count, 4)
+
+    async def test_gallery_receipts_respect_reply_budget_and_report_truncation(self):
+        for private, limit in ((True, 4), (False, 5)):
+            bridge, event = self.fixture(private=private)
+            bridge.config['official_trial_groups'] = 'group-openid'
+            event.get_messages = lambda: [Comp.Plain('https://v.douyin.com/example')]
+            bridge._request_backend.return_value = {'mode':'media-gallery','messages':[
+                {'type':'forward','images':['https://example/image'] * 10}]}
+            bridge._video_card = AsyncMock(return_value='YWJj')
+            with patch('astrbot_plugin_longtu_bridge.official_trial.send_chain',new_callable=AsyncMock) as send:
+                await handle_official_message(bridge,event)
+            self.assertLessEqual(event.send.await_count + send.await_count,limit)
+            self.assertIn('未全部发送',event.send.call_args.args[0].chain[0].text)
+
     def test_media_budget_and_opaque_identity_length(self):
         chains = output_chains({'messages': [{'type': 'forward', 'images': ['https://example/image'] * 18}]})
         self.assertEqual(len(chains), 5)
