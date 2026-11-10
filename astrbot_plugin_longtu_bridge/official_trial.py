@@ -244,6 +244,7 @@ async def handle_official_message(bridge, event):
     event.call_llm = True
     media_receipt = False
     media_stage = 'backend'
+    observe_only = False
     try:
         if not enabled(bridge.config):
             return
@@ -286,14 +287,17 @@ async def handle_official_message(bridge, event):
         bound_user = str(user_bindings(bridge.config).get(str(event.get_sender_id())) or '')
         from .main import ALLOWED_BRIDGE_SLASH_COMMANDS, REPORT_TIMEZONE, nearby_holiday_context, MEDIA_ACK_PATTERN
         rich = media_segments(raw)
-        # Full-message events use the same group intent as @ events. Once the
-        # group passes the optional allowlist, direct shares need no mention.
-        # Do not turn ordinary group messages into forced replies.
-        if not private and not mentioned:
-            if not MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)):
-                return
-            if getattr(getattr(raw, 'author', None), 'bot', False):
-                return
+        # Full group messages feed the existing backend's passive decision gate.
+        # A shared URL is a direct share; other chatter is observation only.
+        # Never feed this bot's own output or another bot back into the loop.
+        if not private and (getattr(getattr(raw, 'author', None), 'bot', False)
+                            or str(event.get_sender_id()) == str(event.get_self_id())):
+            return
+        has_link = bool(re.search(r'https?://', text, re.IGNORECASE)
+                        or MEDIA_ACK_PATTERN.search(str(rich)))
+        observe_only = bool(not private and not mentioned and not has_link)
+        if observe_only and text.startswith('/'):
+            return
         if text.startswith('/') and text.split()[0] not in ALLOWED_BRIDGE_SLASH_COMMANDS:
             return
         if text.split(' ', 1)[0] == '/usage-report':
@@ -340,7 +344,7 @@ async def handle_official_message(bridge, event):
             'quoted_text': ''.join(c.text for c in quote_chain if isinstance(c, Comp.Plain)),
             'rich_segments': rich,
             'media_share': True,
-            'observe_only': False,
+            'observe_only': observe_only,
         }
         if text.startswith('/crazy-thursday'):
             if not private:
@@ -353,7 +357,8 @@ async def handle_official_message(bridge, event):
             elif command == '/crazy-thursday-add': payload.update(crazy_thursday_add=True, crazy_thursday_entry=argument)
             elif command == '/crazy-thursday-list': payload['crazy_thursday_list'] = True
             elif command == '/crazy-thursday-del': payload['crazy_thursday_delete'] = argument
-        logger.info(f'官方 QQ 试用收到消息：appid={appid} private={private} images={len(images)}')
+        logger.info(f'官方 QQ 试用收到消息：appid={appid} private={private} group={event.get_group_id()} '
+                    f'images={len(images)} observe={observe_only} link={has_link}')
         media_receipt = bool(not text.startswith('/') and MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)))
         response = await bridge._request_backend(payload)
         update = getattr(bridge, '_update_relation_import', None)
@@ -381,6 +386,17 @@ async def handle_official_message(bridge, event):
             except Exception as error:
                 logger.warning(f'官方分享简介卡生成失败：{type(error).__name__}')
                 card = ''
+            if media.get('type') == 'forward':
+                from .official_gallery import send_gallery, GalleryPreparationError
+                galleries = [row for row in response['messages'] if row.get('type') == 'forward']
+                media_stage = 'send'
+                try:
+                    await send_gallery(event, bridge, galleries, card)
+                except GalleryPreparationError as error:
+                    notice = MessageChain([Comp.Plain(str(error))])
+                    notice.use_markdown_ = False
+                    await event.send(notice)
+                return
             if card:
                 response = {**response, 'messages': [{'type': 'image', 'base64': card}, *response['messages']]}
         # Tencent permits 4 C2C / 5 group passive replies. Keep a slot for
@@ -415,6 +431,8 @@ async def handle_official_message(bridge, event):
     except Exception as error:
         # Unknown sends must not be blindly retried by this bridge.
         logger.warning(f'官方 QQ 试用失败：{type(error).__name__} code={getattr(error, "code", "")}')
+        if observe_only:
+            return
         if media_receipt:
             if media_stage == 'send':
                 status = '解析已完成，但内容未全部确认发送；可能已有部分到达，请勿连续重复提交。'
