@@ -69,6 +69,26 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         event.send.assert_awaited_once()
         bridge._request_backend.assert_awaited_once()
 
+    async def test_full_group_event_accepts_direct_share_only_in_verified_trial_group(self):
+        for kind in ('link', 'card', 'ordinary', 'bot', 'no-allowlist'):
+            bridge, event = self.fixture(private=False)
+            bridge.config['official_trial_groups'] = 'group-openid'
+            event.get_messages = lambda: [Comp.Plain('https://b23.tv/example')]
+            if kind == 'card':
+                event.get_messages = lambda: [Comp.Plain('[卡片消息]')]
+                event.message_obj.raw_message.raw_data = {'ark_data':{'fields':{'jump_url':'https://v.douyin.com/example/'}}}
+            if kind == 'ordinary': event.get_messages = lambda: [Comp.Plain('普通消息')]
+            if kind == 'bot': event.message_obj.raw_message.author.bot = True
+            if kind == 'no-allowlist': bridge.config['official_trial_groups'] = ''
+            await handle_official_message(bridge, event)
+            if kind in ('link', 'card'):
+                payload = bridge._request_backend.call_args.args[0]
+                self.assertTrue(payload['media_share'])
+                self.assertFalse(payload['observe_only'])
+                self.assertEqual(payload['mentions'], [])
+            else:
+                bridge._request_backend.assert_not_awaited()
+
     async def test_current_and_quote_images_forwarded_without_onebot(self):
         bridge, event = self.fixture(private=False)
         event.get_messages = lambda: [Comp.At(qq='bot'), Comp.Image(file='https://example/image'),

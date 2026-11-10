@@ -255,8 +255,6 @@ async def handle_official_message(bridge, event):
         private = event.is_private_chat()
         mentioned = any(isinstance(c, Comp.At) and str(c.qq) == str(event.get_self_id())
                         for c in components)
-        if not private and not mentioned:
-            return
         allowed = {x.strip() for x in str(bridge.config.get('official_trial_groups') or '').split(',') if x.strip()}
         if not private and allowed and str(event.get_group_id()) not in allowed:
             return
@@ -280,7 +278,16 @@ async def handle_official_message(bridge, event):
         if raw_text.startswith('/'):
             text = raw_text
         bound_user = str(user_bindings(bridge.config).get(str(event.get_sender_id())) or '')
-        from .main import ALLOWED_BRIDGE_SLASH_COMMANDS, REPORT_TIMEZONE, nearby_holiday_context
+        from .main import ALLOWED_BRIDGE_SLASH_COMMANDS, REPORT_TIMEZONE, nearby_holiday_context, MEDIA_ACK_PATTERN
+        rich = media_segments(raw)
+        # Full-message events use the same group intent as @ events. Allow
+        # direct supported shares in verified trial groups once Tencent delivers
+        # them; do not turn every ordinary group message into a forced reply.
+        if not private and not mentioned:
+            if not allowed or not MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)):
+                return
+            if getattr(getattr(raw, 'author', None), 'bot', False):
+                return
         if text.startswith('/') and text.split()[0] not in ALLOWED_BRIDGE_SLASH_COMMANDS:
             return
         if text.split(' ', 1)[0] == '/usage-report':
@@ -311,7 +318,6 @@ async def handle_official_message(bridge, event):
         quoted = next((c for c in components if isinstance(c, Comp.Reply)), None)
         quote_chain = getattr(quoted, 'chain', None) or []
         quote_images = await bridge._image_base64s(quote_chain, limit=24 if importing else 4)
-        rich = media_segments(raw)
         payload = {
             'message_id': identity(appid, 'message', message_id),
             'message_type': 'private' if private else 'group',
