@@ -32,6 +32,16 @@ def sample():
 
 
 class RenderTests(unittest.TestCase):
+    def test_official_group_name_and_subtitle_never_expose_internal_route(self):
+        key = 'qqofficial:1903660238:group:OPENID'
+        report = {'groups':[{'groupId':key, 'requests':1}]}
+        row = report_rows(report, {key:'真实测试群'})[0]
+        self.assertEqual(row['label'], '真实测试群')
+        self.assertEqual(row['displayId'], 'QQ 官方 Bot')
+        row = report_rows(report, {})[0]
+        self.assertEqual(row['label'], '官方 QQ 群')
+        self.assertNotIn('OPENID', row['displayId'])
+
     def test_png_and_empty_report(self):
         for report in (sample(), {}):
             pngs = render_usage_report(report)

@@ -607,8 +607,14 @@ class LongtuQqBridge(Star):
         sent_count = 0
         for delivery in body.get("deliveries") or []:
             sent, error = False, ""
+            official_result = None
+            if getattr(self, 'config', {}).get('official_trial_enabled', False):
+                from .official_trial import mirror_learning
+                official_result = await mirror_learning(self, delivery.get("payload") or {})
             planned = learning_delivery_message(delivery.get("payload") or {})
-            if not planned:
+            if official_result is not None:
+                sent, error = official_result, "" if official_result else "官方投递未确认"
+            elif not planned:
                 error = "投递目标无效"
             else:
                 action, destination, message = planned
@@ -737,6 +743,9 @@ class LongtuQqBridge(Star):
                 pass
             try:
                 await self._send_crazy_thursday(target.date())
+                if self.config.get('official_trial_enabled', False):
+                    from .official_trial import mirror_crazy_thursday
+                    await mirror_crazy_thursday(self, target.date())
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -803,9 +812,12 @@ class LongtuQqBridge(Star):
     async def _group_names(self, group_ids: list[str]) -> dict[str, str]:
         platform = self._qq_platform()
         bot = getattr(platform, "bot", None)
-        if not bot:
-            return {}
         names = {}
+        if getattr(self, 'config', {}).get('official_trial_enabled', False):
+            from .official_trial import official_group_names
+            names.update(await official_group_names(self, group_ids))
+        if not bot:
+            return names
         for group_id in group_ids[:20]:
             if not str(group_id).isdigit():
                 continue
@@ -1303,6 +1315,9 @@ class LongtuQqBridge(Star):
                 pass
             try:
                 await self._send_daily_usage_report(target.date() - timedelta(days=1))
+                if self.config.get('official_trial_enabled', False):
+                    from .official_trial import mirror_daily_report
+                    await mirror_daily_report(self, target.date() - timedelta(days=1))
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -3242,6 +3257,14 @@ class LongtuQqBridge(Star):
             self.relation_import_sessions[key] = min(float(state.get("expires_at", 0)), now + 15 * 60 * 1000)
         else:
             self.relation_import_sessions.pop(key, None)
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=1001)
+    async def on_official_qq_message(self, event: AstrMessageEvent):
+        """Official trial has its own event boundary; OneBot remains untouched."""
+        if event.get_platform_name() not in ('qq_official', 'qq_official_webhook'):
+            return
+        from .official_trial import handle_official_message
+        await handle_official_message(self, event)
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)

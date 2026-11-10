@@ -246,8 +246,14 @@ class AdapterBridge(LongtuQqBridge):
         sent_count = 0
         for delivery in body.get("deliveries") or []:
             sent, error = False, ""
+            official_result = None
+            if getattr(self, 'config', {}).get('official_trial_enabled', False):
+                from .official_trial import mirror_learning
+                official_result = await mirror_learning(self, delivery.get("payload") or {})
             planned = learning_delivery_message(delivery.get("payload") or {})
-            if not planned:
+            if official_result is not None:
+                sent, error = official_result, "" if official_result else "官方投递未确认"
+            elif not planned:
                 error = "投递目标无效"
             else:
                 action, destination, message = planned
@@ -338,9 +344,12 @@ class AdapterBridge(LongtuQqBridge):
     async def _group_names(self, group_ids: list[str]) -> dict[str, str]:
         platform = self._qq_platform()
         bot = getattr(platform, "bot", None)
-        if not bot:
-            return {}
         names = {}
+        if getattr(self, 'config', {}).get('official_trial_enabled', False):
+            from .official_trial import official_group_names
+            names.update(await official_group_names(self, group_ids))
+        if not bot:
+            return names
         for group_id in group_ids[:20]:
             if not str(group_id).isdigit():
                 continue
