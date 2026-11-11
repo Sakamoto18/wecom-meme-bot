@@ -21,7 +21,7 @@ export class VideoCurriculum {
     const headers = await c.bilibiliHeaders({
       referer: `https://space.bilibili.com/${this.mid}`,
       'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    });
+    }, { requireSession: true });
     const url = await c.wbiUrl('https://api.bilibili.com/x/space/wbi/arc/search', {
       mid: this.mid, pn, ps: 30, order: 'pubdate', platform: 'web',
     }, headers);
@@ -44,6 +44,7 @@ export class VideoCurriculum {
     if (state.run?.status === 'done') this.report(state);
     const today = dayKey(now);
     if (state.run?.day === today && state.run.status === 'done') return;
+    if (state.run?.day === today && state.run.status === 'retry-wait' && now < state.run.retryAt) return;
     if (state.run?.day !== today) {
       // Report an interrupted previous day, then continue its persisted queue.
       if (state.run) { state.run.status = 'interrupted'; this.report(state); }
@@ -51,8 +52,12 @@ export class VideoCurriculum {
       save();
     }
     const run = state.run;
+    run.status = 'running';
+    delete run.error;
+    delete run.retryAt;
+    const videoLimit = Math.min(this.dailyVideos, Math.max(1, Number(run.videoLimit) || this.dailyVideos));
     try {
-      while (run.items.length < this.dailyVideos && run.seconds < this.dailySeconds - 20) {
+      while (run.items.length < videoLimit && run.seconds < this.dailySeconds - 20) {
         if (!state.queue.length) {
           // At most three pages per day; duplicate BV IDs never become work.
           if ((run.pages ?? 0) >= 3) break;
@@ -108,6 +113,17 @@ export class VideoCurriculum {
       }
     } catch (error) {
       run.error = String(error.message).slice(0, 240);
+      const transient = error.retryable === true || /HTTP (412|429|5\d\d)|B 站返回 -(352|412)|timeout|fetch failed/i.test(error.message)
+        || ['TimeoutError', 'AbortError'].includes(error.name);
+      const retries = Number(run.retries) || 0;
+      if (transient && retries < 2) {
+        run.retries = retries + 1;
+        run.retryAt = c.now() + (retries === 0 ? 30 : 120) * 60_000;
+        run.status = 'retry-wait';
+        save();
+        c.logger?.warn?.(`主页学习暂缓：${run.error}；第${run.retries}次补试在 ${new Date(run.retryAt).toISOString()}`);
+        return;
+      }
     }
     run.status = 'done';
     run.finishedAt = c.now();

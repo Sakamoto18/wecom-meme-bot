@@ -19,13 +19,13 @@ function normalizeEndpoint(value) {
  * cookie in qq-bot's environment. The endpoint is only reachable on the
  * private Docker network and returns no cookie when the account is logged out.
  */
-export function createBilibiliSessionProvider({ providerUrl, timeoutMs = 800 } = {}) {
+export function createBilibiliSessionProvider({ providerUrl, timeoutMs = 8000 } = {}) {
   const endpoint = normalizeEndpoint(providerUrl);
   if (!endpoint) return null;
   return async () => {
     try {
       const response = await fetch(`${endpoint}/bilibili-cookie`, {
-        signal: AbortSignal.timeout(Math.max(200, Number(timeoutMs) || 800)),
+        signal: AbortSignal.timeout(Math.max(200, Number(timeoutMs) || 8000)),
       });
       if (!response.ok) return '';
       const payload = await response.json();

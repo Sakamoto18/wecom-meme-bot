@@ -1037,7 +1037,7 @@ export async function createQqRuntime() {
   const douyinProvider = createDouyinProvider({ providerUrl: process.env.DOUYIN_PROVIDER_URL });
   const bilibiliSessionProvider = createBilibiliSessionProvider({
     providerUrl: process.env.BILIBILI_PROVIDER_URL || process.env.DOUYIN_PROVIDER_URL,
-    timeoutMs: (parsePositiveNumber(process.env.QQ_BILIBILI_SESSION_TIMEOUT_MS) ?? 800),
+    timeoutMs: (parsePositiveNumber(process.env.QQ_BILIBILI_SESSION_TIMEOUT_MS) ?? 8000),
   });
   const mediaProvider = async ({ url, platform }) => {
     if (platform === 'xiaohongshu') return xhsProvider?.({ url, platform });
