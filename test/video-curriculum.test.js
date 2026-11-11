@@ -5,6 +5,41 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { VideoLearningStore } from '../src/video-learning-store.js';
 import { VideoCurriculum } from '../src/video-curriculum.js';
+import { VideoLearningCoordinator } from '../src/video-learning.js';
+
+test('主页获取不到登录态时暂停，不能匿名请求列表', async () => {
+  const coordinator = Object.create(VideoLearningCoordinator.prototype);
+  coordinator.cookieProvider = async () => '';
+  coordinator.store = {};
+  coordinator.fetchImpl = async () => { throw new Error('不应请求 B 站'); };
+  const curriculum = new VideoCurriculum(coordinator, { mid: '123', recipients: ['456'] });
+  await assert.rejects(curriculum.page(2), error => error.retryable && /未使用匿名请求/.test(error.message));
+});
+
+test('412 冷却后续学，进程重启保留等待时间和队列', async t => {
+  const f = fixture(t);const c = f.make();
+  c.page = async () => { throw new Error('HTTP 412'); };
+  await c.tick();
+  assert.equal(f.store.getProgress(c.key).run.status, 'retry-wait');
+  assert.equal(f.store.claimDeliveries().length, 0);
+  await f.make().tick();assert.equal(f.watched.length, 0);
+  f.advance(30 * 60_000);await f.make().tick();
+  assert.equal(f.watched.length, 1);
+  assert.equal(f.store.getProgress(c.key).run.error, undefined);
+});
+
+test('持续风控最多补试两次后报告，临时补学上限不改变每日配置', async t => {
+  const f=fixture(t);const c=f.make();let calls=0;
+  c.page=async()=>{calls++;throw new Error('HTTP 412');};
+  await c.tick();f.advance(30*60_000);await c.tick();f.advance(120*60_000);await c.tick();
+  await c.tick();assert.equal(calls,3);
+  assert.equal(f.store.getProgress(c.key).run.status,'done');
+  assert.match(f.store.claimDeliveries()[0].payload.reportText,/HTTP 412/);
+  f.nextDay();const next=f.make();next.dailyVideos=10;
+  f.store.saveProgress(c.key,{queue:[],seen:[],nextPage:1,learned:0,failed:0,total:0,
+    run:{day:'2026-11-06',status:'running',items:[],seconds:0,videoLimit:1}});
+  await next.tick();assert.equal(f.watched.length,1);assert.equal(next.dailyVideos,10);
+});
 
 function fixture(t) {
   const directory = mkdtempSync(path.join(tmpdir(), 'curriculum-'));

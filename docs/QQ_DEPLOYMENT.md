@@ -719,7 +719,7 @@ QQ_MEDIA_USAGE_DATABASE_FILE=data/qq-media-usage.sqlite
 # 可选：B 站 AI 视频总结登录态。只用于 B 站总结接口，不写入日志。
 QQ_BILIBILI_COOKIE=
 QQ_BILIBILI_AI_SUMMARY_TIMEOUT_SECONDS=1.5
-QQ_BILIBILI_SESSION_TIMEOUT_MS=800
+QQ_BILIBILI_SESSION_TIMEOUT_MS=8000
 ```
 
 单视频上限为 500 MiB（提示写作 500MB）。解析到可靠的文件大小或通过探测取得大小后，先判断再完整下载；未知大小的下载路径按累计字节等方式兜底，不能由播放时长推算大小，也不能认为交给 NapCat 的直链都经过 Node 全程计数。图文不走视频大小拦截，视频自身播放时长不作为拒绝条件。

@@ -692,21 +692,28 @@ export class VideoLearningCoordinator {
     }
   }
 
-  async bilibiliHeaders(extra = {}) {
+  async bilibiliHeaders(extra = {}, { requireSession = false } = {}) {
     let cookie = '';
     try {
       cookie = String(await this.cookieProvider?.() || '').trim();
     } catch {
       cookie = '';
     }
+    if (requireSession && !cookie) {
+      throw Object.assign(new Error('B 站登录态暂不可用（Provider 超时或未登录），已暂停主页读取，未使用匿名请求'), { retryable: true });
+    }
     return { 'user-agent': SEARCH_UA, referer: 'https://www.bilibili.com/', ...(cookie ? { cookie } : {}), ...extra };
   }
 
   async getJson(url, headers) {
     const response = await this.fetchImpl(url, { headers, signal: AbortSignal.timeout(15_000) });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status}`), {
+      retryable: [412, 429].includes(response.status) || response.status >= 500,
+    });
     const payload = await response.json();
-    if (Number(payload?.code ?? 0) !== 0) throw new Error(`B 站返回 ${payload?.code} ${payload?.message || ''}`.trim());
+    if (Number(payload?.code ?? 0) !== 0) throw Object.assign(new Error(`B 站返回 ${payload?.code} ${payload?.message || ''}`.trim()), {
+      retryable: [-352, -412].includes(Number(payload?.code)),
+    });
     return payload;
   }
 
