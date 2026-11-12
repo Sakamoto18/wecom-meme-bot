@@ -233,6 +233,8 @@ test('搜索只发送固定白名单查询，不泄露群聊原文，并缓存�
   assert.doesNotMatch(capturedUrl, /private-group-text-123/);
   assert.match(decodeURIComponent(capturedUrl), /龙玉涛/);
   assert.match(first.context, /不可信外部资料/);
+  await search.search('龙图', { forceRefresh: true });
+  assert.equal(calls, 2, '指定学习必须绕过本地搜索缓存');
 });
 
 test('Bing RSS 没有结果时直接返回空结果且不请求 360', async () => {

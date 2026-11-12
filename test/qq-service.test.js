@@ -36,6 +36,33 @@ function createMeme(filename = 'longtu.png') {
   };
 }
 
+test('指定梗学习面向群成员，兼容官方身份，旁观和其他 Bot 不触发学习', async () => {
+  const { service } = createService();
+  const requests = [];
+  service.webMemeLearning.learn = async (term, scope) => {
+    requests.push({ term, scope });return '联网学梗报告：审核通过';
+  };
+  for (const official of [false, true]) {
+    const group = official ? 'qqofficial:1903660238:group:test' : 'g1';
+    const bot = official ? 'qqofficial:1903660238:user:bot' : 'bot';
+    const base = { message_type: 'group', group_id: group, user_id: 'ordinary-member', bot_user_id: bot };
+    const before = requests.length;
+    const observed = await service.handleMessage({ ...base, text: '联网学习 肥嘟嘟 这个梗', observe_only: true });
+    assert.equal(observed.messages.length, 0);assert.equal(requests.length, before);
+    const result = await service.handleMessage({ ...base, text: '/learn-meme 肥嘟嘟', mentions: [{ user_id: bot }] });
+    assert.equal(result.mode, 'web-meme-learning-report');assert.equal(result.messages.length, 1);
+    assert.equal(requests.at(-1).term, '肥嘟嘟');assert.equal(requests.at(-1).scope.groupId, group);
+    await service.handleMessage({ ...base, text: '帮我联网学习肥嘟嘟这个梗', quoted_user_id: bot });
+    assert.equal(requests.length, before + 2);
+  }
+  const help = await service.handleMessage({ message_type: 'private', user_id: 'user', text: '/learn-meme' });
+  assert.match(help.messages[0].text, /用法/);
+  const { service: peerService } = createService({ peerBotUsers: new Set(['peer']) });
+  peerService.webMemeLearning.learn = async () => assert.fail('其他 Bot 不能启动学习');
+  await peerService.handleMessage({ message_type: 'group', group_id: 'peer-group', user_id: 'peer',
+    bot_user_id: 'bot', mentions: [{ user_id: 'bot' }], text: '/learn-meme 肥嘟嘟' });
+});
+
 async function createPng(width = 32, height = 32, color = 0xffffffff) {
   return new Jimp({ width, height, color }).getBuffer('image/png');
 }
@@ -144,6 +171,7 @@ test('/指令只对超管返回完整斜杠指令清单', async () => {
   });
   assert.equal(allowed.mode, 'command-help');
   assert.match(allowed.messages[0].text, /\/usage-report/);
+  assert.match(allowed.messages[0].text, /\/learn-meme 梗名/);
   for (const command of ['/rel-import ', '/rel-import-status', '/rel-import-end', '/rel-index-status']) {
     assert.ok(allowed.messages[0].text.includes(command));
   }

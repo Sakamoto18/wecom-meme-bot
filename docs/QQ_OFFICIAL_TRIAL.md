@@ -83,3 +83,5 @@ AppID `1903660238`，AstrBot 平台 ID `longtu-official-trial`，WebSocket 接�
 群内未 @ 普通消息以 `observe_only` 送给原后端，沿用原接话决策、冷却与频控，不强制逐条回答。普通 HTTP(S) 链接不再被媒体域名过滤，进入普通网页问答路径；抖音等平台分享仍进入原 Provider。忽略机器人自身和标记为 bot 的消息，旁观处理失败保持静默。日志记录群 OpenID、旁观/链接标志便于定位。需群主开启接收全部消息；不新增历史回捞或合并聊天记录展开能力。
 
 2026-11-10 单条图集、普通链接与旁观修复版：47 项回归通过，已部署；备份 `C:/migration-backup/official-trial-20261110-203254`。官方与 OneBot 均已重连。线上已确认多图 Markdown 发送成功、普通链接进入后端回复、未 @ 群消息进入旁观判定。分享卡分离版在 20:37 部署，备份 C:/migration-backup/official-trial-20261110-203714。
+
+指定梗网页学习：群内 @ 后发送 `/learn-meme 梗名` 或“联网学习 XXX 这个梗”，按置信度审核并在原群返回报告，普通成员可用。详见 [使用与审核规则](WEB_MEME_LEARNING.md)。
