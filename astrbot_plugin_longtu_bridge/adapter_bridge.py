@@ -1350,6 +1350,8 @@ class AdapterBridge(LongtuQqBridge):
 
             try:
                 payload["recent_group_context"] = await self._recent_group_context(event, payload)
+                from .web_learning_progress import learning_receipt
+                await learning_receipt(event, payload)
                 response = await self._request_backend(payload)
                 import_update = getattr(self, '_update_relation_import', None)
                 if callable(import_update):

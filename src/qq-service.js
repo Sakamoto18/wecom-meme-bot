@@ -32,7 +32,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { buildVideoLearningLinkRequest } from './video-learning-request.js';
-import { parseWebMemeLearningRequest, WebMemeLearning } from './web-meme-learning.js';
+import { parseWebMemeLearningRequest, parseWebMemeQuery, WebMemeLearning } from './web-meme-learning.js';
 import { isRemovedError } from './media-removed.js';
 import { isMediaExtractionTimeoutError, isMediaTooLargeError } from './media-limits.js';
 import { crazyThursdayCalendarRejection } from './crazy-thursday-calendar.js';
@@ -5652,6 +5652,16 @@ export class QqBotService {
   }
 
   async handleUsageTrackedMessage(payload) {
+    // Read-only progress must not wait behind the same group's learning call.
+    const learningQuery = parseWebMemeQuery(extractMessageText(buildQqCompatibleMessage(payload)));
+    if (learningQuery && !this.isPeerBotMessage(payload)) {
+      if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
+        return { mode: 'observed', messages: [] };
+      }
+      return { mode: 'web-meme-learning-report', messages: [{ type: 'text', text: this.webMemeLearning.query({
+        chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId,
+      }, learningQuery) }] };
+    }
     const conversationTarget = payload.messageType === 'group'
       ? payload.groupId
       : payload.userId;

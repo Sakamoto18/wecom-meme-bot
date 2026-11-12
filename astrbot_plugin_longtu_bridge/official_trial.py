@@ -400,6 +400,8 @@ async def handle_official_message(bridge, event):
                     f'images={len(images)} observe={observe_only} link={has_link} '
                     f'quote={quote["present"]} quote_chars={len(quote["text"])}')
         media_receipt = bool(not text.startswith('/') and MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)))
+        from .web_learning_progress import learning_receipt
+        await learning_receipt(event, payload)
         response = await bridge._request_backend(payload)
         update = getattr(bridge, '_update_relation_import', None)
         if callable(update):

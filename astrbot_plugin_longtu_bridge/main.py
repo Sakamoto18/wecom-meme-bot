@@ -69,7 +69,7 @@ ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
     "/rel-import", "/rel-import-status", "/rel-import-end", "/rel-index-status",
     "/stop", "/usage-report", "/persona", "/jev", "/crazy-thursday", "/crazy-thursday-add",
-    "/crazy-thursday-list", "/crazy-thursday-del", "/learn-meme", "/指令",
+    "/crazy-thursday-list", "/crazy-thursday-del", "/learn-meme", "/learn-status", "/learn-report", "/指令",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
@@ -3708,6 +3708,8 @@ class LongtuQqBridge(Star):
 
             try:
                 payload["recent_group_context"] = await self._recent_group_context(event, payload)
+                from .web_learning_progress import learning_receipt
+                await learning_receipt(event, payload)
                 response = await self._request_backend(payload)
                 import_update = getattr(self, '_update_relation_import', None)
                 if callable(import_update):

@@ -4,12 +4,23 @@ const HELP = '用法：@机器人 /learn-meme 梗名；也可说“联网学习 
 const clean = (value, limit = 500) => String(value ?? '').replace(/[\u0000-\u001f\u007f]+/gu, ' ').replace(/\s+/gu, ' ').trim().slice(0, limit);
 const normalized = value => clean(value, 10000).normalize('NFKC').replace(/\s+/gu, '').toLowerCase();
 const site = domain => domain.split('.').slice(/\.(?:com|org|net)\.(?:cn|uk|au)$/u.test(domain) ? -3 : -2).join('.');
+const scopeKeyFor = scope => createHash('sha256').update(JSON.stringify({ chatType: scope.chatType,
+  target: scope.chatType === 'group' ? scope.groupId : scope.userId })).digest('hex');
+
+export function parseWebMemeQuery(value) {
+  const text = String(value ?? '').trim();
+  if (/^(?:\/learn-status|学习进度|学到哪了|学习到哪了)[？?]?$/iu.test(text)) return 'status';
+  if (/^(?:\/learn-report|学习报告|查看学习报告|补发学习报告)$/iu.test(text)) return 'report';
+  return null;
+}
 
 export function parseWebMemeLearningRequest(value) {
   const text = String(value ?? '').normalize('NFKC').trim();
   const slash = text.match(/^\/learn-meme(?:\s+([\s\S]*))?$/iu);
   // Keep links and explicit video instructions in the existing video path.
   const natural = !/https?:\/\/|这个视频|视频里的/iu.test(text) && (
+    text.match(/^(?:你)?(?:去|帮我|请)?\s*学习(?:一下)?\s*(.+?)\s*(?:相关梗|这个梗|这个网络梗)(?:的(?:内容和关联|内容|用法|出处))?(?:[，,。 ]*(?:发(?:个|一份)?报告(?:到群里)?|并输出报告))?[。！!]?$/u)
+    ||
     text.match(/^(?:请|帮我|麻烦)?\s*(?:去网上|上网|联网)\s*(?:重新)?(?:学(?:习)?(?:一下)?|了解一下)\s*([\s\S]+)$/u)
     || text.match(/^(?:请|帮我)?\s*(?:重新)?学(?:习)?(?:一下)?\s*[“「"]?(.+?)[”」"]?\s*(?:这个梗|这个网络梗)[。！!]?$/u));
   if (!slash && !natural) return null;
@@ -80,6 +91,26 @@ export class WebMemeLearning {
     Object.assign(this, { webSearch, chatClient, memeKnowledge, store, now, logger });
     this.active = 0;
     this.terms = new Set();
+    this.live = new Map();
+  }
+
+  query(scope, kind = 'status') {
+    const scopeKey = scopeKeyFor(scope);
+    let report = this.live.get(scopeKey);
+    try { report ||= this.store?.getProgress(`web-meme-latest:${scopeKey}`); }
+    catch { return '暂时无法读取学习记录，请稍后重试。'; }
+    if (!report) return '本会话还没有已开始的联网学习记录；若刚发送指令，可能仍在排队。';
+    const finished = ['done', 'failed'].includes(report.status);
+    if (kind === 'report' && finished) return formatWebMemeReport(report, this.memeKnowledge?.ttlMs);
+    const elapsed = Math.max(0, Math.round(((finished ? report.finishedAt : this.now()) - report.startedAt) / 1000));
+    const stage = finished ? (report.saved ? '已完成，已入库' : report.status === 'failed' ? '失败，未入库' : '审核完成，未入库')
+      : !this.live.has(scopeKey) ? '上次任务已中断，需重新提交学习'
+        : ({ search: '正在检索网页', draft: '正在提取网页结论', review: '正在审核置信度', save: '正在写入梗库' })[report.stage] || '正在处理';
+    return [`学习进度：${report.term}`, `状态：${stage}`, `${finished ? '耗时' : '已等待'}：${elapsed} 秒`,
+      `已获取 ${report.sources?.length || 0} 条网页材料`,
+      report.confidence ? `置信度：${({ high: '高', medium: '中', low: '低' })[report.confidence]}` : '',
+      report.error || '', finished ? '用 /learn-report 补取完整报告（不会重新学习）。' : '',
+      `报告编号：${report.id}`].filter(Boolean).join('\n');
   }
 
   async learn(term, scope) {
@@ -89,18 +120,23 @@ export class WebMemeLearning {
     if (!this.webSearch || !this.chatClient?.isConfigured || !this.memeKnowledge || !this.store) {
       return '联网学习尚未就绪：需要搜索、审核模型、梗库和学习记录存储；本次未入库。';
     }
-    const scopeKey = createHash('sha256').update(JSON.stringify({ chatType: scope.chatType,
-      target: scope.chatType === 'group' ? scope.groupId : scope.userId })).digest('hex');
+    const scopeKey = scopeKeyFor(scope);
+    if (this.live.has(scopeKey)) return this.query(scope);
     let previous;
     try { previous = this.store.getProgress(`web-meme-latest:${scopeKey}`); }
     catch { return '学习记录存储暂不可用，本次未开始学习、未入库，请稍后重试。'; }
     if (previous && this.now() - previous.finishedAt < 60_000) return '本会话刚完成一次联网学习，请一分钟后再提交；已有报告可直接查看。';
     this.active++;
     this.terms.add(termKey);
-    const report = { id: randomUUID(), term, startedAt: this.now(), scope, status: 'running', saved: false, sources: [] };
+    const report = { id: randomUUID(), term, startedAt: this.now(), scope, status: 'running', stage: 'search', saved: false, sources: [] };
     const key = `web-meme-report:${report.id}`;
-    try {
+    this.live.set(scopeKey, report);
+    const persist = () => {
       this.store.saveProgress(key, report);
+      this.store.saveProgress(`web-meme-latest:${scopeKey}`, report);
+    };
+    try {
+      persist();
       const queries = [`${term} 是什么梗 含义 出处`, `${term} 梗 用法 适用场景 来源`];
       const results = await Promise.allSettled(queries.map(query => this.webSearch.search(term, {
         query, mode: 'general', forceRefresh: true, usageSource: 'web-meme-learning-search',
@@ -110,6 +146,7 @@ export class WebMemeLearning {
       report.sources = sourcesFrom(results.filter(r => r.status === 'fulfilled').map(r => r.value));
       if (!report.sources.length) throw new Error('未取得可审核的网页正文证据');
       report.stage = 'draft';
+      persist();
       const material = JSON.stringify({ term, sources: report.sources });
       const draft = json(await this.chatClient.complete([], material, {
         systemPrompt: DRAFT_PROMPT, usageSource: 'web-meme-learning-draft',
@@ -117,15 +154,17 @@ export class WebMemeLearning {
       }));
       report.draft = draft;
       report.stage = 'review';
+      persist();
       const review = json(await this.chatClient.complete([], JSON.stringify({ term, sources: report.sources, draft }), {
         systemPrompt: REVIEW_PROMPT, usageSource: 'web-meme-learning-review',
         thinking: { type: 'disabled' }, temperature: 0, maxTokens: 1300, timeoutMs: 35_000,
       }));
       report.review = review;
       Object.assign(report, validateWebMemeReview(draft, review, report.sources), { status: 'reviewed' });
-      this.store.saveProgress(key, report);
+      persist();
       if (report.confidence === 'high') {
         report.stage = 'save';
+        persist();
         const used = new Set(report.claims.flatMap(c => c.sourceIds));
         const sources = report.sources.filter(s => used.has(s.id));
         report.saved = this.memeKnowledge.put({ term, confidence: 'high', lookupSource: 'web-reviewed',
@@ -145,13 +184,13 @@ export class WebMemeLearning {
     } finally {
       report.finishedAt = this.now();
       try {
-        this.store.saveProgress(key, report);
-        this.store.saveProgress(`web-meme-latest:${scopeKey}`, report);
+        persist();
       } catch {
         report.error = `${report.error ? report.error + '；' : ''}报告存档失败`;
       }
       this.active--;
       this.terms.delete(termKey);
+      this.live.delete(scopeKey);
     }
     return formatWebMemeReport(report, this.memeKnowledge.ttlMs);
   }
