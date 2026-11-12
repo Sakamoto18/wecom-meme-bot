@@ -4976,3 +4976,12 @@ test('官方群与绑定管理员私聊的单链接和多链接跳过人为抓�
     }
   }
 });
+
+test('人工入库命令拦截普通成员且旁观不响应，不进入模型', async () => {
+  const { service, calls } = createService();
+  const base = { message_type: 'group', group_id: 'manual-group', user_id: 'ordinary', bot_user_id: 'bot' };
+  const result = await service.handleMessage({ ...base, text: '/learn-confirm', mentions: [{ user_id: 'bot' }] });
+  assert.match(result.messages[0].text, /只有已配置/);
+  assert.equal((await service.handleMessage({ ...base, text: '/learn-confirm', observe_only: true })).messages.length, 0);
+  assert.equal(calls.length, 0);
+});

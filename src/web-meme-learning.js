@@ -94,10 +94,15 @@ export class WebMemeLearning {
     this.live = new Map();
   }
 
+  currentReport(scope) {
+    const scopeKey = scopeKeyFor(scope);
+    return this.live.get(scopeKey) || this.store?.getProgress(`web-meme-latest:${scopeKey}`);
+  }
+
   query(scope, kind = 'status') {
     const scopeKey = scopeKeyFor(scope);
-    let report = this.live.get(scopeKey);
-    try { report ||= this.store?.getProgress(`web-meme-latest:${scopeKey}`); }
+    let report;
+    try { report = this.currentReport(scope); }
     catch { return '暂时无法读取学习记录，请稍后重试。'; }
     if (!report) return '本会话还没有已开始的联网学习记录；若刚发送指令，可能仍在排队。';
     const finished = ['done', 'failed'].includes(report.status);
@@ -197,17 +202,19 @@ export class WebMemeLearning {
 }
 
 export function formatWebMemeReport(report, ttlMs) {
-  const verdict = report.saved ? '已通过审核并更新共享梗库'
+  const verdict = report.manualConfirmation ? '已人工确认并更新共享梗库' : report.saved ? '已通过审核并更新共享梗库'
     : report.status === 'failed' ? '学习失败，未入库' : '未入库，保留原有知识';
   return [
     `联网学梗报告：${report.term}`, `结果：${verdict}`,
     `置信度：${({ high: '高', medium: '中', low: '低' })[report.confidence] || '未完成审核'}`,
     ...(report.claims ?? []).map(c => `${({ meaning: '梗义', origin: '出处', usage: '用法/场景' })[c.kind]}${report.confidence === 'high' ? '' : '（待确认）'}：${c.text} [${c.sourceIds.join(',')}]`),
+    report.manualConfirmation ? `人工确认：${report.manualConfirmation.userId} · ${new Date(report.manualConfirmation.at).toISOString()}\n实际保存：${report.manualConfirmation.claims.map(c => c.text).join('；')}\n原机器评分及未选中结论保留，不代表全部通过。` : '',
     report.reason ? `审核：${report.reason}` : '',
     report.uncertainties?.length ? `未确认：${report.uncertainties.join('；')}` : '',
     report.error ? `说明：${report.error}` : '',
     report.saved ? `后续聊天可召回；有效期约 ${Math.round((Number(ttlMs) || 30 * 86400000) / 86400000)} 天。` : '',
     ...report.sources.slice(0, 8).map(s => `[${s.id}] ${s.title}\n${s.url}`),
+    '管理员：/learn-review 梗名 预览；/learn-list 按时间选报告。',
     `报告编号：${report.id}`,
   ].filter(Boolean).join('\n').slice(0, 3400);
 }

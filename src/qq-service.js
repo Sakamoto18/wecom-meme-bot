@@ -32,6 +32,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { buildVideoLearningLinkRequest } from './video-learning-request.js';
+import { WebMemeConfirmation, parseWebMemeManagement } from './web-meme-confirmation.js';
 import { parseWebMemeLearningRequest, parseWebMemeQuery, WebMemeLearning } from './web-meme-learning.js';
 import { isRemovedError } from './media-removed.js';
 import { isMediaExtractionTimeoutError, isMediaTooLargeError } from './media-limits.js';
@@ -5652,15 +5653,29 @@ export class QqBotService {
   }
 
   async handleUsageTrackedMessage(payload) {
+    const learningManagement = parseWebMemeManagement(extractMessageText(buildQqCompatibleMessage(payload)));
+    if (learningManagement && !this.isPeerBotMessage(payload)) {
+      if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
+        return { mode: 'observed', messages: [] };
+      }
+      const manager = new WebMemeConfirmation(this.webMemeLearning);
+      const text = manager.handle(learningManagement, {
+        chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId,
+      }, { administrator: isLongtuAdministrator(payload.userId, this.adminUsers),
+        quotedText: payload.quotedText, quotedMessageId: payload.quotedMessageId });
+      return { mode: 'web-meme-learning-report', messages: [{ type: 'text', text }] };
+    }
     // Read-only progress must not wait behind the same group's learning call.
     const learningQuery = parseWebMemeQuery(extractMessageText(buildQqCompatibleMessage(payload)));
     if (learningQuery && !this.isPeerBotMessage(payload)) {
       if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
         return { mode: 'observed', messages: [] };
       }
-      return { mode: 'web-meme-learning-report', messages: [{ type: 'text', text: this.webMemeLearning.query({
-        chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId,
-      }, learningQuery) }] };
+      const scope = { chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId };
+      let learningRequestId = '';
+      try { learningRequestId = this.webMemeLearning.currentReport(scope)?.scope?.messageId || ''; } catch { /* query reports storage error */ }
+      return { mode: 'web-meme-learning-report', learning_request_id: learningRequestId,
+        messages: [{ type: 'text', text: this.webMemeLearning.query(scope, learningQuery) }] };
     }
     const conversationTarget = payload.messageType === 'group'
       ? payload.groupId
@@ -5857,9 +5872,9 @@ export class QqBotService {
         return { mode: 'observed', messages: [] };
       }
       const text = webLearning.error || await this.webMemeLearning.learn(webLearning.term, {
-        chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId,
+        chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId, messageId: payload.messageId,
       });
-      return { mode: 'web-meme-learning-report', messages: [{ type: 'text', text }] };
+      return { mode: 'web-meme-learning-report', learning_completed: text.startsWith('联网学梗报告：'), messages: [{ type: 'text', text }] };
     }
     const importCommand = parseLongtuManagementCommand(payload.text);
     const importSession = this.getRelationImport(payload);

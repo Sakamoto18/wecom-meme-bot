@@ -13,15 +13,16 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
     async def test_group_member_web_learning_command_reaches_backend_and_report_returns(self):
         bridge, event = self.fixture(private=False)
         event.get_messages = lambda: [Comp.At(qq='bot'), Comp.Plain('/learn-meme 肥嘟嘟')]
-        bridge._request_backend.return_value = {'mode': 'web-meme-learning-report',
+        bridge._request_backend.return_value = {'mode': 'web-meme-learning-report', 'learning_completed': True,
             'messages': [{'type': 'text', 'text': '联网学梗报告：肥嘟嘟\n置信度：高\n已入库'}]}
         await handle_official_message(bridge, event)
         payload = bridge._request_backend.call_args.args[0]
         self.assertEqual(payload['text'], '/learn-meme 肥嘟嘟')
         self.assertFalse(payload['observe_only'])
         self.assertEqual(event.send.await_count, 2)
-        self.assertIn('/learn-status', event.send.call_args_list[0].args[0].chain[0].text)
-        self.assertIn('联网学梗报告', event.send.call_args.args[0].chain[0].text)
+        self.assertIn('翻翻资料', event.send.call_args_list[0].args[0].chain[0].text)
+        self.assertEqual(event.send.call_args.args[0].chain[0].qq, 'user-openid')
+        self.assertIn('联网学梗报告', event.send.call_args.args[0].chain[-1].text)
 
     def fixture(self, private=True):
         bridge = SimpleNamespace(
