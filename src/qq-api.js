@@ -33,7 +33,7 @@ import { CultureCache } from './culture-cache.js';
 import { MemeKnowledgeStore } from './meme-knowledge.js';
 import { MemeCorpusStore } from './meme-corpus.js';
 import { VideoLearningStore } from './video-learning-store.js';
-import { createLearningReportRenderer } from './learning-report-image.js';
+import { createLearningReportRenderer, renderWebLearningResponse } from './learning-report-image.js';
 import { VideoLearningCoordinator } from './video-learning.js';
 import { JevAtmosphereGate, JevRuntimeState } from './jev-atmosphere-gate.js';
 import { JevResponseModeMemory } from './jev-response-mode.js';
@@ -433,7 +433,7 @@ export function createQqApiServer(options) {
       }
 
       const payload = await readJsonBody(request);
-      const result = await service.handleMessage(payload);
+      const result = await renderWebLearningResponse(await service.handleMessage(payload), renderLearningReport);
       sendJson(response, 200, { ok: true, ...result });
     } catch (error) {
       console.error('QQ API 原始异常：', error?.stack || error);

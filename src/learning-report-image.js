@@ -1,3 +1,20 @@
+// Full web-learning reports use the same image renderer as daily reports.
+// Short progress/help responses stay text; never retry a QQ send here.
+export async function renderWebLearningResponse(result, render) {
+  if (result?.mode !== 'web-meme-learning-report') return result;
+  const report = result.messages?.find(row => row.type === 'text'
+    && String(row.text).startsWith('联网学梗报告：'));
+  if (!report) return result;
+  try {
+    const image = await render(report.text);
+    if (!/^base64:\/\/iVBOR/u.test(image)) throw new Error('Invalid report PNG');
+    return { ...result, messages: [{ type: 'image', base64: image.slice('base64://'.length) }] };
+  } catch {
+    return { ...result, messages: [{ type: 'text',
+      text: '学习结果已生成，但报告图片暂时生成失败。请用 /learn-status 查看结果，稍后用 /learn-report 重取。' }] };
+  }
+}
+
 // Cache only the most recent report; both recipients receive identical pixels.
 export function createLearningReportRenderer(providerUrl, fetchImpl = fetch) {
   let cachedText = '';
