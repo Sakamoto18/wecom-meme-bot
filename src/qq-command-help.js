@@ -47,6 +47,7 @@ export function formatAdminSlashCommandHelp() {
     '超管可用的斜杠指令：',
     ...ADMIN_SLASH_COMMANDS.map(([command, description]) => `${command}：${description}`),
     '',
+    '学习报告可由管理员直接回复“入库”或“确认入库”，不必先预览；多份时说“入库 梗名”。',
     '说明：带“私聊”的命令请在私聊中发送；图库命令通常需要附图或引用图片。',
     '未列出的 / 开头内容会被静默拦截，不会交给模型或其他插件。',
   ].join('\n');

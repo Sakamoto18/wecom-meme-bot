@@ -8,7 +8,7 @@ export async function renderWebLearningResponse(result, render) {
   try {
     const image = await render(report.text);
     if (!/^base64:\/\/iVBOR/u.test(image)) throw new Error('Invalid report PNG');
-    return { ...result, messages: [{ type: 'image', base64: image.slice('base64://'.length) }] };
+    return { ...result, learning_report_term: report.text.split('\n')[0].slice('联网学梗报告：'.length), messages: [{ type: 'image', base64: image.slice('base64://'.length) }] };
   } catch {
     return { ...result, messages: [{ type: 'text',
       text: '学习结果已生成，但报告图片暂时生成失败。请用 /learn-status 查看结果，稍后用 /learn-report 重取。' }] };

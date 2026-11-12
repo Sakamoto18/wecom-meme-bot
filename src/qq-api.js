@@ -1,3 +1,4 @@
+import { WebMemeConfirmation } from './web-meme-confirmation.js';
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
@@ -433,7 +434,17 @@ export function createQqApiServer(options) {
       }
 
       const payload = await readJsonBody(request);
-      const result = await renderWebLearningResponse(await service.handleMessage(payload), renderLearningReport);
+      const rawResult = await service.handleMessage(payload);
+      const result = await renderWebLearningResponse(rawResult, renderLearningReport);
+      if (result.mode === 'web-meme-learning-report' && service.webMemeLearning) {
+        try {
+          new WebMemeConfirmation(service.webMemeLearning).rememberReportImage({
+            chatType: payload.message_type === 'private' ? 'private' : 'group',
+            groupId: String(payload.group_id || ''), userId: String(payload.user_id || ''),
+          }, rawResult.messages?.find(row => row.type === 'text')?.text,
+          result.messages?.find(row => row.type === 'image')?.base64);
+        } catch (error) { console.warn('学习报告引用索引保存失败：', error?.name); }
+      }
       sendJson(response, 200, { ok: true, ...result });
     } catch (error) {
       console.error('QQ API 原始异常：', error?.stack || error);
