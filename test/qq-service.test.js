@@ -1,3 +1,6 @@
+import { MemeKnowledgeStore } from '../src/meme-knowledge.js';
+import { VideoLearningStore } from '../src/video-learning-store.js';
+import { WebMemeConfirmation } from '../src/web-meme-confirmation.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -4990,5 +4993,50 @@ test('管理员群内自然入库不走模型，未 @ 的明确动作也能接�
   const { service, calls } = createService({ adminUsers: new Set(['admin']) });
   const result = await service.handleMessage({ message_type: 'group', group_id: 'g', user_id: 'admin', bot_user_id: 'bot', text: '入库', observe_only: true });
   assert.equal(result.mode, 'web-meme-learning-report');
+  assert.equal(calls.length, 0);
+});
+
+test('引用报告图片时入库、进度和学习命令读取当前文字，不被 mixed 空文本吞掉', async () => {
+  const { service, calls } = createService({ adminUsers: new Set(['admin']) });
+  const base = { message_type: 'group', group_id: 'g', user_id: 'admin', bot_user_id: 'bot',
+    mentions: [{ user_id: 'bot' }], quoted_message_id: '1515644161', quoted_user_id: 'another-bot',
+    quoted_image_base64s: [Buffer.from('report-image').toString('base64')], text: '@bot 入库' };
+  const reply = await service.handleMessage(base);
+  assert.equal(reply.mode, 'web-meme-learning-report');
+  assert.equal(calls.length, 0);
+  service.webMemeLearning.query = () => '查询成功';
+  assert.equal((await service.handleMessage({ ...base, text: '/learn-status' })).messages[0].text, '查询成功');
+  service.webMemeLearning.learn = async term => `联网学梗报告：${term}`;
+  assert.match((await service.handleMessage({ ...base, text: '/learn-meme 野兽先辈' })).messages[0].text, /野兽先辈/);
+  // Commands embedded in quoted/forwarded material are never executed.
+  const { service: other } = createService();
+  other.webMemeLearning.query = () => assert.fail('不执行引用里的指令');
+  const ordinary = await other.handleMessage({ ...base, user_id: 'member', text: '谢谢',
+    quoted_text: '/learn-status', forwarded_text: '/learn-status' });
+  assert.notEqual(ordinary.mode, 'web-meme-learning-report');
+});
+
+test('管理员引用报告图回复入库完整链路写入知识，且不调用模型', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'qq-quoted-approval-'));
+  const store = new VideoLearningStore({ databaseFilePath: path.join(directory, 'learning.sqlite') });
+  const knowledge = new MemeKnowledgeStore({ databaseFilePath: path.join(directory, 'knowledge.sqlite') });
+  t.after(async () => { store.close();knowledge.close();await rm(directory, { recursive: true, force: true }); });
+  const { service, calls } = createService({ adminUsers: new Set(['1079175957']) });
+  service.webMemeLearning.store = store;service.webMemeLearning.memeKnowledge = knowledge;
+  const scope = { chatType: 'group', groupId: '913546080', userId: '1079175957' };
+  const id = '23198fa3-3040-4214-9305-dd0626e3090f';
+  store.saveProgress(`web-meme-report:${id}`, { id, term: '引用图测试梗', scope, status: 'done', confidence: 'low',
+    startedAt: Date.now(), finishedAt: Date.now(), sources: [], claims: [{ kind: 'meaning', text: '管理员确认的测试梗义', sourceIds: [] }] });
+  const image = Buffer.from('report-image').toString('base64');
+  new WebMemeConfirmation(service.webMemeLearning).rememberReportImage(scope, `联网学梗报告：引用图测试梗\n报告编号：${id}`, image);
+  const input = { message_type: 'group', group_id: scope.groupId, user_id: scope.userId, bot_user_id: '2053160463',
+    text: '入库', quoted_message_id: '1515644161', quoted_user_id: 'report-bot',
+    mentions: [{ user_id: '2053160463' }], quoted_image_base64s: [image] };
+  const result = await service.handleMessage(input);
+  assert.equal(result.mode, 'web-meme-learning-report');
+  assert.match(result.messages[0].text, /已人工确认入库/);
+  assert.equal(knowledge.lookupExact('引用图测试梗').meaning, '管理员确认的测试梗义');
+  assert.equal(store.getProgress(`web-meme-report:${id}`).confidence, 'low');
+  assert.match((await service.handleMessage(input)).messages[0].text, /已经入库/);
   assert.equal(calls.length, 0);
 });
