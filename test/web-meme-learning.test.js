@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { MemeKnowledgeStore } from '../src/meme-knowledge.js';
 import { VideoLearningStore } from '../src/video-learning-store.js';
-import { WebMemeLearning, parseWebMemeLearningRequest, validateWebMemeReview } from '../src/web-meme-learning.js';
+import { WebMemeLearning, parseWebMemeLearningRequest, parseWebMemeQuery, validateWebMemeReview } from '../src/web-meme-learning.js';
 
 const sources = [
   { id: 1, url: 'https://a.example.org/source', domain: 'a.example.org', title: '肥嘟嘟梗解释', text: '肥嘟嘟这个梗用可爱的叠词调侃大胆行为，常用于朋友之间开玩笑，而非严肃威胁。这里介绍了这个词语的日常使用场景。' },
@@ -26,6 +26,30 @@ test('明确命令与自然语言入口，不抢普通问梗和视频学习', ()
   assert.ok(parseWebMemeLearningRequest('/learn-meme').error);
   assert.ok(parseWebMemeLearningRequest('联网学习这个梗').error);
   assert.ok(parseWebMemeLearningRequest('/learn-meme https://example.com').error);
+  assert.deepEqual(parseWebMemeLearningRequest('你去学习一下114514相关梗的内容和关联，发个报告到群里'), { term: '114514' });
+  assert.equal(parseWebMemeQuery('学习进度'), 'status');
+  assert.equal(parseWebMemeQuery('/learn-report'), 'report');
+});
+
+test('执行中可查询当前阶段，报告补取不重学且隔离会话；重启不伪报运行中', async t => {
+  const f = fixture(t);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  f.learner.webSearch.search = async () => { await gate;return { results: sources.map(s => ({ ...s, description: s.text })) }; };
+  const pending = f.learner.learn('肥嘟嘟', scope);
+  assert.match(f.learner.query(scope), /正在检索网页/);
+  assert.match(f.learner.query({ ...scope, groupId: 'unrelated' }), /没有已开始/);
+  const restarted = new WebMemeLearning({ store: f.store, memeKnowledge: f.memeKnowledge });
+  assert.match(restarted.query(scope), /已中断/);
+  const complete = f.learner.chatClient.complete;
+  f.learner.chatClient.complete = async (...args) => {
+    assert.match(f.learner.query(scope), args[2].usageSource.endsWith('draft') ? /提取网页结论/ : /审核置信度/);
+    return complete(...args);
+  };
+  release();const report = await pending;
+  assert.match(f.learner.query(scope), /已完成，已入库/);
+  assert.equal(f.learner.query(scope, 'report'), report);
+  assert.equal(restarted.query(scope, 'report'), report);
 });
 
 test('审核剔除伪造引文，同站子域、单来源、审核拒绝不能高置信入库', () => {

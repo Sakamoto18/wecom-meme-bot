@@ -36,6 +36,23 @@ function createMeme(filename = 'longtu.png') {
   };
 }
 
+test('学习进度绕过群串行队列，执行中立即返回并且旁观不响应', async () => {
+  const { service } = createService();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const locked = service.runGroupExclusive('progress-group', () => gate);
+  service.webMemeLearning.query = () => '正在审核置信度';
+  const base = { message_type: 'group', group_id: 'progress-group', user_id: 'member', bot_user_id: 'bot' };
+  try {
+    const result = await Promise.race([
+      service.handleMessage({ ...base, text: '/learn-status', mentions: [{ user_id: 'bot' }] }),
+      new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('查询被群队列阻塞')), 500);timer.unref(); }),
+    ]);
+    assert.match(result.messages[0].text, /审核置信度/);
+    assert.equal((await service.handleMessage({ ...base, text: '学习进度', observe_only: true })).messages.length, 0);
+  } finally { release();await locked; }
+});
+
 test('指定梗学习面向群成员，兼容官方身份，旁观和其他 Bot 不触发学习', async () => {
   const { service } = createService();
   const requests = [];

@@ -19,7 +19,8 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         payload = bridge._request_backend.call_args.args[0]
         self.assertEqual(payload['text'], '/learn-meme 肥嘟嘟')
         self.assertFalse(payload['observe_only'])
-        event.send.assert_awaited_once()
+        self.assertEqual(event.send.await_count, 2)
+        self.assertIn('/learn-status', event.send.call_args_list[0].args[0].chain[0].text)
         self.assertIn('联网学梗报告', event.send.call_args.args[0].chain[0].text)
 
     def fixture(self, private=True):
