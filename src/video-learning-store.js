@@ -560,6 +560,17 @@ export class VideoLearningStore {
     return row ? json(row.progress_json) : null;
   }
 
+  listWebMemeReports(scope) {
+    const target = scope.chatType === 'group' ? scope.groupId : scope.userId;
+    const field = scope.chatType === 'group' ? '$.scope.groupId' : '$.scope.userId';
+    return this.ensureOpen().prepare(`SELECT progress_json FROM video_learning_progress
+      WHERE source_key LIKE 'web-meme-report:%'
+        AND json_extract(progress_json, '$.scope.chatType') = ?
+        AND json_extract(progress_json, ?) = ?
+      ORDER BY CAST(json_extract(progress_json, '$.startedAt') AS INTEGER) DESC, source_key DESC`)
+      .all(scope.chatType, field, target).map(row => json(row.progress_json));
+  }
+
   saveProgress(sourceKey, progress) {
     this.ensureOpen().prepare(`INSERT INTO video_learning_progress VALUES (?, ?, ?)
       ON CONFLICT(source_key) DO UPDATE SET progress_json=excluded.progress_json, updated_at=excluded.updated_at`)

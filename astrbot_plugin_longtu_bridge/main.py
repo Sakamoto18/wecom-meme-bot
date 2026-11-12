@@ -69,7 +69,7 @@ ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
     "/rel-import", "/rel-import-status", "/rel-import-end", "/rel-index-status",
     "/stop", "/usage-report", "/persona", "/jev", "/crazy-thursday", "/crazy-thursday-add",
-    "/crazy-thursday-list", "/crazy-thursday-del", "/learn-meme", "/learn-status", "/learn-report", "/指令",
+    "/crazy-thursday-list", "/crazy-thursday-del", "/learn-meme", "/learn-status", "/learn-report", "/learn-list", "/learn-review", "/learn-confirm", "/learn-cancel", "/指令",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
@@ -3708,9 +3708,8 @@ class LongtuQqBridge(Star):
 
             try:
                 payload["recent_group_context"] = await self._recent_group_context(event, payload)
-                from .web_learning_progress import learning_receipt
-                await learning_receipt(event, payload)
-                response = await self._request_backend(payload)
+                from .web_learning_progress import request_learning_backend
+                response = await request_learning_backend(self, event, payload)
                 import_update = getattr(self, '_update_relation_import', None)
                 if callable(import_update):
                     import_update(event, response)
@@ -3731,6 +3730,10 @@ class LongtuQqBridge(Star):
             # 普通群消息原本以 observe_only 进入 Node 服务。Node 现在可能通过
             # “读空气”判定把它升级为主动回复；只有确实没有返回消息时才保持静默。
             if observe_only and not response["messages"]:
+                return
+
+            from .web_learning_progress import deliver_learning_report
+            if await deliver_learning_report(event, response):
                 return
 
             await self._sleep_before_reply(event, response)

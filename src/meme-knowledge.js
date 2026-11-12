@@ -177,7 +177,7 @@ export function memeKnowledgePrompt(entry, source = 'cache', options = {}) {
       return `时事（${text(event.time, 20) || '时间未知'}，${status}${age}）：${text(event.subject, 30)} ${text(event.claim || event.event, 160)}`;
     }),
     list(entry.replyHooks, 4).length ? `可接话的说法：${list(entry.replyHooks, 4).join('；')}` : '',
-    `证据状态：${entry.confidence === 'medium' ? '全局候选梗记忆（事实待核实）' : source === 'cache' ? '本地高置信梗库' : '本轮定向 B 站梗语境/百科检索'}`,
+    `证据状态：${entry.lookupSource === 'human-confirmed' ? '管理员人工确认（不是网页独立互证）' : entry.confidence === 'medium' ? '全局候选梗记忆（事实待核实）' : source === 'cache' ? '本地高置信梗库' : '本轮定向 B 站梗语境/百科检索'}`,
     `可信度：${entry.confidence}`,
     entry.confidence === 'medium' ? '候选只可借用梗义、反差和适用场景自然接话；不能据此断言出处、人物身份、原句或现实事件。被问到来源时明确尚未核实，不播报内部学习过程。' : '',
     options.intent ? MEME_INTENT_RULES[options.intent] ?? '' : '',
@@ -410,6 +410,12 @@ export class MemeKnowledgeStore {
 
   cleanup() {
     this.ensureOpen().prepare('DELETE FROM meme_knowledge WHERE expires_at <= ?').run(this.now());
+  }
+
+  lookupExact(term) {
+    const row = this.ensureOpen().prepare('SELECT * FROM meme_knowledge WHERE term_key = ? AND expires_at > ?')
+      .get(text(term, MAX_TERM).toLowerCase(), this.now());
+    return row ? { ...this.#row(row), updatedAt: row.updated_at } : null;
   }
 
   lookup(term) {

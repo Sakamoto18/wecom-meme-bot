@@ -400,9 +400,8 @@ async def handle_official_message(bridge, event):
                     f'images={len(images)} observe={observe_only} link={has_link} '
                     f'quote={quote["present"]} quote_chars={len(quote["text"])}')
         media_receipt = bool(not text.startswith('/') and MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)))
-        from .web_learning_progress import learning_receipt
-        await learning_receipt(event, payload)
-        response = await bridge._request_backend(payload)
+        from .web_learning_progress import request_learning_backend
+        response = await request_learning_backend(bridge, event, payload)
         update = getattr(bridge, '_update_relation_import', None)
         if callable(update):
             update(event, response)
@@ -416,6 +415,9 @@ async def handle_official_message(bridge, event):
             notice = MessageChain([Comp.Plain(notices[response['mode']] + ('\n' + detail[:600] if detail else ''))])
             notice.use_markdown_ = False
             await event.send(notice)
+            return
+        from .web_learning_progress import deliver_learning_report
+        if await deliver_learning_report(event, response):
             return
         media = next((row for row in response.get('messages', []) if row.get('type') in ('video', 'forward')), None)
         result_media_count = sum(1 if row.get('type') in ('video', 'image') else len(row.get('images', []))
