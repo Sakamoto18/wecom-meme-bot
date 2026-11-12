@@ -74,3 +74,33 @@ test('重启后可确认自己的快照，私聊记录隔离，失败任务需�
   f.store.saveProgress('web-meme-report:private', { ...f.report, id: 'private', scope: { chatType: 'private', userId: 'admin' } });
   assert.equal(f.store.listWebMemeReports({ chatType: 'private', userId: 'another' }).length, 0);
 });
+
+test('管理员自然回复一步入库，普通聊天和否定不触发', t => {
+  const f = setup(t);
+  for (const text of ['入库', '确认入库', '这个我确认了', '这份入库吧']) assert.equal(parseWebMemeManagement(text)?.action, 'direct');
+  for (const text of ['不要入库', '能入库吗', '对的话我确认一下就能入库', '入库失败了吗']) assert.equal(parseWebMemeManagement(text), null);
+  assert.match(f.call('入库', scope, false), /只有已配置/);
+  assert.match(f.call('入库'), /已人工确认入库/);
+  assert.match(f.call('入库'), /已经入库/);
+  assert.equal(f.memeKnowledge.lookup('哼哼啊啊').lookupSource, 'human-confirmed');
+});
+test('引用标题或报告图精准选择旧报告，多份不猜，未知引用不落到最近', t => {
+  const f = setup(t);
+  f.store.saveProgress('web-meme-report:new', { ...f.report, id: 'new', term: '另一个梗' });
+  assert.match(f.call('入库'), /几份报告/);
+  assert.match(f.call('入库', scope, true, { quotedMessageId: 'unknown' }), /引用没能对应/);
+  assert.match(f.call('入库', scope, true, { quotedMessageId: 'old', quotedText: '《哼哼啊啊》学习报告\n管理员回复入库' }), /已人工确认入库/);
+  assert.equal(f.store.getProgress('web-meme-report:new').saved, false);
+  assert.match(f.call('入库 另一个梗'), /已人工确认入库/);
+});
+test('持久化报告图片引用与会话隔离，图片预览只保存预览内容', t => {
+  const f = setup(t); const id = '23198fa3-3040-4214-9305-dd0626e3090f';
+  f.store.saveProgress(`web-meme-report:${id}`, { ...f.report, id, term: '图片报告' });
+  const preview = f.call('/learn-review 图片报告 | 这段声音属于野兽先辈梗');
+  const image = Buffer.from('test-image').toString('base64');
+  f.manager.rememberReportImage(scope, preview, image);
+  f.call('/learn-cancel');
+  assert.match(f.call('入库', { ...scope, groupId: 'other' }, true, { quotedMessageId: 'image', quotedImages: [image] }), /引用没能对应/);
+  assert.match(f.call('入库', scope, true, { quotedMessageId: 'image', quotedImages: [image] }), /已人工确认入库/);
+  assert.equal(f.memeKnowledge.lookup('图片报告').meaning, '这段声音属于野兽先辈梗');
+});

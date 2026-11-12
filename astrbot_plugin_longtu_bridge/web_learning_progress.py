@@ -100,11 +100,14 @@ async def request_learning_backend(bridge, event, payload, *, intervals=(35, 45)
 
 async def deliver_learning_report(event, response):
     """Deliver the finished request in its original event, @ raw sender (QQ/OpenID)."""
-    if not response.get('learning_completed'):
+    if not response.get('learning_completed') and not response.get('learning_report_term'):
         return False
     parts = []
-    if not event.is_private_chat():
+    if not event.is_private_chat() and response.get('learning_completed'):
         parts.extend([Comp.At(qq=str(event.get_sender_id())), Comp.Plain(' ')])
+    term = str(response.get('learning_report_term') or '')
+    if term:
+        parts.append(Comp.Plain(f'《{term}》学习报告\n管理员回复“入库”即可保存梗义和用法。\n'))
     for row in response.get('messages', []):
         if row.get('type') == 'image' and row.get('base64'):
             parts.append(Comp.Image(file='base64://' + row['base64']))
@@ -118,7 +121,7 @@ async def deliver_learning_report(event, response):
     except Exception as error:
         logger.warning(f'联网学习报告未确认送达：{type(error).__name__}')
         # Never blindly resend a possibly delivered report. A short recovery notice is distinct.
-        notice = MessageChain([*(parts[:2] if not event.is_private_chat() else []),
+        notice = MessageChain([*([Comp.At(qq=str(event.get_sender_id())), Comp.Plain(' ')] if not event.is_private_chat() else []),
                                Comp.Plain('报告发出去时出了点问题，先别重学；发 /learn-report 就能补取。')])
         notice.use_markdown_ = False
         try:

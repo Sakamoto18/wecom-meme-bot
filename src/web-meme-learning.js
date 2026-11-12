@@ -214,7 +214,7 @@ export function formatWebMemeReport(report, ttlMs) {
     report.error ? `说明：${report.error}` : '',
     report.saved ? `后续聊天可召回；有效期约 ${Math.round((Number(ttlMs) || 30 * 86400000) / 86400000)} 天。` : '',
     ...report.sources.slice(0, 8).map(s => `[${s.id}] ${s.title}\n${s.url}`),
-    '管理员：/learn-review 梗名 预览；/learn-list 按时间选报告。',
+    '管理员确认：回复“入库”即可保存梗义和用法；也可说“入库 梗名”。' ,
     `报告编号：${report.id}`,
   ].filter(Boolean).join('\n').slice(0, 3400);
 }

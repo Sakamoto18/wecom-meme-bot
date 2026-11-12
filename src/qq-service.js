@@ -1637,6 +1637,7 @@ export function normalizeQqPayload(payload, { relationImport = false } = {}) {
     groupId,
     senderName: normalizeString(payload.sender_name, MAX_NAME_CHARACTERS),
     text: normalizeString(payload.text, MAX_MESSAGE_CHARACTERS),
+    learningQuoteImages: limitedImages.quotedImages,
     quotedMessageId: normalizeIdentifier(
       payload.quoted_message_id,
       'quoted_message_id',
@@ -5655,14 +5656,15 @@ export class QqBotService {
   async handleUsageTrackedMessage(payload) {
     const learningManagement = parseWebMemeManagement(extractMessageText(buildQqCompatibleMessage(payload)));
     if (learningManagement && !this.isPeerBotMessage(payload)) {
-      if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
+      if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)
+        && !(learningManagement.action === 'direct' && isLongtuAdministrator(payload.userId, this.adminUsers))) {
         return { mode: 'observed', messages: [] };
       }
       const manager = new WebMemeConfirmation(this.webMemeLearning);
       const text = manager.handle(learningManagement, {
         chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId,
       }, { administrator: isLongtuAdministrator(payload.userId, this.adminUsers),
-        quotedText: payload.quotedText, quotedMessageId: payload.quotedMessageId });
+        quotedText: payload.quotedText, quotedMessageId: payload.quotedMessageId, quotedImages: payload.learningQuoteImages });
       return { mode: 'web-meme-learning-report', messages: [{ type: 'text', text }] };
     }
     // Read-only progress must not wait behind the same group's learning call.

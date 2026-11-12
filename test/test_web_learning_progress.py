@@ -61,3 +61,14 @@ class ProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await deliver_learning_report(event, result))
         self.assertEqual(event.send.await_count, 3)  # receipt, report, distinct recovery text
         self.assertIn('/learn-report', event.send.await_args.args[0].chain[0].text)
+
+    async def test_report_retrieval_has_term_caption_and_image_in_one_message(self):
+        from astrbot_plugin_longtu_bridge.web_learning_progress import deliver_learning_report
+        event = SimpleNamespace(is_private_chat=lambda: False, get_sender_id=lambda: 'sender', send=AsyncMock())
+        response = {'learning_report_term': '野兽先辈', 'messages': [{'type': 'image', 'base64': 'iVBOR'}]}
+        self.assertTrue(await deliver_learning_report(event, response))
+        event.send.assert_awaited_once()
+        chain = event.send.await_args.args[0].chain
+        self.assertIn('《野兽先辈》学习报告', chain[0].text)
+        self.assertIn('入库', chain[0].text)
+        self.assertEqual(chain[1].file, 'base64://iVBOR')

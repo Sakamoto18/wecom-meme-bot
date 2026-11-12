@@ -4985,3 +4985,10 @@ test('人工入库命令拦截普通成员且旁观不响应，不进入模型',
   assert.equal((await service.handleMessage({ ...base, text: '/learn-confirm', observe_only: true })).messages.length, 0);
   assert.equal(calls.length, 0);
 });
+
+test('管理员群内自然入库不走模型，未 @ 的明确动作也能接住', async () => {
+  const { service, calls } = createService({ adminUsers: new Set(['admin']) });
+  const result = await service.handleMessage({ message_type: 'group', group_id: 'g', user_id: 'admin', bot_user_id: 'bot', text: '入库', observe_only: true });
+  assert.equal(result.mode, 'web-meme-learning-report');
+  assert.equal(calls.length, 0);
+});
