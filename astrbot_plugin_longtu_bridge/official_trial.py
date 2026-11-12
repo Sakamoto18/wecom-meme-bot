@@ -417,7 +417,7 @@ async def handle_official_message(bridge, event):
             await event.send(notice)
             return
         from .web_learning_progress import deliver_learning_report
-        if await deliver_learning_report(event, response):
+        if await deliver_learning_report(event, response, bridge):
             return
         media = next((row for row in response.get('messages', []) if row.get('type') in ('video', 'forward')), None)
         result_media_count = sum(1 if row.get('type') in ('video', 'image') else len(row.get('images', []))

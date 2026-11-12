@@ -5040,3 +5040,43 @@ test('管理员引用报告图回复入库完整链路写入知识，且不调�
   assert.match((await service.handleMessage(input)).messages[0].text, /已经入库/);
   assert.equal(calls.length, 0);
 });
+
+test('引用消息 ID 即可定位报告，不需要引用文字或图片，支持嵌套 ID', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'qq-receipt-'));
+  const store = new VideoLearningStore({ databaseFilePath: path.join(directory, 'learning.sqlite') });
+  const knowledge = new MemeKnowledgeStore({ databaseFilePath: path.join(directory, 'knowledge.sqlite') });
+  t.after(async () => { store.close();knowledge.close();await rm(directory, { recursive: true, force: true }); });
+  const { service, calls } = createService({ adminUsers: new Set(['admin']) });
+  service.webMemeLearning.store = store;service.webMemeLearning.memeKnowledge = knowledge;
+  const scope = { chatType:'group',groupId:'g',userId:'admin',botUserId:'bot' };
+  const id = '23198fa3-3040-4214-9305-dd0626e3090f';
+  store.saveProgress(`web-meme-report:${id}`, { id,term:'回执词',scope,status:'done',confidence:'low',sources:[],
+    claims:[{kind:'meaning',text:'只有回执也能正确定位报告',sourceIds:[]}] });
+  const manager = new WebMemeConfirmation(service.webMemeLearning);
+  manager.bindDelivery(manager.issueDelivery(scope,`报告编号：${id}`),'report-id');
+  const result = await service.handleMessage({message_type:'group',group_id:'g',user_id:'admin',bot_user_id:'bot',text:'入库',
+    quoted_message_id:'wrapper',quoted_message_ids:['report-id'],mentions:[{user_id:'bot'}]});
+  assert.match(result.messages[0].text,/已人工确认/);assert.equal(calls.length,0);
+  assert.ok(knowledge.lookupExact('回执词'));
+});
+
+test('报告回执 HTTP 接口要求认证，绑定仅存档的 token 且幂等', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(),'receipt-api-'));
+  const store = new VideoLearningStore({databaseFilePath:path.join(directory,'reports.sqlite')});
+  const learner = {store};
+  const server = createQqApiServer({apiToken:'receipt-test',service:{webMemeLearning:learner}});
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));store.close();await rm(directory,{recursive:true,force:true});});
+  const manager = new WebMemeConfirmation(learner);
+  const scope = {chatType:'group',groupId:'g',userId:'admin',botUserId:'bot'};
+  const id = '23198fa3-3040-4214-9305-dd0626e3090f';
+  store.saveProgress(`web-meme-report:${id}`,{id,scope,claims:[],status:'done'});
+  const token=manager.issueDelivery(scope,`报告编号：${id}`);
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const url=`http://127.0.0.1:${server.address().port}/v1/qq/learning-report-receipt`;
+  const post=(body,auth=true)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...(auth?{Authorization:'Bearer receipt-test'}:{})},body:JSON.stringify(body)});
+  assert.equal((await post({token,message_id:'msg'},false)).status,401);
+  assert.equal((await post({token:'fake',message_id:'msg'})).status,409);
+  assert.equal((await post({token,message_id:'msg'})).status,200);
+  assert.equal((await post({token,message_id:'msg'})).status,200);
+  assert.equal((await post({token,message_id:'different'})).status,409);
+});

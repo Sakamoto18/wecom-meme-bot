@@ -1639,6 +1639,7 @@ export function normalizeQqPayload(payload, { relationImport = false } = {}) {
     senderName: normalizeString(payload.sender_name, MAX_NAME_CHARACTERS),
     text: normalizeString(payload.text, MAX_MESSAGE_CHARACTERS),
     learningQuoteImages: limitedImages.quotedImages,
+    learningQuoteMessageIds: (Array.isArray(payload.quoted_message_ids) ? payload.quoted_message_ids : []).slice(0, 12).map(id => String(id).slice(0, 240)),
     quotedMessageId: normalizeIdentifier(
       payload.quoted_message_id,
       'quoted_message_id',
@@ -5663,9 +5664,9 @@ export class QqBotService {
       }
       const manager = new WebMemeConfirmation(this.webMemeLearning);
       const text = manager.handle(learningManagement, {
-        chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId,
+        chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId, botUserId: payload.botUserId,
       }, { administrator: isLongtuAdministrator(payload.userId, this.adminUsers),
-        quotedText: payload.quotedText, quotedMessageId: payload.quotedMessageId, quotedImages: payload.learningQuoteImages });
+        quotedText: payload.quotedText, quotedMessageId: payload.quotedMessageId, quotedImages: payload.learningQuoteImages, quotedMessageIds: payload.learningQuoteMessageIds });
       return { mode: 'web-meme-learning-report', messages: [{ type: 'text', text }] };
     }
     // Read-only progress must not wait behind the same group's learning call.

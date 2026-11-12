@@ -104,3 +104,39 @@ test('持久化报告图片引用与会话隔离，图片预览只保存预览�
   assert.match(f.call('入库', scope, true, { quotedMessageId: 'image', quotedImages: [image] }), /已人工确认入库/);
   assert.equal(f.memeKnowledge.lookup('图片报告').meaning, '这段声音属于野兽先辈梗');
 });
+
+test('平台发送 ID 持久化绑定报告，同名、多层引用、重启后仍精准，隔离群与机器人', t => {
+  const f = setup(t);const boundScope = { ...scope, botUserId: 'bot1' };
+  const id = '23198fa3-3040-4214-9305-dd0626e3090f';
+  f.store.saveProgress(`web-meme-report:${id}`, { ...f.report, id });
+  const token = f.manager.issueDelivery(boundScope, `联网学梗报告：哼哼啊啊\n报告编号：${id}`);
+  assert.ok(token);assert.equal(f.manager.bindDelivery(token, 'sent-report'), true);
+  assert.equal(f.manager.bindDelivery(token, 'sent-report'), true);
+  assert.equal(f.manager.bindDelivery(token, 'different-message'), false);
+  const manager = new WebMemeConfirmation({ store: f.store, memeKnowledge: f.memeKnowledge });
+  const confirm = (s, ids) => manager.handle({ action: 'direct', argument: '' }, s,
+    { administrator: true, quotedMessageId: 'wrapper', quotedMessageIds: ids });
+  assert.match(confirm({ ...boundScope, botUserId: 'bot2' }, ['sent-report']), /没能对应/);
+  assert.match(confirm({ ...boundScope, groupId: 'other' }, ['sent-report']), /没能对应/);
+  assert.match(confirm(boundScope, ['sent-report']), /已人工确认/);
+  assert.equal(f.store.getProgress(`web-meme-report:${id}`).saved, true);
+  assert.equal(f.store.getProgress('web-meme-report:test-id').saved, false);
+});
+test('发送回执不能重绑、不能伪造 token、多份引用拒绝；预览保留选中结论', t => {
+  const f = setup(t);const s = { ...scope, botUserId: 'bot' };
+  const id = '23198fa3-3040-4214-9305-dd0626e3090f', other = '23198fa3-3040-4214-9305-dd0626e3090a';
+  f.store.saveProgress(`web-meme-report:${id}`, { ...f.report, id, term: '预览词' });
+  f.store.saveProgress(`web-meme-report:${other}`, { ...f.report, id: other, term: '另词' });
+  const preview = f.call('/learn-review 预览词 | 只保存这句人工确认的含义', s);
+  const token = f.manager.issueDelivery(s, preview);
+  assert.equal(f.manager.bindDelivery('made-up', 'msg'), false);
+  assert.equal(f.manager.bindDelivery(token, 'msg'), true);
+  const next = f.manager.issueDelivery(s, `联网学梗报告：另词\n报告编号：${other}`);
+  assert.equal(f.manager.bindDelivery(next, 'msg'), false);
+  assert.equal(f.manager.bindDelivery(next, 'msg2'), true);
+  assert.match(f.call('入库', s, true, { quotedMessageIds: ['msg', 'msg2'] }), /多份学习报告/);
+  assert.match(f.call('入库', { ...s, userId: 'another' }, true, { quotedMessageId: 'msg' }), /另一位管理员/);
+  f.call('/learn-cancel', s);
+  assert.match(f.call('入库', s, true, { quotedMessageId: 'msg' }), /已人工确认/);
+  assert.equal(f.memeKnowledge.lookup('预览词').meaning, '只保存这句人工确认的含义');
+});
