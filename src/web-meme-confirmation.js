@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { formatWebMemeReport } from './web-meme-learning.js';
 
 const norm = value => String(value ?? '').normalize('NFKC').replace(/\s+/gu, '').toLowerCase();
@@ -23,6 +23,38 @@ export function parseWebMemeManagement(value) {
 export class WebMemeConfirmation {
   constructor({ store, memeKnowledge, now = Date.now }) { Object.assign(this, { store, memeKnowledge, now }); }
 
+  issueDelivery(scope, text) {
+    const id = String(text).match(/报告编号：([\da-f-]{36})/iu)?.[1];
+    const report = id && this.store?.getProgress(`web-meme-report:${id}`);
+    if (!report || !sameScope(report.scope, scope)) return null;
+    const preview = text.includes('人工确认预览（尚未入库）');
+    const pending = preview ? this.store.getProgress(key(scope, 'confirmation')) : null;
+    if (preview && pending?.reportId !== id) return null;
+    const token = randomUUID();
+    this.store.saveProgress(`web-meme-delivery:${token}`, { reportId: id, scope, at: this.now(),
+      claims: preview ? pending.claims : (report.claims || []).filter(c => ['meaning', 'usage'].includes(c.kind)),
+      reportVersion: digest(report), preview, administrator: preview ? scope.userId : null });
+    return token;
+  }
+
+  bindDelivery(token, messageId) {
+    if (!/^[\da-f-]{36}$/iu.test(String(token)) || !String(messageId || '').trim() || String(messageId).length > 240) return false;
+    const delivery = this.store?.getProgress(`web-meme-delivery:${token}`);
+    if (!delivery?.reportId || !delivery.scope.botUserId) return false;
+    const id = String(messageId).trim();
+    const key = this.deliveryMessageKey(delivery.scope, id);
+    const current = this.store.getProgress(key);
+    if (current?.token && current.token !== token) return false;
+    if (delivery.messageId && delivery.messageId !== id) return false;
+    this.store.saveProgress(key, { ...delivery, token, messageId: id });
+    this.store.saveProgress(`web-meme-delivery:${token}`, { ...delivery, messageId: id });
+    return true;
+  }
+
+  deliveryMessageKey(scope, id) {
+    return `web-meme-message:${digest([scope.chatType, scope.chatType === 'group' ? scope.groupId : scope.userId, scope.botUserId, id])}`;
+  }
+
   rememberReportImage(scope, text, image) {
     const id = String(text).match(/报告编号：([\da-f-]{36})/iu)?.[1];
     if (!id || !image) return;
@@ -34,7 +66,7 @@ export class WebMemeConfirmation {
       claims: pending?.reportId === id ? pending.claims : undefined });
   }
 
-  handle(command, scope, { administrator = false, quotedText = '', quotedMessageId = '', quotedImages = [] } = {}) {
+  handle(command, scope, { administrator = false, quotedText = '', quotedMessageId = '', quotedImages = [], quotedMessageIds = [] } = {}) {
     const { action, argument } = command;
     if (['review', 'confirm', 'cancel', 'direct'].includes(action) && !administrator) return '只有已配置的机器人管理员可以确认入库；普通成员可以查看学习报告。';
     if (!this.store || !this.memeKnowledge) return '学习记录或梗库暂不可用。';
@@ -50,9 +82,22 @@ export class WebMemeConfirmation {
           const matched = reports.filter(r => norm(r.term) === norm(term));
           if (matched.length > 1) return `「${term}」有多份报告，请引用要确认的那张报告回复“入库”。`;
           report = matched[0];
-        } else if (quotedMessageId || quotedText || quotedImages.length) {
+        } else if (quotedMessageId || quotedText || quotedImages.length || quotedMessageIds.length) {
+          const bindings = [...new Set([quotedMessageId, ...quotedMessageIds].filter(Boolean))].slice(0, 12)
+            .map(id => this.store.getProgress(this.deliveryMessageKey(scope, id))).filter(r => r?.reportId);
+          const boundIds = [...new Set(bindings.map(r => r.reportId))];
+          if (boundIds.length > 1) return '引用链里有多份学习报告，请只引用要保存的那份。';
+          if (boundIds.length === 1) {
+            // Prefer the immediate quote when several receipts point to this report.
+            const binding = bindings[0];
+            report = reports.find(r => r.id === binding.reportId);
+            if (!report) return '这份报告存档暂不可用，没有入库。';
+            if (binding.preview && binding.administrator !== scope.userId) return '这是另一位管理员的部分确认预览，请引用完整报告或说明要保存的梗名。';
+            if (!report.saved && binding.reportVersion !== digest(report)) return '报告内容已更新，请引用新版报告再确认。';
+            selectedClaims = binding.claims;
+          }
           const id = String(quotedText).match(/报告编号：([\da-f-]{36})/iu)?.[1];
-          report = reports.find(r => r.id === id);
+          if (!report) report = reports.find(r => r.id === id);
           {
             const refs = quotedImages.map(image => this.store.getProgress(`web-meme-image:${createHash('sha256').update(Buffer.from(image.replace(/^base64:\/\//u, ''), 'base64')).digest('hex')}`))
               .filter(ref => ref && sameScope(ref.scope, scope));
@@ -61,7 +106,7 @@ export class WebMemeConfirmation {
             if (ids.length === 1) {
               if (report && report.id !== ids[0]) return '引用文字和图片对应的报告不同，请重新引用一份报告。';
               report = reports.find(r => r.id === ids[0]);
-              selectedClaims = refs.find(ref => ref.reportId === ids[0])?.claims;
+              selectedClaims ||= refs.find(ref => ref.reportId === ids[0])?.claims;
             }
           }
           if (!report) {

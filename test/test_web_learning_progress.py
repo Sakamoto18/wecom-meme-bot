@@ -72,3 +72,14 @@ class ProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('《野兽先辈》学习报告', chain[0].text)
         self.assertIn('入库', chain[0].text)
         self.assertEqual(chain[1].file, 'base64://iVBOR')
+
+    async def test_report_receipt_registration_failure_never_resends_delivered_image(self):
+        from unittest.mock import patch
+        from astrbot_plugin_longtu_bridge.web_learning_progress import deliver_learning_report
+        event = SimpleNamespace(is_private_chat=lambda: True, send=AsyncMock())
+        response = {'learning_report_term': '梗', 'learning_delivery_token': 'token',
+                    'messages': [{'type':'image','base64':'abc'}]}
+        with patch('astrbot_plugin_longtu_bridge.learning_report_receipt.send_with_receipt', AsyncMock(return_value='actual-id')) as send, \
+             patch('astrbot_plugin_longtu_bridge.learning_report_receipt.remember_receipt', AsyncMock(side_effect=OSError())):
+            self.assertTrue(await deliver_learning_report(event,response,SimpleNamespace()))
+            send.assert_awaited_once();event.send.assert_not_awaited()

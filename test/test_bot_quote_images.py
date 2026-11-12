@@ -34,7 +34,7 @@ class Reply:
         self.sender_id, self.chain, self.id = sender_id, chain, 'original-message'
 class Forward: pass
 
-namespace = {'Comp': SimpleNamespace(Plain=Plain, Image=Image, Reply=Reply, Forward=Forward),
+namespace = {'__name__': 'astrbot_plugin_longtu_bridge.quote_test', '__package__': 'astrbot_plugin_longtu_bridge', 'Comp': SimpleNamespace(Plain=Plain, Image=Image, Reply=Reply, Forward=Forward),
              'asyncio': asyncio, 'contextlib': contextlib, 're': re, 'time': time,
              'logger': logging.getLogger('test'), 'MAX_IMAGE_COMPONENTS': 12, 'MAX_FORWARD_IMAGE_COMPONENTS': 24,
              'MAX_QUOTED_REPLY_DEPTH': 3,

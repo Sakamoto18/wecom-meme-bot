@@ -62,6 +62,12 @@ async def request_learning_backend(bridge, event, payload, *, intervals=(35, 45)
     """One receipt + at most two progress notices, leaving a final-report slot in QQ."""
     import asyncio
     import contextlib
+    if getattr(bridge, 'session', None):
+        try:
+            from .learning_report_receipt import flush_receipts
+            await flush_receipts(bridge)
+        except Exception as error:
+            logger.warning(f'学习回执补登暂不可用：{type(error).__name__}')
     if not learning_targeted(event, payload):
         return await bridge._request_backend(payload)
     await learning_receipt(event, payload)
@@ -98,7 +104,7 @@ async def request_learning_backend(bridge, event, payload, *, intervals=(35, 45)
                 await request
 
 
-async def deliver_learning_report(event, response):
+async def deliver_learning_report(event, response, bridge=None):
     """Deliver the finished request in its original event, @ raw sender (QQ/OpenID)."""
     if not response.get('learning_completed') and not response.get('learning_report_term'):
         return False
@@ -116,7 +122,12 @@ async def deliver_learning_report(event, response):
     chain = MessageChain(parts)
     chain.use_markdown_ = False
     try:
-        await event.send(chain)
+        if bridge is not None and response.get('learning_delivery_token'):
+            from .learning_report_receipt import send_with_receipt
+            message_id = await send_with_receipt(event, chain)
+        else:
+            message_id = ''
+            await event.send(chain)
         logger.info('联网学习报告已发送：群内提醒发起人' if not event.is_private_chat() else '联网学习报告已发送：私聊')
     except Exception as error:
         logger.warning(f'联网学习报告未确认送达：{type(error).__name__}')
@@ -128,4 +139,11 @@ async def deliver_learning_report(event, response):
             await event.send(notice)
         except Exception as notice_error:
             logger.warning(f'学习报告补取提示未确认发送：{type(notice_error).__name__}')
+    else:
+        if bridge is not None and response.get('learning_delivery_token'):
+            try:
+                from .learning_report_receipt import remember_receipt
+                await remember_receipt(bridge, response['learning_delivery_token'], message_id)
+            except Exception as error:
+                logger.warning(f'学习报告已发出但回执存档失败：{type(error).__name__}')
     return True

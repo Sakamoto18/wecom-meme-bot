@@ -1842,6 +1842,12 @@ class LongtuQqBridge(Star):
             and any(isinstance(component, Comp.Image) for component in current_chain)
         )
         reply_id = str(getattr(reply_component, "id", "") or "").strip()
+        if reply_id:
+            ids = getattr(event, '_longtu_learning_quote_ids', None)
+            if ids is None:
+                event._longtu_learning_quote_ids = ids = []
+            if reply_id not in ids and len(ids) < 12:
+                ids.append(reply_id)
         bot = getattr(event, "bot", None)
         if (
             not reply_id
@@ -3669,6 +3675,7 @@ class LongtuQqBridge(Star):
                 "text": text,
                 "quoted_text": quoted_text,
                 "quoted_message_id": str(getattr(reply_component, "id", "") or ""),
+                "quoted_message_ids": getattr(event, "_longtu_learning_quote_ids", []),
                 "forwarded_text": forwarded_text,
                 "quoted_forwarded_text": quoted_forwarded_text,
                 "quoted_user_id": quoted_user_id,
@@ -3733,7 +3740,7 @@ class LongtuQqBridge(Star):
                 return
 
             from .web_learning_progress import deliver_learning_report
-            if await deliver_learning_report(event, response):
+            if await deliver_learning_report(event, response, self):
                 return
 
             await self._sleep_before_reply(event, response)

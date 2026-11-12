@@ -420,6 +420,15 @@ export function createQqApiServer(options) {
         return;
       }
 
+      if (url.pathname === '/v1/qq/learning-report-receipt') {
+        if (request.method !== 'POST') { sendJson(response, 405, { ok: false });return; }
+        if (!isAuthorized(request, apiToken)) { sendJson(response, 401, { ok: false });return; }
+        const body = await readJsonBody(request);
+        const ok = service.webMemeLearning && new WebMemeConfirmation(service.webMemeLearning)
+          .bindDelivery(body.token, body.message_id);
+        sendJson(response, ok ? 200 : 409, { ok: Boolean(ok) });return;
+      }
+
       if (url.pathname !== '/v1/qq/message') {
         sendJson(response, 404, { ok: false, error: '接口不存在' });
         return;
@@ -438,11 +447,15 @@ export function createQqApiServer(options) {
       const result = await renderWebLearningResponse(rawResult, renderLearningReport);
       if (result.mode === 'web-meme-learning-report' && service.webMemeLearning) {
         try {
-          new WebMemeConfirmation(service.webMemeLearning).rememberReportImage({
+          const confirmation = new WebMemeConfirmation(service.webMemeLearning);
+          const scope = {
             chatType: payload.message_type === 'private' ? 'private' : 'group',
-            groupId: String(payload.group_id || ''), userId: String(payload.user_id || ''),
-          }, rawResult.messages?.find(row => row.type === 'text')?.text,
-          result.messages?.find(row => row.type === 'image')?.base64);
+            groupId: String(payload.group_id || ''), userId: String(payload.user_id || ''), botUserId: String(payload.bot_user_id || ''),
+          };
+          const text = rawResult.messages?.find(row => row.type === 'text')?.text;
+          const image = result.messages?.find(row => row.type === 'image')?.base64;
+          confirmation.rememberReportImage(scope, text, image);
+          if (image) result.learning_delivery_token = confirmation.issueDelivery(scope, text);
         } catch (error) { console.warn('学习报告引用索引保存失败：', error?.name); }
       }
       sendJson(response, 200, { ok: true, ...result });
