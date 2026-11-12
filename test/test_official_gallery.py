@@ -11,7 +11,7 @@ class GalleryTests(unittest.IsolatedAsyncioTestCase):
     def fixture(self, count=18):
         event = SimpleNamespace(bot=SimpleNamespace(api=SimpleNamespace(_http=object())))
         bridge = SimpleNamespace(_cover_bytes=AsyncMock(side_effect=lambda url, *a, **k: url.encode()))
-        gallery = {'title': '[title](https://example)', 'description': '描述',
+        gallery = {'title': '[title](https://example)', 'description': '描述', 'author': '作者昵称',
                    'images': [f'https://example/{i}' for i in range(count)]}
         return event, bridge, gallery
 
@@ -34,7 +34,7 @@ class GalleryTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(content.index('原图1 '), content.index('原图18 '))
         self.assertEqual(len(cleanup.call_args.args[1]), 18)
 
-    async def test_no_card_keeps_escaped_description_and_one_message(self):
+    async def test_content_contains_only_images_without_title_author_or_description(self):
         event, bridge, gallery = self.fixture(2)
         with patch('astrbot_plugin_longtu_bridge.official_gallery.upload_markdown_image',
                    new_callable=AsyncMock, return_value=('qqbot-media://image/v1/x', 300, 400)), \
@@ -42,8 +42,8 @@ class GalleryTests(unittest.IsolatedAsyncioTestCase):
              patch('astrbot_plugin_longtu_bridge.official_gallery.cleanup_materials', new_callable=AsyncMock):
             await send_gallery(event, bridge, [gallery])
         content = send.call_args.args[1]
-        self.assertIn('描述', content)
-        self.assertNotIn('[title](https://example)', content)
+        for text in ('描述', 'title', '作者昵称'):
+            self.assertNotIn(text, content)
         self.assertEqual(content.count('![原图'), 2)
 
     async def test_partial_preparation_failure_cleans_up_and_sends_nothing(self):

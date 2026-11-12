@@ -1,7 +1,6 @@
 """Deliver an entire gallery in one official QQ Markdown message."""
 import asyncio
 import base64
-import re
 
 from astrbot.api import logger
 from .official_compact_image import upload_markdown_image, cleanup_materials, send_markdown_images
@@ -9,11 +8,6 @@ from .official_compact_image import upload_markdown_image, cleanup_materials, se
 
 class GalleryPreparationError(ValueError):
     """Nothing was sent; a single failure notice is safe."""
-
-
-def plain_markdown(value):
-    # Source descriptions are text, never arbitrary Markdown image/link syntax.
-    return re.sub(r'([\\`*_{}\[\]()<>#+.!|~>-])', r'\\\1', str(value or ''))
 
 
 async def send_gallery(event, bridge, galleries):
@@ -30,9 +24,8 @@ async def send_gallery(event, bridge, galleries):
             # separately from the send so a timeout here is known not to have sent.
             async with asyncio.timeout(180):
                 for gallery in galleries:
-                    for key in ('title', 'author', 'description'):
-                        if gallery.get(key):
-                            parts.append(plain_markdown(gallery[key]))
+                    # Metadata belongs to the separate intro card. The content
+                    # message contains only originals, even if card generation fails.
                     for index, source in enumerate(gallery.get('images') or [], 1):
                         if not isinstance(source, str) or not source.startswith(('http://', 'https://')):
                             raise ValueError('Invalid gallery image URL')
