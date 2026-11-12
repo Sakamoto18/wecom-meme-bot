@@ -1984,16 +1984,40 @@ test('有上下文的简短追问、检查失败或格式错误仍保留正常�
   }
 });
 
-test('已确认空喊但草稿夹带 token 元话术时短句兜底，不重新启动搜索', async () => {
+test('艾特意图草稿不合格时回到正常回答，不替换成空喊套话', async () => {
   let calls = 0;
   const result = await generateConversationReply({
     content:'在？',modelInput:'在？',directBotMention:true,
     webSearch:{async search(){assert.fail('不能为无意义艾特重启搜索');}},
-    chatClient:{isConfigured:true,async complete(){calls++;return '{"kind":"banter","reply":"先把欠的 token 结了。"}';}},
+    chatClient:{isConfigured:true,async complete(){calls++;return calls === 1 ? '{"kind":"banter","reply":"先把欠的 token 结了。"}' : '在，听着呢。';}},
   });
-  assert.equal(result.mode,'idle-mention');
+  assert.equal(result.mode,'model');
+  assert.equal(result.answer,'在，听着呢。');
   assert.doesNotMatch(result.answer,/token|结了|搜索/iu);
-  assert.equal(calls,1);
+  assert.equal(calls,2);
+});
+
+test('图片纠错已规划实质回答时，短艾特检查不能抢走上下文', async () => {
+  for (const plan of [
+    { answer_required: true },
+    { answer_required: false, topic_relation: 'correction' },
+    { answer_required: false, speech_act: 'correction_with_banter' },
+  ]) {
+    const calls = [];
+    const result = await generateConversationReply({
+      content: '你是阳痿吗？看不到奈奈和大腿', directBotMention: true,
+      history: [{ role: 'assistant', content: '这幅插画只露出鞋跟。' }],
+      turnPlan: normalizeTurnPlan(plan), webSearchEnabled: false,
+      chatClient: { isConfigured: true, async complete(_h, _i, options) {
+        calls.push(options.usageSource);
+        return options.usageSource === 'mention-intent-reply'
+          ? '{"kind":"banter","reply":"叫我有事？"}' : '画面主体得一起看，不能只盯着鞋跟评价。';
+      } },
+    });
+    assert.ok(!calls.includes('mention-intent-reply'));
+    assert.notEqual(result.mode, 'idle-mention');
+    assert.match(result.answer, /画面主体/);
+  }
 });
 
 test('普通消息、实际问题和附带材料不被短艾特语义检查抢走', async () => {

@@ -7,7 +7,7 @@ test('只把真人直接艾特中的短歧义文本交给语义判断，不按�
     assert.equal(shouldCheckMentionIntent(text, { directBotMention: true }), true, text);
     assert.equal(shouldCheckMentionIntent(text), false, text);
   }
-  for (const flag of ['hasImageContext', 'hasQuotedContent', 'hasVideoContext', 'recordSummary', 'hasThirdPartyTarget', 'attackStyle', 'requiredIdentityRole']) {
+  for (const flag of ['hasImageContext', 'hasQuotedContent', 'hasVideoContext', 'recordSummary', 'hasThirdPartyTarget', 'attackStyle', 'requiredIdentityRole', 'answerRequired', 'correction']) {
     assert.equal(shouldCheckMentionIntent('看看', { directBotMention: true, [flag]: true }), false, flag);
   }
 });
