@@ -1,6 +1,7 @@
 import {
   buildModelInput,
   extractMessageText,
+  stripBotMention,
   getAnonymousSpeakerId,
   getConversationId,
   getGroupInteractionContext,
@@ -5654,7 +5655,7 @@ export class QqBotService {
   }
 
   async handleUsageTrackedMessage(payload) {
-    const learningManagement = parseWebMemeManagement(extractMessageText(buildQqCompatibleMessage(payload)));
+    const learningManagement = parseWebMemeManagement(stripBotMention(payload.text));
     if (learningManagement && !this.isPeerBotMessage(payload)) {
       if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)
         && !(learningManagement.action === 'direct' && isLongtuAdministrator(payload.userId, this.adminUsers))) {
@@ -5668,7 +5669,7 @@ export class QqBotService {
       return { mode: 'web-meme-learning-report', messages: [{ type: 'text', text }] };
     }
     // Read-only progress must not wait behind the same group's learning call.
-    const learningQuery = parseWebMemeQuery(extractMessageText(buildQqCompatibleMessage(payload)));
+    const learningQuery = parseWebMemeQuery(stripBotMention(payload.text));
     if (learningQuery && !this.isPeerBotMessage(payload)) {
       if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
         return { mode: 'observed', messages: [] };
@@ -5868,7 +5869,7 @@ export class QqBotService {
   }
 
   async handleNormalizedMessage(payload) {
-    const webLearning = parseWebMemeLearningRequest(extractMessageText(buildQqCompatibleMessage(payload)));
+    const webLearning = parseWebMemeLearningRequest(stripBotMention(payload.text));
     if (webLearning && !this.isPeerBotMessage(payload)) {
       if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
         return { mode: 'observed', messages: [] };
