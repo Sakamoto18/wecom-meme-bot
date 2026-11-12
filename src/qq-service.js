@@ -3918,15 +3918,23 @@ export class QqBotService {
         jevStyle,
         historicalContextImageCandidates,
       );
+      // A visual correction can omit “that picture”. Only recover a fresh
+      // image owned by this speaker; another member's image is not evidence.
+      const visualCorrection = /看不到|没(?:有)?看[到见]|看(?:漏|错)|漏看|没(?:有)?注意到/u.test(imageSearchQuestion);
+      const correctionImage = visualCorrection
+        ? historicalContextImageCandidates.findLast(candidate =>
+          candidate.senderUserId === speakerUserId && speakerUserId
+          && candidate.ageSeconds <= 120)
+        : null;
       if (historicalContextImageCandidates.length > 0
         && initialContextImageEntries.length === 0
         && imageCount === 0
         && options.directBotMention === true
-        && isHistoricalImageReference(imageSearchQuestion)) {
+        && (isHistoricalImageReference(imageSearchQuestion) || correctionImage)) {
         contextImageStyle = {
           ...(jevStyle ?? {}),
           contextImageNeeded: 1,
-          contextImageIndexes: [historicalContextImageCandidates.length],
+          contextImageIndexes: [correctionImage?.index ?? historicalContextImageCandidates.length],
           contextImageReason: '当前消息明确承接最近一张图片，补回原图供 DeepSeek 核对',
         };
         this.logger.log?.('QQ 历史图片引用兜底：当前消息明确指向最近图片，补回最新候选');

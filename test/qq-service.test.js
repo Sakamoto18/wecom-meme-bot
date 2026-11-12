@@ -1299,6 +1299,36 @@ test('历史图片按发言人和明确图指代过滤，不跨成员硬套上�
   }).length, 0);
 });
 
+test('无引用的看图纠错补回本人最近原图，不误用别人的图或过期图', async () => {
+  for (const scenario of [
+    { owner: 'speaker', age: 60_000, text: '你是阳痿吗？看不到奈奈和大腿', expected: true },
+    { owner: 'other', age: 60_000, text: '看不到大腿吗', expected: false },
+    { owner: 'speaker', age: 180_000, text: '看不到大腿吗', expected: false },
+    { owner: 'speaker', age: 60_000, text: '今天吃什么', expected: false },
+  ]) {
+    let now = 1_000_000;
+    const calls = [];
+    const { service } = createService({ now: () => now, chatClient: {
+      isConfigured: true, async complete(_h, input, options) {
+        calls.push({ input, options });
+        return '画面要整体看，不能只挑一处。';
+      },
+    } });
+    const prepared = await prepareImageBlocks({ imageBase64s: [(await createPng()).toString('base64')] });
+    service.rememberContextImages('group:g1', prepared.blocks, {
+      items: [{ index: 1, description: '人物插画' }],
+    }, { from: { userid: scenario.owner } });
+    now += scenario.age;
+    const message = buildQqCompatibleMessage(normalizeQqPayload({
+      message_type: 'group', group_id: 'g1', user_id: 'speaker', text: scenario.text,
+      bot_user_id: 'bot', mentions: [{ user_id: 'bot' }],
+    }));
+    await service.replyConversation(message, scenario.text, '群友', { directBotMention: true });
+    const images = calls.flatMap(c => Array.isArray(c.input) ? c.input : []).filter(b => b.type === 'image_url');
+    assert.equal(images.length > 0, scenario.expected, JSON.stringify(scenario));
+  }
+});
+
 test('无图消息不会把上一位群友的图片带进最终回复材料', async () => {
   const calls = [];
   const { service } = createService({

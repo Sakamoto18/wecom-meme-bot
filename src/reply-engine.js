@@ -1217,6 +1217,8 @@ export async function generateConversationReply(options) {
     hasVideoContext: videoBlocks.length > 0,
     hasThirdPartyTarget: interactionContext.hasThirdPartyTarget,
     attackStyle, requiredIdentityRole,
+    answerRequired: turnPlan?.answerRequired === true,
+    correction: turnPlan?.topicRelation === 'correction' || turnPlan?.speechAct === 'correction_with_banter',
   }) && !PERSONA_DEMONSTRATION_PATTERN.test(String(currentQuestion ?? ''))) {
     let mentionReply;
     try {
@@ -1242,9 +1244,9 @@ export async function generateConversationReply(options) {
           removeReplyProcessNarration(stripReplyActing(removeInternalReplyMetadata(mentionReply))), forbiddenProtectedRoleTerms,
         ),
       ));
-      if (answer) {
+      if (answer && !isInvalidPureMentionReply(answer)) {
         return {
-          answer: isInvalidPureMentionReply(answer) ? PURE_MENTION_FALLBACK : answer,
+          answer,
           mode: 'idle-mention', references: [], review: null, attempts: 1,
           searchResult: emptySearchResult(), searchError: null,
           searchAttempted: false, searchMode: '', thinkingEnabled: false,

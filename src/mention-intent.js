@@ -11,6 +11,7 @@ import {
 export function shouldCheckMentionIntent(question, options = {}) {
   const text = String(question ?? '').trim();
   return options.directBotMention === true
+    && !options.answerRequired && !options.correction
     && !options.hasImageContext && !options.hasQuotedContent
     && !options.recordSummary && !options.hasVideoContext
     && !options.hasThirdPartyTarget && !options.attackStyle
