@@ -38,6 +38,7 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(handler, /PURE_BOT_MENTION_TEXT\s+if pure_bot_mention/);
   assert.match(source, /ALLOWED_BRIDGE_SLASH_COMMANDS\s*=\s*\{[^}]*"\/stop"/);
   assert.match(source, /"\/usage-report"/);
+  assert.match(source, /"\/learn-meme"/);
   assert.match(source, /"\/指令"/);
   assert.match(source, /if raw_text == "\/指令":/);
   assert.match(source, /"\/persona"/);

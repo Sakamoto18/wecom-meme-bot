@@ -69,7 +69,7 @@ ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
     "/rel-import", "/rel-import-status", "/rel-import-end", "/rel-index-status",
     "/stop", "/usage-report", "/persona", "/jev", "/crazy-thursday", "/crazy-thursday-add",
-    "/crazy-thursday-list", "/crazy-thursday-del", "/指令",
+    "/crazy-thursday-list", "/crazy-thursday-del", "/learn-meme", "/指令",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
@@ -3210,7 +3210,7 @@ class LongtuQqBridge(Star):
             return
         # A +1 must join the ongoing repeat run before the group moves on, and
         # a "let me look it up" reminder should land before the lookup does.
-        if response.get("mode") in {"repeat-reply", "learning-pending"}:
+        if response.get("mode") in {"repeat-reply", "learning-pending", "web-meme-learning-report"}:
             return
         if response.get("mode") == "management-relation-import":
             return

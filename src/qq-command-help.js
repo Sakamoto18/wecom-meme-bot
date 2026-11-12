@@ -12,6 +12,7 @@ const ADMIN_SLASH_COMMANDS = [
   ['/rel-index-status', '查看图库文字、场景识别及自动词族归类进度；普通对话会按语境选图。'],
   ['/stop', '停止当前群的 Bot 回复和连续话题。仅群聊生效。'],
   ['/usage-report [YYYY-MM-DD]', '查看今日或指定日期的用量日报。'],
+  ['/learn-meme 梗名', '指定梗重新联网学习，经独立置信度审核后返回报告；仅高置信结果更新共享梗库。普通成员可用，群里需 @机器人或引用机器人；也支持“联网学习 XXX 这个梗”。'],
   ['/persona [help|train|start]', '查看人格训练说明或开始训练。'],
   ['/persona [save|confirm]', '确认保存待确认的人格补充。'],
   ['/persona [cancel|reject]', '取消待确认的人格补充。'],

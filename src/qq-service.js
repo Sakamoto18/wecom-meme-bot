@@ -32,6 +32,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { buildVideoLearningLinkRequest } from './video-learning-request.js';
+import { parseWebMemeLearningRequest, WebMemeLearning } from './web-meme-learning.js';
 import { isRemovedError } from './media-removed.js';
 import { isMediaExtractionTimeoutError, isMediaTooLargeError } from './media-limits.js';
 import { crazyThursdayCalendarRejection } from './crazy-thursday-calendar.js';
@@ -2267,6 +2268,11 @@ export class QqBotService {
     // without making an ordinary message wait on browser work.
     this.videoLearningStore = options.videoLearningStore ?? null;
     this.videoLearning = options.videoLearning ?? null;
+    this.webMemeLearning = new WebMemeLearning({
+      webSearch: this.webSearchEnabled ? this.webSearch : null, chatClient: this.chatClient,
+      memeKnowledge: this.memeKnowledge, store: this.videoLearningStore,
+      now: options.now ?? Date.now, logger: options.logger ?? console,
+    });
     this.memeCorpus = options.memeCorpus ?? null;
     this.abstractAssociationFeedback = new Map();
     this.abstractAssociationFeedbackTtlMs = Math.max(
@@ -5835,6 +5841,16 @@ export class QqBotService {
   }
 
   async handleNormalizedMessage(payload) {
+    const webLearning = parseWebMemeLearningRequest(extractMessageText(buildQqCompatibleMessage(payload)));
+    if (webLearning && !this.isPeerBotMessage(payload)) {
+      if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
+        return { mode: 'observed', messages: [] };
+      }
+      const text = webLearning.error || await this.webMemeLearning.learn(webLearning.term, {
+        chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId,
+      });
+      return { mode: 'web-meme-learning-report', messages: [{ type: 'text', text }] };
+    }
     const importCommand = parseLongtuManagementCommand(payload.text);
     const importSession = this.getRelationImport(payload);
     if (importCommand?.action?.startsWith('relation-import-')

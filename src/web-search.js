@@ -668,7 +668,7 @@ export class LongtuWebSearch {
     const includeDomains = normalizeDomains(options.includeDomains);
     const cacheKey = `${this.provider}:${mode}:${includeDomains.join(",")}:${normalizedCacheQuery}`;
     const cached = this.cache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (!options.forceRefresh && cached && cached.expiresAt > Date.now()) {
       return { ...cached.value, fromCache: true };
     }
 
