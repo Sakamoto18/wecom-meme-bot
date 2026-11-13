@@ -5080,3 +5080,26 @@ test('报告回执 HTTP 接口要求认证，绑定仅存档的 token 且幂等'
   assert.equal((await post({token,message_id:'msg'})).status,200);
   assert.equal((await post({token,message_id:'different'})).status,409);
 });
+
+test('聊天分句不切逗号半句、链接或数字，超过两条保留完整内容', () => {
+  const clauses = '如果你还没有扫码登录，就先去登录页面完成扫码，然后等状态恢复，再发送原来的链接，免得重复提交后仍然失败。';
+  assert.deepEqual(splitReplyText(clauses, { splitSentences:true, splitClauses:false, maxPartCharacters:30, maxParts:2 }), [clauses]);
+  const answer = '先登录。再试一次。失败就查日志。';
+  const parts = splitReplyText(answer, { splitSentences:true, splitClauses:false, maxPartCharacters:5, maxParts:2 });
+  assert.equal(parts.length,2);assert.equal(parts.join('').replace(/\n/gu,''),answer);
+  const link = '接口地址是 https://example.com:8080/a,b?x=1.25。';
+  assert.deepEqual(splitReplyText(link, { splitSentences:true, splitClauses:false, maxPartCharacters:15, maxParts:2 }), [link]);
+});
+
+test('官方与 NapCat 普通回复共用最多两条完整句子的展示规则', async () => {
+  const answer = '这个问题先看登录状态，登录过期的话抓取就会失败，所以先确认账号还是在线的。'
+    + '状态正常再检查链接是不是原视频地址，分享页和视频页有时候不是一回事。'
+    + '还失败就看具体错误码，不要一直重复发送同一链接。';
+  for (const group of ['913546080','qqofficial:1903660238:group:test']) {
+    const { service } = createService({ chatClient:{isConfigured:true,async complete(){return answer;}} });
+    const result = await service.handleMessage({message_type:'group',group_id:group,user_id:'u',bot_user_id:'bot',mentions:[{user_id:'bot'}],text:'抓取为什么没成功'});
+    const texts=result.messages.filter(m=>m.type==='text').map(m=>m.text);
+    assert.equal(texts.length,2);assert.equal(texts.join('').replace(/\n/gu,''),answer);
+    assert.ok(texts.every(t=>t.endsWith('。')));
+  }
+});

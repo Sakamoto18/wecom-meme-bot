@@ -18,6 +18,7 @@ import {
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
 import { QqUsageLimitError, isDeepSeekPeakTime } from './qq-usage-tracker.js';
 import { generateConversationReply } from './reply-engine.js';
+import { shouldRequestDetailedAnswer } from './response-style.js';
 import { guardFinalReply } from './reply-expression.js';
 import {
   isAdminStopCommand,
@@ -1868,7 +1869,8 @@ export function splitReplyText(value, options = {}) {
   const paragraphs = normalized.split(paragraphPattern).map((part) => part.trim()).filter(Boolean);
   const parts = [];
   for (const paragraph of paragraphs) {
-    if (paragraph.length <= maxPartCharacters && !splitSentences) {
+    if (paragraph.length <= maxPartCharacters && !splitSentences
+      || options.splitClauses === false && /https?:\/\//iu.test(paragraph)) {
       parts.push(paragraph);
       continue;
     }
@@ -1876,13 +1878,13 @@ export function splitReplyText(value, options = {}) {
       .split(/(?<=[。！？!?；;])\s*/u)
       .filter(Boolean)
       .flatMap((sentence) => {
-        if (!splitSentences || sentence.length <= maxPartCharacters) return [sentence];
+        if (!splitSentences || options.splitClauses === false || sentence.length <= maxPartCharacters) return [sentence];
         return sentence.split(/(?<=[：:，,])\s*/u).filter(Boolean);
       });
     let current = '';
     for (const sentence of sentences) {
       const candidate = current ? `${current}${sentence}` : sentence;
-      if (current && candidate.length > maxPartCharacters) {
+      if (current && current.length >= Number(options.minPartCharacters || 0) && candidate.length > maxPartCharacters) {
         parts.push(current.trim());
         current = sentence;
       } else {
@@ -4445,12 +4447,15 @@ export class QqBotService {
       }
       // 普通闲聊按完整句子拆成几条更像群友接话；代码块和列表仍保持单条，
       // 避免把结构化内容切碎。阈值保持在一整句以上，不退回碎片式发言。
-      const structuredReply = /```|(?:^|\n)\s*(?:[-*]|\d+\.)\s/u.test(answer);
+      const structuredReply = /```|(?:^|\n)\s*(?:[-*]|\d+\.)\s/u.test(answer)
+        || shouldRequestDetailedAnswer(content);
       const messages = splitReplyText(answer, {
         splitSentences: !structuredReply,
         splitLineBreaks: !structuredReply,
-        maxPartCharacters: structuredReply ? 1_800 : 100,
-        maxParts: structuredReply ? 1 : 3,
+        splitClauses: false,
+        minPartCharacters: 12,
+        maxPartCharacters: structuredReply ? 1_800 : 65,
+        maxParts: structuredReply ? 1 : 2,
       }).map((text) => ({ type: 'text', text }));
 
       try {
