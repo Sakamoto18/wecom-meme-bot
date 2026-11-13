@@ -969,7 +969,12 @@ test('纯艾特等候补充，随后问题保留回捞的群聊讨论', async ()
 
 test('无引用艾特看法问题把最近其他群友的原图和来源交给最终模型', async () => {
   const png = (await createPng()).toString('base64');
-  const { service, calls } = createService();
+  const calls = [];
+  const { service } = createService({ chatClient: { isConfigured: true, async complete(history, modelInput, options) {
+    calls.push({ history, modelInput, options });
+    if (options.usageSource === 'reply-image-relevance') return '{"ids":[0]}';
+    return '这个设计可以。';
+  } } });
   await service.handleMessage({ message_type: 'group', group_id: 'recall-group',
     message_id: 'recall-image', user_id: 'u2', sender_name: '乙', bot_user_id: 'bot',
     mentions: [{ user_id: 'bot' }], text: '你怎么看',
@@ -1327,7 +1332,7 @@ test('图片缓存按发送者与消息保留归属，引用不抢走原图所�
     quote: { msgid: 'a-pic', from: { userid: 'a', name: 'a' } } });
   assert.deepEqual(service.contextImageCandidates('group:owners').map(c => c.senderUserId), ['a', 'b']);
   const own = service.contextImageCandidatesForTurn('group:owners', { speakerUserId: 'a', currentText: '刚才那张图怎么看' });
-  assert.deepEqual(own.map(c => c.senderUserId), ['a']);
+  assert.deepEqual(own.map(c => c.senderUserId), ['a', 'b']);
   assert.deepEqual(service.contextImageCandidatesForTurn('group:owners', {
     speakerUserId: 'a', currentText: '这张图怎么看', quotedMessageId: 'b-pic', quotedUserId: 'b',
   }).map(c => c.senderUserId), ['b']);
@@ -1358,7 +1363,7 @@ for (const official of [false, true]) test(`${official ? '官方' : 'NapCat'} �
   assert.match(final.filter(b => b.type === 'text').map(b => b.text).join('\n'), /当前提问人自己的图片/);
 });
 
-test('历史图片按发言人和明确图指代过滤，不跨成员硬套上下文', async () => {
+test('历史图片提供有来源的候选，不以关键词决定取舍', async () => {
   const { service } = createService();
   const png = (await createPng()).toString('base64');
   const prepared = await prepareImageBlocks({ imageBase64s: [png] });
@@ -1370,7 +1375,7 @@ test('历史图片按发言人和明确图指代过滤，不跨成员硬套上�
     speakerUserId: 'another-member',
     speakerName: '群管',
     currentText: '烧鸡',
-  }).length, 0);
+  }).length, 1);
 
   assert.equal(service.contextImageCandidatesForTurn('group-1', {
     speakerUserId: 'image-owner',
@@ -1388,7 +1393,7 @@ test('历史图片按发言人和明确图指代过滤，不跨成员硬套上�
     speakerUserId: 'another-member',
     speakerName: '群管',
     currentText: '你怎么看',
-  }).length, 0);
+  }).length, 1);
 });
 
 test('无引用的看图纠错补回本人最近原图，不误用别人的图或过期图', async () => {
@@ -1403,6 +1408,7 @@ test('无引用的看图纠错补回本人最近原图，不误用别人的图�
     const { service } = createService({ now: () => now, chatClient: {
       isConfigured: true, async complete(_h, input, options) {
         calls.push({ input, options });
+        if (options.usageSource === 'reply-image-relevance') return JSON.stringify({ ids: scenario.expected ? [0] : [] });
         return '画面要整体看，不能只挑一处。';
       },
     } });
@@ -1416,7 +1422,7 @@ test('无引用的看图纠错补回本人最近原图，不误用别人的图�
       bot_user_id: 'bot', mentions: [{ user_id: 'bot' }],
     }));
     await service.replyConversation(message, scenario.text, '群友', { directBotMention: true });
-    const images = calls.flatMap(c => Array.isArray(c.input) ? c.input : []).filter(b => b.type === 'image_url');
+    const images = calls.filter(c => c.options.usageSource !== 'reply-image-relevance').flatMap(c => Array.isArray(c.input) ? c.input : []).filter(b => b.type === 'image_url');
     assert.equal(images.length > 0, scenario.expected, JSON.stringify(scenario));
   }
 });
@@ -1428,6 +1434,7 @@ test('无图消息不会把上一位群友的图片带进最终回复材料', as
       isConfigured: true,
       async complete(_history, modelInput, options) {
         calls.push({ modelInput, options });
+        if (options.usageSource === 'reply-image-relevance') return '{"ids":[]}';
         return '烧鸡就烧鸡，别拿上个人的图往我这儿安。';
       },
     },
@@ -1454,7 +1461,7 @@ test('无图消息不会把上一位群友的图片带进最终回复材料', as
   });
 
   assert.ok(calls.length >= 1);
-  assert.doesNotMatch(calls[0].modelInput, /Jev 选中的历史上下文图片|上一位群友发的黄色糊图/u);
+  assert.doesNotMatch(calls.at(-1).modelInput, /Jev 选中的历史上下文图片|上一位群友发的黄色糊图/u);
 });
 
 test('画作赏析使用主体关系取证，不复用通用图片缓存', async () => {
@@ -4296,6 +4303,41 @@ test('艾特机器人并指名未确认群友攻击时，攻击目标不落到�
   assert.match(calls[0].options.additionalSystemPrompt, /本轮被攻击目标：张三/);
   assert.match(calls[0].options.additionalSystemPrompt, /不得把攻击落到指令发送者身上/);
 });
+
+for (const official of [false, true]) {
+  for (const outcome of ['video', 'gallery', 'excluded', 'failure']) {
+    test(`新分享优先于旧分享卡标记：official=${official} outcome=${outcome}`, async () => {
+      let resolves = 0;
+      const group = 'share-context-regression';
+      const { service, calls } = createService({
+        mediaExcludedGroups: new Set(outcome === 'excluded' ? [group] : []),
+        mediaResolver: { enabled: true, async resolve(candidate, options) {
+          resolves++;
+          assert.equal(candidate.provider, 'douyin');
+          assert.equal(options.skipStartDelay, official);
+          if (outcome === 'failure') throw new Error('provider unavailable');
+          return outcome === 'gallery'
+            ? { images: ['https://cdn.example/1.jpg'], title: '图文' }
+            : { url: 'https://cdn.example/video.mp4', title: '视频' };
+        } },
+      });
+      const result = await service.handleMessage({
+        message_type: 'group', group_id: group, user_id: 'member',
+        bot_user_id: official ? 'qqofficial:1903660238:user:bot' : 'bot',
+        text: '8.76 复制打开抖音，看看【半口小希的作品】不喜欢我的让一让 让喜欢我的到前面来 https://v.douyin.com/mKvAs1y9img/',
+        media_share: true, quoted_bot_generated_image: true, bot_generated_image_only: true,
+        has_image: true, image_base64s: ['c3RhbGUtY2FyZA=='],
+      });
+      assert.equal(resolves, outcome === 'excluded' ? 0 : 1);
+      assert.equal(calls.length, 0);
+      if (outcome === 'video') assert.equal(result.messages[0].type, 'video');
+      if (outcome === 'gallery') assert.equal(result.mode, 'media-gallery');
+      if (outcome === 'excluded') assert.deepEqual(result.messages, []);
+      if (outcome === 'failure') assert.equal(result.mode, 'media-unavailable');
+      assert.notEqual(result.mode, 'bot-generated-image');
+    });
+  }
+}
 
 test('外部视频分享在排除群中保持静默且不调用解析器', async () => {
   let resolveCalls = 0;

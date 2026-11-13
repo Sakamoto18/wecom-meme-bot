@@ -57,8 +57,8 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context['images'][0]['message_id'], 'picture')
         self.assertEqual(loader.await_count, 2)
 
-    async def test_implicit_question_reads_recent_image_but_new_topic_does_not(self):
-        for text, expected in [('你怎么看', 1), ('解释一下', 1), ('明天天气如何', 0), ('烧鸡', 0)]:
+    async def test_candidates_are_available_without_keyword_gates(self):
+        for text, expected in [('你怎么看', 1), ('解释一下', 1), ('明天天气如何', 1), ('烧鸡', 1)]:
             with self.subTest(text=text):
                 context, loader = await self.fetch([row('picture', images=1)], text=text)
                 self.assertEqual(len(context['images']), expected)

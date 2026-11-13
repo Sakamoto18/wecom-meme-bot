@@ -1079,7 +1079,6 @@ class AdapterBridge(LongtuQqBridge):
             # 回捞成功时也保留这个标记：短时回执缓存不仅用于补回图片字节，
             # 还用于告诉 Node 这不是用户图片，而是 Bot 自己发出的分享卡。
             bot_generated_image_reference = bool(cached_outbound_quote_images)
-            bot_generated_image_reference_from_recent = False
             has_image = any(
                 isinstance(component, Comp.Image)
                 for component in components
@@ -1248,46 +1247,10 @@ class AdapterBridge(LongtuQqBridge):
                     f"已从机器人发送回执缓存恢复 {len(quoted_image_base64s)} 张引用图片",
                 )
 
-            cached_images = [
-                *image_base64s,
-                *quoted_image_base64s,
-                *forward_image_base64s,
-                *quoted_forward_image_base64s,
-                *observed_forward_images,
-                *observed_quoted_forward_images,
-            ]
-            self._cache_recent_images(event, cached_images)
+            self._cache_recent_images(event, [*image_base64s, *forward_image_base64s, *observed_forward_images])
 
-            # QQ 中常见的“上一条先发图，下一条再 @ 机器人”不会携带引用组件；
-            # 用户明确指向上文图片时，把短时缓存的图片带入本轮视觉请求。
-            if should_reply and not import_images and reply_component is None and not (
-                image_base64s
-                or quoted_image_base64s
-                or forward_image_base64s
-                or quoted_forward_image_base64s
-            ):
-                recent_images = self._recent_images_for_reference(event, text)
-                if recent_images:
-                    image_base64s = recent_images
-                    has_image = True
-                    logger.info(
-                        f"已将最近缓存的 {len(recent_images)} 张图片带入本轮 QQ 视觉请求",
-                    )
-                else:
-                    outbound_reference_lookup = getattr(self, '_outbound_images_for_reference', None)
-                    outbound_images = (
-                        outbound_reference_lookup(event, text)
-                        if callable(outbound_reference_lookup)
-                        else []
-                    )
-                    if outbound_images:
-                        image_base64s = outbound_images
-                        has_image = True
-                        bot_generated_image_reference = True
-                        bot_generated_image_reference_from_recent = True
-                        logger.info(
-                            f"已将最近发送的 {len(outbound_images)} 张分享卡带入本轮 QQ 视觉请求",
-                        )
+            # 历史图片只作为带来源的候选，禁止按词命中后冒充本条附件。
+            # Node 结合整句、发言人和历史决定是否使用，空选择也必须尊重。
 
             bot_user_id = str(event.get_self_id() or "").strip()
             group_info = (
@@ -1296,8 +1259,7 @@ class AdapterBridge(LongtuQqBridge):
                 else {}
             )
             bot_generated_image_only = bot_generated_image_reference and (
-                bot_generated_image_reference_from_recent
-                or not any((
+                not any((
                     image_base64s,
                     quoted_forward_image_base64s,
                     forward_image_base64s,
@@ -1357,6 +1319,20 @@ class AdapterBridge(LongtuQqBridge):
 
             try:
                 payload["recent_group_context"] = await self._recent_group_context(event, payload)
+                if (should_reply and not event.is_private_chat() and not payload["media_share"]
+                        and reply_component is None and not payload["has_image"]):
+                    candidate_lookup = getattr(self, "_recent_image_candidates", None)
+                    if callable(candidate_lookup):
+                        cached = candidate_lookup(event)
+                        context = payload["recent_group_context"] or {"group_id": event.get_group_id(), "messages": [], "images": []}
+                        known = {str(row["message_id"]) for row in context.get("images", [])}
+                        for row in cached.get("messages", []):
+                            if row["message_id"] not in known:
+                                if not any(str(item["message_id"]) == row["message_id"] for item in context.get("messages", [])):
+                                    context.setdefault("messages", []).append(row)
+                                context.setdefault("images", []).extend(
+                                    image for image in cached["images"] if image["message_id"] == row["message_id"])
+                        payload["recent_group_context"] = context
                 from .web_learning_progress import request_learning_backend
                 response = await request_learning_backend(self, event, payload)
                 import_update = getattr(self, '_update_relation_import', None)

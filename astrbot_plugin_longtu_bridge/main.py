@@ -55,9 +55,6 @@ OUTBOUND_IMAGE_CACHE_TTL_SECONDS = 30 * 60
 OUTBOUND_IMAGE_CACHE_MAX_ENTRIES = 128
 OUTBOUND_IMAGE_MAX_BASE64_CHARACTERS = 16 * 1024 * 1024 * 4 // 3
 OUTBOUND_IMAGE_CACHE_MAX_TOTAL_BASE64_CHARACTERS = 32 * 1024 * 1024 * 4 // 3
-RECENT_IMAGE_REFERENCE_PATTERN = re.compile(
-    r"(?:上面|刚才|刚刚|前面|上一张|前一张|这张(?:图|图片|封面|卡片|分享卡)|这个(?:图|图片|封面|卡片|分享卡)|图里|图片里|封面里|卡片里)",
-)
 REPORT_TIMEZONE = ZoneInfo("Asia/Shanghai")
 CRAZY_THURSDAY_SLOTS = (
     (9, 0),
@@ -194,9 +191,8 @@ class LongtuQqBridge(Star):
         self.media_status_cache: dict[str, float] = {}
         # 静默观察不调用模型，但保留短时间内最近一批图片，支持用户先发图、
         # 再单独 @ 机器人询问“上面这张图”的常见 QQ 使用方式。
-        self.recent_image_cache: dict[str, tuple[float, list[str]]] = {}
+        self.recent_image_cache: dict[str, list[dict]] = {}
         self.outbound_image_cache: dict[str, tuple[float, list[str]]] = {}
-        self.outbound_latest_image_cache: dict[str, tuple[float, list[str]]] = {}
         # 同一条视频的封面字节，键是去掉签名的地址，重复转发直接命中。
         self.cover_cache: dict[str, tuple[float, bytes]] = {}
         self.video_delivery_cache = VideoDeliveryCache(logger=logger)
@@ -1973,30 +1969,38 @@ class LongtuQqBridge(Star):
         if not selected:
             return
         key = self._recent_image_cache_key(event)
-        self.recent_image_cache[key] = (time.monotonic(), selected)
-        if len(self.recent_image_cache) > RECENT_IMAGE_CACHE_MAX_ENTRIES:
-            oldest_key = min(
-                self.recent_image_cache,
-                key=lambda cache_key: self.recent_image_cache[cache_key][0],
-            )
-            self.recent_image_cache.pop(oldest_key, None)
+        now = time.monotonic()
+        rows = getattr(self, "recent_image_cache", {}).get(key, [])
+        mid = str(event.message_obj.message_id or "")
+        rows = [row for row in rows if now - row["created_at"] <= 120 and row["message_id"] != mid]
+        rows.append({"created_at": now, "message_id": mid,
+                     "user_id": str(event.get_sender_id()), "sender_name": event.get_sender_name(),
+                     "text": str(event.message_str or "[图片]")[:800], "images": selected[:2]})
+        if not hasattr(self, "recent_image_cache"):
+            self.recent_image_cache = {}
+        rows = rows[-12:]
+        while len(rows) > 1 and sum(len(image) for row in rows for image in row["images"]) > RECENT_IMAGE_CACHE_MAX_BASE64_CHARACTERS:
+            rows.pop(0)
+        self.recent_image_cache[key] = rows
+        while len(self.recent_image_cache) > RECENT_IMAGE_CACHE_MAX_ENTRIES:
+            self.recent_image_cache.pop(next(iter(self.recent_image_cache)))
 
-    def _recent_images_for_reference(
-        self,
-        event: AstrMessageEvent,
-        text: str,
-    ) -> list[str]:
-        if not RECENT_IMAGE_REFERENCE_PATTERN.search(str(text or "")):
-            return []
-        key = self._recent_image_cache_key(event)
-        cached = self.recent_image_cache.get(key)
-        if not cached:
-            return []
-        created_at, images = cached
-        if time.monotonic() - created_at > RECENT_IMAGE_CACHE_TTL_SECONDS:
-            self.recent_image_cache.pop(key, None)
-            return []
-        return list(images)
+    def _recent_image_candidates(self, event) -> dict:
+        rows = [row for row in getattr(self, "recent_image_cache", {}).get(self._recent_image_cache_key(event), [])
+                if 0 <= time.monotonic() - row["created_at"] <= 120
+                and row["message_id"] != str(event.message_obj.message_id or "")]
+        own = next((row for row in reversed(rows) if row["user_id"] == str(event.get_sender_id())), None)
+        other = next((row for row in reversed(rows) if row["user_id"] != str(event.get_sender_id())), None)
+        selected = [row for row in (own, other) if row]
+        images, total = [], 0
+        for row in selected:
+            for image in row["images"]:
+                if total + len(image) <= 8 * 1024 * 1024:
+                    images.append({"message_id": row["message_id"], "base64": image})
+                    total += len(image)
+        return {"group_id": event.get_group_id(),
+                "messages": [{key: row[key] for key in ("message_id", "user_id", "sender_name", "text")} for row in selected],
+                "images": images}
 
     def _remember_outbound_image(
         self,
@@ -2017,9 +2021,7 @@ class LongtuQqBridge(Star):
             return
         now = time.monotonic()
         self.outbound_image_cache[message_id] = (now, [normalized])
-        scope = self._recent_image_cache_key(event)
-        self.outbound_latest_image_cache[scope] = (now, [normalized])
-        for cache in (self.outbound_image_cache, self.outbound_latest_image_cache):
+        for cache in (self.outbound_image_cache,):
             expired = [
                 key for key, (created_at, _images) in cache.items()
                 if now - created_at > OUTBOUND_IMAGE_CACHE_TTL_SECONDS
@@ -2048,23 +2050,6 @@ class LongtuQqBridge(Star):
         created_at, images = cached
         if time.monotonic() - created_at > OUTBOUND_IMAGE_CACHE_TTL_SECONDS:
             getattr(self, 'outbound_image_cache', {}).pop(message_id, None)
-            return []
-        return list(images)
-
-    def _outbound_images_for_reference(
-        self,
-        event: AstrMessageEvent,
-        text: str,
-    ) -> list[str]:
-        if not RECENT_IMAGE_REFERENCE_PATTERN.search(str(text or '')):
-            return []
-        scope = self._recent_image_cache_key(event)
-        cached = getattr(self, 'outbound_latest_image_cache', {}).get(scope)
-        if not cached:
-            return []
-        created_at, images = cached
-        if time.monotonic() - created_at > OUTBOUND_IMAGE_CACHE_TTL_SECONDS:
-            getattr(self, 'outbound_latest_image_cache', {}).pop(scope, None)
             return []
         return list(images)
 
@@ -3439,7 +3424,6 @@ class LongtuQqBridge(Star):
             # 回捞成功时也保留这个标记：短时回执缓存不仅用于补回图片字节，
             # 还用于告诉 Node 这不是用户图片，而是 Bot 自己发出的分享卡。
             bot_generated_image_reference = bool(cached_outbound_quote_images)
-            bot_generated_image_reference_from_recent = False
             has_image = any(
                 isinstance(component, Comp.Image)
                 for component in components
@@ -3608,46 +3592,10 @@ class LongtuQqBridge(Star):
                     f"已从机器人发送回执缓存恢复 {len(quoted_image_base64s)} 张引用图片",
                 )
 
-            cached_images = [
-                *image_base64s,
-                *quoted_image_base64s,
-                *forward_image_base64s,
-                *quoted_forward_image_base64s,
-                *observed_forward_images,
-                *observed_quoted_forward_images,
-            ]
-            self._cache_recent_images(event, cached_images)
+            self._cache_recent_images(event, [*image_base64s, *forward_image_base64s, *observed_forward_images])
 
-            # QQ 中常见的“上一条先发图，下一条再 @ 机器人”不会携带引用组件；
-            # 用户明确指向上文图片时，把短时缓存的图片带入本轮视觉请求。
-            if should_reply and not import_images and reply_component is None and not (
-                image_base64s
-                or quoted_image_base64s
-                or forward_image_base64s
-                or quoted_forward_image_base64s
-            ):
-                recent_images = self._recent_images_for_reference(event, text)
-                if recent_images:
-                    image_base64s = recent_images
-                    has_image = True
-                    logger.info(
-                        f"已将最近缓存的 {len(recent_images)} 张图片带入本轮 QQ 视觉请求",
-                    )
-                else:
-                    outbound_reference_lookup = getattr(self, '_outbound_images_for_reference', None)
-                    outbound_images = (
-                        outbound_reference_lookup(event, text)
-                        if callable(outbound_reference_lookup)
-                        else []
-                    )
-                    if outbound_images:
-                        image_base64s = outbound_images
-                        has_image = True
-                        bot_generated_image_reference = True
-                        bot_generated_image_reference_from_recent = True
-                        logger.info(
-                            f"已将最近发送的 {len(outbound_images)} 张分享卡带入本轮 QQ 视觉请求",
-                        )
+            # 历史图片只作为带来源的候选，禁止按词命中后冒充本条附件。
+            # Node 结合整句、发言人和历史决定是否使用，空选择也必须尊重。
 
             bot_user_id = str(event.get_self_id() or "").strip()
             group_info = (
@@ -3656,8 +3604,7 @@ class LongtuQqBridge(Star):
                 else {}
             )
             bot_generated_image_only = bot_generated_image_reference and (
-                bot_generated_image_reference_from_recent
-                or not any((
+                not any((
                     image_base64s,
                     quoted_forward_image_base64s,
                     forward_image_base64s,
@@ -3717,6 +3664,20 @@ class LongtuQqBridge(Star):
 
             try:
                 payload["recent_group_context"] = await self._recent_group_context(event, payload)
+                if (should_reply and not event.is_private_chat() and not payload["media_share"]
+                        and reply_component is None and not payload["has_image"]):
+                    candidate_lookup = getattr(self, "_recent_image_candidates", None)
+                    if callable(candidate_lookup):
+                        cached = candidate_lookup(event)
+                        context = payload["recent_group_context"] or {"group_id": event.get_group_id(), "messages": [], "images": []}
+                        known = {str(row["message_id"]) for row in context.get("images", [])}
+                        for row in cached.get("messages", []):
+                            if row["message_id"] not in known:
+                                if not any(str(item["message_id"]) == row["message_id"] for item in context.get("messages", [])):
+                                    context.setdefault("messages", []).append(row)
+                                context.setdefault("images", []).extend(
+                                    image for image in cached["images"] if image["message_id"] == row["message_id"])
+                        payload["recent_group_context"] = context
                 from .web_learning_progress import request_learning_backend
                 response = await request_learning_backend(self, event, payload)
                 import_update = getattr(self, '_update_relation_import', None)
