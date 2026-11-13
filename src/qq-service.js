@@ -34,6 +34,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { buildVideoLearningLinkRequest } from './video-learning-request.js';
+import { QqFollowupTurns } from './qq-followup-turns.js';
 import { parseCurriculumRetry } from './video-curriculum-retry.js';
 import { WebMemeConfirmation, parseWebMemeManagement } from './web-meme-confirmation.js';
 import { parseWebMemeLearningRequest, parseWebMemeQuery, WebMemeLearning } from './web-meme-learning.js';
@@ -2559,6 +2560,7 @@ export class QqBotService {
     this.adminStoppedPeerGroups = new Map();
     this.groupStopRevisions = new Map();
     this.groupProcessingQueues = new Map();
+    this.followupTurns = new QqFollowupTurns({ now: () => this.now() });
     this.lastGroupPassiveDecisionAt = new Map();
   }
 
@@ -4369,6 +4371,7 @@ export class QqBotService {
         );
       }
 
+      if (options.followupStale?.()) return { mode: 'superseded', messages: [] };
       // Validate the complete text before persistence and before QQ splitting.
       // No malformed inner-monologue tail may become a standalone first send.
       if (generated.answer) {
@@ -5644,6 +5647,22 @@ export class QqBotService {
         + `self_mentioned=${selfMentioned ? 'yes' : 'no'}`,
       );
     }
+    const commandText = stripBotMention(payload.text);
+    const followup = this.followupTurns.accept(payload, {
+      direct: this.isDirectHumanEngagementTrigger(payload), peer: this.isPeerBotMessage(payload),
+      command: commandText.startsWith('/')
+        || mediaCandidates({ text: payload.text, richSegments: payload.richSegments })
+          .some(candidate => ['bilibili', 'xiaohongshu', 'douyin', 'kuaishou'].includes(candidate.provider))
+        || Boolean(parseWebMemeManagement(commandText)
+        || parseWebMemeLearningRequest(commandText) || parseWebMemeQuery(commandText)
+        || parseCurriculumRetry(commandText) || parseLongtuManagementCommand(commandText)),
+    });
+    if (followup?.duplicate) return { mode: 'duplicate', messages: [] };
+    if (followup?.waiting) return { mode: 'awaiting-followup', messages: [] };
+    const handle = async () => {
+      try { return await this.handleUsageTrackedMessage(payload); }
+      finally { followup?.finish?.(); }
+    };
     const largeGroup = payload.messageType === 'group'
       && this.isLargeGroup(payload.groupId, payload);
     if (this.usageTracker) {
@@ -5656,10 +5675,10 @@ export class QqBotService {
       };
       return this.usageTracker.runWithContext(
         usageContext,
-        () => this.handleUsageTrackedMessage(payload),
+        handle,
       );
     }
-    return this.handleUsageTrackedMessage(payload);
+    return handle();
   }
 
   async handleUsageTrackedMessage(payload) {
@@ -5741,10 +5760,12 @@ export class QqBotService {
 
     try {
       const processMessage = async () => {
+        if (payload.followupStale?.()) return { mode: 'superseded', messages: [] };
         const startedAtStopRevision = payload.messageType === 'group'
           ? this.groupStopRevision(payload.groupId)
           : 0;
         const result = await this.handleNormalizedMessage(payload);
+        if (payload.followupStale?.()) return { mode: 'superseded', messages: [] };
         if (payload.messageType === 'group'
           && result?.messages?.length > 0
           && this.groupStopRevision(payload.groupId) !== startedAtStopRevision) {
@@ -6388,6 +6409,7 @@ export class QqBotService {
         imageQuestion: payload.text,
         forwardedContext: [payload.forwardedText, payload.quotedForwardedText].filter(Boolean).join('\n'),
         longtuAliases,
+        followupStale: payload.followupStale,
         pureBotMention: payload.pureBotMention,
         directBotMention: this.isDirectHumanMentionTrigger(payload),
         recentGroupContext: recall,

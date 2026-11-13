@@ -758,7 +758,7 @@ test('普通群在工作日峰时收紧明确回复窗口和读空气频率', ()
   );
 });
 
-test('Bridge 显示出来的纯 At 昵称仍走短回复并拦截客服话术', async () => {
+test('Bridge 显示出来的纯 At 昵称静默等候问题', async () => {
   const input = {
     message_id: 'rendered-at-1',
     message_type: 'group',
@@ -781,8 +781,8 @@ test('Bridge 显示出来的纯 At 昵称仍走短回复并拦截客服话术', 
   const result = await service.handleMessage(input);
 
   assert.equal(payload.pureBotMention, true);
-  assert.equal(result.mode, 'pure-mention');
-  assert.equal(result.messages[0].text, '叫我有事？');
+  assert.equal(result.mode, 'awaiting-followup');
+  assert.deepEqual(result.messages, []);
 });
 
 test('明确龙图指令直接返回 Base64 图片且不调用模型', async () => {
@@ -949,7 +949,7 @@ test('未启用话题记忆的群聊在无引用艾特时保留其他群友的�
   assert.match(final.options.additionalSystemPrompt, /无引用艾特的群聊语境/);
 });
 
-test('纯艾特优先读取回捞的群友讨论，不固定当作无事空喊', async () => {
+test('纯艾特等候补充，随后问题保留回捞的群聊讨论', async () => {
   const { service, calls } = createService();
   const result = await service.handleMessage({ message_type: 'group', group_id: 'recall-group',
     message_id: 'recall-pure', user_id: 'u3', sender_name: '群友丙', bot_user_id: 'bot',
@@ -960,11 +960,11 @@ test('纯艾特优先读取回捞的群友讨论，不固定当作无事空喊',
       { message_id: 'past2', user_id: 'u2', sender_name: '群友乙', text: '预报周末暴雨，改室内吧' },
     ] },
   });
-  assert.equal(result.mode, 'pure-mention');
-  assert.equal(calls.length, 1);
-  assert.match(calls[0].history.map(row => row.content).join('\n'), /周末暴雨/);
-  assert.match(calls[0].options.additionalSystemPrompt, /这次点名之前有群聊语境/);
-  assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /抓住“无事艾特”这个具体动作现场写/);
+  assert.equal(result.mode, 'awaiting-followup');
+  assert.equal(calls.length, 0);
+  await service.handleMessage({ message_type: 'group', group_id: 'recall-group',
+    message_id: 'recall-followup', user_id: 'u3', bot_user_id: 'bot', text: '你觉得去哪更好', observe_only: true });
+  assert.match(calls.at(-1).history.map(row => row.content).join('\n'), /周末暴雨/);
 });
 
 test('无引用艾特看法问题把最近其他群友的原图和来源交给最终模型', async () => {
@@ -992,6 +992,8 @@ test('成功回看但最近无人讨论时不重新带入陈旧会话', async ()
     text: '（用户仅 @ 了你，没有附加文字）',
     recent_group_context: { group_id: 'recall-group', messages: [] },
   });
+  await service.handleMessage({ message_type: 'group', group_id: 'recall-group',
+    message_id: 'recall-empty-followup', user_id: 'u1', bot_user_id: 'bot', text: '最近群里聊啥', observe_only: true });
   assert.deepEqual(calls[0].history, []);
   assert.doesNotMatch(calls[0].options.additionalSystemPrompt, /这次点名之前有群聊语境/);
 });
@@ -3933,12 +3935,12 @@ test('自然对话先回复文字，再用语义候选发送 GIF；语义拒绝�
   assert.ok(none.messages.every(message => message.type === 'text'));
 });
 
-test('语义没有候选不取消原本纯 @ 的表情回复', async () => {
+test('纯 @ 等候补充时不提前发表情打断', async () => {
   const { service } = createService({ longtuSemanticIndex: { async select() { return []; } } });
   const result = await service.handleMessage({ message_type: 'group', group_id: 'g1', user_id: 'u1',
     text: '@龙玉涛', bot_user_id: 'bot', mentions: [{ user_id: 'bot', name: '龙玉涛' }] });
-  assert.equal(result.mode, 'pure-mention');
-  assert.ok(result.messages.some(message => message.type === 'image'));
+  assert.equal(result.mode, 'awaiting-followup');
+  assert.deepEqual(result.messages, []);
 });
 
 test('群聊 @bot 也能用关联词族选图，不局限于私聊', async () => {
@@ -5120,5 +5122,35 @@ test('双端每日失败补学统一入口、管理员权限、混合引用保�
     assert.match(denied.messages[0].text, /管理员/);
     assert.equal(handled.length, 1);
     assert.equal(calls.length, 0);
+  }
+});
+
+test('官方和 NapCat 先 @ 后发问题无需再次 @，生成中补充会抑制旧回答并合并原问题', async () => {
+  for (const official of [false, true]) {
+    const { service, calls } = createService();
+    const base = { message_type: 'group', group_id: official ? 'qqofficial:123:group:g' : 'g',
+      user_id: 'u', bot_user_id: official ? 'qqofficial:123:user:bot' : 'bot' };
+    const waiting = await service.handleMessage({ ...base, message_id: 'at', text: '', pure_bot_mention: true,
+      mentions: [{ user_id: base.bot_user_id }] });
+    assert.equal(waiting.mode, 'awaiting-followup'); assert.equal(calls.length, 0);
+    let release, started;
+    const entered = new Promise(resolve => { started = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const original = service.chatClient.complete.bind(service.chatClient);
+    let blocked = false;
+    service.chatClient.complete = async (...args) => {
+      if (!blocked) { blocked = true; started(); await gate; }
+      return original(...args);
+    };
+    const first = service.handleMessage({ ...base, message_id: 'q1', text: '这图来自哪里', observe_only: true });
+    await entered;
+    const second = service.handleMessage({ ...base, message_id: 'q2', text: '我问的是游戏名，不是人物名', observe_only: true });
+    release();
+    assert.equal((await first).mode, 'superseded');
+    assert.ok((await second).messages.length > 0);
+    assert.match(String(calls.at(-1).modelInput), /这图来自哪里/);
+    assert.match(String(calls.at(-1).modelInput), /游戏名，不是人物名/);
+    const history = service.conversationStore.get(`group:${base.group_id}`);
+    assert.equal(history.filter(row => row.role === 'assistant').length, 1, '未发出的旧回答不能写入记忆');
   }
 });
