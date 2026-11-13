@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 
 const GAME = /洛克(?:王国)?(?:世界)?|洛国|洛克王国世界知识库/u;
 const QUESTION = /技能|特性|特效|属性|种族|数值|能耗|威力|伤害|效果|免疫|精灵|配招|怎么|如何|什么|哪些|多少|介绍|图鉴|学会|学习|区别|对比|克制|厉害|强不强|厉不厉害|速度|物攻|魔攻|物防|魔防|血脉|技能石/u;
-const FOLLOWUP = /(?:它|这只|这个|该精灵|该技能).{0,20}(?:呢|吗|\?|？)|^(?:那|还有|几级|能学).{0,18}(?:技能|特性|效果|威力|能耗|种族|配招|呢|吗)|^(?:技能|特性|效果|威力|能耗|种族值|配招)(?:呢|是什么|多少|咋样|怎么选|\?|？)*$/u;
+const FOLLOWUP = /(?:它|这只|这个|该精灵|该技能).{0,20}(?:呢|吗|几级|学会|\?|？)|^(?:那|还有|几级|能学).{0,18}(?:技能|特性|效果|威力|能耗|种族|配招|呢|吗)|^(?:技能|特性|效果|威力|能耗|种族值|配招)(?:呢|是什么|多少|咋样|怎么选|\?|？)*$/u;
 const KIND = { pet: '精灵', skill: '技能', trait: '特性', effect: '机制/状态' };
 const FIELDS = { number: '编号', name: '名称', types: '属性', feature: '特性', featureDesc: '特性效果', hp: '生命种族值', spe: '速度种族值', atk: '物攻种族值', spa: '魔攻种族值', def: '物防种族值', spd: '魔防种族值', total: '种族值总和', stage: '进化阶段', form: '形态', season: '赛季', eggs: '蛋组', height: '身高', weight: '体重', ride: '骑乘', doubleRide: '双人骑乘', description: '描述' };
 const normalize = (value) => String(value ?? '').normalize('NFKC').replace(/\s+/gu, '').toLowerCase();
@@ -69,6 +69,9 @@ export class RocoKnowledge {
     if (!explicit && !petQuestion && !namedMechanic && !exactName && !quotedGame && !contextual) return null;
     if (!matches.length && quotedGame) matches = this.matches(quote);
     if (!matches.length && contextual) matches = this.entries.filter((e) => previous.ids.includes(e.id));
+    if (contextual && /它|这只|这个|该精灵/u.test(text) && !matches.some(e => e.kind === 'pet')) {
+      matches.push(...this.entries.filter(e => e.kind === 'pet' && previous.ids.includes(e.id)));
+    }
     const selected = new Map(matches.map((e) => [e.id, e]));
     const owners = {};
     // Also retrieve effects mentioned in a pet trait or an explicitly selected

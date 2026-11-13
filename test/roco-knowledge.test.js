@@ -47,6 +47,8 @@ test('跨用户/跨群隔离，过期追问不串话，普通词不劫持游戏�
   const initial = store.retrieve('喵喵的特性呢', { sessionKey: 'g1:u1' });
   store.remember(initial);
   assert.equal(store.retrieve('那它的技能呢', { sessionKey: 'g1:u1' }).records[0].名称, '喵喵');
+  const skillFollowup = store.retrieve('那它几级学会棘突', { sessionKey: 'g1:u1' });
+  assert.ok(skillFollowup.records.some(r => r.名称 === '喵喵' && r.技能表[0].等级 === '6'));
   assert.equal(store.retrieve('那它的技能呢', { sessionKey: 'g1:u2' }), null);
   assert.equal(store.retrieve('那它的技能呢', { sessionKey: 'g2:u1' }), null);
   assert.equal(store.retrieve('那我今天吃什么', { sessionKey: 'g1:u1' }), null);
