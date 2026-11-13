@@ -25,7 +25,7 @@ import {
   isExplicitEngagementEnd,
 } from './active-reply.js';
 import { RepeatDetector } from './repeat-detector.js';
-import { normalizeRecentGroupContext, recentGroupHistory, RECENT_GROUP_CONTEXT_PROMPT } from './recent-group-context.js';
+import { normalizeRecentGroupContext, recentGroupHistory, selectReplyImages, RECENT_GROUP_CONTEXT_PROMPT } from './recent-group-context.js';
 import { Jimp } from 'jimp';
 import { recognizeImageText } from './image-ocr.js';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -3249,6 +3249,7 @@ export class QqBotService {
         ageSeconds: Math.max(0, Math.round((this.now() - entry.createdAt) / 1_000)),
         sender: entry.sender,
         senderUserId: entry.senderUserId,
+        messageId: entry.messageId,
         label: entry.label,
         summary: entry.summary,
         hasRawImage: Boolean(entry.block),
@@ -3266,8 +3267,21 @@ export class QqBotService {
     const candidates = Array.isArray(options.candidates)
       ? options.candidates
       : this.contextImageCandidates(conversationId);
+    if (options.quotedMessageId || options.quotedUserId) {
+      const quoted = candidates.filter(candidate => options.quotedMessageId
+        ? candidate.messageId === options.quotedMessageId
+        : candidate.senderUserId === options.quotedUserId);
+      return quoted.map((candidate, index) => ({ ...candidate, index: index + 1 }));
+    }
+    const own = candidates.filter(candidate => candidate.senderUserId && speakerUserId
+      ? candidate.senderUserId === speakerUserId
+      : candidate.sender && speakerName && candidate.sender === speakerName);
+    const namedOthers = candidates.filter(candidate => candidate.senderUserId !== speakerUserId
+      && candidate.sender && currentText.includes(candidate.sender));
     return candidates
       .filter((candidate) => {
+        if (namedOthers.length) return namedOthers.includes(candidate);
+        if (own.length) return own.includes(candidate);
         if (explicitReference) return true;
         if (candidate.senderUserId && speakerUserId) {
           return candidate.senderUserId === speakerUserId;
@@ -3322,23 +3336,29 @@ export class QqBotService {
       const bytes = Math.ceil(item.base64.length * 0.75);
       if (bytes > this.contextImageMaxItemBytes) continue;
       const hash = createHash('sha256').update(item.base64).digest('hex');
-      const existing = current.find((candidate) => candidate.hash === hash);
+      const quoted = /引用/u.test(item.label);
+      const imageOwner = quoted ? String(message?.quote?.from?.userid || '') : senderUserId;
+      const imageSender = quoted ? String(message?.quote?.from?.name || '') : sender;
+      const messageId = String(quoted ? message?.quote?.msgid || '' : message?.msgid || '');
+      const existing = current.find((candidate) => candidate.hash === hash
+        && candidate.senderUserId === imageOwner && candidate.messageId === messageId);
       const sourceItem = sourceItems[entryIndex] ?? null;
       const summary = contextImageSummary(sourceItem ?? {});
       const stored = existing ?? {
-        id: `${now}-${hash.slice(0, 16)}`,
+        id: `${now}-${hash.slice(0, 16)}-${imageOwner}-${messageId}`,
         hash,
         block: item.block,
         label: item.label,
-        sender,
-        senderUserId,
+        sender: imageSender,
+        senderUserId: imageOwner,
+        messageId,
         createdAt: now,
         bytes,
       };
       stored.block = item.block;
       stored.label = item.label;
-      stored.sender = sender || stored.sender;
-      stored.senderUserId = senderUserId || stored.senderUserId;
+      stored.sender = imageSender || stored.sender;
+      stored.senderUserId = imageOwner || stored.senderUserId;
       stored.summary = summary || stored.summary || '';
       stored.expiresAt = now + this.contextImageTtlMs;
       if (!existing) {
@@ -3790,6 +3810,8 @@ export class QqBotService {
           speakerName: senderName,
           currentText: content,
           quotedText: extractMessageText(message?.quote),
+          quotedMessageId: String(message?.quote?.msgid || ''),
+          quotedUserId: String(message?.quote?.from?.userid || ''),
         },
       );
       const memorySummary = resetPrivateHistory
@@ -3950,7 +3972,9 @@ export class QqBotService {
         && initialContextImageEntries.length === 0
         && imageCount === 0
         && options.directBotMention === true
-        && (isHistoricalImageReference(imageSearchQuestion) || correctionImage)) {
+        && (isHistoricalImageReference(imageSearchQuestion) || correctionImage
+          || (isImageEvaluationIntent(imageSearchQuestion)
+            && historicalContextImageCandidates.some(c => c.senderUserId === speakerUserId)))) {
         contextImageStyle = {
           ...(jevStyle ?? {}),
           contextImageNeeded: 1,
@@ -3970,11 +3994,9 @@ export class QqBotService {
         { type: 'text', text: `上下文历史图片 ${entry.candidateIndex}（${entry.label}）` },
         entry.block,
       ]);
-      const selectedRecallImage = !relevanceSelected || (options.recentGroupContext?.images ?? []).some(image => {
-        const source = options.recentGroupContext.messages.find(row => row.messageId === image.messageId);
-        return source?.text && history.some(row => row.content.includes(source.text));
-      });
-      const recalledImageBlocks = readGroupContext && selectedRecallImage ? options.recentGroupImageBlocks ?? [] : [];
+      // Images were selected by source identity and image relevance before
+      // preparation. Never gate the entire batch on a shared “[图片]” string.
+      const recalledImageBlocks = readGroupContext ? options.recentGroupImageBlocks ?? [] : [];
       if (historicalContextImageBlocks.length > 0 || recalledImageBlocks.length > 0) hasImageContext = true;
       // A follow-up may contain no new pixels but still explicitly refer to a
       // recently selected image. Reuse its short visual summary as search
@@ -6398,17 +6420,48 @@ export class QqBotService {
     }
 
     const preparedImages = await prepareImageBlocks(payload, this.logger);
-    const recall = this.isDirectHumanMentionTrigger(payload) && !message.quote
+    let recall = this.isDirectHumanMentionTrigger(payload) && !message.quote
       ? payload.recentGroupContext : { messages: [], images: [] };
-    const recentImages = preparedImages.blocks.length === 0
-      ? await prepareImageBlocks({ imageBase64s: recall.images.map(image => image.base64) }, this.logger)
+    // Official adapters may have no history API. Also guard against an older
+    // bridge sending only another member's newest image while our local cache
+    // still has the asker's preceding upload.
+    if (preparedImages.blocks.length === 0 && !message.quote
+      && this.isDirectHumanMentionTrigger(payload)
+      && (isHistoricalImageReference(payload.text) || isImageEvaluationIntent(payload.text))) {
+      const own = this.pruneContextImageHistory(conversationId).filter(e => e.senderUserId === payload.userId
+        && this.now() - e.createdAt <= 120_000);
+      const latest = own.at(-1);
+      const alreadyOwn = recall.images.some(i => recall.messages.some(r => r.messageId === i.messageId && r.userId === payload.userId));
+      if (latest && !alreadyOwn) {
+        const id = `local-image:${latest.messageId || latest.id}`;
+        const group = latest.messageId ? own.filter(e => e.messageId === latest.messageId) : [latest];
+        const images = group.slice(-2).map(e => ({ messageId: id,
+          base64: e.block.image_url.url.split(',')[1] })).filter(e => e.base64);
+        recall = { ...recall, messages: [...recall.messages,
+          { messageId: id, userId: payload.userId, senderName: payload.senderName, text: latest.summary || '[图片]' }],
+        images: [...images, ...recall.images].slice(0, 4) };
+      }
+      const other = this.pruneContextImageHistory(conversationId).findLast(e => e.senderUserId
+        && e.senderUserId !== payload.userId && this.now() - e.createdAt <= 120_000);
+      if (other && !recall.images.some(i => recall.messages.some(r => r.messageId === i.messageId && r.userId !== payload.userId))) {
+        const id = `local-image:${other.messageId || other.id}`;
+        recall = { ...recall, messages: [...recall.messages,
+          { messageId: id, userId: other.senderUserId, senderName: other.sender, text: other.summary || '[图片]' }],
+        images: [...recall.images, { messageId: id, base64: other.block.image_url.url.split(',')[1] }].slice(0, 4) };
+      }
+    }
+    const selectedRecallImages = preparedImages.blocks.length === 0 && recall.images.length
+      ? await selectReplyImages({ context: recall, speakerUserId: payload.userId,
+        content: payload.text, chatClient: this.chatClient }) : [];
+    const recentImages = selectedRecallImages.length
+      ? await prepareImageBlocks({ imageBase64s: selectedRecallImages.map(image => image.base64) }, this.logger)
       : { blocks: [] };
     const recentGroupImageBlocks = recentImages.blocks.map(block => block.type !== 'text' ? block : {
       ...block,
       text: block.text.replace(/当前消息图片 (\d+)/gu, (_match, index) => {
-        const image = recall.images[Number(index) - 1];
+        const image = selectedRecallImages[Number(index) - 1];
         const source = recall.messages.find(row => row.messageId === image?.messageId);
-        return `群聊历史图片 ${index}（之前由${source?.senderName || '群友'}发送，仅在当前话题相关时参考）`;
+        return `群聊历史图片 ${index}（${source?.userId === payload.userId ? '当前提问人自己的图片，优先回答' : '其他成员的相关参考图片，不替换提问对象'}；之前由${source?.senderName || '群友'}发送）`;
       }),
     });
     return this.replyConversation(

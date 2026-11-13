@@ -41,7 +41,7 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
     async def fetch(self, rows, **kwargs):
         action = AsyncMock(return_value={'messages': rows})
         event = SimpleNamespace(bot=SimpleNamespace(call_action=action),
-            get_group_id=lambda: '123', get_self_id=lambda: 'bot',
+            get_group_id=lambda: '123', get_self_id=lambda: 'bot', get_sender_id=lambda: 'asker',
             message_obj=SimpleNamespace(message_id='current'))
         loader = kwargs.pop('loader', AsyncMock(return_value='aW1hZ2U='))
         with patch.object(module.time, 'time', return_value=1000):
@@ -79,6 +79,14 @@ class GroupContextTests(unittest.IsolatedAsyncioTestCase):
                                      loader=AsyncMock(side_effect=asyncio.TimeoutError))
         self.assertEqual(len(context['messages']), 1)
         self.assertEqual(context['images'], [])
+
+    async def test_asker_image_survives_interjections_and_other_images(self):
+        rows = [row('own', user='asker', images=1, timestamp=980)]
+        rows += [row(str(i), user='other') for i in range(8)]
+        rows += [row('other-image', user='other', images=1)]
+        context, loader = await self.fetch(rows, text='怎么看')
+        self.assertEqual([i['message_id'] for i in context['images']], ['own', 'other-image'])
+        self.assertEqual(loader.await_count, 2)
 
     async def test_bridge_skips_private_quoted_passive_and_non_mentions_and_degrades_on_error(self):
         tree = ast.parse((path.parent / 'main.py').read_text(encoding='utf-8'))
