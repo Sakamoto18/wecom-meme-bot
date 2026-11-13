@@ -394,6 +394,17 @@ test('动漫头像的聊天截图不会被误判成纯角色图', () => {
     keywords: ['动漫角色', '聊天截图'],
   }] };
   assert.equal(isPureCharacterImage(chat), false);
+  chat.items[0].subjectKind = 'anime_character';
+  assert.equal(isPureCharacterImage(chat), false, '错误的角色标签不能覆盖聊天截图证据');
+});
+
+test('长文和混合切片不能被局部角色图否决，纠错识别请求始终放行', () => {
+  const character = { subjectKind: 'anime_character', description: '动漫角色立绘', visibleText: [] };
+  assert.equal(isPureCharacterImage({ items: [character] }), true);
+  assert.equal(isPureCharacterImage({ items: [character, { subjectKind: 'document', description: '文章正文' }] }), false);
+  assert.equal(isPureCharacterImage({ items: [character, { failed: true }] }), false);
+  assert.equal(isPureCharacterImage({ items: [{ ...character, visibleText: ['这是截图中的完整正文。'.repeat(20)] }] }), false);
+  assert.equal(shouldSkipCharacterEvaluation({ items: [character] }, '睁大眼睛看清楚这是什么，如何评价'), false);
 });
 
 test('图片回答提示保留纯角色图不评价的兜底规则', () => {
