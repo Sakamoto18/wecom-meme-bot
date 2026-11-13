@@ -113,3 +113,33 @@ test('仍失败可再次补学，候选保持待审核，官方私聊回到官�
   assert.equal(deliveries[1].payload.reportItems[0].status, 'candidate');
   assert.match(f.retry.handle({ action: 'retry' }, official), /没有需要补学/);
 });
+
+test('自然补学按意图提取日期和数量，保留原话且不混入人格提示', async () => {
+  const { resolveCurriculumRetry, isCurriculumRetryIntent } = await import('../src/video-curriculum-retry.js');
+  for (const text of ['补学一下今天凌晨学习失败的两个视频', '把昨晚没学会的那几个视频重新学一遍吧',
+    '今天失败的两个视频再试一次，补完给我报告', '帮我重学一下，今天日报失败的那两条', '补学那几个视频现在怎么样了？']) {
+    assert.equal(isCurriculumRetryIntent(text), true, text);
+    const client = { isConfigured: true, async complete(history, input, options) {
+      assert.deepEqual(history, []);assert.equal(JSON.parse(input).message, text);
+      assert.equal(options.usageSource, 'curriculum-retry-intent');assert.equal(options.prioritySystemPrompt, undefined);
+      return '{"action":"retry","day":"2026-11-13","count":2}';
+    } };
+    assert.deepEqual(await resolveCurriculumRetry(text, { chatClient: client, now: Date.parse('2026-11-13T04:00:00+08:00') }),
+      { action: 'retry', day: '2026-11-13', count: 2 });
+  }
+});
+
+test('语义识别失败、否定或数量日期非法都不创建任务', async t => {
+  const f = setup(t);
+  const { resolveCurriculumRetry } = await import('../src/video-curriculum-retry.js');
+  for (const answer of ['补就补', '{"action":"retry","day":"2026-02-30"}',
+    '{"action":"retry","day":"2026-11-13","count":-1}', '{"action":"other"}']) {
+    const command = await resolveCurriculumRetry('今天失败的视频帮我补学一下', {
+      chatClient: { isConfigured: true, complete: async () => answer }, now: f.c.now() });
+    assert.equal(command.action, 'clarify');
+    assert.match(f.retry.handle(command, scope), /没有创建任务/);
+  }
+  assert.match(f.retry.handle({ action: 'decline' }, scope), /没有创建补学任务/);
+  assert.match(f.retry.handle({ action: 'retry', day: '2026-11-12', count: 2 }, scope), /实际有 1 个/);
+  assert.equal(f.store.listCurriculumRetries().length, 0);
+});
