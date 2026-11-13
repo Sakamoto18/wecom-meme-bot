@@ -5154,3 +5154,23 @@ test('官方和 NapCat 先 @ 后发问题无需再次 @，生成中补充会抑�
     assert.equal(history.filter(row => row.role === 'assistant').length, 1, '未发出的旧回答不能写入记忆');
   }
 });
+
+test('自然补学句子走受限分类和真实任务入口，不交给人格闲聊，双端权限一致', async () => {
+  for (const groupId of ['g', 'qqofficial:1903660238:group:openid']) {
+    const { service } = createService({ adminUsers: new Set(['admin']) });
+    const requested = [], calls = [];
+    service.chatClient = { isConfigured: true, async complete(_h, input, options) {
+      calls.push(options.usageSource);
+      assert.equal(JSON.parse(input).message, '补学一下今天凌晨学习失败的两个视频');
+      return JSON.stringify({ action: 'retry', day: new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10), count: 2 });
+    } };
+    service.videoLearning = { curriculumRetry: { handle(command, scope) { requested.push({ command, scope });return '已创建补学任务'; } } };
+    const base = { message_type: 'group', group_id: groupId, user_id: 'admin', bot_user_id: 'bot',
+      text: '补学一下今天凌晨学习失败的两个视频', observe_only: true };
+    const result = await service.handleMessage(base);
+    assert.equal(result.mode, 'video-learning-retry');assert.equal(requested[0].command.count, 2);
+    assert.deepEqual(calls, ['curriculum-retry-intent']);
+    await service.handleMessage({ ...base, user_id: 'ordinary', mentions: [{ user_id: 'bot' }] });
+    assert.equal(requested.length, 1);assert.equal(calls.length, 1);
+  }
+});

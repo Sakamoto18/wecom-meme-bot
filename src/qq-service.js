@@ -35,7 +35,7 @@ import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { buildVideoLearningLinkRequest } from './video-learning-request.js';
 import { QqFollowupTurns } from './qq-followup-turns.js';
-import { parseCurriculumRetry } from './video-curriculum-retry.js';
+import { parseCurriculumRetry, isCurriculumRetryIntent, resolveCurriculumRetry } from './video-curriculum-retry.js';
 import { WebMemeConfirmation, parseWebMemeManagement } from './web-meme-confirmation.js';
 import { parseWebMemeLearningRequest, parseWebMemeQuery, WebMemeLearning } from './web-meme-learning.js';
 import { isRemovedError } from './media-removed.js';
@@ -5655,7 +5655,7 @@ export class QqBotService {
           .some(candidate => ['bilibili', 'xiaohongshu', 'douyin', 'kuaishou'].includes(candidate.provider))
         || Boolean(parseWebMemeManagement(commandText)
         || parseWebMemeLearningRequest(commandText) || parseWebMemeQuery(commandText)
-        || parseCurriculumRetry(commandText) || parseLongtuManagementCommand(commandText)),
+        || parseCurriculumRetry(commandText) || isCurriculumRetryIntent(commandText) || parseLongtuManagementCommand(commandText)),
     });
     if (followup?.duplicate) return { mode: 'duplicate', messages: [] };
     if (followup?.waiting) return { mode: 'awaiting-followup', messages: [] };
@@ -5682,12 +5682,14 @@ export class QqBotService {
   }
 
   async handleUsageTrackedMessage(payload) {
-    const retryCommand = parseCurriculumRetry(stripBotMention(payload.text));
-    if (retryCommand && !this.isPeerBotMessage(payload)) {
+    const retryText = stripBotMention(payload.text);
+    let retryCommand = parseCurriculumRetry(retryText);
+    if ((retryCommand || isCurriculumRetryIntent(retryText)) && !this.isPeerBotMessage(payload)) {
       const administrator = isLongtuAdministrator(payload.userId, this.adminUsers);
       if (!administrator && payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
         return { mode: 'observed', messages: [] };
       }
+      if (administrator && !retryCommand) retryCommand = await resolveCurriculumRetry(retryText, { chatClient: this.chatClient, now: this.now() });
       const text = !administrator ? '只有已配置的管理员可以补学每日失败视频和查看补学报告。'
         : !this.videoLearning?.curriculumRetry ? '视频学习服务当前未启用。'
           : this.videoLearning.curriculumRetry.handle(retryCommand, {
