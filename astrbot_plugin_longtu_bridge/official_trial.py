@@ -252,7 +252,12 @@ async def mirror_learning(bridge, payload):
         targets = [key for key, qq in user_bindings(bridge.config).items() if str(qq) == target]
     if not targets:
         return None
-    chains = [MessageChain([Comp.Plain(str(payload.get('text') or ''))])]
+    parts = []
+    requester = str(payload.get('deliveryUserId') or '')
+    if group and payload.get('mentionRequester') and requester.startswith(prefix + 'user:'):
+        parts.append(Comp.At(qq=requester.split(':', 3)[-1]))
+    parts.append(Comp.Plain(str(payload.get('text') or '')))
+    chains = [MessageChain(parts)]
     if payload.get('reportImage') and str(payload.get('imageFile') or '').startswith('base64://'):
         chains.append(MessageChain([Comp.Image(file=payload['imageFile'])]))
     ok = True
@@ -367,6 +372,7 @@ async def handle_official_message(bridge, event):
             'message_type': 'private' if private else 'group',
             'group_id': '' if private else identity(appid, 'group', event.get_group_id()),
             'user_id': bound_user or identity(appid, 'user', event.get_sender_id()),
+            'learning_delivery_user_id': identity(appid, 'user', event.get_sender_id()),
             'sender_name': event.get_sender_name(),
             'bot_user_id': identity(appid, 'user', event.get_self_id()),
             'text': current_text,

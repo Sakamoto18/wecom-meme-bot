@@ -18,6 +18,7 @@ import {
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
 import { QqUsageLimitError, isDeepSeekPeakTime } from './qq-usage-tracker.js';
 import { generateConversationReply } from './reply-engine.js';
+import { shouldRequestDetailedAnswer } from './response-style.js';
 import { guardFinalReply } from './reply-expression.js';
 import {
   isAdminStopCommand,
@@ -33,6 +34,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { buildVideoLearningLinkRequest } from './video-learning-request.js';
+import { QqFollowupTurns } from './qq-followup-turns.js';
+import { parseCurriculumRetry } from './video-curriculum-retry.js';
 import { WebMemeConfirmation, parseWebMemeManagement } from './web-meme-confirmation.js';
 import { parseWebMemeLearningRequest, parseWebMemeQuery, WebMemeLearning } from './web-meme-learning.js';
 import { isRemovedError } from './media-removed.js';
@@ -1638,6 +1641,7 @@ export function normalizeQqPayload(payload, { relationImport = false } = {}) {
     groupId,
     senderName: normalizeString(payload.sender_name, MAX_NAME_CHARACTERS),
     text: normalizeString(payload.text, MAX_MESSAGE_CHARACTERS),
+    learningDeliveryUserId: normalizeString(payload.learning_delivery_user_id, MAX_IDENTIFIER_CHARACTERS),
     learningQuoteImages: limitedImages.quotedImages,
     learningQuoteMessageIds: (Array.isArray(payload.quoted_message_ids) ? payload.quoted_message_ids : []).slice(0, 12).map(id => String(id).slice(0, 240)),
     quotedMessageId: normalizeIdentifier(
@@ -1868,7 +1872,8 @@ export function splitReplyText(value, options = {}) {
   const paragraphs = normalized.split(paragraphPattern).map((part) => part.trim()).filter(Boolean);
   const parts = [];
   for (const paragraph of paragraphs) {
-    if (paragraph.length <= maxPartCharacters && !splitSentences) {
+    if (paragraph.length <= maxPartCharacters && !splitSentences
+      || options.splitClauses === false && /https?:\/\//iu.test(paragraph)) {
       parts.push(paragraph);
       continue;
     }
@@ -1876,13 +1881,13 @@ export function splitReplyText(value, options = {}) {
       .split(/(?<=[。！？!?；;])\s*/u)
       .filter(Boolean)
       .flatMap((sentence) => {
-        if (!splitSentences || sentence.length <= maxPartCharacters) return [sentence];
+        if (!splitSentences || options.splitClauses === false || sentence.length <= maxPartCharacters) return [sentence];
         return sentence.split(/(?<=[：:，,])\s*/u).filter(Boolean);
       });
     let current = '';
     for (const sentence of sentences) {
       const candidate = current ? `${current}${sentence}` : sentence;
-      if (current && candidate.length > maxPartCharacters) {
+      if (current && current.length >= Number(options.minPartCharacters || 0) && candidate.length > maxPartCharacters) {
         parts.push(current.trim());
         current = sentence;
       } else {
@@ -2555,6 +2560,7 @@ export class QqBotService {
     this.adminStoppedPeerGroups = new Map();
     this.groupStopRevisions = new Map();
     this.groupProcessingQueues = new Map();
+    this.followupTurns = new QqFollowupTurns({ now: () => this.now() });
     this.lastGroupPassiveDecisionAt = new Map();
   }
 
@@ -4365,6 +4371,7 @@ export class QqBotService {
         );
       }
 
+      if (options.followupStale?.()) return { mode: 'superseded', messages: [] };
       // Validate the complete text before persistence and before QQ splitting.
       // No malformed inner-monologue tail may become a standalone first send.
       if (generated.answer) {
@@ -4445,12 +4452,15 @@ export class QqBotService {
       }
       // 普通闲聊按完整句子拆成几条更像群友接话；代码块和列表仍保持单条，
       // 避免把结构化内容切碎。阈值保持在一整句以上，不退回碎片式发言。
-      const structuredReply = /```|(?:^|\n)\s*(?:[-*]|\d+\.)\s/u.test(answer);
+      const structuredReply = /```|(?:^|\n)\s*(?:[-*]|\d+\.)\s/u.test(answer)
+        || shouldRequestDetailedAnswer(content);
       const messages = splitReplyText(answer, {
         splitSentences: !structuredReply,
         splitLineBreaks: !structuredReply,
-        maxPartCharacters: structuredReply ? 1_800 : 100,
-        maxParts: structuredReply ? 1 : 3,
+        splitClauses: false,
+        minPartCharacters: 12,
+        maxPartCharacters: structuredReply ? 1_800 : 65,
+        maxParts: structuredReply ? 1 : 2,
       }).map((text) => ({ type: 'text', text }));
 
       try {
@@ -5637,6 +5647,22 @@ export class QqBotService {
         + `self_mentioned=${selfMentioned ? 'yes' : 'no'}`,
       );
     }
+    const commandText = stripBotMention(payload.text);
+    const followup = this.followupTurns.accept(payload, {
+      direct: this.isDirectHumanEngagementTrigger(payload), peer: this.isPeerBotMessage(payload),
+      command: commandText.startsWith('/')
+        || mediaCandidates({ text: payload.text, richSegments: payload.richSegments })
+          .some(candidate => ['bilibili', 'xiaohongshu', 'douyin', 'kuaishou'].includes(candidate.provider))
+        || Boolean(parseWebMemeManagement(commandText)
+        || parseWebMemeLearningRequest(commandText) || parseWebMemeQuery(commandText)
+        || parseCurriculumRetry(commandText) || parseLongtuManagementCommand(commandText)),
+    });
+    if (followup?.duplicate) return { mode: 'duplicate', messages: [] };
+    if (followup?.waiting) return { mode: 'awaiting-followup', messages: [] };
+    const handle = async () => {
+      try { return await this.handleUsageTrackedMessage(payload); }
+      finally { followup?.finish?.(); }
+    };
     const largeGroup = payload.messageType === 'group'
       && this.isLargeGroup(payload.groupId, payload);
     if (this.usageTracker) {
@@ -5649,13 +5675,28 @@ export class QqBotService {
       };
       return this.usageTracker.runWithContext(
         usageContext,
-        () => this.handleUsageTrackedMessage(payload),
+        handle,
       );
     }
-    return this.handleUsageTrackedMessage(payload);
+    return handle();
   }
 
   async handleUsageTrackedMessage(payload) {
+    const retryCommand = parseCurriculumRetry(stripBotMention(payload.text));
+    if (retryCommand && !this.isPeerBotMessage(payload)) {
+      const administrator = isLongtuAdministrator(payload.userId, this.adminUsers);
+      if (!administrator && payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
+        return { mode: 'observed', messages: [] };
+      }
+      const text = !administrator ? '只有已配置的管理员可以补学每日失败视频和查看补学报告。'
+        : !this.videoLearning?.curriculumRetry ? '视频学习服务当前未启用。'
+          : this.videoLearning.curriculumRetry.handle(retryCommand, {
+            chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId,
+            botUserId: payload.botUserId, messageId: payload.messageId,
+            deliveryUserId: payload.learningDeliveryUserId,
+          });
+      return { mode: 'video-learning-retry', messages: [{ type: 'text', text }] };
+    }
     const learningManagement = parseWebMemeManagement(stripBotMention(payload.text));
     if (learningManagement && !this.isPeerBotMessage(payload)) {
       if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)
@@ -5719,10 +5760,12 @@ export class QqBotService {
 
     try {
       const processMessage = async () => {
+        if (payload.followupStale?.()) return { mode: 'superseded', messages: [] };
         const startedAtStopRevision = payload.messageType === 'group'
           ? this.groupStopRevision(payload.groupId)
           : 0;
         const result = await this.handleNormalizedMessage(payload);
+        if (payload.followupStale?.()) return { mode: 'superseded', messages: [] };
         if (payload.messageType === 'group'
           && result?.messages?.length > 0
           && this.groupStopRevision(payload.groupId) !== startedAtStopRevision) {
@@ -6366,6 +6409,7 @@ export class QqBotService {
         imageQuestion: payload.text,
         forwardedContext: [payload.forwardedText, payload.quotedForwardedText].filter(Boolean).join('\n'),
         longtuAliases,
+        followupStale: payload.followupStale,
         pureBotMention: payload.pureBotMention,
         directBotMention: this.isDirectHumanMentionTrigger(payload),
         recentGroupContext: recall,

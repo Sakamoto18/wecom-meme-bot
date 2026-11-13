@@ -69,7 +69,7 @@ ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
     "/rel-import", "/rel-import-status", "/rel-import-end", "/rel-index-status",
     "/stop", "/usage-report", "/persona", "/jev", "/crazy-thursday", "/crazy-thursday-add",
-    "/crazy-thursday-list", "/crazy-thursday-del", "/learn-meme", "/learn-status", "/learn-report", "/learn-list", "/learn-review", "/learn-confirm", "/learn-cancel", "/指令",
+    "/crazy-thursday-list", "/crazy-thursday-del", "/learn-retry", "/learn-retry-status", "/learn-meme", "/learn-status", "/learn-report", "/learn-list", "/learn-review", "/learn-confirm", "/learn-cancel", "/指令",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
@@ -164,6 +164,8 @@ def learning_delivery_message(payload: dict):
     message_id = str(payload.get("messageId") or "")
     if message_id.lstrip("-").isdigit():
         message.append({"type": "reply", "data": {"id": message_id}})
+    if payload.get("mentionRequester") and payload.get("chatType") == "group" and str(payload.get("userId") or "").isdigit():
+        message.append({"type": "at", "data": {"qq": str(payload["userId"])}})
     message.append({"type": "text", "data": {"text": text}})
     if payload.get("reportImage"):
         image_file = str(payload.get("imageFile") or "")
@@ -593,7 +595,7 @@ class LongtuQqBridge(Star):
         platform = self._qq_platform()
         bot = getattr(platform, "bot", None) if platform else None
         token = self._api_token()
-        if not bot or not token or not self.session or self.session.closed:
+        if not token or not self.session or self.session.closed:
             return 0
         headers = {"Authorization": f"Bearer {token}"}
         async with self.session.get(
@@ -614,8 +616,8 @@ class LongtuQqBridge(Star):
             planned = learning_delivery_message(delivery.get("payload") or {})
             if official_result is not None:
                 sent, error = official_result, "" if official_result else "官方投递未确认"
-            elif not planned:
-                error = "投递目标无效"
+            elif not planned or not bot:
+                error = "投递目标无效或 OneBot 未连接"
             else:
                 action, destination, message = planned
                 try:
