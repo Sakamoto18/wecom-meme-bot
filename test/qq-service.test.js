@@ -5103,3 +5103,22 @@ test('官方与 NapCat 普通回复共用最多两条完整句子的展示规则
     assert.ok(texts.every(t=>t.endsWith('。')));
   }
 });
+
+test('双端每日失败补学统一入口、管理员权限、混合引用保留当前指令', async () => {
+  for (const groupId of ['1109147947', 'qqofficial:123:group:openid']) {
+    const { service, calls } = createService({ adminUsers: new Set(['admin']) });
+    const handled = [];
+    service.videoLearning = { curriculumRetry: { handle(command, scope) { handled.push({ command, scope }); return '补学已排队'; } } };
+    const base = { message_type: 'group', group_id: groupId, user_id: 'admin', bot_user_id: 'bot',
+      observe_only: true, text: '重学昨天失败的视频', quoted_image_base64s: [Buffer.from('report').toString('base64')] };
+    const reply = await service.handleMessage(base);
+    assert.equal(reply.mode, 'video-learning-retry');
+    assert.match(reply.messages[0].text, /补学已排队/);
+    assert.equal(handled[0].scope.groupId, groupId);
+    assert.equal(handled[0].command.action, 'retry');
+    const denied = await service.handleMessage({ ...base, user_id: 'member', mentions: [{ user_id: 'bot' }], text: '/learn-retry' });
+    assert.match(denied.messages[0].text, /管理员/);
+    assert.equal(handled.length, 1);
+    assert.equal(calls.length, 0);
+  }
+});

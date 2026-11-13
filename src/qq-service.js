@@ -34,6 +34,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mediaCandidates } from './media-link-extractor.js';
 import { buildVideoLearningLinkRequest } from './video-learning-request.js';
+import { parseCurriculumRetry } from './video-curriculum-retry.js';
 import { WebMemeConfirmation, parseWebMemeManagement } from './web-meme-confirmation.js';
 import { parseWebMemeLearningRequest, parseWebMemeQuery, WebMemeLearning } from './web-meme-learning.js';
 import { isRemovedError } from './media-removed.js';
@@ -1639,6 +1640,7 @@ export function normalizeQqPayload(payload, { relationImport = false } = {}) {
     groupId,
     senderName: normalizeString(payload.sender_name, MAX_NAME_CHARACTERS),
     text: normalizeString(payload.text, MAX_MESSAGE_CHARACTERS),
+    learningDeliveryUserId: normalizeString(payload.learning_delivery_user_id, MAX_IDENTIFIER_CHARACTERS),
     learningQuoteImages: limitedImages.quotedImages,
     learningQuoteMessageIds: (Array.isArray(payload.quoted_message_ids) ? payload.quoted_message_ids : []).slice(0, 12).map(id => String(id).slice(0, 240)),
     quotedMessageId: normalizeIdentifier(
@@ -5661,6 +5663,21 @@ export class QqBotService {
   }
 
   async handleUsageTrackedMessage(payload) {
+    const retryCommand = parseCurriculumRetry(stripBotMention(payload.text));
+    if (retryCommand && !this.isPeerBotMessage(payload)) {
+      const administrator = isLongtuAdministrator(payload.userId, this.adminUsers);
+      if (!administrator && payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)) {
+        return { mode: 'observed', messages: [] };
+      }
+      const text = !administrator ? '只有已配置的管理员可以补学每日失败视频和查看补学报告。'
+        : !this.videoLearning?.curriculumRetry ? '视频学习服务当前未启用。'
+          : this.videoLearning.curriculumRetry.handle(retryCommand, {
+            chatType: payload.messageType, groupId: payload.groupId, userId: payload.userId,
+            botUserId: payload.botUserId, messageId: payload.messageId,
+            deliveryUserId: payload.learningDeliveryUserId,
+          });
+      return { mode: 'video-learning-retry', messages: [{ type: 'text', text }] };
+    }
     const learningManagement = parseWebMemeManagement(stripBotMention(payload.text));
     if (learningManagement && !this.isPeerBotMessage(payload)) {
       if (payload.messageType === 'group' && !this.isDirectHumanEngagementTrigger(payload)

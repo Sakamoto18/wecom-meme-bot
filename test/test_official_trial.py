@@ -327,6 +327,17 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send.call_args.args[1], 'group-id')
             self.assertTrue(send.call_args.kwargs['group'])
 
+    async def test_retry_report_mentions_official_requester(self):
+        bridge, _ = self.fixture(private=False)
+        with patch('astrbot_plugin_longtu_bridge.official_trial.proactive', new_callable=AsyncMock, return_value=True) as send:
+            self.assertTrue(await mirror_learning(bridge, {
+                'chatType': 'group', 'groupId': 'qqofficial:1903660238:group:group-id',
+                'deliveryUserId': 'qqofficial:1903660238:user:user-openid', 'mentionRequester': True,
+                'text': '补学完成', 'reportImage': True, 'imageFile': 'base64://abc'}))
+            chains = send.call_args.args[2]
+            self.assertEqual(chains[0].chain[0].qq, 'user-openid')
+            self.assertIsInstance(chains[1].chain[0], Comp.Image)
+
     async def test_verified_group_mapping_uses_live_qq_name_and_safe_fallback(self):
         bridge, _ = self.fixture()
         bridge.config['official_trial_group_bindings'] = {'openid': {'qq_group_id': '1109147947'}}

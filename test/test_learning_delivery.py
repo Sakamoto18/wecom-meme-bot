@@ -45,6 +45,12 @@ class LearningDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(learning_delivery_message({'chatType': 'group', 'groupId': 'x', 'text': 'a'}))
         self.assertIsNone(learning_delivery_message({'chatType': 'private', 'userId': '1', 'text': ''}))
 
+    def test_retry_report_mentions_requester(self):
+        _, _, message = learning_delivery_message({'chatType': 'group', 'groupId': '123', 'userId': '456',
+            'text': '补学完成', 'mentionRequester': True, 'reportImage': True, 'imageFile': 'base64://abc'})
+        self.assertEqual([m['type'] for m in message], ['at', 'text', 'image'])
+        self.assertEqual(message[0]['data']['qq'], '456')
+
     def test_daily_report_sends_one_complete_image_with_text(self):
         payload = {'chatType': 'private', 'userId': '555', 'text': '每日学习报告',
                    'reportImage': True, 'imageFile': 'base64://abc'}

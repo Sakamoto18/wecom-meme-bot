@@ -1,5 +1,6 @@
 import { requestBrowserWatch } from './browser-watch-client.js';
 import { VideoCurriculum } from './video-curriculum.js';
+import { VideoCurriculumRetry } from './video-curriculum-retry.js';
 import { createHash } from 'node:crypto';
 import { Jimp } from 'jimp';
 import { buildBilibiliWbiParams } from './bilibili-ai-summary.js';
@@ -201,6 +202,7 @@ export class VideoLearningCoordinator {
     this.timer = null;
     this.catchupRunning = false;
     this.curriculum = new VideoCurriculum(this, options.curriculum);
+    this.curriculumRetry = new VideoCurriculumRetry(this);
   }
 
   start(intervalMs = 15_000) {
@@ -576,6 +578,7 @@ export class VideoLearningCoordinator {
         await this.processTask(task);
       }
       // On-demand learning goes first; catch-up runs once the queue is empty.
+      await this.curriculumRetry.tick();
       await this.curriculum.tick();
       if (this.catchupDue()) await this.runCatchup();
     } catch (error) {

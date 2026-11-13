@@ -560,6 +560,27 @@ export class VideoLearningStore {
     return row ? json(row.progress_json) : null;
   }
 
+  listCurriculumRetries() {
+    return this.ensureOpen().prepare(`SELECT progress_json FROM video_learning_progress
+      WHERE source_key LIKE 'curriculum-retry:%' ORDER BY updated_at ASC, source_key ASC`)
+      .all().map(row => json(row.progress_json));
+  }
+
+  curriculumReport(mid, day = '') {
+    const prefix = `curriculum-report:${mid}:`;
+    const rows = this.ensureOpen().prepare(`SELECT payload_json FROM video_learning_deliveries
+      WHERE substr(json_extract(payload_json, '$.waiterKey'), 1, ?) = ?
+      ORDER BY created_at DESC, rowid DESC`).all(prefix.length, prefix);
+    for (const row of rows) {
+      const payload = json(row.payload_json);
+      const date = String(payload.waiterKey).slice(prefix.length, prefix.length + 10);
+      if ((!day || day === date) && Array.isArray(payload.reportItems)) {
+        return { day: date, items: payload.reportItems, error: payload.reportText || '' };
+      }
+    }
+    return null;
+  }
+
   listWebMemeReports(scope) {
     const target = scope.chatType === 'group' ? scope.groupId : scope.userId;
     const field = scope.chatType === 'group' ? '$.scope.groupId' : '$.scope.userId';
