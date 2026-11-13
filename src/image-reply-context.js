@@ -30,7 +30,7 @@ const TECHNICAL_GROUNDING_PATTERN = /(?:私钥|密钥|助记词|钱包|算法|�
 const RECENT_GROUNDING_PATTERN = /(?:昨天|昨日|前天|今天|今日|刚刚|刚才|这两天|这几天|这周|本周|上周|最近|近期|最新)/iu;
 const CHARACTER_SUBJECT_KIND_PATTERN = /^(?:anime_character|game_character)$/iu;
 const CHARACTER_VISUAL_PATTERN = /(?:二次元|动漫|动画角色|游戏角色|角色立绘|立绘|纸片人|虚拟主播|vtuber|galgame|原画|人物插画|角色插画)/iu;
-const NON_CHARACTER_SCREENSHOT_PATTERN = /(?:聊天截图|聊天记录|私聊|群聊|评论区|论坛|帖子|新闻截图|公告截图|网页截图|公众号|文章截图)/iu;
+const NON_CHARACTER_SCREENSHOT_PATTERN = /(?:聊天截图|聊天记录|私聊|群聊|评论区|论坛|帖子|新闻截图|公告截图|网页截图|公众号|文章截图|长文|文档|文字截图|文字长图|长截图)/iu;
 const CHARACTER_IDENTIFICATION_PATTERN = /(?:这是谁|谁啊|哪个角色|什么角色|哪个作品|哪部作品|什么作品|哪部|哪款游戏|什么游戏|游戏名|动漫名|出处|来源|叫什么|识别一下|认一下|认不认识)/iu;
 const PUBLIC_INFORMATION_KINDS = new Set([
   'news', 'public_event', 'public_figure', 'technical_rule',
@@ -358,6 +358,16 @@ export function primaryImageMemeClaim(analysis) {
 export function isPureCharacterImage(analysis, content = '') {
   const items = imageAnalysisItems(analysis);
   if (items.length === 0) return false;
+  // Pure means every image/tile is character art. A single anime avatar or
+  // illustration must never veto the document around it, even when vision
+  // emits a contradictory character subject_kind.
+  if (items.length > 1) return items.every(item => !item.failed && isPureCharacterImage({ items: [item] }, content));
+  if (items.some(item => item.failed
+    || /^document$/iu.test(compactText(item.subjectKind ?? item.subject_kind))
+    || /^private_chat$/iu.test(compactText(item.informationKind ?? item.information_kind))
+    || NON_CHARACTER_SCREENSHOT_PATTERN.test([item.description, item.scene, item.visualSubject,
+      ...(item.keywords || [])].filter(Boolean).join(' '))
+    || (item.visibleText || []).join('').replace(/\s/gu, '').length >= 160)) return false;
   const explicitCharacterSubject = items.some((item) => (
     CHARACTER_SUBJECT_KIND_PATTERN.test(compactText(item?.subjectKind ?? item?.subject_kind))
   ));
@@ -401,6 +411,7 @@ export function isPureCharacterImage(analysis, content = '') {
 
 export function shouldSkipCharacterEvaluation(analysis, content = '') {
   const text = compactText(content);
+  if (/这(?:张图|个|到底)?(?:是|讲|说|写)(?:的|了)?什么|看清楚|重新(?:看|识别)|再(?:看|读)一(?:遍|次)|读(?:图|字|正文)|长文|看错/u.test(text)) return false;
   if (CHARACTER_IDENTIFICATION_PATTERN.test(text)) return false;
   return isPureCharacterImage(analysis, text);
 }

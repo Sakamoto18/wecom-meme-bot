@@ -4659,6 +4659,25 @@ test('视觉分析保留现实锚点、信息类型和角色主体类型', async
   assert.equal(analysis.items[0].informationKind, 'unknown');
 });
 
+test('要求重新看图时绕过错误识图缓存并替换旧结果', async () => {
+  let calls = 0;
+  const { service } = createService({ chatClient: { isConfigured: true, async complete() {
+    calls++;
+    return JSON.stringify(calls === 1
+      ? { subject_kind: 'anime_character', description: '角色立绘' }
+      : { subject_kind: 'document', description: '带动漫头像的长文截图', visible_text: ['这是文章正文'] });
+  } } });
+  const blocks = (await prepareImageBlocks({ imageBase64s: [(await createPng()).toString('base64')] })).blocks;
+  await service.analyzeImages(blocks, '如何评价');
+  await service.analyzeImages(blocks, '如何评价');
+  assert.equal(calls, 1);
+  const corrected = await service.analyzeImages(blocks, '睁大眼睛看清楚这是什么，如何评价');
+  assert.equal(calls, 2);
+  assert.equal(corrected.items[0].subjectKind, 'document');
+  assert.equal((await service.analyzeImages(blocks, '如何评价')).items[0].subjectKind, 'document');
+  assert.equal(calls, 2);
+});
+
 test('纯游戏角色图要求评价时直接拒绝，不进入模型或联网', async () => {
   const png = (await createPng()).toString('base64');
   const calls = [];
