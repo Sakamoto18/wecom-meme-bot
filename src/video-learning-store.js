@@ -417,8 +417,9 @@ export class VideoLearningStore {
   nextQueuedTask() {
     return this.#taskRow(this.ensureOpen().prepare(`
       SELECT * FROM video_learning_tasks WHERE status = 'queued'
+        AND COALESCE(json_extract(metadata_json, '$.watchRetryAt'), 0) <= ?
       ORDER BY created_at ASC LIMIT 1
-    `).get());
+    `).get(this.now()));
   }
 
   countTasksSince(since) {

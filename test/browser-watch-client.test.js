@@ -38,3 +38,17 @@ test('连接断开返回具体错误并清理总等待计时器', async t => {
   });
   await assert.rejects(requestBrowserWatch('http://provider', 'https://www.bilibili.com/video/BV1Epx96EEBG', 300), /ECONNRESET/);
 });
+
+test('观看空位繁忙保留结构化错误供调度延期', async t => {
+  t.mock.method(http, 'request', (_url, _options, callback) => {
+    const req = new EventEmitter();
+    req.end = () => queueMicrotask(() => {
+      const response = new EventEmitter();response.statusCode = 503;callback(response);
+      response.emit('data', Buffer.from(JSON.stringify({ error: '等待空位超时，尚未观看', code: 'WATCH_BUSY' })));
+      response.emit('end');
+    });
+    return req;
+  });
+  await assert.rejects(requestBrowserWatch('http://provider', 'https://www.bilibili.com/video/BV1Epx96EEBG', 300),
+    error => error.code === 'WATCH_BUSY' && /尚未观看/.test(error.message));
+});

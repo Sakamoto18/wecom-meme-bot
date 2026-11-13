@@ -23,12 +23,16 @@ export function requestBrowserWatch(providerUrl, url, seconds) {
         clearTimeout(timer);
         try {
           const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          if (response.statusCode !== 200) throw new Error(body.error || `网页观看失败 HTTP ${response.statusCode}`);
+          if (response.statusCode !== 200) {
+            const error = new Error(body.error || `网页观看失败 HTTP ${response.statusCode}`);
+            error.code = body.code || '';
+            throw error;
+          }
           resolve(body);
         } catch (error) { reject(error); }
       });
     });
-    const timer = setTimeout(() => request.destroy(new Error('网页观看请求超过总等待时间')), (seconds + 190) * 1000);
+    const timer = setTimeout(() => request.destroy(new Error('网页观看请求超过总等待时间')), (seconds + 240) * 1000);
     request.on('error', error => { clearTimeout(timer); reject(error); });
     request.end(data);
   });

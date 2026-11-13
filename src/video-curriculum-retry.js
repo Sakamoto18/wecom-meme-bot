@@ -137,7 +137,10 @@ export class VideoCurriculumRetry {
         }
         if (!terminal(task.status)) await this.c.processTask(task);
         const done = this.store.getTask(task.taskKey);
-        if (!terminal(done?.status)) return;
+        if (!terminal(done?.status)) {
+          batch.note = done?.error || '正在等待观看服务，稍后自动继续。';
+          this.save(batch); return;
+        }
         const entry = done.result?.entry;
         const learned = done.status === 'completed' && entry?.verified === true;
         const candidate = done.status === 'completed' && entry?.confidence === 'medium';
