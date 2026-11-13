@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from learning_report import render_report
-from bilibili_watch import watch_page, watch_url
+from bilibili_watch import watch_page, watch_url, WatchBusyError
 from profile_guard import acquire_profile
 from runtime_config import browser_options, data_path, douyin_profile_path
 from xhs_content import clean_author_name, is_note_url, normalize_note, parse_public_note
@@ -615,6 +615,9 @@ async def bilibili_watch(body: BilibiliWatchRequest, request: Request):
         with suppress(Exception):
             await save_bilibili_state()
         return result
+    except WatchBusyError as error:
+        logger.warning('Bilibili browser watch busy: %s', error)
+        return JSONResponse({'error': str(error), 'code': 'WATCH_BUSY'}, status_code=503)
     except (ValueError, PlaywrightError, TimeoutError) as error:
         logger.warning('Bilibili browser watch failed: %s', str(error)[:300])
         return JSONResponse({'error': str(error)[:300] or '网页观看超时'}, status_code=502)

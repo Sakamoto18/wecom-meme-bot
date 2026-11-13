@@ -145,3 +145,15 @@ test('中置信候选单独计数，日报说明可接梗但事实待核实', as
   assert.match(delivery.payload.reportText, /候选可接梗/);
   assert.match(delivery.payload.reportText, /事实待核实/);
 });
+
+test('观看服务繁忙延期不记为失败也不消费每日队列', async t => {
+  const f = fixture(t);
+  f.coordinator.processTask = async task => f.store.updateTask(task.taskKey, {
+    status: 'queued', error: '观看服务忙', metadata: { ...task.metadata, watchRetryAt: f.coordinator.now() + 60000 },
+  });
+  await f.make().tick();
+  const state = f.store.getProgress('bilibili-space:123');
+  assert.equal(state.run.items.length, 0);assert.equal(state.queue.length, 2);
+  assert.equal(f.store.nextQueuedTask(), null);
+  f.advance(60001);assert.ok(f.store.nextQueuedTask());
+});

@@ -593,3 +593,20 @@ test('中置信视频保留候选记忆，排除未核实出处和原句', async
     assert.deepEqual(candidates[0].replyHooks, []);
   } finally { f.close(); }
 });
+
+test('观看空位繁忙有界延后，保留原任务不发送虚假学习失败', async () => {
+  const f = fixture();
+  try {
+    const { task } = f.store.createOrJoinTask({ topic: '等候观看', metadata: {
+      background: true, directLink: true, preferredBvid: 'BV1Epx96EEBG', waiters: [] } });
+    let attempts = 0;
+    f.coordinator.browserWatch = async () => { attempts++;throw Object.assign(new Error('观看服务忙'), { code: 'WATCH_BUSY' }); };
+    await f.coordinator.processTask(task);
+    let queued = f.store.getTask(task.taskKey);
+    assert.equal(queued.status, 'queued');assert.equal(f.store.nextQueuedTask(), null);
+    await f.coordinator.processTask(queued);assert.equal(attempts, 1);
+    for (let i = 0; i < 3; i++) { f.advance(60001);await f.coordinator.processTask(f.store.getTask(task.taskKey)); }
+    assert.equal(f.store.getTask(task.taskKey).status, 'failed');assert.equal(attempts, 4);
+    assert.equal(f.store.claimDeliveries().length, 0);
+  } finally { f.close(); }
+});

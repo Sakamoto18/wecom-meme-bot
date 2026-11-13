@@ -589,6 +589,7 @@ export class VideoLearningCoordinator {
   }
 
   async processTask(task) {
+    if (Number(task.metadata?.watchRetryAt) > this.now()) return;
     // Catch-up tasks have nobody waiting, so they are not held to the wait limit.
     const catchup = Boolean(task.metadata?.catchup || task.metadata?.background);
     const budget = { modelCalls: 0, deadline: (catchup ? this.now() : task.createdAt) + this.limits.waitMs };
@@ -637,6 +638,7 @@ export class VideoLearningCoordinator {
             material += result.seconds;
           }
         } catch (error) {
+          if (error.code === 'WATCH_BUSY') throw error;
           failures.push(`${candidate.bvid || candidate.url}：${error.message}`);
           this.logger.warn?.(`视频学梗：${candidate.bvid} 观看失败：${error.message}`);
         }
@@ -689,6 +691,14 @@ export class VideoLearningCoordinator {
       await this.notifyWaiters(this.store.getTask(task.taskKey), entry ? 'result' : 'failure', entry);
       this.logger.log?.(`视频学梗：${entry ? '完成' : '未确认'} topic=${task.topic} sources=${watched.length} seconds=${material} calls=${budget.modelCalls}`);
     } catch (error) {
+      if (error.code === 'WATCH_BUSY' && (Number(task.metadata?.watchBusyRetries) || 0) < 3) {
+        this.store.updateTask(task.taskKey, { status: 'queued', error: error.message, metadata: {
+          ...task.metadata, watchRetryAt: this.now() + 60_000,
+          watchBusyRetries: (Number(task.metadata?.watchBusyRetries) || 0) + 1,
+        } });
+        this.logger.warn?.(`视频学习等待观看空位，60秒后继续：${task.topic}`);
+        return;
+      }
       this.logger.warn?.(`视频学梗：任务失败 topic=${task.topic}：${error.message}`);
       this.store.updateTask(task.taskKey, { status: 'failed', error: error.message });
       await this.notifyWaiters(this.store.getTask(task.taskKey), 'failure', null);

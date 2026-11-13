@@ -30,6 +30,34 @@ class AudioTests(unittest.IsolatedAsyncioTestCase):
              patch.object(browser_audio.asyncio, 'wait_for', short_wait):
             return await browser_audio.transcribe_recording(page, {'ok': True})
 
+    async def test_cancelling_asr_stops_child_and_propagates_cancellation(self):
+        data = io.BytesIO()
+        with wave.open(data, 'wb') as wav:
+            wav.setparams((1, 2, 16000, 0, 'NONE', 'NONE'))
+            wav.writeframes(b'\x01\x00' * 16000)
+        page = AsyncMock()
+        page.evaluate.return_value = base64.b64encode(data.getvalue()).decode()
+        spawn = asyncio.create_subprocess_exec
+        created = asyncio.Event()
+        children = []
+        async def fake_spawn(*args, **kwargs):
+            # Pass through Windows taskkill used by cancellation cleanup.
+            if args[0] == 'taskkill':
+                return await spawn(*args, **kwargs)
+            child = await spawn(sys.executable, '-c', 'import time; time.sleep(30)', **kwargs)
+            children.append(child)
+            created.set()
+            return child
+        with patch.dict(os.environ, QQ_VIDEO_LEARNING_ASR_PYTHON=sys.executable), \
+             patch.object(browser_audio.asyncio, 'create_subprocess_exec', fake_spawn):
+            task = asyncio.create_task(browser_audio.transcribe_recording(page, {'ok': True}))
+            await created.wait()
+            await asyncio.sleep(0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertIsNotNone(children[0].returncode)
+
     async def test_completed_audio(self):
         result = await self.run_asr('print(\'[ {"start":0,"end":1,"text":"hello"} ]\')')
         self.assertEqual(result['status'], 'transcribed')

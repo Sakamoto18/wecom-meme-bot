@@ -92,6 +92,7 @@ export class VideoCurriculum {
         }
         if (!['completed', 'failed', 'cancelled'].includes(task.status)) await c.processTask(task);
         const done = this.store.getTask(task.taskKey);
+        if (!['completed', 'failed', 'cancelled'].includes(done?.status)) { save(); return; }
         const learned = done?.status === 'completed' && done?.result?.entry?.verified === true;
         const candidate = done?.status === 'completed' && done?.result?.entry?.confidence === 'medium';
         const item = { bvid: video.bvid, title: video.title, taskKey: task.taskKey,
