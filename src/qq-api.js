@@ -1,4 +1,5 @@
 import { WebMemeConfirmation } from './web-meme-confirmation.js';
+import { RocoKnowledge } from './roco-knowledge.js';
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
@@ -1094,6 +1095,8 @@ export async function createQqRuntime() {
     logger: console,
   });
   const service = new QqBotService({
+    rocoKnowledge: new RocoKnowledge({ databaseFilePath: path.resolve(projectRoot,
+      process.env.QQ_ROCO_KNOWLEDGE_FILE?.trim() || 'data/roco-world.sqlite') }),
     chatClient,
     replyTurnPlanner,
     // 使用公开文案库只提取结构样本，默认指向一个可审计的 GitHub 原始文件；

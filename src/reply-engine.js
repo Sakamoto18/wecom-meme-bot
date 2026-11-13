@@ -1,3 +1,4 @@
+import { answerRocoQuestion } from './roco-knowledge.js';
 import { ASSOCIATION_SCOPE, learnTextAssociation, taughtAssociationPrompt, selectLearnedAssociation, associationTransferPrompt } from './association-learning.js';
 import { REPLY_EXPRESSION_PROMPT, stripReplyActing, hasReplyProcessNarration, removeReplyProcessNarration, hasBrokenReplyParentheses, guardFinalReply } from './reply-expression.js';
 import {
@@ -858,6 +859,11 @@ export async function generateConversationReply(options) {
     groupStyleProvider = null,
     turnPlan = null,
   } = options;
+
+  if (options.gameKnowledge && !recordSummary && !videoLearningRequest) {
+    return answerRocoQuestion({ knowledge: options.gameKnowledge, chatClient,
+      query: currentQuestion || content, history });
+  }
 
   // The runtime planner is a second opinion, not a replacement for the image
   // analysis. Prefer concrete vision fields and only fill blanks with its card.

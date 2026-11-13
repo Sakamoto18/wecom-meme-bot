@@ -3,6 +3,7 @@
 .env.windows
 .venv-windows/
 data/windows/
+data/roco-wiki-cache/
 node_modules/
 npm-debug.log*
 .DS_Store
