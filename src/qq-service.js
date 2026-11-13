@@ -2303,6 +2303,7 @@ export class QqBotService {
         .filter(Boolean),
     );
     this.knowledgeContext = options.knowledgeContext ?? '';
+    this.rocoKnowledge = options.rocoKnowledge ?? null;
     this.memberAliases = options.memberAliases ?? {};
     this.longtuLibrary = options.longtuLibrary ?? null;
     // Relation vocabulary is a local, precompiled tag index. It only expands
@@ -4154,7 +4155,13 @@ export class QqBotService {
           conversationId,
         }
         : null;
+      const gameKnowledge = !hasImageContext && !recordSummary && !options.videoLearningRequest
+        ? this.rocoKnowledge?.retrieve(content, {
+          sessionKey: `${conversationId}:${message.from?.userid ?? ''}`,
+          quote: extractMessageText(message?.quote),
+        }) : null;
       const generateReply = (input, blocks) => generateConversationReply({
+        gameKnowledge,
         content,
         roleplayImmersion: this.roleplayImmersion,
         videoLearningGate: learningWaiter
@@ -4372,6 +4379,7 @@ export class QqBotService {
       }
 
       if (options.followupStale?.()) return { mode: 'superseded', messages: [] };
+      if (generated.mode === 'game-knowledge') this.rocoKnowledge?.remember(gameKnowledge);
       // Validate the complete text before persistence and before QQ splitting.
       // No malformed inner-monologue tail may become a standalone first send.
       if (generated.answer) {
