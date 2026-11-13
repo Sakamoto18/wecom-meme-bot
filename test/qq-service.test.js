@@ -980,7 +980,7 @@ test('无引用艾特看法问题把最近其他群友的原图和来源交给�
   const input = calls.at(-1).modelInput;
   assert.ok(Array.isArray(input));
   assert.ok(input.some(block => block.type === 'image_url'));
-  assert.match(input.filter(block => block.type === 'text').map(block => block.text).join('\n'), /群聊历史图片 1（之前由甲发送/);
+  assert.match(input.filter(block => block.type === 'text').map(block => block.text).join('\n'), /其他成员的相关参考图片.*之前由甲发送/);
 });
 
 test('成功回看但最近无人讨论时不重新带入陈旧会话', async () => {
@@ -1314,6 +1314,48 @@ test('历史图片只保留短期候选，并按 Jev 选择结果送入视觉请
   assert.equal(selected[0].block.type, 'image_url');
   now += 61_000;
   assert.deepEqual(service.contextImageCandidates('group-1'), []);
+});
+
+test('图片缓存按发送者与消息保留归属，引用不抢走原图所有者', async () => {
+  const { service } = createService();
+  const base64 = (await createPng()).toString('base64');
+  const blocks = (await prepareImageBlocks({ imageBase64s: [base64] })).blocks;
+  for (const user of ['a', 'b']) service.rememberContextImages('group:owners', blocks, null,
+    { msgid: user + '-pic', from: { userid: user, name: user } });
+  const quoted = (await prepareImageBlocks({ quotedImageBase64s: [base64] })).blocks;
+  service.rememberContextImages('group:owners', quoted, null, { msgid: 'c-quote', from: { userid: 'c' },
+    quote: { msgid: 'a-pic', from: { userid: 'a', name: 'a' } } });
+  assert.deepEqual(service.contextImageCandidates('group:owners').map(c => c.senderUserId), ['a', 'b']);
+  const own = service.contextImageCandidatesForTurn('group:owners', { speakerUserId: 'a', currentText: '刚才那张图怎么看' });
+  assert.deepEqual(own.map(c => c.senderUserId), ['a']);
+  assert.deepEqual(service.contextImageCandidatesForTurn('group:owners', {
+    speakerUserId: 'a', currentText: '这张图怎么看', quotedMessageId: 'b-pic', quotedUserId: 'b',
+  }).map(c => c.senderUserId), ['b']);
+});
+
+for (const official of [false, true]) test(`${official ? '官方' : 'NapCat'} 多人交错发图后单点提问优先自己的原图`, async () => {
+  const own = (await createPng(32, 32, 0xff0000ff)).toString('base64');
+  const other = (await createPng(32, 32, 0x0000ffff)).toString('base64');
+  const calls = [];
+  const { service } = createService({ chatClient: { isConfigured: true, async complete(history, input, options) {
+    calls.push({ input, options });
+    if (options.usageSource === 'reply-image-relevance') return '{"ids":[0]}';
+    return '这是你自己发的红色图片。';
+  } } });
+  const group = official ? 'qqofficial:1903660238:group:interleaved' : 'interleaved';
+  for (const [user, image] of [['asker', own], ['other', other]]) {
+    service.rememberContextImages('group:' + group, (await prepareImageBlocks({ imageBase64s: [image] })).blocks,
+      null, { msgid: user + '-pic', from: { userid: user, name: user } });
+  }
+  await service.handleMessage({ message_type: 'group', group_id: group, user_id: 'asker', sender_name: 'asker',
+    bot_user_id: 'bot', mentions: [{ user_id: 'bot' }], message_id: 'question', text: '这张图怎么看',
+    // Simulate an old bridge that only supplied the intervening user's image.
+    recent_group_context: official ? undefined : { group_id: group, messages: [{ message_id: 'other-pic', user_id: 'other', sender_name: 'other', text: '[图片]' }],
+      images: [{ message_id: 'other-pic', base64: other }] } });
+  const final = calls.at(-1).input;
+  assert.ok(final.some(b => b.type === 'image_url' && b.image_url.url.endsWith(own)));
+  assert.ok(!final.some(b => b.type === 'image_url' && b.image_url.url.endsWith(other)));
+  assert.match(final.filter(b => b.type === 'text').map(b => b.text).join('\n'), /当前提问人自己的图片/);
 });
 
 test('历史图片按发言人和明确图指代过滤，不跨成员硬套上下文', async () => {

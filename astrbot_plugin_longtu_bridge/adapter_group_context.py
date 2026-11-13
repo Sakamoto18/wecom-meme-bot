@@ -22,19 +22,16 @@ async def fetch_recent_group_context(event, image_loader, *, text="", pure_menti
         message_id=str(event.message_obj.message_id), now=now,
     )
     images = []
+    total = 0
     if include_images and wants_recent_images(text, pure_mention):
-        # Only the most recent image message, close to the @. A fresh topic
-        # many messages later must not inherit an unrelated old picture.
-        source = next((row for row in reversed(rows[-6:])
-                       if row["_images"] and now - row["time"] <= 120), None)
-        if source:
+        # Share the same sender-first source policy as the legacy bridge.
+        for source in image_context_sources(rows, str(event.get_sender_id()), now):
             async def read(data):
                 try:
                     return await asyncio.wait_for(image_loader(event, data), timeout=4)
                 except Exception:
                     return ""
             loaded = await asyncio.gather(*(read(data) for data in source["_images"][:2]))
-            total = 0
             for encoded in loaded:
                 if not isinstance(encoded, str) or not encoded or total + len(encoded) > MAX_IMAGE_CHARACTERS:
                     continue
