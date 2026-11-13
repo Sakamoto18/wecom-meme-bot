@@ -72,9 +72,10 @@ test('QQ Bridge 先禁用默认 LLM，并在回复经过 RespondStage 后停止�
   assert.match(handler, /quoted_text = self\._quoted_text\(quoted_chain\)/);
   assert.doesNotMatch(handler, /_quoted_text\(quoted_chain or components\)/);
   assert.match(source, /recent_image_cache/);
-  assert.match(source, /RECENT_IMAGE_REFERENCE_PATTERN/);
+  assert.doesNotMatch(source, /RECENT_IMAGE_REFERENCE_PATTERN/);
   assert.match(handler, /_cache_recent_images/);
-  assert.match(handler, /_recent_images_for_reference/);
+  assert.doesNotMatch(handler, /_recent_images_for_reference|_outbound_images_for_reference/);
+  assert.match(handler, /_recent_image_candidates/);
   assert.match(handler, /self\._is_allowed_bridge_slash_command\(event\)/);
   assert.doesNotMatch(handler, /and not str\(text or ""\)\.strip\(\)/);
 });

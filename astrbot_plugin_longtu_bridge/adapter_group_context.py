@@ -23,7 +23,7 @@ async def fetch_recent_group_context(event, image_loader, *, text="", pure_menti
     )
     images = []
     total = 0
-    if include_images and wants_recent_images(text, pure_mention):
+    if include_images:
         # Share the same sender-first source policy as the legacy bridge.
         for source in image_context_sources(rows, str(event.get_sender_id()), now):
             async def read(data):

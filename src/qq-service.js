@@ -150,20 +150,6 @@ function buildStoredUserTurn(content, imageAnalysis, message, memberAliases = {}
   return lines.filter(Boolean).join('\n');
 }
 
-function isHistoricalImageReference(value = '') {
-  const text = String(value ?? '').normalize('NFKC').replace(/\s+/gu, '').trim();
-  return /(?:刚才|刚刚|上面|上一张|前一张|前面|那张|这个图|这张图|图片里|图里面|图中|截图里|九宫格|什么意思|啥意思|什么梗|怎么看|怎么回事|图里.{0,8}(?:是谁|什么|哪个|哪些|内容)|图片.{0,8}(?:是谁|什么|哪个|哪些|内容)|截图.{0,8}(?:是谁|什么|哪个|哪些|内容))/u.test(text);
-}
-
-// Returning to an earlier image is only safe when the current message names
-// the image itself. Broad phrases such as “怎么看/啥意思” can describe text,
-// food, a game or anything else, so they must not pull another member's image
-// into the turn. Same-speaker continuation is handled separately.
-function explicitlyReferencesHistoricalImage(value = '') {
-  const text = String(value ?? '').normalize('NFKC').replace(/\s+/gu, '').trim();
-  return /(?:(?:刚才|刚刚|前面|上面|上一条).{0,8}(?:那张|这张|图|图片|截图|照片|画面)|(?:上一张|前一张|那张图|这张图|这个图|图片里|图里面|图中|截图里|看图|识图|九宫格)|(?:图|图片|截图|照片|画面)(?:里|中|上|里面)|(?:图|图片|截图|照片|画面).{0,6}(?:是谁|什么|哪个|哪些|内容|意思|梗|出处|来源)|(?:看|读|分析|解释|总结).{0,4}(?:图|图片|截图|照片|画面))/u.test(text);
-}
-
 export function classifyAbstractAssociationFeedback(value = '') {
   const text = String(value ?? '').normalize('NFKC').trim();
   if (!text) return '';
@@ -3258,12 +3244,6 @@ export class QqBotService {
   }
 
   contextImageCandidatesForTurn(conversationId = '', options = {}) {
-    const speakerUserId = String(options.speakerUserId ?? '').trim();
-    const speakerName = String(options.speakerName ?? '').trim();
-    const currentText = [options.currentText, options.quotedText]
-      .filter(Boolean)
-      .join('\n');
-    const explicitReference = explicitlyReferencesHistoricalImage(currentText);
     const candidates = Array.isArray(options.candidates)
       ? options.candidates
       : this.contextImageCandidates(conversationId);
@@ -3273,21 +3253,8 @@ export class QqBotService {
         : candidate.senderUserId === options.quotedUserId);
       return quoted.map((candidate, index) => ({ ...candidate, index: index + 1 }));
     }
-    const own = candidates.filter(candidate => candidate.senderUserId && speakerUserId
-      ? candidate.senderUserId === speakerUserId
-      : candidate.sender && speakerName && candidate.sender === speakerName);
-    const namedOthers = candidates.filter(candidate => candidate.senderUserId !== speakerUserId
-      && candidate.sender && currentText.includes(candidate.sender));
-    return candidates
-      .filter((candidate) => {
-        if (namedOthers.length) return namedOthers.includes(candidate);
-        if (own.length) return own.includes(candidate);
-        if (explicitReference) return true;
-        if (candidate.senderUserId && speakerUserId) {
-          return candidate.senderUserId === speakerUserId;
-        }
-        return Boolean(candidate.sender && speakerName && candidate.sender === speakerName);
-      })
+    // These are candidates, not selected evidence. No word/name matching here.
+    return candidates.filter(candidate => candidate.ageSeconds <= 120)
       .map((candidate, index) => ({ ...candidate, index: index + 1 }));
   }
 
@@ -3742,8 +3709,8 @@ export class QqBotService {
       const hasTopicContext = message.chattype === 'group'
         && options.topicContext
         && Array.isArray(options.topicContext.history);
-      const readGroupContext = message.chattype === 'group'
-        && options.directBotMention === true && !message.quote;
+      const readGroupContext = !message.quote
+        && (options.directBotMention === true || options.recentImageSelectionDone === true);
       const recalledHistory = readGroupContext ? recentGroupHistory(options.recentGroupContext) : [];
       const topicHistory = readGroupContext && options.recentGroupContext?.available
         && options.topicContext?.status !== 'matched'
@@ -3779,7 +3746,9 @@ export class QqBotService {
             this.logger.log(`QQ 上下文关联筛选：group=${message.chatid} candidates=${selection.candidates} selected=${selection.selected} messages=${history.length}`);
           }
         } catch (error) {
-          this.logger.warn(`QQ 上下文关联筛选失败，保留本轮话题回退：${error.message}`);
+          relevanceSelected = true;
+          history = [];
+          this.logger.warn(`QQ 上下文关联筛选失败，本轮不注入未确认历史：${error.message}`);
         }
       }
       if (!hasTopicContext && !relevanceSelected) {
@@ -3795,11 +3764,9 @@ export class QqBotService {
       }
       // 只取进入本轮前已经存在的历史图片；当前消息的图片仍由现有链路处理，
       // 不让 Jev 把它误当成“上一轮上下文图片”。
-      // A previous member's picture is not evidence for a text-only turn.
-      // Keep same-speaker follow-ups, but require an explicit image reference
-      // before crossing speakers. This prevents “上一个人发了图，下一个人随口
-      // 说两个字” from becoming “这糊图配上……”, while still allowing “刚才那张图”.
-      const historicalContextImageCandidates = readGroupContext && options.recentGroupImageBlocks?.length
+      // Ownership and source IDs travel with candidates; relevance is decided
+      // semantically below. An earlier empty selection is final for this turn.
+      const historicalContextImageCandidates = options.recentImageSelectionDone
         ? [] : this.contextImageCandidatesForTurn(
         conversationId,
         {
@@ -3954,42 +3921,22 @@ export class QqBotService {
         }).style;
         this.jevResponseModeMemory.commit(conversationId, jevStyle);
       }
-      let contextImageStyle = jevStyle;
-      const initialContextImageEntries = this.contextImageBlocksFor(
-        conversationId,
-        jevStyle,
-        historicalContextImageCandidates,
-      );
-      // A visual correction can omit “that picture”. Only recover a fresh
-      // image owned by this speaker; another member's image is not evidence.
-      const visualCorrection = /看不到|没(?:有)?看[到见]|看(?:漏|错)|漏看|没(?:有)?注意到/u.test(imageSearchQuestion);
-      const correctionImage = visualCorrection
-        ? historicalContextImageCandidates.findLast(candidate =>
-          candidate.senderUserId === speakerUserId && speakerUserId
-          && candidate.ageSeconds <= 120)
-        : null;
-      if (historicalContextImageCandidates.length > 0
-        && initialContextImageEntries.length === 0
-        && imageCount === 0
-        && options.directBotMention === true
-        && (isHistoricalImageReference(imageSearchQuestion) || correctionImage
-          || (isImageEvaluationIntent(imageSearchQuestion)
-            && historicalContextImageCandidates.some(c => c.senderUserId === speakerUserId)))) {
-        contextImageStyle = {
-          ...(jevStyle ?? {}),
-          contextImageNeeded: 1,
-          contextImageIndexes: [correctionImage?.index ?? historicalContextImageCandidates.length],
-          contextImageReason: '当前消息明确承接最近一张图片，补回原图供 DeepSeek 核对',
-        };
-        this.logger.log?.('QQ 历史图片引用兜底：当前消息明确指向最近图片，补回最新候选');
+      let historicalContextImageEntries = [];
+      if (imageCount === 0 && historicalContextImageCandidates.length) {
+        const entries = this.contextImageBlocksFor(conversationId, {
+          contextImageNeeded: 1, contextImageIndexes: historicalContextImageCandidates.map(c => c.index),
+        }, historicalContextImageCandidates);
+        if (message.quote) {
+          historicalContextImageEntries = entries;
+        } else {
+          const context = { messages: entries.map((e, i) => ({ messageId: String(i),
+            userId: e.senderUserId, senderName: e.sender, text: e.summary || '[图片]' })),
+          images: entries.map((e, i) => ({ messageId: String(i), base64: e.block.image_url.url.split(',')[1] })) };
+          const selected = await selectReplyImages({ context, speakerUserId, content: imageSearchQuestion, chatClient: this.chatClient, history });
+          historicalContextImageEntries = selected.map(img => entries[Number(img.messageId)]);
+          this.logger.log?.(`QQ 历史图片语义选择：candidates=${entries.length} selected=${selected.length}`);
+        }
       }
-      const historicalContextImageEntries = contextImageStyle === jevStyle
-        ? initialContextImageEntries
-        : this.contextImageBlocksFor(
-          conversationId,
-          contextImageStyle,
-          historicalContextImageCandidates,
-        );
       const historicalContextImageBlocks = historicalContextImageEntries.flatMap((entry) => [
         { type: 'text', text: `上下文历史图片 ${entry.candidateIndex}（${entry.label}）` },
         entry.block,
@@ -5992,15 +5939,6 @@ export class QqBotService {
     if (jevCommand) {
       return this.handleJevCommand(jevCommand, payload);
     }
-    if (payload.botGeneratedImageOnly && !parseLongtuManagementCommand(payload.text)) {
-      return {
-        mode: 'bot-generated-image',
-        messages: [{
-          type: 'text',
-          text: '这是我抓取视频生成的封面卡片，只用于传递视频信息，不评价这张图。',
-        }],
-      };
-    }
     const candidates = mediaCandidates({
       text: payload.text,
       richSegments: payload.richSegments,
@@ -6009,6 +5947,19 @@ export class QqBotService {
     // URLs must remain ordinary text and must never trigger video extraction.
     let supportedCandidates = candidates.filter((candidate) =>
       ['bilibili', 'xiaohongshu', 'douyin', 'kuaishou'].includes(candidate.provider));
+    // A new media share takes priority over a quoted/recalled generated card.
+    // Keep this guard even for older bridges which may attach stale card flags.
+    if (payload.botGeneratedImageOnly
+      && !(payload.mediaShare && supportedCandidates.length > 0)
+      && !parseLongtuManagementCommand(payload.text)) {
+      return {
+        mode: 'bot-generated-image',
+        messages: [{
+          type: 'text',
+          text: '这是我抓取视频生成的封面卡片，只用于传递视频信息，不评价这张图。',
+        }],
+      };
+    }
     const groupId = String(payload.groupId ?? '').trim();
     // Official bridge supplies this bot identity even for bound administrators.
     // Skip artificial pacing per request; keep shared provider limits/cache intact.
@@ -6420,14 +6371,13 @@ export class QqBotService {
     }
 
     const preparedImages = await prepareImageBlocks(payload, this.logger);
-    let recall = this.isDirectHumanMentionTrigger(payload) && !message.quote
+    let recall = !message.quote
       ? payload.recentGroupContext : { messages: [], images: [] };
     // Official adapters may have no history API. Also guard against an older
     // bridge sending only another member's newest image while our local cache
     // still has the asker's preceding upload.
     if (preparedImages.blocks.length === 0 && !message.quote
-      && this.isDirectHumanMentionTrigger(payload)
-      && (isHistoricalImageReference(payload.text) || isImageEvaluationIntent(payload.text))) {
+      && !payload.observeOnly) {
       const own = this.pruneContextImageHistory(conversationId).filter(e => e.senderUserId === payload.userId
         && this.now() - e.createdAt <= 120_000);
       const latest = own.at(-1);
@@ -6452,7 +6402,10 @@ export class QqBotService {
     }
     const selectedRecallImages = preparedImages.blocks.length === 0 && recall.images.length
       ? await selectReplyImages({ context: recall, speakerUserId: payload.userId,
-        content: payload.text, chatClient: this.chatClient }) : [];
+        content: payload.text, chatClient: this.chatClient, history }) : [];
+    if (recall.images.length && preparedImages.blocks.length === 0) {
+      this.logger.log?.(`QQ 历史图片语义选择：group=${payload.groupId || ''} candidates=${recall.images.length} selected=${selectedRecallImages.length}`);
+    }
     const recentImages = selectedRecallImages.length
       ? await prepareImageBlocks({ imageBase64s: selectedRecallImages.map(image => image.base64) }, this.logger)
       : { blocks: [] };
@@ -6480,6 +6433,7 @@ export class QqBotService {
         directBotMention: this.isDirectHumanMentionTrigger(payload),
         recentGroupContext: recall,
         recentGroupImageBlocks,
+        recentImageSelectionDone: !message.quote && preparedImages.blocks.length === 0,
         topicContext,
         videoLearningRequest: directLearningRequest,
       },

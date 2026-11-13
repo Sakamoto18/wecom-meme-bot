@@ -9,17 +9,6 @@ MAX_AGE_SECONDS = 600
 MAX_IMAGE_CHARACTERS = 8 * 1024 * 1024
 
 
-def wants_recent_images(text: str, pure_mention: bool = False) -> bool:
-    if pure_mention:
-        return True
-    return bool(re.search(
-        r"刚才|刚刚|上面|前面|这张|那张|图片|截图|照片|看图|图里|"
-        r"怎么看|你说呢|你觉得呢|什么意思|啥意思|什么梗|怎么回事|"
-        r"^(?:你)?(?:评价|锐评|解释|分析|看看|说说)(?:一下|下|这个|这|呢|吧|呗|？|\?)?$",
-        str(text or "").strip(),
-    ))
-
-
 def select_recent_messages(raw, *, group_id, bot_id, message_id, now):
     """Keep only preceding human messages in this group, in chronological order."""
     if isinstance(raw, dict) and isinstance(raw.get("data"), dict):
@@ -105,7 +94,7 @@ async def fetch_recent_group_context(event, image_loader, *, text="", pure_menti
     )
     images = []
     total = 0
-    if include_images and wants_recent_images(text, pure_mention):
+    if include_images:
         # Download the asker's latest source first; another member's source is
         # only a candidate, selected for relevance by the backend.
         for source in image_context_sources(rows, str(event.get_sender_id()), now):

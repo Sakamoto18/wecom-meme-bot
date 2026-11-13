@@ -7,23 +7,36 @@ const imageContext = () => ({ messages: [
   { messageId: 'b', userId: 'other', senderName: '小乙', text: '[图片]' },
 ], images: [{ messageId: 'a', base64: 'iVBORaW1hZ2U=' }, { messageId: 'b', base64: '/9jaW1hZ2U=' }] });
 
-test('多人插图：模糊追问保留本人图；其他图须经过关联选择', async () => {
-  const context = imageContext();
-  for (const output of ['{"ids":[0]}', 'invalid', '{"ids":[99]}']) {
-    const selected = await selectReplyImages({ context, speakerUserId: 'asker', content: '这张图怎么看',
-      chatClient: { isConfigured: true, async complete(_h, input, options) {
-        assert.equal(options.usageSource, 'reply-image-relevance');
-        assert.equal(input.filter(b => b.type === 'image_url').length, 2);
-        assert.match(input[2].image_url.url, /^data:image\/png/);
-        return output;
-      } } });
-    assert.deepEqual(selected.map(i => i.messageId), ['a']);
+test('所有历史图片均须语义选择，空结果和失败不强塞本人图', async () => {
+  for (const size of [1, 2]) {
+    const context = imageContext();
+    context.messages = context.messages.slice(0, size); context.images = context.images.slice(0, size);
+    for (const [output, expected] of [['{"ids":[0]}', ['a']], ['{"ids":[]}', []], ['invalid', []], ['{"ids":[99]}', []]]) {
+      let calls = 0;
+      const selected = await selectReplyImages({ context, speakerUserId: 'asker', content: '前面路口怎么走',
+        chatClient: { isConfigured: true, async complete(_h, input, options) {
+          calls++;
+          assert.equal(options.usageSource, 'reply-image-relevance');
+          assert.equal(input.filter(b => b.type === 'image_url').length, size);
+          assert.match(input[2].image_url.url, /^data:image\/png/);
+          assert.equal(JSON.parse(input[0].text).question, '前面路口怎么走');
+          return output;
+        } } });
+      assert.deepEqual(selected.map(i => i.messageId), expected); assert.equal(calls, 1);
+    }
+    assert.deepEqual(await selectReplyImages({ context, speakerUserId: 'asker', content: '小乙的图怎么看' }), []);
+    assert.deepEqual(await selectReplyImages({ context, speakerUserId: 'asker', content: '这张图',
+      chatClient: { isConfigured: true, complete: async () => { throw new Error('timeout'); } } }), []);
   }
-  const related = await selectReplyImages({ context, speakerUserId: 'asker', content: '这两张图放一起怎么看',
-    chatClient: { isConfigured: true, complete: async () => '{"ids":[1,0]}' } });
-  assert.deepEqual(related.map(i => i.messageId), ['a', 'b']);
-  const named = await selectReplyImages({ context, speakerUserId: 'asker', content: '小乙的图怎么看' });
-  assert.deepEqual(named.map(i => i.messageId), ['b']);
+  for (const [question, output, expected] of [
+    ['两个放一起比较', [0, 1], ['a', 'b']],
+    ['右边那位发的呢', [1], ['b']],
+    ['这个配色太艳了吗', [0], ['a']],
+  ]) {
+    const selected = await selectReplyImages({ context: imageContext(), speakerUserId: 'asker', content: question,
+      chatClient: { isConfigured: true, complete: async () => JSON.stringify({ ids: output }) } });
+    assert.deepEqual(selected.map(i => i.messageId), expected);
+  }
 });
 
 test('多源图按来源校验，保留每人两张；陌生图片不得混入', () => {
