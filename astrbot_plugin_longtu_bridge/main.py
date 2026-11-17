@@ -608,7 +608,7 @@ class LongtuQqBridge(Star):
             official_result = None
             if getattr(self, 'config', {}).get('official_trial_enabled', False):
                 from .official_trial import mirror_learning
-                official_result = await mirror_learning(self, delivery.get("payload") or {})
+                official_result = await mirror_learning(self, delivery.get("payload") or {}, delivery_id=str(delivery.get("deliveryId") or ""))
             planned = learning_delivery_message(delivery.get("payload") or {})
             if official_result is not None:
                 sent, error = official_result, "" if official_result else "官方投递未确认"

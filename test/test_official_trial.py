@@ -327,6 +327,25 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(send.call_args.args[1], 'group-id')
             self.assertTrue(send.call_args.kwargs['group'])
 
+    async def test_learning_mirror_retries_only_unsent_parts_after_restart(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as root:
+            bridge, _ = self.fixture()
+            bridge._learning_receipt_db = str(Path(root) / 'receipts.sqlite')
+            bridge.config.update(official_trial_user_bindings={'user-openid':'1079175957'},
+                                 official_trial_push_enabled=True)
+            payload = {'chatType':'private', 'userId':'1079175957', 'text':'日报',
+                       'reportImage':True, 'imageFile':'base64://abc'}
+            with patch('astrbot_plugin_longtu_bridge.official_trial.proactive',
+                       new_callable=AsyncMock, side_effect=[True, False, True]) as send:
+                self.assertIsNone(await mirror_learning(bridge, payload, delivery_id='daily-1'))
+                del bridge._official_learning_lock
+                for _ in range(5):
+                    self.assertIsNone(await mirror_learning(bridge, payload, delivery_id='daily-1'))
+                self.assertEqual(send.await_count, 3)
+                self.assertIsInstance(send.call_args.args[2][0].chain[0], Comp.Image)
+
     async def test_retry_report_mentions_official_requester(self):
         bridge, _ = self.fixture(private=False)
         with patch('astrbot_plugin_longtu_bridge.official_trial.proactive', new_callable=AsyncMock, return_value=True) as send:

@@ -238,7 +238,30 @@ async def mirror_crazy_thursday(bridge, target_date):
             logger.warning(f'官方星期四推送失败：{type(error).__name__}')
 
 
-async def mirror_learning(bridge, payload):
+async def _learning_proactive_once(bridge, target, chains, *, group, delivery_id):
+    """Retain each official part's receipt across OneBot retries and restarts."""
+    if not delivery_id:
+        return await proactive(bridge, target, chains, group=group)
+    from .learning_report_receipt import connect
+    lock = getattr(bridge, '_official_learning_lock', None)
+    if lock is None:
+        bridge._official_learning_lock = lock = asyncio.Lock()
+    async with lock:
+        for index, chain in enumerate(chains):
+            token = json.dumps([str(bridge.config.get('official_trial_appid')), delivery_id,
+                                group, target, index], ensure_ascii=False)
+            with connect(bridge) as db:
+                db.execute('CREATE TABLE IF NOT EXISTS official_learning_sent (token TEXT PRIMARY KEY)')
+                if db.execute('SELECT 1 FROM official_learning_sent WHERE token=?', (token,)).fetchone():
+                    continue
+            if not await proactive(bridge, target, [chain], group=group):
+                return False
+            with connect(bridge) as db:
+                db.execute('INSERT OR IGNORE INTO official_learning_sent VALUES (?)', (token,))
+    return True
+
+
+async def mirror_learning(bridge, payload, *, delivery_id=""):
     """Deliver official-targeted jobs, or mirror configured administrator reports."""
     if not enabled(bridge.config):
         return None
@@ -263,7 +286,10 @@ async def mirror_learning(bridge, payload):
     ok = True
     for target in targets:
         try:
-            ok = await proactive(bridge, target, chains, group=group) and ok
+            ok = await _learning_proactive_once(
+                bridge, target, chains, group=group,
+                delivery_id=delivery_id or str(payload.get('waiterKey') or ''),
+            ) and ok
         except Exception as error:
             logger.warning(f'官方学习投递失败：{type(error).__name__}')
             ok = False
