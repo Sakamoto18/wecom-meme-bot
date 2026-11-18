@@ -339,6 +339,7 @@ async def handle_official_message(bridge, event):
         text = ''.join(c.text for c in components if isinstance(c, Comp.Plain)).strip()
         # WakingCheck may strip a slash from the component; raw content is authoritative.
         raw_text = str(getattr(raw, 'content', '') or '').strip()
+        raw_text = re.sub(r'^(?:<@!?[A-Za-z0-9_-]+>\s*)+', '', raw_text).strip()
         if raw_text.startswith('/'):
             text = raw_text
         bound_user = str(user_bindings(bridge.config).get(str(event.get_sender_id())) or '')
@@ -350,6 +351,9 @@ async def handle_official_message(bridge, event):
         # Never feed this bot's own output or another bot back into the loop.
         if not private and (getattr(getattr(raw, 'author', None), 'bot', False)
                             or str(event.get_sender_id()) == str(event.get_self_id())):
+            return
+        from .merchant_command import handle_merchant_command
+        if await handle_merchant_command(bridge, event, text, official=True):
             return
         has_link = bool(re.search(r'https?://', text, re.IGNORECASE)
                         or MEDIA_ACK_PATTERN.search(str(rich)))

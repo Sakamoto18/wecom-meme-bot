@@ -1,6 +1,6 @@
 # 远行商人稀有道具提醒
 
-2026-11-18 用户授权：只发 QQ 群 `913546080`，命中才发送一条图文消息并使用真正的 OneBot at 消息段 @`1079175957` 和 @`2584778797`。订阅炫彩蛋、棱镜球、首领秘药、金镜子（指定性格/修改正面性格加成）、国王球、祝福项坠、奇异血脉秘药。不将残缺魔镜、技能石魔镜、普通神奇的蛋或普通属性秘药混入。
+2026-11-18 用户授权：只发 QQ 群 `913546080`，命中才发送一条图文消息并使用真正的 OneBot at 消息段 @`1079175957`、@`2584778797`、@`1299971625`、@`1846366057`。订阅炫彩蛋、棱镜球、首领秘药、金镜子（指定性格/修改正面性格加成）、国王球、祝福项坠、奇异血脉秘药。不将残缺魔镜、技能石魔镜、普通神奇的蛋或普通属性秘药混入。
 
 数据来源：[好游快爆查询器](https://www.onebiji.com/hykb_tools/comm/lkwgmerchant/preview.php?id=1&immgj=0)，只读取公开页面。备用为 [洛克工具站](https://lk.y1g.cc/merchant.html) 使用的公开 `POST /proxy.php {"type":"merchant"}`，其 sourceUrl 同样指向快爆，因此不是独立交叉验证源。Wiki 的商人活动公告仅用于核对营业时间，不代表实时库存。18183 当次检查仍返回前一天商品，未选用。
 
@@ -16,12 +16,28 @@
 {
   "merchant_alert_enabled": true,
   "merchant_alert_group": "913546080",
-  "merchant_alert_mentions": "1079175957,2584778797"
+  "merchant_alert_mentions": "1079175957,2584778797,1299971625,1846366057",
+  "merchant_official_enabled": true,
+  "merchant_official_member_bindings": "{}"
 }
 ```
 
-默认关闭，设置目标后重载插件启用。任务属于现有 Bridge initialize/terminate 生命周期，只使用 NapCat，官方 QQ 对话和已有主动消息不变。语义筛选使用后端已认证的 `/v1/qq/merchant/select`，沿用当前模型与调用统计。
+默认关闭，设置目标后重载插件启用。任务属于现有 Bridge initialize/terminate 生命周期，支持 NapCat 与官方 QQ 两个通道独立投递。当前官方 Bot 尚未加入目标群，因此只由 NapCat 实际投递；官方通道等待核验目标群和全部四位成员的 OpenID，不使用其他群代替。语义筛选使用后端已认证的 `/v1/qq/merchant/select`，沿用当前模型与调用统计。
 
 `data/plugin_data/longtu_merchant.sqlite` 保存筛选缓存和群/轮次投递状态。发送前事务占位，收到 message_id 才记录成功；重启或多个实例不会重发。明确失败可重试。超时/无回执时读取本群最近 100 条消息核验机器人自身的相同正文，能找到则补登记，找不到则保留 uncertain 状态而不盲目重复 @。同群同轮最多一次；源在已通知之后再补充商品不会再次提醒。
 
-验证：`python3 test/test_merchant_alert.py`、`node --test test/roco-merchant-selection.test.js`。测试覆盖真实 HTML 样本、过期/跨轮拦截、午夜、空选择、商品原图、群号与两人 @、持久化去重、确定失败重试及超时回执补登记。现场取源/生成预览与模型回放不发群测试消息。
+验证：`python3 test/test_merchant_alert.py`、`node --test test/roco-merchant-selection.test.js`。测试覆盖真实 HTML 样本、过期/跨轮拦截、午夜、空选择、商品原图、群号与四人 @、持久化去重、确定失败重试及超时回执补登记。现场取源/生成预览与模型回放不发群测试消息。
+
+## 群内查询
+
+NapCat 和官方 Bot 均支持 `@机器人 /远行商人`，普通群成员可用。每次重新获取本轮库存，发送一条正文 + 实时库存整理图，无需命中订阅道具，不 @ 四位订阅成员；午夜休息、来源过期或缺图会说明原因。支持显式 `/远行商人`，不做自然语言关键词路由。有两种 Bot 同时在群时，请 @ 希望回复的那个 Bot。
+
+命令使用独立的 `command:<平台>:<群>:<消息ID>` 投递记录；重复事件、并发点击不会重复发图，也不会消耗定时提醒的本轮额度。
+
+## 官方通道待启用条件
+
+`official_trial_group_bindings` 必须有且仅有一个经过核验的 OpenID 指向 `913546080`；`merchant_official_member_bindings` 格式为 `{ "群OpenID": { "QQ号": "成员OpenID" } }`，四位成员必须全部完成核验且不重复。此配置仅供商人提醒 @，不授予管理员权限。现有其他官方群不能作为替代目标。
+
+官方发送先上传库存图，再使用官方消息接口一次发送图片、正文和四个原生 OpenID @。收到消息 ID 才记为成功；平台返回不明确时保留待核验状态，不盲目重发。官方主动消息仍受平台权限/额度限制；部署时没有向未授权官方群发测试消息。群内命令使用触发消息 ID 被动回复，不依赖自动提醒的订阅成员映射。
+
+验证新增：`python -m unittest test.test_merchant_official test.test_merchant_command test.test_official_trial`（后两项需要安装 AstrBot 的 Python 环境；全部传输使用模拟接口）。

@@ -302,7 +302,29 @@ class MerchantMonitor:
         self.state.cache(cache_key, selected)
         return selected
 
+    async def current_snapshot(self, now):
+        if getattr(self, '_tick_snapshot', None) is None:
+            self._tick_snapshot = await fetch_snapshot(self.bridge.session, now)
+        return self._tick_snapshot
+
     async def tick(self, now=None):
+        self._tick_snapshot = None
+        config = getattr(self.bridge, 'config', {})
+        if config.get('merchant_official_enabled') is not True:
+            return await self._tick_napcat(now)
+        statuses, errors = [], []
+        for channel, operation in [('napcat', self._tick_napcat), ('official', self._tick_official)]:
+            try:
+                statuses.append(f'{channel}={await operation(now)}')
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                errors.append(f'{channel}:{type(error).__name__}')
+        if errors:
+            raise RuntimeError('Merchant channel failure: ' + ','.join(errors + statuses))
+        return ' '.join(statuses)
+
+    async def _tick_napcat(self, now=None):
         now = now or time.time()
         window = round_window(now)
         if not window:
@@ -325,7 +347,7 @@ class MerchantMonitor:
                 LOG.warning(f'Merchant delivery uncertain; held to avoid duplicate @: {key}')
                 return 'uncertain'
             self.state.retry_rejected(key)
-        snapshot = await fetch_snapshot(self.bridge.session, now)
+        snapshot = await self.current_snapshot(now)
         selected = await self.select(snapshot)
         if not selected:
             return 'no-subscribed-goods'
@@ -358,6 +380,51 @@ class MerchantMonitor:
         self.state.mark(key, 'sent' if receipt else 'uncertain', str(receipt or ''))
         LOG.info(f'Merchant alert delivery: key={key} receipt={receipt or "unconfirmed"}')
         return 'sent' if receipt else 'uncertain'
+
+    async def _tick_official(self, now=None):
+        from .merchant_official import scheduled_target, official_platform, prepare_image, send_image
+        now = now or time.time()
+        window = round_window(now)
+        if not window:
+            return 'closed'
+        target = scheduled_target(self.bridge.config, self.group, self.mentions)
+        if target is None:
+            return 'waiting-verified-group-and-members'
+        group, members = target
+        platform = official_platform(self.bridge)
+        if not platform:
+            raise RuntimeError('Official QQ platform unavailable')
+        key = f'official:{platform.appid}:{group}:{int(window[1])}'
+        row = self.state.get(key)
+        if row:
+            # QQ's official API has no arbitrary history query for reconciling
+            # a timeout. Preserve uncertain sends instead of sending again.
+            return 'already-sent' if row[0] == 'sent' else 'uncertain-held'
+        snapshot = await self.current_snapshot(now)
+        selected = await self.select(snapshot)
+        if not selected:
+            return 'no-subscribed-goods'
+        icons = await fetch_icons(self.bridge.session, snapshot['items'])
+        from .merchant_card import render_merchant_card
+        created = time.time()
+        png = await asyncio.to_thread(render_merchant_card, snapshot, selected, icons, created)
+        # Upload is preparation, not a visible message: failures can safely retry.
+        media = await prepare_image(platform.client, group, png)
+        if time.time() >= snapshot['end']:
+            return 'expired-before-send'
+        text = notification_text(snapshot, selected, created)
+        if not self.state.claim(key, text, time.time()):
+            return 'claimed-by-another-worker'
+        try:
+            receipt = await send_image(platform.client, group, media, text, members)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.state.mark(key, 'uncertain')
+            raise
+        self.state.mark(key, 'sent', receipt)
+        LOG.info(f'Official merchant alert delivered: group={group} receipt={receipt}')
+        return 'sent'
 
     async def run(self):
         LOG.info(f'Merchant monitor enabled: group={self.group} hours=08/12/16/20 Asia/Shanghai')

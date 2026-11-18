@@ -24,6 +24,20 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.send.call_args.args[0].chain[0].qq, 'user-openid')
         self.assertIn('联网学梗报告', event.send.call_args.args[0].chain[-1].text)
 
+    async def test_merchant_command_raw_mention_and_unmentioned_group_dispatch(self):
+        for mentioned in (False, True):
+            bridge, event = self.fixture(private=False)
+            event.get_messages = lambda: [Comp.Plain('远行商人')]
+            event.message_obj.raw_message.content = ('<@!bot> ' if mentioned else '') + '/远行商人'
+            with patch('astrbot_plugin_longtu_bridge.merchant_command.handle_merchant_command',
+                       AsyncMock(return_value=True)) as merchant:
+                await handle_official_message(bridge, event)
+                merchant.assert_awaited_once_with(bridge, event, '/远行商人', official=True)
+                await handle_official_message(bridge, event)
+                merchant.assert_awaited_once()
+            bridge._request_backend.assert_not_awaited()
+            event.send.assert_not_awaited()
+
     def fixture(self, private=True):
         bridge = SimpleNamespace(
             config={'official_trial_enabled': True, 'official_trial_appid': '1903660238'},

@@ -80,7 +80,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.bot = SimpleNamespace(call_action=AsyncMock(return_value={'message_id': 42}))
         self.monitor = object.__new__(m.MerchantMonitor)
         self.monitor.group = '913546080'
-        self.monitor.mentions = ['1079175957', '2584778797']
+        self.monitor.mentions = ['1079175957', '2584778797', '1299971625', '1846366057']
         self.monitor.state = m.State(Path(self.tmp.name) / 'state.sqlite')
         self.monitor.bridge = SimpleNamespace(session=None, _qq_platform=lambda: SimpleNamespace(bot=self.bot))
         self.monitor.select = AsyncMock(return_value=[1])
@@ -98,7 +98,7 @@ class DeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.monitor.state.close()
         self.tmp.cleanup()
 
-    async def test_single_message_contains_image_and_both_real_at_segments(self):
+    async def test_single_message_contains_image_and_four_real_at_segments(self):
         self.assertEqual(await self.monitor.tick(NOW), 'sent')
         call = self.bot.call_action.call_args
         self.assertEqual(call.args, ('send_group_msg',))

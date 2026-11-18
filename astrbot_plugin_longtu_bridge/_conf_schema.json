@@ -1,4 +1,16 @@
 {
+  "merchant_official_enabled": {
+    "description": "官方 QQ 商人主动提醒",
+    "type": "bool",
+    "default": false,
+    "hint": "仅发送到 merchant_alert_group 对应的已核验官方群；群与全部提醒对象映射未齐时等待绑定，不向其他官方群发送。"
+  },
+  "merchant_official_member_bindings": {
+    "description": "商人提醒专用的官方群成员映射",
+    "type": "string",
+    "default": "{}",
+    "hint": "JSON：{群OpenID:{QQ号:成员OpenID}}。必须核验，不按昵称推断；仅用于商人 @，不会授予管理员权限。"
+  },
   "merchant_alert_enabled": {
     "description": "远行商人稀有道具主动提醒",
     "type": "bool",

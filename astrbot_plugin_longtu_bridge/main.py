@@ -66,7 +66,7 @@ ALLOWED_BRIDGE_SLASH_COMMANDS = {
     "/add", "/tag", "/del", "/rel", "/rel-list", "/rel-del",
     "/rel-import", "/rel-import-status", "/rel-import-end", "/rel-index-status",
     "/stop", "/usage-report", "/persona", "/jev", "/crazy-thursday", "/crazy-thursday-add",
-    "/crazy-thursday-list", "/crazy-thursday-del", "/learn-retry", "/learn-retry-status", "/learn-meme", "/learn-status", "/learn-report", "/learn-list", "/learn-review", "/learn-confirm", "/learn-cancel", "/指令",
+    "/crazy-thursday-list", "/crazy-thursday-del", "/learn-retry", "/learn-retry-status", "/learn-meme", "/learn-status", "/learn-report", "/learn-list", "/learn-review", "/learn-confirm", "/learn-cancel", "/指令", "/远行商人",
 }
 PURE_BOT_MENTION_TEXT = "（用户仅 @ 了你，没有附加文字）"
 
@@ -1535,7 +1535,7 @@ class LongtuQqBridge(Star):
     @classmethod
     def _is_allowed_bridge_slash_command(cls, event: AstrMessageEvent) -> bool:
         raw_text = (cls._raw_text(event) or event.message_str or "").strip()
-        if raw_text == "/指令":
+        if raw_text in ("/指令", "/远行商人"):
             return True
         matched = re.match(r"^/([a-z][a-z0-9_-]*)\b", raw_text, re.IGNORECASE)
         return bool(matched and f"/{matched.group(1).lower()}" in ALLOWED_BRIDGE_SLASH_COMMANDS)
@@ -3271,6 +3271,15 @@ class LongtuQqBridge(Star):
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def on_qq_message(self, event: AstrMessageEvent):
         """回复唤醒消息，并静默观察允许群中的普通消息。"""
+        merchant_text = (self._raw_text(event) or event.message_str or '').strip()
+        if merchant_text == '/远行商人':
+            try:
+                if str(event.get_sender_id()) != str(event.get_self_id()):
+                    from .merchant_command import handle_merchant_command
+                    await handle_merchant_command(self, event, merchant_text)
+            finally:
+                event.stop_event()
+            return
         if getattr(self, 'transport_mode', 'legacy') == 'adapter':
             from .adapter_bridge import AdapterBridge
             async for result in AdapterBridge.on_qq_message(self, event):
