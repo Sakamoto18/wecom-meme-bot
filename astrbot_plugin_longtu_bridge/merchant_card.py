@@ -1,10 +1,9 @@
 """Render fresh merchant stock in a game-inspired shop panel, using actual icons."""
 import io
-import math
 from datetime import datetime
 from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont, ImageOps
-from .video_card import card_font
+from .video_card import card_font, ASSETS
 from .merchant_alert import BJ
 
 
@@ -21,8 +20,21 @@ def wrap(draw, value, font, width):
     return lines
 
 
+@lru_cache(maxsize=8)
+def shop_font(size):
+    # Match the reference page's Microsoft Yahei fallback on the Windows host.
+    try:
+        return ImageFont.truetype('C:/Windows/Fonts/msyh.ttc', size)
+    except OSError:
+        return card_font(size)
+
+
 @lru_cache(maxsize=4)
 def shop_title_font(size):
+    try:
+        return ImageFont.truetype('C:/Windows/Fonts/msyhbd.ttc', size)
+    except OSError:
+        pass
     regular = card_font(size)
     if regular.getname()[0] == 'Hiragino Sans GB':
         # Use the bundled W6 face: synthetic outlines fill dense Chinese glyphs.
@@ -33,16 +45,19 @@ def shop_title_font(size):
     return regular
 
 
-def compass(draw, cx, cy, radius, color):
-    """Original compass ornament; not an official game logo."""
-    draw.ellipse((cx-radius, cy-radius, cx+radius, cy+radius), outline=color, width=2)
-    points = []
-    for step in range(16):
-        angle = step * math.pi / 8 - math.pi / 2
-        r = radius * (1.15 if step % 4 == 0 else .72 if step % 2 == 0 else .26)
-        points.append((cx + math.cos(angle) * r, cy + math.sin(angle) * r))
-    draw.polygon(points, fill=color)
-    draw.ellipse((cx-5, cy-5, cx+5, cy+5), fill='#292b32')
+@lru_cache(maxsize=16)
+def shop_asset(name):
+    with Image.open(ASSETS / 'merchant' / name) as source:
+        return source.convert('RGBA')
+
+
+def paste_asset(card, name, box, crop=None):
+    asset = shop_asset(name)
+    if crop:
+        asset = asset.crop(crop)
+    x, y, width, height = box
+    asset = asset.resize((width, height), Image.Resampling.LANCZOS)
+    card.paste(asset, (x, y), asset)
 
 
 def render_merchant_card(snapshot, selected, icons, now):
@@ -54,50 +69,47 @@ def render_merchant_card(snapshot, selected, icons, now):
     dummy = ImageDraw.Draw(Image.new('RGB', (1, 1)))
     rows = []
     for index, item in enumerate(items):
-        title = wrap(dummy, item['name'], shop_title_font(32), 680)
-        price = wrap(dummy, f'{item["price"]} {item.get("currency", "洛克贝")}    限购 {item["limit"]}', card_font(26), 680)
-        details = wrap(dummy, item.get('description', ''), card_font(23), 680)
+        title = wrap(dummy, item['name'], shop_title_font(32), 610)
+        limit_width = max(140, int(dummy.textlength(f'限购 {item["limit"]}', font=shop_font(21)))+24)
+        price_text = f'{item["price"]} {item.get("currency", "洛克贝")}'
+        if limit_width > 156:
+            price_text += f'    限购 {item["limit"]}'
+        price = wrap(dummy, price_text, shop_font(26), 680)
+        details = wrap(dummy, item.get('description', ''), shop_font(23), 680)
         row_height = max(166, 88 + len(title) * 40 + len(details) * 31 + (len(price) - 1) * 34)
         rows.append((index, item, title, price, details, row_height))
-    height = 266 + sum(row[5] + 16 for row in rows) + 122
+    height = 282 + sum(row[5] + 16 for row in rows) + 122
     if height > 12000:
         raise ValueError('Merchant card too large')
-    card = Image.new('RGB', (width, height))
+    card = Image.new('RGB', (width, height), '#75412f')
+    background = shop_asset('bg.jpg')
+    scaled = background.resize((width, round(background.height * width / background.width)), Image.Resampling.LANCZOS)
+    card.paste(scaled, (0, 0))
     draw = ImageDraw.Draw(card)
-    # Sky blue backing with broad, quiet facets, leaving the stock itself prominent.
-    top, bottom = (89, 130, 190), (173, 199, 222)
-    for y in range(height):
-        blend = min(1, y / max(height - 1, 1))
-        color = tuple(round(a + (b - a) * blend) for a, b in zip(top, bottom))
-        draw.line((0, y, width, y), fill=color)
-    draw.polygon([(0, 0), (405, 0), (0, 660)], fill='#648ac0')
-    draw.polygon([(width, height), (width-340, height), (width, height-600)], fill='#a2bed9')
-    draw.rounded_rectangle((margin, 39, width-margin, 229), radius=30, fill='#4c6c96')
-    draw.rounded_rectangle((margin, 32, width-margin, 222), radius=30, fill='#292b32', outline='#e5be61', width=2)
-    draw.polygon([(570, 35), (780, 35), (680, 219), (470, 219)], fill='#30323a')
-    compass(draw, 100, 85, 28, '#f4cd70')
-    draw.text((150, 45), '商店', font=card_font(24), fill='#f4cd70')
-    draw.text((148, 77), '远行商人', font=shop_title_font(42), fill='#fff7df')
-    draw.rounded_rectangle((825, 57, 1008, 102), radius=12, fill='#f3cd74')
-    draw.text((846, 63), '本轮在售', font=card_font(27), fill=ink)
+    # The title is cropped from the user's game screenshot, preserving its
+    # actual lettering. Decorative panels are the reference site's own assets.
+    paste_asset(card, 'game-shop-title.png', (0, 8, 554, 124))
     start = datetime.fromtimestamp(snapshot['start'], BJ)
     end = datetime.fromtimestamp(snapshot['end'], BJ)
     remaining = max(0, int(snapshot['end'] - now))
-    draw.text((margin + 28, 133), f'{start:%m月%d日} 第{snapshot["round"]}轮  {start:%H:%M}—{end:%H:%M}（北京时间）', font=card_font(26), fill='#e5e1d6')
-    draw.text((margin + 28, 173), f'距刷新 {remaining // 3600:02d}:{remaining // 60 % 60:02d}:{remaining % 60:02d}', font=card_font(30), fill='#ffdc83')
-    y = 246
+    draw.rounded_rectangle((44, 140, 1036, 185), radius=12, fill='#292d2e')
+    draw.text((64, 147), f'{start:%m月%d日} 第{snapshot["round"]}轮  {start:%H:%M}—{end:%H:%M}（北京时间）', font=shop_font(26), fill='#fffaee')
+    draw.rounded_rectangle((668, 52, 1036, 112), radius=30, fill='#1f1f1f')
+    paste_asset(card, 'icon-sl1.png', (686, 67, 27, 30))
+    draw.rounded_rectangle((728, 60, 1027, 104), radius=22, fill='#fffaee')
+    draw.text((748, 66), f'距刷新 {remaining // 3600:02d}:{remaining // 60 % 60:02d}:{remaining % 60:02d}', font=shop_font(26), fill='#1f1f1f')
+    paste_asset(card, 'bx1.png', (32, 190, 1016, 154), crop=(0, 0, 725, 110))
+    paste_asset(card, 'tit1.png', (105, 203, 325, 44))
+    draw.text((790, 205), '本轮实时库存', font=shop_title_font(26), fill='#ffdc79')
+    draw.rounded_rectangle((32, 260, 1048, height-132), radius=26, fill='#292d2e')
+    y = 262
     for index, item, titles, prices, details, row_height in rows:
         target = index in selected
-        draw.rounded_rectangle((margin, y+5, width-margin, y+row_height+5), radius=22, fill='#7892ac')
-        draw.rounded_rectangle((margin, y, width-margin, y+row_height), radius=22,
-                               fill='#f7d16f' if target else '#f5dfaa',
-                               outline='#ffe9a0' if target else '#ffedc1', width=3)
-        # A translucent-looking gold facet and medallion frame echo the shop UI.
-        draw.polygon([(margin+22, y+5), (margin+157, y+5), (margin+129, y+row_height-5),
-                      (margin+6, y+row_height-22)], fill='#eabe60' if target else '#eacf96')
-        cx, cy = margin+86, y+82
-        draw.ellipse((cx-67, cy-67, cx+67, cy+67), fill='#ffe4a1' if target else '#f9e9bd',
-                     outline='#d8aa4b' if target else '#d5b577', width=2)
+        paste_asset(card, 'item-on.png' if target else 'item.png',
+                    (margin, y, width-2*margin, row_height))
+        cx, cy = margin+86, y+80
+        paste_asset(card, 'item-bg-on.png' if target else 'item-bg.png',
+                    (cx-70, cy-68, 140, 135))
         data = icons.get(item['image'])
         if not data:
             raise ValueError('Missing current product icon')
@@ -106,28 +118,36 @@ def render_merchant_card(snapshot, selected, icons, now):
                 raise ValueError('Product image too large')
             icon = ImageOps.contain(original.convert('RGBA'), (124, 124))
         card.paste(icon, (cx-icon.width//2, cy-icon.height//2), icon)
+        limit = f'限购 {item["limit"]}'
+        limit_width = max(140, int(dummy.textlength(limit, font=shop_font(21)))+24)
+        if limit_width <= 156:
+            paste_asset(card, 'txt-bg.png', (cx-limit_width//2, y+132, limit_width, 34))
+            draw.text((cx, y+136), limit, anchor='mt', font=shop_font(21), fill='#fff29f')
         if target:
-            draw.rounded_rectangle((margin+20, y+132, margin+152, y+162), radius=7, fill='#42362b')
-            draw.text((margin+36, y+133), '订阅命中', font=card_font(21), fill='#ffe09a')
+            draw.text((width-margin-24, y+18), '订阅命中', anchor='rt', font=shop_title_font(21), fill='#8d4b13')
         x, ty = margin+178, y+20
         for title in titles:
             draw.text((x, ty), title, font=shop_title_font(32), fill=ink)
             ty += 40
         for price in prices:
-            draw.text((x, ty+4), price, font=card_font(26), fill='#76501c')
+            if item.get('currency', '洛克贝') == '洛克贝':
+                coin_x = x + int(dummy.textlength(price, font=shop_font(26))) + 12
+                if coin_x + 34 < width-margin-20:
+                    paste_asset(card, 'icon.png', (coin_x, ty+2, 34, 32))
+            draw.text((x, ty+4), price, font=shop_font(26), fill='#393939')
             ty += 34
         ty += 14
         for line in details:
-            draw.text((x, ty), line, font=card_font(23), fill=muted)
+            draw.text((x, ty), line, font=shop_font(23), fill=muted)
             ty += 31
         y += row_height+16
     captured = datetime.fromtimestamp(snapshot['fetchedAt'], BJ)
     generated = datetime.fromtimestamp(now, BJ)
-    draw.rounded_rectangle((margin, y, width-margin, y+108), radius=16, fill='#dce7ed')
-    draw.text((margin+18, y+8), f'采集 {captured:%H:%M:%S} · 制图 {generated:%H:%M:%S} · 倒计时以制图时刻为准', font=card_font(22), fill='#40546b')
-    draw.text((margin+18, y+44), '库存与商品原图：好游快爆远行商人查询器 · 实时数据整理图', font=card_font(22), fill='#40546b')
+    draw.rounded_rectangle((margin, y, width-margin, y+108), radius=16, fill='#292d2e')
+    draw.text((margin+18, y+8), f'采集 {captured:%H:%M:%S} · 制图 {generated:%H:%M:%S} · 倒计时以制图时刻为准', font=shop_font(22), fill='#fffaee')
+    draw.text((margin+18, y+44), '库存与界面素材：好游快爆查询器 · 商品原图 · 实时数据整理图', font=shop_font(22), fill='#e3d3b9')
     if snapshot['source'].startswith('https://lk.y1g.cc/'):
-        draw.text((margin+18, y+76), '数据转引：lk.y1g.cc（当轮缓存）', font=card_font(20), fill='#40546b')
+        draw.text((margin+18, y+76), '数据转引：lk.y1g.cc（当轮缓存）', font=shop_font(20), fill='#e3d3b9')
     out = io.BytesIO()
     card.save(out, format='PNG', optimize=True)
     return out.getvalue()
