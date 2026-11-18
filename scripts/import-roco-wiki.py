@@ -128,15 +128,30 @@ def parse_pet(page, expected_id=''):
         raise ValueError('Missing public pet detail')
     if expected_id and pets[0].attrs.get('data-pet-id') != expected_id:
         raise ValueError('Pet form identity mismatch: ' + expected_id)
+    templates = {n.attrs['data-sd-p-template']: n.text() for n in pets[0].walk()
+                 if n.attrs.get('data-sd-p-template')}
     skills = []
     for n in pets[0].find(cls='sd-p-skill-card'):
         a = n.attrs
         desc = n.find(cls='sd-p-skill-description')
-        skills.append({'名称': a['data-name'], '习得': {'level': '自学', 'machine': '技能石', 'blood': '血脉'}.get(a['data-source'], a['data-source']),
-                       '等级': a.get('data-level', ''), '属性': a.get('data-type', ''),
+        skills.append({'名称': a['data-name'], '习得': {'level': '自学', 'machine': '技能石', 'blood': '血脉', 'legendary': 'legendary'}.get(a['data-source'], a['data-source']),
+                       '等级': a.get('data-level', '') if a['data-source'] != 'machine' else '', '属性': a.get('data-type', ''),
                        '分类': a.get('data-category', ''), '威力': a.get('data-power', ''),
-                       '能耗': a.get('data-energy', ''), '效果': desc[0].text() if desc else ''})
+                       '能耗': a.get('data-energy', ''), '效果': desc[0].text() if desc else '',
+                       '详情': templates.get(a.get('data-sd-p-skill', ''), '')})
     return skills, pets[0].attrs.get('data-nrc-codex', '')
+
+
+def parse_pet_sections(page):
+    """Keep rendered detail panels, including research rewards and fruit sources.
+
+    Empty client-rendered panels remain explicitly absent, never guessed.
+    """
+    root = Tree(page['parse']['text']['*']).root
+    labels = {'info': '资料', 'evolution': '进化', 'topics': '课题',
+              'ecology': '生态与获取', 'usage': '培养', 'history': '历史'}
+    return {labels[n.attrs['data-sd-p-panel']]: n.text() for n in root.walk()
+            if n.attrs.get('data-sd-p-panel') in labels and n.text()}
 
 
 class Fetcher:
@@ -198,11 +213,45 @@ def save_snapshot(output, records):
     return metadata
 
 
+def apply_browser_details(records, details):
+    """Accept public DOM exports only when every indexed pet has matching identity."""
+    pets = [e for e in records if e['kind'] == 'pet']
+    by_title = {d['title']: d for d in details}
+    if len(by_title) != len(details) or set(by_title) != {p['name'] for p in pets}:
+        raise ValueError('Incomplete or duplicate browser pet details')
+    labels = {'info': '资料', 'evolution': '进化', 'topics': '课题',
+              'ecology': '生态与获取', 'usage': '培养', 'history': '历史'}
+    source_labels = {'level': '自学', 'machine': '技能石', 'blood': '血脉', 'legendary': 'legendary'}
+    for pet in pets:
+        detail = by_title[pet['name']]
+        if pet.get('wikiPetId') != detail.get('petId'):
+            raise ValueError('Pet form identity mismatch: ' + pet['name'])
+        if not detail.get('version') or not detail.get('revision') or not detail.get('fetchedAt'):
+            raise ValueError('Missing browser source version: ' + pet['name'])
+        if not all(detail.get('sections', {}).get(k) for k in ('info', 'topics', 'ecology')):
+            raise ValueError('Missing browser detail panel: ' + pet['name'])
+        pet['skills'] = []
+        for skill in detail['skills']:
+            if skill.get('source') not in source_labels or not all(k in skill for k in
+                    ('name', 'level', 'power', 'energy', 'effect', 'detail', 'category', 'type')):
+                raise ValueError('Missing skill data: ' + pet['name'])
+            pet['skills'].append({'名称': skill['name'], '习得': source_labels[skill['source']],
+                '等级': skill['level'] if skill['source'] != 'machine' else '',
+                '属性': skill['type'], '分类': skill['category'], '威力': skill['power'],
+                '能耗': skill['energy'], '效果': skill['effect'], '详情': skill['detail']})
+        pet['sections'] = {labels[k]: v for k, v in detail['sections'].items() if k in labels and v}
+        pet['version'] = detail['version']
+        pet['detailRevision'] = detail['revision']
+        pet['detailFetchedAt'] = detail['fetchedAt']
+    return records
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', default='data/roco-world.sqlite')
     parser.add_argument('--cache', default='data/roco-wiki-cache')
     parser.add_argument('--refresh', action='store_true')
+    parser.add_argument('--browser-details', help='Complete validated public DOM detail export')
     args = parser.parse_args()
     fetcher = Fetcher(args.cache, args.refresh)
     records = []
@@ -210,12 +259,17 @@ def main():
         entries = parse_index(fetcher.fetch(title), kind)
         records.extend(entries)
         print(title, len(entries), flush=True)
+    if args.browser_details:
+        apply_browser_details(records, json.loads(Path(args.browser_details).read_text(encoding='utf8')))
+        print(json.dumps(save_snapshot(args.output, records), ensure_ascii=False), flush=True)
+        return
     pets = [r for r in records if r['kind'] == 'pet']
 
     def detail(pet):
         title = urllib.parse.unquote(pet['url'].split('/nrc/', 1)[1])
         page = fetcher.fetch(title)
         pet['skills'], pet['version'] = parse_pet(page, pet.get('wikiPetId', ''))
+        pet['sections'] = parse_pet_sections(page)
         pet['detailRevision'] = page['parse']['revid']
         pet['detailFetchedAt'] = page.get('fetchedAt', '')
         return pet

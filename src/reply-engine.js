@@ -862,7 +862,8 @@ export async function generateConversationReply(options) {
 
   if (options.gameKnowledge && !recordSummary && !videoLearningRequest) {
     return answerRocoQuestion({ knowledge: options.gameKnowledge, chatClient,
-      query: currentQuestion || content, history });
+      query: currentQuestion || content, history, personaContext, priorityPersonaContext,
+      protectedIdentityContext, groupStyleProvider, webSearch, webSearchEnabled });
   }
 
   // The runtime planner is a second opinion, not a replacement for the image

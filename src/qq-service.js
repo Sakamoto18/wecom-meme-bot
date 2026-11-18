@@ -4128,9 +4128,9 @@ export class QqBotService {
         }
         : null;
       const gameKnowledge = !hasImageContext && !recordSummary && !options.videoLearningRequest
-        ? this.rocoKnowledge?.retrieve(content, {
+        ? await this.rocoKnowledge?.retrieve(content, {
           sessionKey: `${conversationId}:${message.from?.userid ?? ''}`,
-          quote: extractMessageText(message?.quote),
+          quote: extractMessageText(message?.quote), history, chatClient: this.chatClient,
         }) : null;
       const generateReply = (input, blocks) => generateConversationReply({
         gameKnowledge,

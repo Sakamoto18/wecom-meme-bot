@@ -35,6 +35,38 @@ class WikiImportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Missing public'):
             wiki.parse_pet(page('<html>visitor check</html>'))
 
+    def test_real_page_research_fruit_evolution_and_skill_stone_source(self):
+        html = (Path(__file__).parent / 'fixtures/roco/bone-panels.html').read_text()
+        sections = wiki.parse_pet_sections(page(html))
+        self.assertIn('捕捉20只精灵 精灵果实 ×1', sections['课题'])
+        self.assertIn('完成寂灭骨龙的图鉴课题获得', sections['生态与获取'])
+        self.assertIn('LV40 进化', sections['进化'])
+        self.assertIn('力竭3回合后复活', sections['历史'])
+        self.assertNotIn('培养', sections)
+        skills, _ = wiki.parse_pet(page(html))
+        self.assertEqual(skills[0]['等级'], '')
+        self.assertEqual(skills[0]['习得'], '技能石')
+        self.assertIn('爵士鹿 使用1次电弧', skills[0]['详情'])
+
+    def test_browser_import_requires_complete_identity_and_fields(self):
+        records = [{'kind': 'pet', 'name': '例子', 'wikiPetId': 'pet1'}]
+        detail = {'title': '例子', 'petId': 'pet1', 'version': 'S5', 'revision': 123,
+                  'fetchedAt': '2026-11-18', 'sections': {'info': '资料', 'topics': '课题', 'ecology': '生态'},
+                  'skills': [{'name': '技能', 'source': 'machine', 'level': '999', 'type': '水',
+                              'category': '状态', 'power': '-1', 'energy': '7', 'effect': '效果', 'detail': '解锁条件'}]}
+        with self.assertRaisesRegex(ValueError, 'Incomplete'):
+            wiki.apply_browser_details(records, [])
+        with self.assertRaisesRegex(ValueError, 'Incomplete'):
+            wiki.apply_browser_details(records, [detail, detail])
+        with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+            wiki.apply_browser_details(records, [dict(detail, petId='wrong')])
+        with self.assertRaisesRegex(ValueError, 'Missing skill data'):
+            wiki.apply_browser_details(records, [dict(detail, skills=[{'name': '技能'}])])
+        result = wiki.apply_browser_details(records, [detail])
+        self.assertEqual(result[0]['skills'][0]['等级'], '')
+        self.assertEqual(result[0]['skills'][0]['详情'], '解锁条件')
+        self.assertEqual(result[0]['sections']['课题'], '课题')
+
     def test_incomplete_import_never_overwrites_existing_file(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'knowledge.sqlite'
