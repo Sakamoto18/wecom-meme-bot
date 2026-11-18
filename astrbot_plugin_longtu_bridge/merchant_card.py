@@ -88,7 +88,7 @@ def render_merchant_card(snapshot, selected, icons, now):
     draw = ImageDraw.Draw(card)
     # The title is cropped from the user's game screenshot, preserving its
     # actual lettering. Decorative panels are the reference site's own assets.
-    paste_asset(card, 'game-shop-title.png', (0, 8, 554, 124))
+    paste_asset(card, 'game-shop-title.png', (0, 8, 426, 124), crop=(128, 0, 554, 124))
     start = datetime.fromtimestamp(snapshot['start'], BJ)
     end = datetime.fromtimestamp(snapshot['end'], BJ)
     remaining = max(0, int(snapshot['end'] - now))
