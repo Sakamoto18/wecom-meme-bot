@@ -1,4 +1,11 @@
 {
+  "merchant_alert_delivery": {
+    "description": "商人自动提醒投递方式",
+    "type": "string",
+    "default": "group",
+    "options": ["group", "private"],
+    "hint": "private：仅 NapCat 私聊订阅好友，群聊及官方自动提醒均不发送；未加好友者等待加好友，无群消息回退。群内 /远行商人 查询仍可用。"
+  },
   "merchant_official_enabled": {
     "description": "官方 QQ 商人主动提醒",
     "type": "bool",
@@ -15,7 +22,7 @@
     "description": "远行商人稀有道具主动提醒",
     "type": "bool",
     "default": false,
-    "hint": "北京时间 08/12/16/20 点检测；命中七类订阅道具才发本轮商品图及指定 @，同群同轮去重。"
+    "hint": "北京时间 08/12/16/20 点检测；命中十类订阅道具才发本轮商品图，按投递方式及接收人持久化去重。"
   },
   "merchant_alert_group": {
     "description": "远行商人提醒的唯一 QQ 群号（NapCat）",
@@ -23,10 +30,10 @@
     "default": ""
   },
   "merchant_alert_mentions": {
-    "description": "远行商人提醒要 @ 的 QQ 账号",
+    "description": "远行商人订阅成员 QQ 账号",
     "type": "string",
     "default": "",
-    "hint": "英文逗号分隔，不默认 @全体。"
+    "hint": "英文逗号分隔。group 模式原生 @这些成员，private 模式逐人私聊，仅发给已添加机器人的好友。"
   },
   "official_trial_group_bindings": {
     "description": "已核验的官方群身份与名称",

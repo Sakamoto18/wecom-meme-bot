@@ -310,6 +310,12 @@ class MerchantMonitor:
     async def tick(self, now=None):
         self._tick_snapshot = None
         config = getattr(self.bridge, 'config', {})
+        delivery = config.get('merchant_alert_delivery', 'group')
+        if delivery == 'private':
+            from .merchant_private import tick_private
+            return await tick_private(self, now)
+        if delivery != 'group':
+            raise ValueError('Invalid merchant delivery mode; no fallback to group')
         if config.get('merchant_official_enabled') is not True:
             return await self._tick_napcat(now)
         statuses, errors = [], []
