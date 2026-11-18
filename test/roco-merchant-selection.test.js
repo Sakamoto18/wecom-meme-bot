@@ -9,7 +9,7 @@ test('merchant subscription uses complete evidence and respects none', async () 
     assert.equal(opts.usageSource, 'roco-merchant-selection');
     assert.deepEqual(JSON.parse(input).candidates.map(x => x.name), items.map(x => x.name));
     assert.match(opts.systemPrompt, /不是普通的神奇的蛋/);
-    assert.match(opts.systemPrompt, /负面影响/);
+    assert.match(opts.systemPrompt, /镜面相框、残缺魔镜、适格之钥、能力钥匙/);
     return '{"selected":[]}';
   } };
   assert.deepEqual(await selectMerchantItems(client, items), []);
@@ -23,4 +23,41 @@ test('malformed, invented and uncertain merchant choices fail closed', async () 
     '{"selected":[{"id":"0","category":"other","confidence":1}]}']) {
     await assert.rejects(selectMerchantItems({ isConfigured: true, complete: async () => value }, items));
   }
+});
+
+test('confirmed mirror frame matches its full product name without model interpretation', async () => {
+  const stock = [{ name: '魔镜', description: '幽系技能石' },
+    { name: ' 镜面相框 ', description: '' },
+    { name: '镜面相框碎片', description: '指定性格' },
+    { name: '未知金色镜子', description: '可以修改性格正面加成' }];
+  const client = { isConfigured: true, complete: async (_, input) => {
+    assert.deepEqual(JSON.parse(input).candidates.map(c => c.id), ['0', '2', '3']);
+    return '{"selected":[]}';
+  } };
+  assert.deepEqual(await selectMerchantItems(client, stock), [1]);
+  assert.deepEqual(await selectMerchantItems(null, [{ name: '镜面相框' }]), [0]);
+  assert.deepEqual(await selectMerchantItems(null, stock), [1]);
+});
+
+test('model cannot extend the confirmed mirror subscription to another product', async () => {
+  const client = { isConfigured: true, complete: async () =>
+    '{"selected":[{"id":"0","category":"nature_mirror","confidence":1}]}' };
+  await assert.rejects(selectMerchantItems(client, [{ name: '未知镜子' }]));
+  assert.deepEqual(await selectMerchantItems(client, [{ name: '未知镜子' }, { name: '镜面相框' }]), [1]);
+});
+
+test('exact mirror binding and other subscribed items are combined', async () => {
+  const client = { isConfigured: true, complete: async () =>
+    '{"selected":[{"id":"1","category":"king_ball","confidence":1}]}' };
+  assert.deepEqual(await selectMerchantItems(client, [{ name: '镜面相框' }, { name: '国王球' }]), [0, 1]);
+});
+
+test('all four explicit product subscriptions work without a model and exclude partial names', async () => {
+  const stock = ['残缺魔镜', '适格之钥', '能力钥匙', '镜面相框', '能力钥匙碎片', '镜面家具'].map(name => ({ name }));
+  assert.deepEqual(await selectMerchantItems(null, stock), [0, 1, 2, 3]);
+  const client = { isConfigured: true, complete: async () => '{"selected":[]}' };
+  for (const item of stock.slice(0, 4)) {
+    assert.deepEqual(await selectMerchantItems(client, [item]), [0]);
+  }
+  assert.deepEqual(await selectMerchantItems(client, stock.slice(4)), []);
 });
