@@ -32,6 +32,46 @@ export class VideoCurriculum {
       .map(v => ({ bvid: v.bvid, title: String(v.title ?? v.bvid).slice(0, 160) })) };
   }
 
+  async refreshHead(state, save) {
+    // New uploads shift every page number. Find the prefix before a known BV
+    // instead of resetting the historical cursor or waiting for its queue to drain.
+    const known = new Set([...state.seen, ...state.queue.map(v => v.bvid)]);
+    const bootstrap = known.size === 0;
+    const scan = state.headScan ??= { nextPage: 1, videos: [] };
+    const discovered = new Set(scan.videos.map(v => v.bvid));
+    // Bound each scheduler turn; persist the scan and finish it before learning.
+    for (let count = 0; count < 3; count++) {
+      const page = await this.page(scan.nextPage);
+      const lastPage = Math.max(1, Math.ceil(page.total / 30));
+      if (!page.videos.length && page.total > 0 && scan.nextPage <= lastPage) {
+        throw Object.assign(new Error('主页新增检查返回空页，稍后重试'), { retryable: true });
+      }
+      state.total = page.total;
+      let boundary = false;
+      for (const video of page.videos) {
+        if (known.has(video.bvid)) { boundary = true; break; }
+        if (!discovered.has(video.bvid)) {
+          scan.videos.push(video);
+          discovered.add(video.bvid);
+        }
+      }
+      if (bootstrap || boundary || scan.nextPage >= lastPage) {
+        const additions = scan.videos.filter(v => !known.has(v.bvid));
+        state.queue.unshift(...additions);
+        if (bootstrap) state.nextPage = lastPage > 1 ? 2 : 1;
+        state.run.newVideos = (state.run.newVideos || 0) + (bootstrap ? 0 : additions.length);
+        state.headCheckedAt = this.coordinator.now();
+        delete state.headScan;
+        save();
+        this.coordinator.logger?.log?.(`主页学习新增检查完成：mid=${this.mid} added=${additions.length} bootstrap=${bootstrap} backlogPage=${state.nextPage}`);
+        return true;
+      }
+      scan.nextPage++;
+      save();
+    }
+    return false;
+  }
+
   async tick() {
     if (!this.enabled) return;
     const c = this.coordinator;
@@ -57,6 +97,7 @@ export class VideoCurriculum {
     delete run.retryAt;
     const videoLimit = Math.min(this.dailyVideos, Math.max(1, Number(run.videoLimit) || this.dailyVideos));
     try {
+      if (!await this.refreshHead(state, save)) return;
       while (run.items.length < videoLimit && run.seconds < this.dailySeconds - 20) {
         if (!state.queue.length) {
           // At most three pages per day; duplicate BV IDs never become work.
@@ -64,7 +105,10 @@ export class VideoCurriculum {
           const page = await this.page(state.nextPage);
           run.pages = (run.pages ?? 0) + 1;
           state.total = page.total;
-          state.queue.push(...page.videos.filter(v => !state.seen.includes(v.bvid)));
+          const known = new Set(state.seen);
+          for (const video of page.videos) {
+            if (!known.has(video.bvid)) { state.queue.push(video); known.add(video.bvid); }
+          }
           const lastPage = Math.max(1, Math.ceil(page.total / 30));
           state.nextPage = state.nextPage >= lastPage ? 1 : state.nextPage + 1;
           save();
@@ -137,6 +181,7 @@ export class VideoCurriculum {
     const lines = [
       `每日梗百科学习报告 ${run.day}`,
       `主页：https://space.bilibili.com/${this.mid}`,
+      `本轮新增优先入队 ${run.newVideos || 0} 个视频；新增处理后继续原学习进度，共用每日预算。`,
       `今天处理 ${run.items.length} 个视频，学会 ${run.items.filter(i => i.status === 'learned').length} 个，候选 ${run.items.filter(i => i.status === 'candidate').length} 个，材料 ${(run.seconds / 60).toFixed(1)} 分钟。`,
       ...run.items.flatMap(item => [
         `${item.status === 'learned' ? '学会' : item.status === 'candidate' ? '候选可接梗' : '未学会'}：${item.title}`,

@@ -414,12 +414,13 @@ export class VideoLearningStore {
     return this.#taskRow(row);
   }
 
-  nextQueuedTask() {
+  nextQueuedTask({ excludeTopicPrefix = '' } = {}) {
     return this.#taskRow(this.ensureOpen().prepare(`
       SELECT * FROM video_learning_tasks WHERE status = 'queued'
         AND COALESCE(json_extract(metadata_json, '$.watchRetryAt'), 0) <= ?
+        AND (? = '' OR substr(topic_key, 1, ?) <> ?)
       ORDER BY created_at ASC LIMIT 1
-    `).get(this.now()));
+    `).get(this.now(), excludeTopicPrefix, excludeTopicPrefix.length, excludeTopicPrefix));
   }
 
   countTasksSince(since) {

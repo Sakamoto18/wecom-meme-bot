@@ -574,7 +574,10 @@ export class VideoLearningCoordinator {
     if (this.running) return;
     this.running = true;
     try {
-      for (let task = this.store.nextQueuedTask(); task; task = this.store.nextQueuedTask()) {
+      // Persisted curriculum tasks must re-enter their own queue: otherwise a
+      // restart would watch yesterday's task before checking today's uploads.
+      const queuedOptions = { excludeTopicPrefix: this.curriculum.enabled ? `curriculum:${this.curriculum.mid}:` : '' };
+      for (let task = this.store.nextQueuedTask(queuedOptions); task; task = this.store.nextQueuedTask(queuedOptions)) {
         await this.processTask(task);
       }
       // On-demand learning goes first; catch-up runs once the queue is empty.
