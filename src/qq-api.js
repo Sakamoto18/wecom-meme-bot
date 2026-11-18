@@ -1,5 +1,6 @@
 import { WebMemeConfirmation } from './web-meme-confirmation.js';
 import { RocoKnowledge } from './roco-knowledge.js';
+import { selectMerchantItems } from './roco-merchant-selection.js';
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
@@ -428,6 +429,15 @@ export function createQqApiServer(options) {
         const ok = service.webMemeLearning && new WebMemeConfirmation(service.webMemeLearning)
           .bindDelivery(body.token, body.message_id);
         sendJson(response, ok ? 200 : 409, { ok: Boolean(ok) });return;
+      }
+
+      if (url.pathname === '/v1/qq/merchant/select') {
+        if (request.method !== 'POST') { sendJson(response, 405, { ok: false }); return; }
+        if (!isAuthorized(request, apiToken)) { sendJson(response, 401, { ok: false }); return; }
+        const body = await readJsonBody(request);
+        const selected = await selectMerchantItems(service.chatClient, body.items);
+        sendJson(response, 200, { ok: true, selected });
+        return;
       }
 
       if (url.pathname !== '/v1/qq/message') {

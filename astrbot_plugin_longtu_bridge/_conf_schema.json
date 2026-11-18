@@ -1,4 +1,21 @@
 {
+  "merchant_alert_enabled": {
+    "description": "远行商人稀有道具主动提醒",
+    "type": "bool",
+    "default": false,
+    "hint": "北京时间 08/12/16/20 点检测；命中七类订阅道具才发本轮商品图及指定 @，同群同轮去重。"
+  },
+  "merchant_alert_group": {
+    "description": "远行商人提醒的唯一 QQ 群号（NapCat）",
+    "type": "string",
+    "default": ""
+  },
+  "merchant_alert_mentions": {
+    "description": "远行商人提醒要 @ 的 QQ 账号",
+    "type": "string",
+    "default": "",
+    "hint": "英文逗号分隔，不默认 @全体。"
+  },
   "official_trial_group_bindings": {
     "description": "已核验的官方群身份与名称",
     "type": "string",

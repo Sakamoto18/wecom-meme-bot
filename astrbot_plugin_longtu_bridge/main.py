@@ -199,6 +199,7 @@ class LongtuQqBridge(Star):
         self.report_task: asyncio.Task | None = None
         self.crazy_thursday_task: asyncio.Task | None = None
         self.learning_delivery_task: asyncio.Task | None = None
+        self.merchant_alert_task: asyncio.Task | None = None
         self.report_stop = asyncio.Event()
         self.internal_send_runner: web.AppRunner | None = None
         # get_image 熔断状态：连续失败到阈值后在一段时间内直接走下载回退。
@@ -247,6 +248,11 @@ class LongtuQqBridge(Star):
             self._learning_delivery_loop(),
             name="longtu-learning-delivery",
         )
+        if self._enabled(self.config.get('merchant_alert_enabled', False), False):
+            from .merchant_alert import MerchantMonitor
+            self.merchant_alert_task = asyncio.create_task(
+                MerchantMonitor(self).run(), name='longtu-merchant-alert',
+            )
 
     def _api_url(self) -> str:
         return (
@@ -3831,7 +3837,8 @@ class LongtuQqBridge(Star):
         if getattr(self, 'video_delivery_cache', None):
             await self.video_delivery_cache.close()
         self.report_stop.set()
-        for task in (self.report_task, self.crazy_thursday_task, self.learning_delivery_task):
+        for task in (self.report_task, self.crazy_thursday_task, self.learning_delivery_task,
+                     getattr(self, 'merchant_alert_task', None)):
             if task:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
