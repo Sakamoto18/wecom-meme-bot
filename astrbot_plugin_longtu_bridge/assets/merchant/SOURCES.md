@@ -13,7 +13,8 @@ from that screenshot. Runtime product icons and inventory always come from the
 validated current round.
 
 These are source/game artwork, not newly generated or owned by this project;
-retain source attribution on the rendered card. No blanket redistribution license
+source provenance is retained in this file; the user requested that source
+labels be removed from the rendered card. No blanket redistribution license
 is asserted here.
 
 The reference CSS has no @font-face; dynamic text uses system sans-serif, including

@@ -78,7 +78,7 @@ def render_merchant_card(snapshot, selected, icons, now):
         details = wrap(dummy, item.get('description', ''), shop_font(23), 680)
         row_height = max(166, 88 + len(title) * 40 + len(details) * 31 + (len(price) - 1) * 34)
         rows.append((index, item, title, price, details, row_height))
-    height = 282 + sum(row[5] + 16 for row in rows) + 122
+    height = 282 + sum(row[5] + 16 for row in rows) + 62
     if height > 12000:
         raise ValueError('Merchant card too large')
     card = Image.new('RGB', (width, height), '#75412f')
@@ -101,7 +101,7 @@ def render_merchant_card(snapshot, selected, icons, now):
     paste_asset(card, 'bx1.png', (32, 190, 1016, 154), crop=(0, 0, 725, 110))
     paste_asset(card, 'tit1.png', (105, 203, 325, 44))
     draw.text((790, 205), '本轮实时库存', font=shop_title_font(26), fill='#ffdc79')
-    draw.rounded_rectangle((32, 260, 1048, height-132), radius=26, fill='#292d2e')
+    draw.rounded_rectangle((32, 260, 1048, height-72), radius=26, fill='#292d2e')
     y = 262
     for index, item, titles, prices, details, row_height in rows:
         target = index in selected
@@ -143,11 +143,8 @@ def render_merchant_card(snapshot, selected, icons, now):
         y += row_height+16
     captured = datetime.fromtimestamp(snapshot['fetchedAt'], BJ)
     generated = datetime.fromtimestamp(now, BJ)
-    draw.rounded_rectangle((margin, y, width-margin, y+108), radius=16, fill='#292d2e')
+    draw.rounded_rectangle((margin, y, width-margin, y+48), radius=16, fill='#292d2e')
     draw.text((margin+18, y+8), f'采集 {captured:%H:%M:%S} · 制图 {generated:%H:%M:%S} · 倒计时以制图时刻为准', font=shop_font(22), fill='#fffaee')
-    draw.text((margin+18, y+44), '库存与界面素材：好游快爆查询器 · 商品原图 · 实时数据整理图', font=shop_font(22), fill='#e3d3b9')
-    if snapshot['source'].startswith('https://lk.y1g.cc/'):
-        draw.text((margin+18, y+76), '数据转引：lk.y1g.cc（当轮缓存）', font=shop_font(20), fill='#e3d3b9')
     out = io.BytesIO()
     card.save(out, format='PNG', optimize=True)
     return out.getvalue()
