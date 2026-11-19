@@ -226,16 +226,27 @@ async def mirror_daily_report(bridge, report_date):
 
 async def mirror_crazy_thursday(bridge, target_date):
     if not enabled(bridge.config) or not bridge.config.get('official_trial_push_enabled', False):
-        return
-    groups = [x.strip() for x in str(bridge.config.get('official_trial_push_groups') or '').split(',') if x.strip()]
+        logger.info(f'官方疯狂星期四跳过：date={target_date} reason=disabled')
+        return 0
+    groups = list(dict.fromkeys(x.strip() for x in str(bridge.config.get('official_trial_push_groups') or '').split(',') if x.strip()))
     if not groups:
-        return
+        logger.warning(f'官方疯狂星期四跳过：date={target_date} reason=no-target-groups')
+        return 0
     text = await bridge._generate_crazy_thursday_text(target_date, scheduled=True)
+    sent = 0
     for group in groups:
         try:
-            await proactive(bridge, group, [MessageChain([Comp.Plain(text)])], group=True)
+            ok = await proactive(bridge, group, [MessageChain([Comp.Plain(text)])], group=True)
+            if ok:
+                sent += 1
+            else:
+                logger.warning(f'官方疯狂星期四未确认：date={target_date} group={group}')
+        except asyncio.CancelledError:
+            raise
         except Exception as error:
-            logger.warning(f'官方星期四推送失败：{type(error).__name__}')
+            logger.warning(f'官方疯狂星期四失败：date={target_date} group={group} error={type(error).__name__}')
+    logger.info(f'官方疯狂星期四投递：date={target_date} groups={sent}/{len(groups)}')
+    return sent
 
 
 async def _learning_proactive_once(bridge, target, chains, *, group, delivery_id):

@@ -717,6 +717,23 @@ class LongtuQqBridge(Star):
         )
         return sent_count
 
+    async def _dispatch_crazy_thursday(self, target_date) -> None:
+        # A missing/disconnected NapCat transport must not suppress official QQ.
+        try:
+            await self._send_crazy_thursday(target_date)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.error(f'NapCat 疯狂星期四发送失败：{type(error).__name__}')
+        if self.config.get('official_trial_enabled', False):
+            try:
+                from .official_trial import mirror_crazy_thursday
+                await mirror_crazy_thursday(self, target_date)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.error(f'官方疯狂星期四发送失败：{type(error).__name__}')
+
     async def _crazy_thursday_loop(self) -> None:
         while not self.report_stop.is_set():
             now = datetime.now(REPORT_TIMEZONE)
@@ -746,10 +763,7 @@ class LongtuQqBridge(Star):
             except asyncio.TimeoutError:
                 pass
             try:
-                await self._send_crazy_thursday(target.date())
-                if self.config.get('official_trial_enabled', False):
-                    from .official_trial import mirror_crazy_thursday
-                    await mirror_crazy_thursday(self, target.date())
+                await self._dispatch_crazy_thursday(target.date())
             except asyncio.CancelledError:
                 raise
             except Exception as error:

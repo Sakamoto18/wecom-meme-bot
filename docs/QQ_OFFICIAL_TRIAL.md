@@ -85,3 +85,10 @@ AppID `1903660238`，AstrBot 平台 ID `longtu-official-trial`，WebSocket 接�
 2026-11-10 单条图集、普通链接与旁观修复版：47 项回归通过，已部署；备份 `C:/migration-backup/official-trial-20261110-203254`。官方与 OneBot 均已重连。线上已确认多图 Markdown 发送成功、普通链接进入后端回复、未 @ 群消息进入旁观判定。分享卡分离版在 20:37 部署，备份 C:/migration-backup/official-trial-20261110-203714。
 
 指定梗网页学习：群内 @ 后发送 `/learn-meme 梗名` 或“联网学习 XXX 这个梗”，按置信度审核并在原群返回报告，普通成员可用。详见 [使用与审核规则](WEB_MEME_LEARNING.md)。
+
+
+## 疯狂星期四排查与投递日志（2026-11-19）
+
+09:00、11:30、15:00 的任务均已触发，NapCat 各为 3/3；官方当时 `official_trial_push_enabled=true`，但 `official_trial_push_groups` 为空，因此没有发送尝试。与 `merchant_official_enabled=false`（商人专用开关）无关。官方群目标需要明确配置其 OpenID，不能把普通群号直接填写，也不自动从已知群映射广播。
+
+定时调度现独立执行 NapCat 和官方通道，一方异常不再阻断另一方。官方目标为空会记录 `reason=no-target-groups`，关闭时记录 `reason=disabled`；配置重复群去重，失败或无成功确认按群记录，最后报告成功数/目标数。发送时段保持北京时间周四 09:00、11:30、15:00、18:00；重启不会追发已过时段。新增模拟测试 `test.test_official_thursday`，与 `test.test_official_trial` 共 35 项通过。
