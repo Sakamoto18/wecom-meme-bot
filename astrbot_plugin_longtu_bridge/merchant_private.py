@@ -30,8 +30,16 @@ async def tick_private(monitor, now=None):
     if not isinstance(friends, list):
         raise ValueError('Cannot verify private merchant recipients')
     friend_ids = {str(row.get('user_id')) for row in friends if isinstance(row, dict)}
+    config = getattr(monitor.bridge, 'config', {})
+    recipients = config.get('merchant_private_recipients')
+    if recipients is None and config.get('merchant_alert_delivery') != 'group_private':
+        recipients = monitor.mentions  # Preserve existing private-only installations.
+    else:
+        recipients = [x.strip() for x in str(recipients or '').split(',') if x.strip()]
+    if not recipients or not all(x.isdigit() for x in recipients):
+        raise ValueError('Private merchant delivery requires explicit QQ recipients')
     pending, statuses = [], []
-    for user in dict.fromkeys(monitor.mentions):
+    for user in dict.fromkeys(recipients):
         key = f'private:{user}:{int(window[1])}'
         row = monitor.state.get(key)
         if row and row[0] == 'sent':

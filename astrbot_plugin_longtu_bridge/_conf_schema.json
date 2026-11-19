@@ -3,8 +3,12 @@
     "description": "商人自动提醒投递方式",
     "type": "string",
     "default": "group",
-    "options": ["group", "private"],
-    "hint": "private：仅 NapCat 私聊订阅好友，群聊及官方自动提醒均不发送；未加好友者等待加好友，无群消息回退。群内 /远行商人 查询仍可用。"
+    "options": [
+      "group",
+      "private",
+      "group_private"
+    ],
+    "hint": "group：群提醒；private：仅私聊；group_private：群与私聊独立投递、去重。官方通道仍受独立开关和目标群映射约束。"
   },
   "merchant_official_enabled": {
     "description": "官方 QQ 商人主动提醒",
@@ -33,7 +37,7 @@
     "description": "远行商人订阅成员 QQ 账号",
     "type": "string",
     "default": "",
-    "hint": "英文逗号分隔。group 模式原生 @这些成员，private 模式逐人私聊，仅发给已添加机器人的好友。"
+    "hint": "群内原生 @ 名单，英文逗号分隔。私聊收件人由 merchant_private_recipients 独立设置。"
   },
   "official_trial_group_bindings": {
     "description": "已核验的官方群身份与名称",
@@ -232,5 +236,11 @@
     "type": "int",
     "default": 30,
     "hint": "定时推送固定为 09:00、11:30、15:00、18:00，此字段保留兼容旧配置"
+  },
+  "merchant_private_recipients": {
+    "description": "商人自动私聊收件人 QQ",
+    "type": "string",
+    "default": "",
+    "hint": "英文逗号分隔，与群内 @ 名单独立；group_private 模式必须明确填写。仅发送好友私聊，无群会话回退。"
   }
 }

@@ -314,12 +314,20 @@ class MerchantMonitor:
         if delivery == 'private':
             from .merchant_private import tick_private
             return await tick_private(self, now)
-        if delivery != 'group':
+        if delivery not in ('group', 'group_private'):
             raise ValueError('Invalid merchant delivery mode; no fallback to group')
-        if config.get('merchant_official_enabled') is not True:
+        if delivery == 'group' and config.get('merchant_official_enabled') is not True:
             return await self._tick_napcat(now)
+        operations = [('napcat', self._tick_napcat)]
+        if delivery == 'group_private':
+            from .merchant_private import tick_private
+            async def private_operation(timestamp):
+                return await tick_private(self, timestamp)
+            operations.append(('private', private_operation))
+        if config.get('merchant_official_enabled') is True:
+            operations.append(('official', self._tick_official))
         statuses, errors = [], []
-        for channel, operation in [('napcat', self._tick_napcat), ('official', self._tick_official)]:
+        for channel, operation in operations:
             try:
                 statuses.append(f'{channel}={await operation(now)}')
             except asyncio.CancelledError:

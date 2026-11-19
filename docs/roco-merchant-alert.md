@@ -1,6 +1,6 @@
 # 远行商人稀有道具提醒
 
-2026-11-18 最新用户要求：只做点对点推送，不影响群内其他成员。自动提醒改为 NapCat 分别私聊 `1079175957`、`2584778797`、`1299971625`、`1846366057`，不再自动向 913546080 或官方目标群发消息，也不发布公告。群内 `/远行商人` 手动查询保留。四人需要先添加机器人 QQ 2053160463 为好友；未加好友者等待，后续每轮检测会重新核验好友关系。部署前已核验前两人为好友，后两位尚未添加。
+最新要求：NapCat 自动稀有道具提醒同时发到群 `913546080`，并分别私聊 `1079175957`、`2584778797`。使用 `group_private` 模式；群内沿用四人原生 @ 名单，私聊仅上述两人。官方主动提醒暂时关闭，待官方 Bot 加入 913546080 并核验目标群/成员映射后再开启。图片样式测试仍只私聊 1079175957，不能改变自动提醒收件人。
 
 订阅炫彩蛋、棱镜球、首领秘药、镜面相框（用户确认“金镜子”指此道具）、国王球、祝福项坠、奇异血脉秘药、残缺魔镜、适格之钥、能力钥匙，共十类。不将技能石魔镜、普通神奇的蛋或普通属性秘药混入。
 
@@ -17,15 +17,16 @@
 ```json
 {
   "merchant_alert_enabled": true,
-  "merchant_alert_delivery": "private",
+  "merchant_alert_delivery": "group_private",
+  "merchant_private_recipients": "1079175957,2584778797",
   "merchant_alert_group": "913546080",
   "merchant_alert_mentions": "1079175957,2584778797,1299971625,1846366057",
-  "merchant_official_enabled": true,
+  "merchant_official_enabled": false,
   "merchant_official_member_bindings": "{}"
 }
 ```
 
-默认关闭，设置目标后重载插件启用。任务属于现有 Bridge initialize/terminate 生命周期，支持 NapCat 与官方 QQ 两个通道独立投递。当前 `private` 模式只走 NapCat 好友私聊，优先于官方主动提醒开关；只有显式恢复 `group` 模式才使用原有群提醒逻辑。语义筛选使用后端已认证的 `/v1/qq/merchant/select`，沿用当前模型与调用统计。
+默认关闭，设置目标后重载插件启用。任务属于现有 Bridge initialize/terminate 生命周期，支持 NapCat 与官方 QQ 两个通道独立投递。当前 `group_private` 模式独立执行 NapCat 群推送和指定好友私聊，某路失败不阻断其他路。官方开关为 false，不执行官方发送。`private` 单独模式仍保留。语义筛选使用后端已认证的 `/v1/qq/merchant/select`，沿用当前模型与调用统计。
 
 `data/plugin_data/longtu_merchant.sqlite` 保存筛选缓存和群/轮次投递状态。发送前事务占位，收到 message_id 才记录成功；重启或多个实例不会重发。明确失败可重试。超时/无回执时读取本群最近 100 条消息核验机器人自身的相同正文，能找到则补登记，找不到则保留 uncertain 状态而不盲目重复 @。同群同轮最多一次；源在已通知之后再补充商品不会再次提醒。
 
@@ -51,4 +52,4 @@ NapCat 和官方 Bot 均支持 `@机器人 /远行商人`，普通群成员可�
 
 发送前检查好友列表，只调用不带 `group_id` 的 `send_private_msg`，绝不回退成群消息或临时群会话。未加好友者不消耗投递记录，加好友后本轮仍未过期即可接收。每人发送前再次检查轮次有效期。私聊回执不代表对方已读或手机必定响铃。
 
-原有群发送和官方群映射代码保留供显式切回群模式使用；当前自动提醒不会执行它们。验证：`python -m unittest test.test_merchant_alert test.test_merchant_official test.test_merchant_private`。
+当前群与每个私聊收件人使用独立持久化投递键，已有本轮私聊记录不会阻止群补发，重启不会重复通知。未设置混合模式私聊名单时拒绝私聊，不能自动套用群 @ 名单。验证：`python -m unittest test.test_merchant_alert test.test_merchant_official test.test_merchant_private`。
