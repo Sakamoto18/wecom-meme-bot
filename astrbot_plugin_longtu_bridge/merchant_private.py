@@ -3,7 +3,7 @@ import asyncio
 import base64
 import time
 
-from .merchant_alert import round_window, fetch_icons, notification_text
+from .merchant_alert import round_window, fetch_icons, scheduled_delivery_key, scheduled_notification_text
 from .merchant_card import render_merchant_card
 
 
@@ -40,7 +40,8 @@ async def tick_private(monitor, now=None):
         raise ValueError('Private merchant delivery requires explicit QQ recipients')
     pending, statuses = [], []
     for user in dict.fromkeys(recipients):
-        key = f'private:{user}:{int(window[1])}'
+        key = scheduled_delivery_key(monitor.state, f'private:{user}:{int(window[1])}', now, window[2],
+            config.get('merchant_expiry_reminder_enabled') is True)
         row = monitor.state.get(key)
         if row and row[0] == 'sent':
             statuses.append(f'{user}=already-sent')
@@ -62,14 +63,14 @@ async def tick_private(monitor, now=None):
     if created >= snapshot['end']:
         return 'private=expired-before-render'
     png = await asyncio.to_thread(render_merchant_card, snapshot, selected, icons, created)
-    text = notification_text(snapshot, selected, created)
-    message = [{'type': 'text', 'data': {'text': text}},
-               {'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(png).decode()}}]
+    image_segment = {'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(png).decode()}}
     errors = []
     for user, key in pending:
         if time.time() >= snapshot['end']:
             statuses.append(f'{user}=expired-before-send')
             continue
+        text = scheduled_notification_text(snapshot, selected, created, key)
+        message = [{'type': 'text', 'data': {'text': text}}, image_segment]
         monitor.state.retry_rejected(key)
         if not monitor.state.claim(key, text, time.time()):
             statuses.append(f'{user}=claimed-by-another-worker')

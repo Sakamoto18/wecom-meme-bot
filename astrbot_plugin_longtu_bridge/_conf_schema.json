@@ -242,5 +242,11 @@
     "type": "string",
     "default": "",
     "hint": "英文逗号分隔，与群内 @ 名单独立；group_private 模式必须明确填写。仅发送好友私聊，无群会话回退。"
+  },
+  "merchant_expiry_reminder_enabled": {
+    "description": "商人结束前30分钟再次提醒",
+    "type": "bool",
+    "default": false,
+    "hint": "本轮已发送首次提醒的目标，在最后30分钟重新核验库存并另提醒一次；最后30分钟才首次收到者不重复。群与每人独立去重，过期不补发。"
   }
 }

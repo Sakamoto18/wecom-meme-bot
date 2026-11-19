@@ -1,4 +1,4 @@
-"""Current-round merchant monitoring; one durable delivery per group and round."""
+"""Current-round merchant monitoring; durable initial and expiry reminders per destination and round."""
 import asyncio
 import base64
 import hashlib
@@ -33,12 +33,14 @@ def poll_delay(now):
         return max(1, datetime.fromtimestamp(now, BJ).replace(hour=8, minute=0, second=0, microsecond=0).timestamp() - now)
     elapsed = now - window[1]
     interval = 15 if elapsed < 300 else 60 if elapsed < 900 else 300
-    return max(1, min(interval, window[2] - now))
+    reminder_at = window[2] - 1800
+    boundary = reminder_at if now < reminder_at else window[2]
+    return max(1, min(interval, boundary - now))
 
 
 def retry_delay(now, failures):
     window = round_window(now)
-    return max(1, min(window[2] - now, 15 * 2 ** (min(5, failures) - 1))) if window and failures else poll_delay(now)
+    return max(1, min(poll_delay(now), 15 * 2 ** (min(5, failures) - 1))) if window and failures else poll_delay(now)
 
 
 class Node:
@@ -165,6 +167,20 @@ def fingerprint(snapshot):
 
 def delivery_key(group, snapshot):
     return f"{group}:{int(snapshot['start'])}"
+
+
+def scheduled_delivery_key(state, base, now, end, enabled=False):
+    """Late first alerts already serve the last-half-hour purpose; never double-send."""
+    if enabled and end - 1800 <= now < end:
+        initial = state.get(base)
+        if initial and initial[0] == 'sent' and initial[3] < end - 1800:
+            return base + ':expiry30'
+    return base
+
+
+def scheduled_notification_text(snapshot, selected, now, key):
+    text = notification_text(snapshot, selected, now)
+    return ('【到期提醒 · 已进入最后30分钟】\n' + text) if key.endswith(':expiry30') else text
 
 
 class State:
@@ -343,7 +359,8 @@ class MerchantMonitor:
         window = round_window(now)
         if not window:
             return 'closed'
-        key = f'{self.group}:{int(window[1])}'
+        key = scheduled_delivery_key(self.state, f'{self.group}:{int(window[1])}', now, window[2],
+            getattr(self.bridge, 'config', {}).get('merchant_expiry_reminder_enabled') is True)
         platform = self.bridge._qq_platform()
         bot = getattr(platform, 'bot', None)
         if not bot:
@@ -373,7 +390,7 @@ class MerchantMonitor:
         png = await asyncio.to_thread(render_merchant_card, snapshot, selected, icons, created)
         if time.time() >= snapshot['end']:
             return 'expired-before-send'
-        text = notification_text(snapshot, selected, created)
+        text = scheduled_notification_text(snapshot, selected, created, key)
         if not self.state.claim(key, text, created):
             return 'claimed-by-another-worker'
         message = [{'type': 'at', 'data': {'qq': user}} for user in self.mentions]
@@ -408,7 +425,8 @@ class MerchantMonitor:
         platform = official_platform(self.bridge)
         if not platform:
             raise RuntimeError('Official QQ platform unavailable')
-        key = f'official:{platform.appid}:{group}:{int(window[1])}'
+        key = scheduled_delivery_key(self.state, f'official:{platform.appid}:{group}:{int(window[1])}',
+            now, window[2], self.bridge.config.get('merchant_expiry_reminder_enabled') is True)
         row = self.state.get(key)
         if row:
             # QQ's official API has no arbitrary history query for reconciling
@@ -426,7 +444,7 @@ class MerchantMonitor:
         media = await prepare_image(platform.client, group, png)
         if time.time() >= snapshot['end']:
             return 'expired-before-send'
-        text = notification_text(snapshot, selected, created)
+        text = scheduled_notification_text(snapshot, selected, created, key)
         if not self.state.claim(key, text, time.time()):
             return 'claimed-by-another-worker'
         try:
