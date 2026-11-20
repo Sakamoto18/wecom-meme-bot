@@ -62,3 +62,11 @@ node --disable-warning=ExperimentalWarning --test test/roco-knowledge.test.js
 真实回放入口：`node scripts/evaluate-roco-knowledge.mjs --live --config-root <线上配置目录> --snapshot <候选SQLite> --output <报告>`。读取现有人格和模型配置，测试带 @ 的实体名、错字、技能解锁、果实课题、被纠正后的答复和普通词消歧；不发送 QQ 消息，不写会话记忆。
 
 浏览器正常可访问公开 Wiki 时，`scripts/roco-browser-export.mjs titles.json` 可生成页面内采集函数，状态和结果在 `window.rocoImport`。最多两个请求并行，HTTP 错误停止；暂时性错误恢复后可再次执行以跳过已完成页。导出 JSON 后用 `scripts/import-roco-wiki.py --cache <四个目录页缓存> --browser-details <完整详情JSON> --output <候选库>` 重建；缺页、重复、形态ID错配和缺失技能字段均拒绝生成。
+
+## Wiki 不足时补充网络证据（2026-11-19）
+
+目录路由只知道栏目覆盖范围，不能据此判定正文足够。回答前，若路由未指定搜索词且联网可用，模型会读取当前问题、解消指代后的问题和实际选中正文，判断关键条件是否齐全；缺少任务前置、步骤、领取条件、版本依据时生成至多两个精确检索词。检索复用现有 WebSearch，不限 Wiki 域名，可使用官方说明、攻略站、B站与社区结果。
+
+事实核对也可返回 `needs_search/search_queries`：即使第一稿谨慎表示没查到，仍可按缺失点补搜，再将新证据连同原 Wiki 交给同一人格重新回答并复核。每轮最多三个去重查询、两稿回答，搜索失败不能变成事实。若扩展稿未通过复核，保留此前已核验的部分答案和不确定性，不把已查到的内容全部丢弃。网页保留来源、发布时间、正文抽取类型；不根据标题或相似道具名猜步骤，不拼接冲突攻略，默认仍不附“来自Wiki”尾句。
+
+Wiki 快照不可用时允许网络证据回答；歧义对象先澄清；关闭联网时不调用检索或充分性审查。NapCat 和官方 QQ 共用这条回答链。验证：`node --test test/roco-knowledge.test.js test/search-policy.test.js`，31 项通过；线上同模型与搜索配置只读回放，不向任何群发送测试。
