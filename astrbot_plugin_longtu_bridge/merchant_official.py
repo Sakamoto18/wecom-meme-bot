@@ -1,6 +1,9 @@
 """Official merchant delivery uses verified identities and retains API receipts."""
 import asyncio
 import base64
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+import html
 import json
 import re
 from types import SimpleNamespace
@@ -78,12 +81,51 @@ async def prepare_image(client, group, png):
     return media
 
 
+@dataclass(frozen=True)
+class MentionImage:
+    url: str
+    width: int
+    height: int
+
+
+@asynccontextmanager
+async def prepare_mention_image(client, png):
+    """Prepare before claiming delivery; clean up on every exit, including expiry."""
+    from .official_compact_image import upload_markdown_image, cleanup_materials
+    material_ids = []
+    http = client.api._http
+    try:
+        url, width, height = await asyncio.wait_for(upload_markdown_image(
+            http, base64.b64encode(png).decode(), material_ids, max_edge=1080), 45)
+        yield MentionImage(url, width, height)
+    finally:
+        # Tencent copies accepted message images; deleting our temporary material
+        # does not change an already-sent message. Never send a fallback message.
+        await cleanup_materials(http, material_ids)
+
+
+def markdown_text(text):
+    """Stock labels are literal text, never extra @ tags or Markdown links."""
+    return re.sub(r'([\\`*_{}\[\]()#+.!|~-])', r'\\\1', html.escape(text, quote=False))
+
+
 async def send_image(client, group, media, text, mentions=(), reply_id=''):
     if any(not valid_openid(oid) for oid in mentions):
         raise ValueError('Invalid official merchant mention')
-    content = ''.join(f'<qqbot-at-user id="{oid}" />' for oid in mentions)
-    content += ('\n' if mentions else '') + text
-    payload = dict(group_openid=group, msg_type=7, content=content, media=media, msg_seq=1)
+    if mentions or isinstance(media, MentionImage):
+        # Group member @ is supported only inside Markdown, not rich-media content.
+        if (not isinstance(media, MentionImage)
+                or not media.url.startswith('qqbot-media://image/')
+                or any(c in media.url for c in '\n\r() ')
+                or not (0 < media.width <= 1080 and 0 < media.height <= 1080)):
+            raise ValueError('Official merchant mentions require a prepared Markdown image')
+        content = ' '.join(f'<qqbot-at-user id="{oid}" />' for oid in mentions)
+        content += ('\n' if mentions else '') + markdown_text(text)
+        content += f'\n![远行商人库存 #{media.width}px #{media.height}px]({media.url})'
+        payload = dict(group_openid=group, msg_type=2, msg_seq=1,
+                       markdown={'content': content, 'force_verify_image_resource': True})
+    else:
+        payload = dict(group_openid=group, msg_type=7, content=text, media=media, msg_seq=1)
     if reply_id:
         payload['msg_id'] = reply_id
     result = await asyncio.wait_for(client.api.post_group_message(**payload), 30)

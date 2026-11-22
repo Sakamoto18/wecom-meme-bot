@@ -413,7 +413,7 @@ class MerchantMonitor:
         return 'sent' if receipt else 'uncertain'
 
     async def _tick_official(self, now=None):
-        from .merchant_official import scheduled_target, official_platform, prepare_image, send_image, proactive_allowed
+        from .merchant_official import scheduled_target, official_platform, prepare_mention_image, send_image, proactive_allowed
         now = now or time.time()
         window = round_window(now)
         if not window:
@@ -443,20 +443,20 @@ class MerchantMonitor:
         created = time.time()
         png = await asyncio.to_thread(render_merchant_card, snapshot, selected, icons, created)
         # Upload is preparation, not a visible message: failures can safely retry.
-        media = await prepare_image(platform.client, group, png)
-        if time.time() >= snapshot['end']:
-            return 'expired-before-send'
-        text = scheduled_notification_text(snapshot, selected, created, key)
-        if not self.state.claim(key, text, time.time()):
-            return 'claimed-by-another-worker'
-        try:
-            receipt = await send_image(platform.client, group, media, text, members)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            self.state.mark(key, 'uncertain')
-            raise
-        self.state.mark(key, 'sent', receipt)
+        async with prepare_mention_image(platform.client, png) as media:
+            if time.time() >= snapshot['end']:
+                return 'expired-before-send'
+            text = scheduled_notification_text(snapshot, selected, created, key)
+            if not self.state.claim(key, text, time.time()):
+                return 'claimed-by-another-worker'
+            try:
+                receipt = await send_image(platform.client, group, media, text, members)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.state.mark(key, 'uncertain')
+                raise
+            self.state.mark(key, 'sent', receipt)
         LOG.info(f'Official merchant alert delivered: group={group} receipt={receipt}')
         return 'sent'
 
