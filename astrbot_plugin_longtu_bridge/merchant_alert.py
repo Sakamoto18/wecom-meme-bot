@@ -413,7 +413,7 @@ class MerchantMonitor:
         return 'sent' if receipt else 'uncertain'
 
     async def _tick_official(self, now=None):
-        from .merchant_official import scheduled_target, official_platform, prepare_image, send_image
+        from .merchant_official import scheduled_target, official_platform, prepare_image, send_image, proactive_allowed
         now = now or time.time()
         window = round_window(now)
         if not window:
@@ -432,6 +432,8 @@ class MerchantMonitor:
             # QQ's official API has no arbitrary history query for reconciling
             # a timeout. Preserve uncertain sends instead of sending again.
             return 'already-sent' if row[0] == 'sent' else 'uncertain-held'
+        if not await proactive_allowed(platform.client, group):
+            return 'waiting-group-proactive-permission'
         snapshot = await self.current_snapshot(now)
         selected = await self.select(snapshot)
         if not selected:

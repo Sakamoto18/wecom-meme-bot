@@ -34,6 +34,15 @@ class IdentityTests(unittest.TestCase):
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_permission_check_requires_an_explicit_boolean_from_qq(self):
+        for flag in (True, False):
+            with patch.object(o, 'group_bot_state', AsyncMock(return_value={'allow_proactive_msg': flag})):
+                self.assertIs(await o.proactive_allowed(None, GROUP), flag)
+        for state in ({}, None, {'allow_proactive_msg': 'true'}, {'allow_proactive_msg': 1}):
+            with patch.object(o, 'group_bot_state', AsyncMock(return_value=state)):
+                with self.assertRaises(RuntimeError):
+                    await o.proactive_allowed(None, GROUP)
+
     async def test_single_native_mention_image_message_with_receipt(self):
         client = SimpleNamespace(api=SimpleNamespace(post_group_message=AsyncMock(return_value={'id': 'receipt'})))
         self.assertEqual(await o.send_image(client, GROUP, {'file_info': 'image'}, 'stock', OPENIDS), 'receipt')
@@ -60,8 +69,11 @@ class ScheduledTests(fixtures.DeliveryTests):
             SimpleNamespace(meta=lambda: SimpleNamespace(name='qq_official'), appid='app-test', client=self.client)]))
         self.upload = patch.object(o, 'prepare_image', AsyncMock(return_value={'file_info': 'image'}))
         self.upload.start()
+        self.permission = patch.object(o, 'proactive_allowed', AsyncMock(return_value=True))
+        self.permission.start()
 
     async def asyncTearDown(self):
+        self.permission.stop()
         self.upload.stop()
         await super().asyncTearDown()
 
@@ -86,6 +98,29 @@ class ScheduledTests(fixtures.DeliveryTests):
     async def test_absent_target_never_uploads_or_sends(self):
         self.monitor.bridge.config['merchant_official_member_bindings'] = '{}'
         self.assertEqual(await self.monitor.tick(NOW), 'napcat=sent official=waiting-verified-group-and-members')
+        o.prepare_image.assert_not_awaited()
+        self.client.api.post_group_message.assert_not_awaited()
+
+    async def test_disabled_permission_waits_without_claim_then_recovers_same_round(self):
+        from astrbot_plugin_longtu_bridge import merchant_alert as m
+        o.proactive_allowed.return_value = False
+        self.assertEqual(await self.monitor.tick(NOW), 'napcat=sent official=waiting-group-proactive-permission')
+        self.assertEqual(self.monitor.state.db.execute("select count(*) from delivery where key like 'official:%'").fetchone()[0], 0)
+        o.prepare_image.assert_not_awaited()
+        self.client.api.post_group_message.assert_not_awaited()
+        path = self.monitor.state.db.execute('PRAGMA database_list').fetchone()[2]
+        self.monitor.state.close()
+        self.monitor.state = m.State(path)
+        o.proactive_allowed.return_value = True
+        self.assertEqual(await self.monitor.tick(NOW + 30), 'napcat=already-sent official=sent')
+        self.assertEqual(await self.monitor.tick(NOW + 60), 'napcat=already-sent official=already-sent')
+        self.client.api.post_group_message.assert_awaited_once()
+
+    async def test_permission_lookup_failure_never_uploads_or_claims(self):
+        o.proactive_allowed.side_effect = asyncio.TimeoutError()
+        with self.assertRaises(RuntimeError):
+            await self.monitor.tick(NOW)
+        self.assertEqual(self.monitor.state.db.execute("select count(*) from delivery where key like 'official:%'").fetchone()[0], 0)
         o.prepare_image.assert_not_awaited()
         self.client.api.post_group_message.assert_not_awaited()
 

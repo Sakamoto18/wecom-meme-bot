@@ -54,6 +54,20 @@ def message_id(result):
     return str(value or '')
 
 
+async def group_bot_state(client, group):
+    from botpy.http import Route
+    return await client.api._http.request(
+        Route('GET', '/v2/groups/{group_openid}/bot_state', group_openid=group))
+
+
+async def proactive_allowed(client, group):
+    """Do not consume a round's delivery record while the group disallows pushes."""
+    state = await asyncio.wait_for(group_bot_state(client, group), 10)
+    if not isinstance(state, dict) or type(state.get('allow_proactive_msg')) is not bool:
+        raise RuntimeError('Official group push permission could not be verified')
+    return state['allow_proactive_msg']
+
+
 async def prepare_image(client, group, png):
     from astrbot.core.platform.sources.qqofficial.qqofficial_message_event import QQOfficialMessageEvent
     media = await asyncio.wait_for(QQOfficialMessageEvent.upload_group_and_c2c_image(
