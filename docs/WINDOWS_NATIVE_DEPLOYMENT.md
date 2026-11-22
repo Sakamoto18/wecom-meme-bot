@@ -202,6 +202,8 @@ powershell -NoProfile -ep Bypass -File .\enable.ps1 -Diagnostics
 
 已核验的服务器 ED25519 指纹为 `SHA256:Rj/1/KUWJWj0kn96eX9MVDZ82YC7NMGwb+6gVjrtakI`，连接端使用独立 known-hosts 文件 `~/.ssh/known_hosts_longtu_windows`，保持严格主机检查。远程默认 shell 是 cmd，自动部署显式调用 PowerShell；长脚本先传文件，避免 cmd 长度限制。
 
+北京时间 2026-11-22 恢复当前 Mac 的维护通道：Full Access 后 SSH 可达，主机指纹与上述记录一致。原 Windows 私钥不在本机，按用户要求新建专用 `~/.ssh/id_ed25519_longtu_windows`（私钥 0600），新公钥指纹 `SHA256:BW4qnUONKNlZwKADUI947XBaqUjFbqyibdi9Di7VtWw`。通过用户已登录的腾讯云 VNC 以键盘输入完成公钥追加，原授权备份为 `C:/ProgramData/ssh/administrators_authorized_keys.before-new-mac`，旧授权保留；未使用旧 Linux 密钥授权。已实测新密钥登录返回 `10_0_0_6\administrator`，SCP、部署和重启后验证均成功。VNC 快速输入会丢字符，`+` 还可能变为 `=`；操作需逐字慢速输入并检查后提交，不重复粘贴未核验长命令。
+
 后续源码、依赖、环境配置同步与健康检查走 SSH；COS 继续用于备份。QQ 登录、WebSocket 及实际私聊/群聊图片和视频收发已验证。迁移剩余验收包括小红书登录、实际定时推送、长时间在线及整机重启后的恢复。不要据本机健康检查宣称这些项目已全部完成。
 
 ### 媒体并发与回复延迟（2026-11-02）

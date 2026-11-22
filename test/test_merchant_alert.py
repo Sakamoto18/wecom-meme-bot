@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import closing
 import io
 import json
 from pathlib import Path
@@ -76,9 +77,7 @@ class EvidenceTests(unittest.TestCase):
 
 class SelectionCacheTests(unittest.IsolatedAsyncioTestCase):
     async def test_old_empty_selection_is_rechecked_without_resetting_delivery_receipts(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state = m.State(Path(directory) / 'cache.sqlite')
-            self.addCleanup(state.close)
+        with tempfile.TemporaryDirectory() as directory, closing(m.State(Path(directory) / 'cache.sqlite')) as state:
             snapshot = m.parse_source(HTML, NOW)
             snapshot['items'][1]['name'] = '首领秘药'
             state.cache('ten-categories-v3-exact-items:' + m.fingerprint(snapshot), [])
