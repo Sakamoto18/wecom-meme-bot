@@ -62,3 +62,11 @@ node --disable-warning=ExperimentalWarning --test test/roco-knowledge.test.js
 真实回放入口：`node scripts/evaluate-roco-knowledge.mjs --live --config-root <线上配置目录> --snapshot <候选SQLite> --output <报告>`。读取现有人格和模型配置，测试带 @ 的实体名、错字、技能解锁、果实课题、被纠正后的答复和普通词消歧；不发送 QQ 消息，不写会话记忆。
 
 浏览器正常可访问公开 Wiki 时，`scripts/roco-browser-export.mjs titles.json` 可生成页面内采集函数，状态和结果在 `window.rocoImport`。最多两个请求并行，HTTP 错误停止；暂时性错误恢复后可再次执行以跳过已完成页。导出 JSON 后用 `scripts/import-roco-wiki.py --cache <四个目录页缓存> --browser-details <完整详情JSON> --output <候选库>` 重建；缺页、重复、形态ID错配和缺失技能字段均拒绝生成。
+
+## 2026-11-22 内部记录外发修复
+
+北京时间 14:40，官方 Bot 的游戏问答生成了带“机器人群聊回复记录 / 本轮回复对象 / 仅供历史消歧 QQ 号”的完整历史包装。游戏分支提前返回，绕过普通聊天的内部标签清理；共用出口此前只检查旁白和残句，最终把标题与剩余记录拆成两条发送。数据库相应 assistant 行也出现双层包装，确认是生成内容复述内部格式，不是官方平台主动推送权限问题。
+
+`QqBotService` 现在对各生成模式统一调用现有内部记录清理，再进行表达检查、保存和分句。保留正常正文与一层内部历史身份信息，清理后为空走既有非空提示。官方和 NapCat 均覆盖；不新增自然语言关键词路由。
+
+本地 327 项相关测试及语法检查通过。Windows 新增三项集成回归通过，涵盖两端发送、记忆和群话题回写、仅有标签的空正文。服务器旧回归套件另有 11 项失败（10 项既有断言及 1 项缺少图鉴样本），回滚后基线复跑得到相同失败，未将其记为本次通过。服务器较新的游戏检索补充逻辑保留，仅部署共用出口和独立测试文件。备份 `C:/migration-backup/reply-metadata-20261122-144819`；后端已重启且健康检查 HTTP 200。截图对应的 `qq_messages` 行 `175786` 已先备份再去除嵌套包装，保留正文和原有身份信息；群话题库无对应污染行。

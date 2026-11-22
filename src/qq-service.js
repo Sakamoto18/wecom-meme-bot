@@ -17,7 +17,7 @@ import {
 } from './longtu-management.js';
 import { shouldReplyOnlyWithLongtu } from './message-routing.js';
 import { QqUsageLimitError, isDeepSeekPeakTime } from './qq-usage-tracker.js';
-import { generateConversationReply } from './reply-engine.js';
+import { generateConversationReply, removeInternalReplyMetadata } from './reply-engine.js';
 import { shouldRequestDetailedAnswer } from './response-style.js';
 import { guardFinalReply } from './reply-expression.js';
 import {
@@ -4352,11 +4352,11 @@ export class QqBotService {
 
       if (options.followupStale?.()) return { mode: 'superseded', messages: [] };
       if (generated.mode === 'game-knowledge') this.rocoKnowledge?.remember(gameKnowledge);
-      // Validate the complete text before persistence and before QQ splitting.
-      // No malformed inner-monologue tail may become a standalone first send.
+      // Every generated mode, including game knowledge's early return, must
+      // shed the internal history envelope before persistence or QQ splitting.
       if (generated.answer) {
-        const guarded = guardFinalReply(generated.answer);
-        if (guarded !== generated.answer) this.logger.warn('QQ 最终表达检查拦截了旁白或残句');
+        const guarded = guardFinalReply(removeInternalReplyMetadata(generated.answer));
+        if (guarded !== generated.answer) this.logger.warn('QQ 最终表达检查拦截了内部记录、旁白或残句');
         generated.answer = guarded || '这条暂时没答好，你再问一句。';
       }
       if (generated.mode === 'learning-pending') {
