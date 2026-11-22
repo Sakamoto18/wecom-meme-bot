@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { selectMerchantItems } from '../src/roco-merchant-selection.js';
 
 const items = [{ name: '神奇的蛋', description: '不知道可以孵化出哪种精灵' },
-  { name: '首领血脉秘药', description: '首领血脉修改道具' }];
+  { name: '国王球', description: '精灵捕捉道具' }];
 test('merchant subscription uses complete evidence and respects none', async () => {
   const client = { isConfigured: true, complete: async (_, input, opts) => {
     assert.equal(opts.usageSource, 'roco-merchant-selection');
@@ -13,7 +13,7 @@ test('merchant subscription uses complete evidence and respects none', async () 
     return '{"selected":[]}';
   } };
   assert.deepEqual(await selectMerchantItems(client, items), []);
-  client.complete = async () => '{"selected":[{"id":"1","category":"leader_potion","confidence":0.98}]}';
+  client.complete = async () => '{"selected":[{"id":"1","category":"king_ball","confidence":0.98}]}';
   assert.deepEqual(await selectMerchantItems(client, items), [1]);
 });
 test('malformed, invented and uncertain merchant choices fail closed', async () => {
@@ -60,4 +60,26 @@ test('all four explicit product subscriptions work without a model and exclude p
     assert.deepEqual(await selectMerchantItems(client, [item]), [0]);
   }
   assert.deepEqual(await selectMerchantItems(client, stock.slice(4)), []);
+});
+
+test('leader potions are selected for both transports even with an empty or unavailable model', async () => {
+  const stock = ['首领秘药', ' 首领血脉秘药 ', '火系血脉秘药', '首领信物', '首领秘药碎片', '奇异血脉秘药'].map(name => ({ name }));
+  const client = { isConfigured: true, complete: async (_, input) => {
+    assert.deepEqual(JSON.parse(input).candidates.map(c => c.id), ['2', '3', '4', '5']);
+    return '{"selected":[]}';
+  } };
+  assert.deepEqual(await selectMerchantItems(client, stock), [0, 1]);
+  assert.deepEqual(await selectMerchantItems(null, stock), [0, 1]);
+  assert.deepEqual(await selectMerchantItems(null, stock.slice(0, 2)), [0, 1]);
+  client.complete = async () => { throw new Error('model timeout'); };
+  assert.deepEqual(await selectMerchantItems(client, stock), [0, 1]);
+  client.complete = async () => '{"selected":[{"id":"5","category":"special_potion","confidence":1}]}';
+  assert.deepEqual(await selectMerchantItems(client, stock), [0, 1, 5]);
+});
+
+test('model cannot broaden the leader potion subscription to a different item', async () => {
+  const client = { isConfigured: true, complete: async () =>
+    '{"selected":[{"id":"0","category":"leader_potion","confidence":1}]}' };
+  await assert.rejects(selectMerchantItems(client, [{ name: '首领信物' }]));
+  assert.deepEqual(await selectMerchantItems(client, [{ name: '首领信物' }, { name: '首领秘药' }]), [1]);
 });

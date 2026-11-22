@@ -89,6 +89,28 @@ class ScheduledTests(fixtures.DeliveryTests):
         o.prepare_image.assert_not_awaited()
         self.client.api.post_group_message.assert_not_awaited()
 
+    async def test_all_five_subscribers_use_scoped_openids_and_missing_fifth_blocks_send(self):
+        self.monitor.mentions.append('1104886947')
+        self.assertEqual(await self.monitor.tick(NOW), 'napcat=sent official=waiting-verified-group-and-members')
+        self.client.api.post_group_message.assert_not_awaited()
+        members = dict(zip(MEMBERS, OPENIDS))
+        members['1104886947'] = 'verified-member-4'
+        # A mapping in a different group must never authorize this group's @.
+        self.monitor.bridge.config['merchant_official_member_bindings'] = {GROUP: dict(zip(MEMBERS, OPENIDS)),
+                                                                         'other-group-openid': members}
+        self.assertEqual(await self.monitor.tick(NOW), 'napcat=already-sent official=waiting-verified-group-and-members')
+        self.client.api.post_group_message.assert_not_awaited()
+        self.monitor.bridge.config['merchant_official_member_bindings'] = {GROUP: members}
+        self.assertEqual(await self.monitor.tick(NOW), 'napcat=already-sent official=sent')
+        payload = self.client.api.post_group_message.call_args.kwargs
+        self.assertEqual(payload['group_openid'], GROUP)
+        self.assertEqual(payload['content'].count('<qqbot-at-user '), 5)
+        for qq, oid in members.items():
+            self.assertIn(f'<qqbot-at-user id="{oid}" />', payload['content'])
+            self.assertNotIn(qq, payload['content'])
+        self.assertEqual(await self.monitor.tick(NOW), 'napcat=already-sent official=already-sent')
+        self.client.api.post_group_message.assert_awaited_once()
+
     async def test_napcat_failure_does_not_block_official(self):
         self.bot.call_action.side_effect = asyncio.TimeoutError()
         with self.assertRaises(RuntimeError):

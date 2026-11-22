@@ -16,6 +16,7 @@ import time
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
+from .official_groups import official_group_names
 
 
 def identity(appid, kind, value):
@@ -35,31 +36,6 @@ def user_bindings(config):
     raw = config.get('official_trial_user_bindings') or '{}'
     data = json.loads(raw) if isinstance(raw, str) else raw
     return data if isinstance(data, dict) else {}
-
-
-def group_binding(config, group_id):
-    prefix = f'qqofficial:{config.get("official_trial_appid")}:group:'
-    if not str(group_id).startswith(prefix):
-        return None
-    raw = config.get('official_trial_group_bindings') or '{}'
-    data = json.loads(raw) if isinstance(raw, str) else raw
-    value = data.get(str(group_id)[len(prefix):], {}) if isinstance(data, dict) else {}
-    return value if isinstance(value, dict) else {}
-
-
-async def official_group_names(bridge, group_ids):
-    names = {}
-    for group_id in group_ids[:20]:
-        binding = group_binding(bridge.config, group_id)
-        if binding is None:
-            continue
-        qq = str(binding.get('qq_group_id') or '')
-        name = str(binding.get('name') or '')
-        if qq.isdigit():
-            found = await bridge._group_names([qq])
-            name = found.get(qq) or name
-        names[str(group_id)] = name or (f'QQ群 {qq}' if qq else '官方 QQ 群')
-    return names
 
 
 def media_segments(raw):

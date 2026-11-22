@@ -301,7 +301,7 @@ class MerchantMonitor:
         self.state = State('data/plugin_data/longtu_merchant.sqlite')
 
     async def select(self, snapshot):
-        cache_key = 'ten-categories-v3-exact-items:' + fingerprint(snapshot)
+        cache_key = 'ten-categories-v4-exact-leader-potion:' + fingerprint(snapshot)
         selected = self.state.cached(cache_key)
         if selected is not None:
             return selected

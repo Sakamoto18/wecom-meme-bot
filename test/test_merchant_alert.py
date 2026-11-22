@@ -74,6 +74,30 @@ class EvidenceTests(unittest.TestCase):
             render_merchant_card(snap, [], icons, snap['end'])
 
 
+class SelectionCacheTests(unittest.IsolatedAsyncioTestCase):
+    async def test_old_empty_selection_is_rechecked_without_resetting_delivery_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = m.State(Path(directory) / 'cache.sqlite')
+            self.addCleanup(state.close)
+            snapshot = m.parse_source(HTML, NOW)
+            snapshot['items'][1]['name'] = '首领秘药'
+            state.cache('ten-categories-v3-exact-items:' + m.fingerprint(snapshot), [])
+            delivery = m.delivery_key('913546080', snapshot)
+            state.claim(delivery, 'already delivered', NOW)
+            state.mark(delivery, 'sent', 'existing-receipt', NOW)
+            request = AsyncMock()
+            session = SimpleNamespace(post=lambda *args, **kwargs: request)
+            monitor = object.__new__(m.MerchantMonitor)
+            monitor.state = state
+            monitor.bridge = SimpleNamespace(session=session,
+                _api_url=lambda: 'http://localhost/v1/qq/message', _api_token=lambda: 'test-token')
+            with patch.object(m, 'read_response', AsyncMock(return_value=b'{"ok":true,"selected":[1]}')) as read:
+                self.assertEqual(await monitor.select(snapshot), [1])
+                self.assertEqual(await monitor.select(snapshot), [1])
+                read.assert_awaited_once()
+            self.assertEqual(state.get(delivery)[0:3], ('sent', 'already delivered', 'existing-receipt'))
+
+
 class DeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -19,4 +19,10 @@ test('merchant evidence endpoint requires authentication and does not enter conv
   const response = await fetch(url, { method: 'POST', body, headers: { Authorization: 'Bearer merchant-test-token' } });
   assert.deepEqual(await response.json(), { ok: true, selected: [] });
   assert.equal(calls, 1);
+  const subscribed = await fetch(url, { method: 'POST',
+    body: JSON.stringify({ items: [{ name: '首领秘药' }, { name: '首领血脉秘药' }] }),
+    headers: { Authorization: 'Bearer merchant-test-token' },
+  });
+  assert.deepEqual(await subscribed.json(), { ok: true, selected: [0, 1] });
+  assert.equal(calls, 1, 'confirmed potions do not need a model call');
 });
