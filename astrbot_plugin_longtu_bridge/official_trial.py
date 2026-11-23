@@ -331,7 +331,12 @@ async def handle_official_message(bridge, event):
         bound_user = str(user_bindings(bridge.config).get(str(event.get_sender_id())) or '')
         from .main import ALLOWED_BRIDGE_SLASH_COMMANDS, REPORT_TIMEZONE, nearby_holiday_context, MEDIA_ACK_PATTERN
         from .official_media import extract_official_media
-        share = extract_official_media(raw)
+        from .official_gateway import gateway_event
+        packet = gateway_event(appid, raw)
+        share = extract_official_media(raw, gateway_packet=packet)
+        if packet:
+            same_body = packet.get('d') == getattr(raw, 'raw_data', None)
+            logger.info(f'官方卡片使用网关原始消息：same_body={same_body}')
         rich = share['segments']
         quote = quote_context(components, raw)
         # Full group messages feed the existing backend's passive decision gate.

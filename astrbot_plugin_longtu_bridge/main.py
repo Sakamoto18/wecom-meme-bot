@@ -226,6 +226,10 @@ class LongtuQqBridge(Star):
         logger.info(f'QQ Bridge transport mode: {self.transport_mode}')
 
     async def initialize(self):
+        if self.config.get('official_trial_enabled', False):
+            from .official_gateway import install_gateway_capture
+            install_gateway_capture(str(self.config.get('official_trial_appid') or ''),
+                                    'data/longtu-official-raw', logger)
         timeout_seconds = max(
             10,
             int(self.config.get("request_timeout_seconds", 190)),

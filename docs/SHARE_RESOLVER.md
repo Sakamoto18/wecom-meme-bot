@@ -19,3 +19,14 @@ QQ Bridge 已经从文本、JSON/XML 卡片和引用消息中提取候选 URL。
 2026-11-22 18:22:01 的历史消息确认收到了小程序卡片，但仅存展示文本，没有完整原始事件。测试中的该文本回放验证了缺少视频地址时的处理，不能证明当时 QQ 下发的所有字段均不含视频 ID；2026-11-23 10:32:11 用户重新分享同一卡片，现场诊断确认 `message_type=3`，`ark_data.fields` 除图标和封面外只有 `source`、`title`，没有视频 URL、`bvid`、`aid` 或跳转路径；`video_count=0`、`truncated=false`。因此本次官方事件缺少视频定位信息，缺链接提示分支已触发，不能宣称这张卡片已成功抓取视频。
 
 验证：`python -m unittest test.test_official_media test.test_official_trial test.test_gallery_reaction`（后两项需真实 AstrBot 依赖，外部发送均为 mock）；`node --test test/media-link-extractor.test.js test/media-resolver.test.js`。线上有独立更新的 `official_groups` 导入，发布时仅应用解析改动，保留该导入。
+
+
+### 网关转换前的原始事件
+
+`official_gateway.py` 在 `BotWebSocket.on_message` 调用原 SDK 前保留卡片事件，按 AppID、群 OpenID、消息 ID 精确匹配。官方提取器优先使用该原始事件的 `d`，不依赖 Plain 展示文本或 SDK 对象字段；若原始事件不可用，则兼容原来的 `raw_data`。日志 `官方卡片使用网关原始消息：same_body=...` 用于检查 SDK/适配器是否改写消息体。
+
+原始卡片仅在内存中保留 10 分钟，最多 64 条、总计 8 MiB。完整落盘默认关闭；排障时在 AstrBot 工作目录的 `data/longtu-official-raw/arm.json` 设置目标 `group_openid`、`capture_id`、Unix 秒 `expires_at`（未来一小时以内）和 `max_events`（最多 10）。文件保留网关收到的完整 JSON，包含事件头和消息体，不做字段过滤。公开日志只记录文件名/大小，分享诊断文件前应脱敏 `message_scene.ext` 中的 `auth_token`。排查后移除 arm 文件。
+
+官方事件字段依据：[群消息（全量模式）](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html)。文档列出了 `ark_data.fields.jump_url`，但未保证每种卡片都下发该字段。`message_scene.ext` 文档定义为 `msg_idx`、`ref_msg_idx`、`auth_token` 等消息上下文，不能默认当成视频地址。
+
+新增回归：`python -m unittest test.test_official_gateway`，覆盖原始捕获先于 SDK、适配器丢失 jump_url 时恢复提取、jumpUrl/qqdocurl/编码卡片、应用隔离、缓存上限、抓包范围和抓包失败不阻断原消息。

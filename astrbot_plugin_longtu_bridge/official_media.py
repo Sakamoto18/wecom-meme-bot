@@ -59,10 +59,11 @@ def _video_url(value, *, bili_context=False):
     return 'https://www.bilibili.com/video/' + video_id + suffix
 
 
-def extract_official_media(raw):
-    data = getattr(raw, 'raw_data', None)
+def extract_official_media(raw, gateway_packet=None):
+    data = (gateway_packet.get('d') if isinstance(gateway_packet, dict)
+            else getattr(raw, 'raw_data', None))
     data = data if isinstance(data, dict) else {}
-    content = str(getattr(raw, 'content', '') or data.get('content') or '')
+    content = str(data.get('content') or getattr(raw, 'content', '') or '')
     # This is QQ's observed card envelope, not a natural-language intent rule.
     lines = content.strip().splitlines()
     envelope = bool(lines and lines[0].strip() == '[卡片消息] 小程序')
