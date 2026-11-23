@@ -74,3 +74,9 @@ class OfficialMediaTests(unittest.TestCase):
         result = extract({'ark_data': ['{' * (256 * 1024 + 1), {'url': 'http://['}]})
         self.assertTrue(result['diagnostic']['truncated'])
         self.assertEqual(result['video_urls'], [])
+
+    def test_serialized_top_level_ark_keeps_direct_url_extraction(self):
+        import json
+        result = extract({'ark_data': json.dumps({'source': '哔哩哔哩', 'bvid': BVID})})
+        self.assertEqual(result['video_urls'], [VIDEO])
+        self.assertIsNone(result['search_card'])

@@ -144,8 +144,15 @@ def extract_official_media(raw, gateway_packet=None):
     # Preserve structures until URL/ID extraction; raw botpy content can exist
     # even when a transport does not expose raw_data.
     walk({**data, 'content': content}, context=envelope_bili)
+    ark = data.get('ark_data') or {}
+    card_fields = ark.get('fields', {}) if isinstance(ark, dict) else {}
+    search_card = None
+    if (bili_card and isinstance(ark, dict) and isinstance(card_fields, dict) and ark.get('ark_type') == 'miniapp'
+            and card_fields.get('title') and card_fields.get('preview')):
+        search_card = {'title': str(card_fields['title'])[:200], 'preview': str(card_fields['preview'])[:4096]}
     urls = (videos + [u for u in links if u not in videos])[:8]
     return {
+        'search_card': search_card,
         'segments': [{'type': 'json', 'data': {'url': url}} for url in urls],
         'card_present': card_present,
         'bilibili_card': bili_card,

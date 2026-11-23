@@ -1,3 +1,4 @@
+import { createBilibiliCardRecovery } from './bilibili-card-recovery.js';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
@@ -471,6 +472,7 @@ export class MediaResolver {
     this.timeoutMs = Math.min(Math.max(1_000, Number(this.timeoutMs) || 120_000), MAX_MEDIA_EXTRACTION_MS);
     this.maxExtractionMs = MAX_MEDIA_EXTRACTION_MS;
     this.cacheTtlMs = Math.max(0, Number(options.cacheTtlMs ?? 10 * 60 * 1000));
+    this.cardRecovery = createBilibiliCardRecovery({ ttlMs: this.cacheTtlMs });
     // A short link does not carry a stable work identity until the Provider
     // resolves it. Keep its alias cache brief so a changed redirect cannot
     // replay a ten-minute-old gallery/video result.
@@ -507,6 +509,10 @@ export class MediaResolver {
       });
     }, cleanupIntervalMs);
     this.cleanupTimer.unref?.();
+  }
+
+  async recoverBilibiliCard(card, chatClient) {
+    return this.cardRecovery(card, { chatClient });
   }
 
   async acquireSlot() {

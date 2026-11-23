@@ -349,10 +349,10 @@ async def handle_official_message(bridge, event):
         if await handle_merchant_command(bridge, event, text, official=True):
             return
         has_link = bool(re.search(r'https?://', text, re.IGNORECASE)
-                        or MEDIA_ACK_PATTERN.search(str(rich)))
+                        or MEDIA_ACK_PATTERN.search(str(rich)) or share['search_card'])
         if share['card_present']:
             logger.info('官方分享卡片诊断：' + json.dumps(share['diagnostic'], ensure_ascii=False))
-        if share['bilibili_card'] and not share['video_urls'] and not quote['present']:
+        if share['bilibili_card'] and not share['video_urls'] and not share['search_card'] and not quote['present']:
             notice = MessageChain([Comp.Plain(
                 '这张 B 站小程序卡片没能提取到视频地址。请在 B 站选择“复制链接”，把链接发到这里，我再解析。')])
             notice.use_markdown_ = False
@@ -419,6 +419,7 @@ async def handle_official_message(bridge, event):
                                or identity(appid, 'user', quote['author_id'])),
             'quoted_sender_name': quote['author_name'],
             'rich_segments': rich,
+            'bilibili_card': share['search_card'] if not share['video_urls'] and not quote['present'] else None,
             'media_share': True,
             'observe_only': observe_only,
         }
@@ -436,7 +437,7 @@ async def handle_official_message(bridge, event):
         logger.info(f'官方 QQ 试用收到消息：appid={appid} private={private} group={event.get_group_id()} '
                     f'images={len(images)} observe={observe_only} link={has_link} '
                     f'quote={quote["present"]} quote_chars={len(quote["text"])}')
-        media_receipt = bool(not text.startswith('/') and MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)))
+        media_receipt = bool(not text.startswith('/') and (payload.get('bilibili_card') or MEDIA_ACK_PATTERN.search(text + ' ' + str(rich))))
         from .web_learning_progress import request_learning_backend
         response = await request_learning_backend(bridge, event, payload)
         update = getattr(bridge, '_update_relation_import', None)

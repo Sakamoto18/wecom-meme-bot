@@ -343,6 +343,20 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         event.send.assert_awaited_once()
         self.assertIn('复制链接', event.send.call_args.args[0].chain[0].text)
 
+    async def test_preview_and_title_reach_official_only_recovery(self):
+        from test.test_official_media import ENVELOPE
+        bridge, event = self.fixture(private=False)
+        event.message_obj.raw_message.content = ENVELOPE
+        event.message_obj.raw_message.raw_data = {'content': ENVELOPE,
+            'ark_data': {'ark_type': 'miniapp', 'fields': {'source': '哔哩哔哩',
+                'title': '这严苛的训练几乎要了蛋的命!', 'preview': 'https://qq.ugcimg.cn/v1/cover'}}}
+        event.get_messages = lambda: [Comp.Plain(ENVELOPE)]
+        await handle_official_message(bridge, event)
+        payload = bridge._request_backend.call_args.args[0]
+        self.assertEqual(payload['bilibili_card']['preview'], 'https://qq.ugcimg.cn/v1/cover')
+        self.assertTrue(payload['media_share'])
+        self.assertFalse(payload['observe_only'])
+
     async def test_structured_bili_id_goes_to_same_media_backend(self):
         from test.test_official_media import ENVELOPE, BVID, VIDEO
         bridge, event = self.fixture(private=False)
