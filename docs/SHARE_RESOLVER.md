@@ -30,3 +30,8 @@ QQ Bridge 已经从文本、JSON/XML 卡片和引用消息中提取候选 URL。
 官方事件字段依据：[群消息（全量模式）](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html)。文档列出了 `ark_data.fields.jump_url`，但未保证每种卡片都下发该字段。`message_scene.ext` 文档定义为 `msg_idx`、`ref_msg_idx`、`auth_token` 等消息上下文，不能默认当成视频地址。
 
 新增回归：`python -m unittest test.test_official_gateway`，覆盖原始捕获先于 SDK、适配器丢失 jump_url 时恢复提取、jumpUrl/qqdocurl/编码卡片、应用隔离、缓存上限、抓包范围和抓包失败不阻断原消息。
+
+
+2026-11-23 10:52:03（北京时间）现场复测：SDK 转换前的 `GROUP_MESSAGE_CREATE` 网关帧为 2108 字节，SHA-256 `6b82b4b7c37c7ada9ca4a9b0661abf355b1cefab193f3dba01fa32941f51e314`。原包 `d.ark_data.fields` 恰好为 `preview`、`source`、`source_logo`、`title`；递归检查整包没有 `jumpUrl` / `jump_url` / `qqdocurl` / `bvid` / `aid` 字段。`message_scene.ext` 为 `msg_idx` 与 `auth_token`。运行日志 `same_body=True` 证明本条消息在 botpy/AstrBot 转换时没有丢失字段。完整私有原包已留存服务器，另有鉴权令牌脱敏副本；采集开关在该次验证后关闭。
+
+因此该卡片缺少跳转地址的问题发生在官方事件到达本机之前，网关原文透传本身不能补出不存在的 jump_url。当前修复完成了原始数据通路，尚不能称为这类卡片的视频抓取成功。官方文档中的[获取指定消息](https://bot.q.qq.com/wiki/develop/pythonsdk/api/message/get_message.html)接收 `channel_id`，是频道消息接口，不能直接用于 QQ 群消息补取。继续达到自动出视频的目标，需要确认是否采用 NapCat 作为完整卡片数据源；这不是仅使用官方接口的方案。
