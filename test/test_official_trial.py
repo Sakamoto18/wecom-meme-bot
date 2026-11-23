@@ -155,6 +155,32 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['quoted_text'], '引用内容')
         self.assertFalse(payload['pure_bot_mention'])
 
+    async def test_quoted_share_is_context_and_only_current_link_can_trigger_media(self):
+        old = 'https://v.douyin.com/old/'
+        for current, target in [('', 'other-member'), ('这是什么意思', 'bot'),
+                                ('https://v.douyin.com/new/', 'bot'), (old, 'bot')]:
+            bridge, event = self.fixture(private=False)
+            raw = event.message_obj.raw_message
+            raw.raw_data = {'message_type': 103, 'content': current,
+                            'parallel_message': {'msg_nodes': [{'content': old}]}}
+            event.get_messages = lambda: [Comp.Reply(id='old', chain=[Comp.Plain(old)]),
+                                          Comp.Plain(current), Comp.At(qq=target)]
+            bridge._request_backend.return_value = {'mode': 'observed', 'messages': []}
+            await handle_official_message(bridge, event)
+            payload = bridge._request_backend.call_args.args[0]
+            self.assertEqual(payload['quoted_text'], old)
+            current_share = current.startswith('https://')
+            self.assertEqual(payload['media_share'], current_share)
+            self.assertEqual(payload['observe_only'], target != 'bot' and not current_share)
+            self.assertEqual(payload['rich_segments'],
+                [{'type': 'json', 'data': {'url': current}}] if current_share else [])
+            if current_share:
+                # Empty mocked media results retain the normal failure receipt.
+                event.send.assert_awaited_once()
+                self.assertIn('抓取失败', event.send.call_args.args[0].chain[0].text)
+            else:
+                event.send.assert_not_awaited()
+
     async def test_quote_with_only_mention_never_becomes_pure_mention(self):
         for source in ('chain', 'fallback', 'raw', 'missing'):
             with self.subTest(source=source):

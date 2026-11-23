@@ -63,6 +63,7 @@ def extract_official_media(raw, gateway_packet=None):
     data = (gateway_packet.get('d') if isinstance(gateway_packet, dict)
             else getattr(raw, 'raw_data', None))
     data = data if isinstance(data, dict) else {}
+    quoted = str(data.get('message_type', getattr(raw, 'message_type', ''))) == '103'
     content = str(data.get('content') or getattr(raw, 'content', '') or '')
     # This is QQ's observed card envelope, not a natural-language intent rule.
     lines = content.strip().splitlines()
@@ -101,7 +102,10 @@ def extract_official_media(raw, gateway_packet=None):
                 if name in _IDENTITY_KEYS or name in _ASSET_KEYS:
                     continue
                 # A quote's card is historical, never a new video share.
-                if name == 'msg_elements' and str(data.get('message_type', getattr(raw, 'message_type', ''))) == '103':
+                # QQ also supplies the quoted content under parallel_message.
+                # Traversing that tree turns another member's old URL into a
+                # fresh share, even when the current message only @s a human.
+                if quoted and name in {'msg_elements', 'parallel_message'}:
                     continue
                 walk(item, f'{path}.{k}' if path else str(k), depth + 1, context, name)
         elif isinstance(value, list):

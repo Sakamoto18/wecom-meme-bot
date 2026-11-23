@@ -439,7 +439,7 @@ async def handle_official_message(bridge, event):
             'quoted_sender_name': quote['author_name'],
             'rich_segments': rich,
             'bilibili_card': share['search_card'] if not share['video_urls'] and not quote['present'] else None,
-            'media_share': not (current_record or quote_record),
+            'media_share': not (current_record or quote_record) and (not quote['present'] or has_link),
             'observe_only': observe_only,
         }
         if text.startswith('/crazy-thursday'):

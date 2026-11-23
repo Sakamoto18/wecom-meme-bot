@@ -64,6 +64,32 @@ class OfficialMediaTests(unittest.TestCase):
         self.assertEqual(result['segments'], [])
         self.assertNotIn(VIDEO, str(result['diagnostic']))
 
+    def test_parallel_quote_urls_and_cards_are_never_current_shares(self):
+        import json
+        for historical in [
+            {'msg_nodes': [{'content': '旧分享 https://v.douyin.com/old/'}]},
+            {'msg_nodes': [{'ark_data': {'source': '哔哩哔哩', 'bvid': BVID}}]},
+            json.dumps({'msg_nodes': [{'content': VIDEO}]}),
+        ]:
+            data = {'message_type': 103, 'content': '<@other-member>',
+                    'parallel_message': historical}
+            for gateway in (False, True):
+                raw = SimpleNamespace(raw_data=data if not gateway else {}, content='')
+                result = extract_official_media(raw, gateway_packet={'d': data} if gateway else None)
+                self.assertEqual(result['segments'], [])
+                self.assertEqual(result['video_urls'], [])
+                self.assertIsNone(result['search_card'])
+                self.assertFalse(result['bilibili_card'])
+
+    def test_current_share_alongside_quote_is_preserved_even_for_same_url(self):
+        for kind in (3, 103):
+            result = extract({'message_type': kind, 'content': VIDEO,
+                              'parallel_message': {'msg_nodes': [{'content': VIDEO}]}})
+            self.assertEqual(result['video_urls'], [VIDEO])
+        result = extract({'content': 'https://v.douyin.com/new/', 'parallel_message': {
+            'msg_nodes': [{'content': 'https://v.douyin.com/old/'}]}, 'message_type': 103})
+        self.assertEqual(result['segments'], [{'type': 'json', 'data': {'url': 'https://v.douyin.com/new/'}}])
+
     def test_short_links_generic_links_and_live_behavior(self):
         self.assertEqual(extract(content='https://b23.tv/test')['video_urls'], ['https://b23.tv/test'])
         self.assertEqual(extract(content='https://example.org/article')['segments'][0]['data']['url'],
