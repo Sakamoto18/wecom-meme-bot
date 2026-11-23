@@ -88,11 +88,14 @@ export async function recoverBilibiliCard(input, {
     const rows = await candidateSearch(card.title, visibleAuthor);
     if (!Array.isArray(rows) || rows.length > 3) throw new Error('无法唯一核验候选视频。');
     for (const row of rows) {
-      if (BVID.test(row?.bvid) && clean(row.title) === card.title && clean(row.author) === visibleAuthor
-        && row.pages_count === 1 && imageUrl(row.cover)) verified.push(row);
+      // OCR is only a search hint: a misread Latin glyph must not prevent the
+      // final image-based author check. That check remains mandatory below.
+      if (BVID.test(row?.bvid) && clean(row.title) === card.title && clean(row.author)
+        && Number.isSafeInteger(row.pages_count) && row.pages_count >= 1
+        && imageUrl(row.cover)) verified.push(row);
     }
   }
-  if (!verified.length) throw new Error('视频信息或分 P 无法核实，请补发链接。');
+  if (!verified.length) throw new Error('未找到标题一致且资料完整的候选视频，请补发链接。');
   const blocks = [{ type: 'text', text: JSON.stringify({ card_title: card.title,
     instruction: '第一张图是用户当前分享的小程序卡片；后面每组是独立核验的视频资料和封面。' }) },
     previewBlock];
@@ -106,7 +109,8 @@ export async function recoverBilibiliCard(input, {
       + '必须同时核对：卡片图中可清楚读出的UP主与候选author一致；卡片中的视频画面与候选封面是同一画面，'
       + '允许裁剪、缩放、播放按钮和播放量文字叠加。仅同一游戏、角色、场景或同名标题都不够。'
       + 'UP主不可读、图片加载失败、封面不同或证据不足时 matches=[]。多条候选吻合时全部列出并 ambiguous=true。'
-      + '不得把候选author抄成visible_author，必须来自第一张图；不得推测任何链接或BV号。',
+      + '不得把候选author抄成visible_author，必须来自第一张图；逐字核对昵称，拉丁字母不能按常见单词补写。'
+      + '首次识图只用于检索，这次必须重新读图核对；不得推测任何链接或BV号。',
     temperature: 0, maxTokens: 450, timeoutMs: 25_000,
     thinking: { type: 'disabled' }, usageSource: 'bilibili-card-recovery',
   });
@@ -122,7 +126,12 @@ export async function recoverBilibiliCard(input, {
     throw new Error('卡片作者或封面未通过核验，请补发链接。');
   }
   return { url: `https://www.bilibili.com/video/${chosen.bvid}`, provider: 'bilibili',
-    recovery: 'title-author-cover', bvid: chosen.bvid };
+    recovery: 'title-author-cover', bvid: chosen.bvid,
+    // Match the existing canonical-video-URL behavior without pretending the
+    // missing original card locator specified P1. Make that default visible.
+    recoveryNotice: chosen.pages_count > 1
+      ? `这个视频共有 ${chosen.pages_count} 个分 P，小程序卡片没有提供分 P 信息，先发送默认 P1。如需其他分 P，请分享带 p=数字 的视频链接。`
+      : '' };
 }
 
 

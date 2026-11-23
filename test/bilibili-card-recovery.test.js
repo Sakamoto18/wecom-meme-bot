@@ -42,9 +42,9 @@ test('rejects unclear, invented, ambiguous or author-mismatched visual decisions
     await assert.rejects(recoverBilibiliCard(card, setup({ result })));
   }
 });
-test('rejects approximate titles, changed metadata and unknown selected part', async () => {
+test('rejects approximate titles, changed metadata and invalid page metadata', async () => {
   for (const options of [setup({ rows: [{ bvid, title: card.title + '合集' }] }),
-    setup({ pages: [{}, {}] }), setup({ changedTitle: true })]) {
+    setup({ pages: [] }), setup({ changedTitle: true })]) {
     options.chatClient.complete = (_h, _b, opt) => {
       assert.equal(opt.usageSource, 'bilibili-card-uploader'); return JSON.stringify({ author });
     };
@@ -117,4 +117,50 @@ test('cross-group card cache shares work, recognizes identical previews at other
   fail = false;
   await recover(card, options);
   assert.equal(attempts, 4);
+});
+
+
+test('OCR spelling is a search hint, with exact author and cover still required in final verification', async () => {
+  const options = setup();
+  let finalChecks = 0;
+  options.candidateSearch = async (_title, hint) => {
+    assert.equal(hint, 'NightTa奈特');
+    return [{ bvid, title: card.title, author: 'NighTa奈特', pages_count: 2,
+      cover: 'https://i0.hdslb.com/cover.jpg' }];
+  };
+  options.chatClient.complete = async (_h, _blocks, opts) => {
+    if (opts.usageSource === 'bilibili-card-uploader') return '{"author":"NightTa奈特"}';
+    finalChecks++;
+    return JSON.stringify({ ambiguous: false, matches: [{ bvid, visible_author: 'NighTa奈特', cover_matches: true }] });
+  };
+  const result = await recoverBilibiliCard(card, options);
+  assert.equal(result.url, 'https://www.bilibili.com/video/' + bvid);
+  assert.match(result.recoveryNotice, /2.*没有提供分 P.*默认 P1/u);
+  assert.equal(finalChecks, 1);
+  options.chatClient.complete = async (_h, _b, opts) => opts.usageSource === 'bilibili-card-uploader'
+    ? '{"author":"NightTa奈特"}'
+    : JSON.stringify({ ambiguous: false, matches: [{ bvid, visible_author: 'NightTa奈特', cover_matches: true }] });
+  await assert.rejects(recoverBilibiliCard(card, options), /作者或封面未通过核验/u);
+});
+
+test('multi-part recovery notice accompanies the video, while direct P2 links bypass recovery', async () => {
+  const result = await recoverBilibiliCard(card, setup({ pages: [{}, {}] }));
+  const candidates = [];
+  let recoveries = 0;
+  const service = new QqBotService({ mediaResolver: { enabled: true,
+    recoverBilibiliCard: async () => { recoveries++; return result; },
+    resolve: async candidate => { candidates.push(candidate); return { url: 'http://127.0.0.1/media/1', title: card.title }; },
+  }, logger: { info() {}, warn() {} } });
+  const input = { message_id: 'multi-1', message_type: 'group', group_id: 'g', user_id: 'u',
+    bot_user_id: 'qqofficial:app:user:bot', media_share: true, bilibili_card: card, text: '[卡片消息] 小程序' };
+  const response = await service.handleMessage(input);
+  assert.equal(response.mode, 'media');
+  assert.deepEqual(response.messages.map(row => row.type), ['text', 'video']);
+  assert.equal(response.messages[0].text, result.recoveryNotice);
+  const direct = await service.handleMessage({ ...input, message_id: 'multi-2',
+    text: 'https://www.bilibili.com/video/' + bvid + '?p=2' });
+  assert.equal(direct.mode, 'media');
+  assert.equal(recoveries, 1);
+  assert.match(candidates[1].url, /[?]p=2/u);
+  assert.deepEqual(direct.messages.map(row => row.type), ['video']);
 });

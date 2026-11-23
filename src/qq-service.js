@@ -6184,7 +6184,8 @@ export class QqBotService {
             };
           });
         if (messages.length === 0) throw new Error('媒体解析未返回可发送的视频地址');
-        return { mode: 'media', messages };
+        return { mode: 'media', messages: candidate.recoveryNotice
+          ? [{ type: 'text', text: candidate.recoveryNotice }, ...messages] : messages };
       } catch (error) {
         const removedAtSource = isRemovedError(error);
         const mediaTooLarge = isMediaTooLargeError(error);
