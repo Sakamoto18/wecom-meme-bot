@@ -269,7 +269,7 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_merged_record_images_reach_forward_channel_without_web_urls(self):
         from test.test_official_forward import BODY
-        for quoted, mentioned in ((False, False), (False, True), (True, True)):
+        for quoted, mentioned in ((True, True),):
             bridge, event = self.fixture(private=False)
             event.message_obj.raw_message.content = '' if quoted else BODY
             event.get_messages = lambda: ([Comp.Reply(id='record', chain=[Comp.Plain(BODY)]),
@@ -295,6 +295,17 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
             else:
                 self.assertIn('[图片#1]', payload['forwarded_text'])
                 self.assertEqual(payload['quoted_forward_image_base64s'], [])
+
+    async def test_unquoted_record_never_downloads_or_invites_backend_to_read(self):
+        from test.test_official_forward import BODY
+        for mentioned in (False, True):
+            bridge, event = self.fixture(private=False)
+            event.message_obj.raw_message.content = BODY
+            event.get_messages = lambda: [Comp.Plain(BODY)] + ([Comp.At(qq='bot')] if mentioned else [])
+            with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', new_callable=AsyncMock) as read:
+                await handle_official_message(bridge, event)
+            read.assert_not_awaited()
+            bridge._request_backend.assert_not_awaited()
 
     async def test_quoted_associated_record_uses_real_reader_and_keeps_current_request(self):
         from test.test_official_forward import QUOTED_BODY, PNG

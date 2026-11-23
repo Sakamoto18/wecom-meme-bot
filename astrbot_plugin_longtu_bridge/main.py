@@ -26,6 +26,8 @@ import astrbot.api.message_components as Comp
 from astrbot.api.star import Context, Star, register
 
 
+from .forward_protocol import forward_reference
+
 MAX_FORWARD_NODES = 80
 MAX_FORWARD_CHARACTERS = 16000
 MAX_FORWARD_NODE_CHARACTERS = 800
@@ -1762,11 +1764,13 @@ class LongtuQqBridge(Star):
 
     @staticmethod
     def _forward_components(components: list) -> list:
-        return [
-            component
-            for component in components
-            if isinstance(component, Comp.Forward)
-        ]
+        result = [component for component in components if isinstance(component, Comp.Forward)]
+        for component in components:
+            if isinstance(component, (Comp.Json, getattr(Comp, "Xml", Comp.Json))):
+                ref = forward_reference({'type': 'json', 'data': getattr(component, 'data', None)})
+                if ref and ref.get('id'):
+                    result.append(Comp.Forward(id=ref['id']))
+        return result
 
     @staticmethod
     def _components_from_raw_message(segments) -> list:
@@ -2118,6 +2122,9 @@ class LongtuQqBridge(Star):
                 continue
             segment_type = str(segment.get("type") or "").lower()
             data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
+            ref = forward_reference(segment)
+            if ref is not None:
+                segment_type, data = "forward", ref
             if segment_type == "text":
                 text = cls._compact_forward_value(
                     data.get("text"),
@@ -2131,7 +2138,8 @@ class LongtuQqBridge(Star):
             elif segment_type == "forward":
                 nested = data.get("content")
                 if depth >= MAX_FORWARD_DEPTH or not isinstance(nested, list):
-                    parts.append("[嵌套合并转发]")
+                    reason = data.get('_longtu_forward_error') or '超过递归深度或未返回可读取节点'
+                    parts.append(f"[嵌套合并转发未读取：{reason}]")
                     continue
                 nested_text = cls._format_forward_nodes(
                     nested,
@@ -2141,7 +2149,7 @@ class LongtuQqBridge(Star):
                 parts.append(
                     f"[嵌套合并转发：{nested_text.replace(chr(10), ' / ')}]"
                     if nested_text
-                    else "[嵌套合并转发]"
+                    else f"[嵌套合并转发未读取：{data.get('_longtu_forward_error') or '空记录或超过消息条数上限'}]"
                 )
             elif segment_type in {"node", "nodes"}:
                 nested = data.get("content") or data.get("message") or data.get("messages")
@@ -2432,6 +2440,7 @@ class LongtuQqBridge(Star):
         depth: int = 0,
         budget: dict | None = None,
         seen_forward_ids: set | None = None,
+        include_images: bool = True,
     ) -> list[str]:
         if not isinstance(nodes, list) or depth > MAX_FORWARD_DEPTH:
             return []
@@ -2461,8 +2470,16 @@ class LongtuQqBridge(Star):
                     continue
                 segment_type = str(segment.get("type") or "").lower()
                 data = segment.get("data") if isinstance(segment.get("data"), dict) else {}
+                ref = forward_reference(segment)
+                if ref is not None:
+                    # Materialize JSON/XML references in the shared text/image tree.
+                    segment_type, data = "forward", ref
+                    segment['type'], segment['data'] = segment_type, data
                 if segment_type == "image":
                     data["_longtu_image_index"] = None
+                    if not include_images:
+                        data["_longtu_image_error"] = "本次仅读取文字"
+                        continue
                     if budget["images"] >= MAX_FORWARD_IMAGE_COMPONENTS:
                         data["_longtu_image_error"] = f"超过 {MAX_FORWARD_IMAGE_COMPONENTS} 张图片的处理上限"
                         continue
@@ -2487,29 +2504,44 @@ class LongtuQqBridge(Star):
                         depth + 1,
                         budget,
                         seen_forward_ids,
+                        include_images,
                     ))
                 elif segment_type == "forward":
                     nested = data.get("content")
                     nested_id = str(data.get("id") or data.get("message_id") or "").strip()
+                    if depth >= MAX_FORWARD_DEPTH:
+                        data['_longtu_forward_error'] = f'超过 {MAX_FORWARD_DEPTH} 层递归上限'
+                        continue
+                    if nested_id and nested_id in seen_forward_ids:
+                        data['_longtu_forward_error'] = '重复或循环记录引用'
+                        data.pop('content', None)
+                        continue
                     if isinstance(nested, list):
+                        if nested_id:
+                            seen_forward_ids.add(nested_id)
                         images.extend(await self._collect_forward_images(
                             event,
                             nested,
                             depth + 1,
                             budget,
                             seen_forward_ids,
+                            include_images,
                         ))
                     elif nested_id and depth < MAX_FORWARD_DEPTH and nested_id not in seen_forward_ids:
                         seen_forward_ids.add(nested_id)
                         nested_nodes = await self._fetch_forward_nodes(event, nested_id, refresh=True)
                         # 图文共用同一棵展开树，避免识别了嵌套图片却丢掉对应文字。
-                        data["content"] = nested_nodes
+                        data["content"] = copy.deepcopy(nested_nodes)
+                        nested_nodes = data["content"]
+                        if not nested_nodes:
+                            data['_longtu_forward_error'] = '记录获取失败或为空'
                         images.extend(await self._collect_forward_images(
                             event,
                             nested_nodes,
                             depth + 1,
                             budget,
                             seen_forward_ids,
+                            include_images,
                         ))
         return images[:MAX_FORWARD_IMAGE_COMPONENTS]
 
@@ -2532,7 +2564,8 @@ class LongtuQqBridge(Star):
             event,
             nodes,
             seen_forward_ids={normalized_id},
-        ) if include_images else []
+            include_images=include_images,
+        )
         # 读取后再格式化，成功图片用实际传输编号，失败图片明确标记，不能错位。
         formatted = self._format_forward_nodes(nodes)
         if not formatted and not images:
@@ -3468,7 +3501,10 @@ class LongtuQqBridge(Star):
                 self._forward_components(components)
                 or self._forward_components(quoted_chain)
             )
-            rich_segments = self._rich_segments(event, quoted_chain)
+            if self._forward_components(components) and not reply_component and not self._raw_text(event).strip():
+                return
+            rich_segments = [segment for segment in self._rich_segments(event, quoted_chain)
+                             if forward_reference(segment) is None]
             has_rich = bool(rich_segments)
             raw_media_text = self._raw_text(event) or event.message_str or ""
             # 平台白名单要看链接才能判断，分享地址可能只在富段卡片里。
@@ -3566,32 +3602,14 @@ class LongtuQqBridge(Star):
                 quoted_text = str(
                     getattr(reply_component, "message_str", "") or "",
                 ).strip()
-            observed_forward_images = []
-            observed_quoted_forward_images = []
-            if should_reply:
-                forwarded_text, forward_image_base64s = await self._forwarded_content(
-                    event,
-                    components,
-                    refresh=True,
-                )
+            # 合并记录只读取本次明确引用的链；不旁观展开、不预下载当前转发。
+            forwarded_text, forward_image_base64s = "", []
+            quoted_forwarded_text, quoted_forward_image_base64s = "", []
+            observed_forward_images, observed_quoted_forward_images = [], []
+            if should_reply and reply_component:
                 quoted_forwarded_text, quoted_forward_image_base64s = await self._forwarded_content(
-                    event,
-                    quoted_chain,
-                    refresh=True,
+                    event, quoted_chain, refresh=True,
                 )
-            else:
-                # 旁观消息仍不把图片上传给 Node，但先提取并缓存合并转发中的
-                # 图片，方便下一条消息明确询问“上面的聊天记录/图片”。
-                forwarded_text, observed_forward_images = await self._forwarded_content(
-                    event,
-                    components,
-                )
-                quoted_forwarded_text, observed_quoted_forward_images = await self._forwarded_content(
-                    event,
-                    quoted_chain,
-                )
-                forward_image_base64s = []
-                quoted_forward_image_base64s = []
             image_base64s = []
             quoted_image_base64s = []
             quoted_image_sub_types = []

@@ -5,6 +5,8 @@ import asyncio
 import base64
 import copy
 import logging
+import json
+from astrbot_plugin_longtu_bridge.forward_protocol import forward_reference
 import os
 from pathlib import Path
 import re
@@ -19,7 +21,7 @@ METHODS = {'_compact_forward_value', '_format_forward_segments', '_format_forwar
            '_normalize_forward_image_base64', '_download_forward_image', '_forward_image_base64',
            '_get_image_circuit_open', '_note_get_image_failure', '_fetch_forward_nodes',
            '_collect_forward_images', '_fetch_forward_content'}
-NS = dict(asyncio=asyncio, base64=base64, copy=copy, os=os, re=re, time=time,
+NS = dict(forward_reference=forward_reference, asyncio=asyncio, base64=base64, copy=copy, os=os, re=re, time=time,
           logger=logging.getLogger('forward-test'), signed_url=lambda url: url,
           aiohttp=SimpleNamespace(ClientTimeout=lambda **kw: kw))
 for node in SOURCE.body:
@@ -126,5 +128,52 @@ class ForwardTests(unittest.IsolatedAsyncioTestCase):
         b._forward_image_base64 = AsyncMock(return_value='YQ==')
         self.assertEqual(len(await b._collect_forward_images(None, nodes)), 24)
         self.assertIn('超过 24 张图片', b._format_forward_nodes(nodes))
+
+    async def test_text_only_reader_expands_nested_id_without_downloading_images(self):
+        b = self.bridge()
+        b._fetch_forward_nodes = AsyncMock(side_effect=[
+            [node({'type': 'forward', 'data': {'id': 'inner'}})],
+            [node(text('内层全文'), image('nested'))],
+        ])
+        b._forward_image_base64 = AsyncMock()
+        record, images = await b._fetch_forward_content(
+            SimpleNamespace(get_group_id=lambda: 'test'), 'outer', include_images=False)
+        self.assertIn('内层全文', record)
+        self.assertEqual(images, [])
+        b._forward_image_base64.assert_not_awaited()
+        self.assertEqual(b._fetch_forward_nodes.await_count, 2)
+
+    async def test_nested_json_and_xml_records_expand_text_and_images(self):
+        cards = [
+            {'type': 'json', 'data': {'data': json.dumps({
+                'app': 'com.tencent.multimsg', 'meta': {'detail': {'resid': 'inner'}}})}},
+            {'type': 'xml', 'data': {'data': '<msg serviceID="35" m_resid="inner"/>'}},
+        ]
+        for card in cards:
+            b = self.bridge()
+            nested = [node(text('内层内容'), image('nested'))]
+            b._fetch_forward_nodes = AsyncMock(return_value=nested)
+            b._forward_image_base64 = AsyncMock(return_value='YQ==')
+            nodes = [node(copy.deepcopy(card))]
+            images = await b._collect_forward_images(None, nodes)
+            self.assertEqual(images, ['YQ=='])
+            self.assertIn('内层内容 [图片#1]', b._format_forward_nodes(nodes))
+            self.assertNotIn('_longtu_image_index', nested[0]['message'][1]['data'])
+
+    async def test_cycle_and_depth_limit_do_not_fetch_unbounded_records(self):
+        b = self.bridge()
+        b._fetch_forward_nodes = AsyncMock(return_value=[node({'type': 'forward', 'data': {'id': 'outer'}})])
+        record, _ = await b._fetch_forward_content(SimpleNamespace(get_group_id=lambda: 'test'), 'outer')
+        self.assertIn('重复或循环记录引用', record)
+        b._fetch_forward_nodes.assert_awaited_once()
+        nodes = [node({'type': 'forward', 'data': {'id': 'other'}})]
+        await b._collect_forward_images(None, nodes, depth=NS['MAX_FORWARD_DEPTH'])
+        b._fetch_forward_nodes.assert_awaited_once()
+        self.assertIn('递归上限', b._format_forward_nodes(nodes))
+
+    def test_ordinary_or_malformed_cards_are_not_forward_records(self):
+        for value in ('{bad', '[]', '{"resid":"not-a-record"}',
+                      '<msg serviceID="1" m_resid="not-a-record"/>'):
+            self.assertIsNone(forward_reference({'type': 'json', 'data': {'data': value}}))
 
 if __name__ == '__main__': unittest.main()
