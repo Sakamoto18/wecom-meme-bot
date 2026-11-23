@@ -70,6 +70,9 @@ export function normalizeDownloadSource(value) {
 }
 
 const MEDIA_CACHE_SCHEMA = 'v2';
+// Tencent's official URL media endpoint accepts at most 200 MB for video.
+// The normal NapCat resolver may keep the broader 500 MiB local limit.
+const MAX_OFFICIAL_MEDIA_BYTES = 200_000_000;
 
 function providerName(candidate) {
   return String(candidate?.provider || 'unknown').trim().toLowerCase() || 'unknown';
@@ -733,6 +736,9 @@ export class MediaResolver {
     if (requireComplete && item.prefetchPromise) {
       await item.prefetchPromise;
       if (item.prefetchError) return null;
+    }
+    if (requireComplete && item.size > MAX_OFFICIAL_MEDIA_BYTES) {
+      return { ...item, officialTooLarge: true };
     }
     // The prefetch is an optimization for NapCat. Official URL delivery uses
     // requireComplete above, so its public endpoint never falls back to a

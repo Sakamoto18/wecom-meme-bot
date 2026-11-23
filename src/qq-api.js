@@ -411,6 +411,12 @@ export function createQqApiServer(options) {
           });
           return;
         }
+        if (mediaFile.officialTooLarge) {
+          sendJson(response, 413, {
+            ok: false, error: 'MEDIA_TOO_LARGE', message: '官方 QQ 视频超过 200 MB 上限',
+          });
+          return;
+        }
         if (mediaFile.remote) {
           if (request.method === 'HEAD') {
             response.writeHead(mediaFile.size > 0 ? 200 : 204, {
