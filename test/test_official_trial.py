@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 import astrbot.api.message_components as Comp
-from astrbot_plugin_longtu_bridge.official_trial import handle_official_message, identity, output_chains, media_segments, mirror_learning, official_group_names
+from astrbot_plugin_longtu_bridge.official_trial import handle_official_message, identity, output_chains, media_segments, mirror_learning, official_group_names, send_official_video_url
 from astrbot_plugin_longtu_bridge.main import LongtuQqBridge
 
 
@@ -53,6 +53,22 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         merchant.assert_awaited_once_with(bridge, event, '/远行商人', official=True)
         bridge._request_backend.assert_awaited_once()
         event.send.assert_not_awaited()
+
+    async def test_official_video_url_upload_registers_then_sends_media_without_local_chain(self):
+        bridge, event = self.fixture(private=False)
+        files = AsyncMock(return_value={'file_uuid': 'file-1', 'file_info': 'signed-info', 'ttl': 600})
+        messages = AsyncMock(return_value={'id': 'sent-1'})
+        event.bot.api = SimpleNamespace(post_group_file=files, post_group_message=messages)
+        receipt = await send_official_video_url(
+            bridge, event, 'https://media.example.com/v1/qq/media/opaque?complete=1', reply_id='source-1')
+        self.assertEqual(receipt, 'sent-1')
+        files.assert_awaited_once_with(
+            group_openid='group-openid', file_type=2,
+            url='https://media.example.com/v1/qq/media/opaque?complete=1', srv_send_msg=False)
+        payload = messages.await_args.kwargs
+        self.assertEqual(payload['msg_type'], 7)
+        self.assertEqual(payload['msg_id'], 'source-1')
+        self.assertEqual(payload['media']['file_info'], 'signed-info')
 
     async def test_merchant_command_raw_mention_and_unmentioned_group_dispatch(self):
         for mentioned in (False, True):

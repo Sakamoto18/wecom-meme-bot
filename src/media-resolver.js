@@ -482,6 +482,11 @@ export class MediaResolver {
     this.cacheDirectory = options.cacheDirectory || path.join(os.tmpdir(), 'longtu-media-cache');
     this.maxCacheBytes = Math.max(0, Number(options.maxCacheBytes ?? 512 * 1024 * 1024));
     this.publicBaseUrl = String(options.publicBaseUrl || 'http://qq-bot:8787').replace(/\/+$/u, '');
+    // Separate public origin for QQ Official's server-side URL fetch. NapCat
+    // and internal callers keep using publicBaseUrl, which may intentionally
+    // remain a loopback/container address.
+    this.officialPublicBaseUrl = String(options.officialPublicBaseUrl || '')
+      .replace(/\/+$/u, '');
     this.maxConcurrent = Math.max(1, Number(options.maxConcurrent ?? 2));
     // Pacing belongs to cache misses, before acquiring a scarce media slot.
     // Non-QQ callers remain unpaced unless they opt in (QQ defaults to 1–10s).
@@ -589,10 +594,14 @@ export class MediaResolver {
       size: value.outputBytes || 0,
       mediaType: value.mediaType || value.contentType || 'video/mp4',
     });
+    const officialUrl = this.officialPublicBaseUrl.startsWith('https://')
+      ? `${this.officialPublicBaseUrl}/v1/qq/media/${id}?complete=1`
+      : '';
     return {
       ...value,
       mediaId: id,
       url: `${this.publicBaseUrl}/v1/qq/media/${id}`,
+      ...(officialUrl ? { officialUrl } : {}),
     };
   }
 
@@ -642,6 +651,7 @@ export class MediaResolver {
       requestHeaders: value.requestHeaders || {},
       expiresAt,
       size: positive(value.size),
+      prefetchError: null,
     };
     this.mediaFiles.set(id, item);
     // Download in the background while the share card is rendered. The proxy
@@ -660,6 +670,7 @@ export class MediaResolver {
         return item;
       })
       .catch((error) => {
+        item.prefetchError = error;
         this.logger.warn(`视频后台预下载失败，回退流式代理：${error.message}`);
         return item;
       });
@@ -668,8 +679,12 @@ export class MediaResolver {
     // The proxy races all signed CDN candidates on the first request. Avoid a
     // separate warm request here: it consumes a connection and can compete
     // with NapCat's first range request instead of reducing latency.
+    const officialUrl = this.officialPublicBaseUrl.startsWith('https://')
+      ? `${this.officialPublicBaseUrl}/v1/qq/media/${id}?complete=1`
+      : '';
     return {
       url: `${this.publicBaseUrl}/v1/qq/media/${id}`,
+      ...(officialUrl ? { officialUrl } : {}),
       mediaId: id,
       ...(value.sourceId ? { sourceId: value.sourceId, contentKind: value.contentKind } : {}),
       title: value.title || '',
@@ -705,7 +720,7 @@ export class MediaResolver {
     }
   }
 
-  async getMediaFile(mediaId) {
+  async getMediaFile(mediaId, { requireComplete = false } = {}) {
     const normalizedId = String(mediaId || '');
     const item = this.mediaFiles.get(normalizedId);
     if (!item || item.expiresAt <= Date.now()) {
@@ -715,9 +730,13 @@ export class MediaResolver {
       }
       return null;
     }
-    // The prefetch is an optimization only. Never make NapCat wait for a full
-    // remote download: return the signed stream after a short head start and
-    // let the proxy race the CDN while the local copy continues in background.
+    if (requireComplete && item.prefetchPromise) {
+      await item.prefetchPromise;
+      if (item.prefetchError) return null;
+    }
+    // The prefetch is an optimization for NapCat. Official URL delivery uses
+    // requireComplete above, so its public endpoint never falls back to a
+    // live CDN stream or starts QQ's fetch before the local file is complete.
     if (item.prefetchPromise) {
       await Promise.race([
         item.prefetchPromise,

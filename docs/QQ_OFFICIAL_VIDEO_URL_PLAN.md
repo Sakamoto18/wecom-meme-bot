@@ -1,6 +1,6 @@
 # QQ 官方 Bot 完整文件 URL 发送方案
 
-状态：待实施方案。本文不代表公网地址已经部署或 QQ URL 拉取已经验证成功。
+状态：代码已实施，默认关闭。公网地址尚未配置，QQ URL 拉取仍需真实域名与测试账号验收。
 
 ## 目标与约束
 
@@ -55,7 +55,7 @@ flowchart LR
 
 ### 3. 官方发送
 
-官方 Bridge 直接调用对应群聊或 C2C 的 `/files`：`file_type=2`、`url=<完整文件地址>`、`srv_send_msg=false`，校验取得 `file_info` 后再发送 `msg_type=7` 消息。
+官方 Bridge 直接调用对应群聊或 C2C 的 `/files`：`file_type=2`、`url=<完整文件地址>`、`srv_send_msg=false`，校验取得 `file_info` 后再发送 `msg_type=7` 消息。当前代码由 `official_video_url_upload_enabled` 控制；URL 失败不会回退到本地分片路径。
 
 不再把视频先下载到 AstrBot 临时目录，也不将本地 Video 交给自动选择分片的上传函数。其余图片、商人 Markdown 艾特和图集发送不改。
 

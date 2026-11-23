@@ -4,7 +4,7 @@ import { WebMemeConfirmation } from '../src/web-meme-confirmation.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Jimp } from 'jimp';
@@ -4562,7 +4562,8 @@ test('视频卡片只透传原作者与正文话题，QQ发送者不覆盖作者
 test('同一抖音分享卡中的多个链接会聚合成多个视频并附带多封面预览', async () => {
   const resolved = new Map([
     ['https://v.douyin.com/one/', {
-      url: 'https://cdn.example/video-1.mp4', coverUrl: 'https://cdn.example/cover-1.jpg', title: '第一条',
+      url: 'https://cdn.example/video-1.mp4', officialUrl: 'https://media.example/video-1?complete=1',
+      coverUrl: 'https://cdn.example/cover-1.jpg', title: '第一条',
     }],
     ['https://v.douyin.com/two/', {
       url: 'https://cdn.example/video-2.mp4', coverUrl: 'https://cdn.example/cover-2.jpg', title: '第二条',
@@ -4583,11 +4584,50 @@ test('同一抖音分享卡中的多个链接会聚合成多个视频并附带�
   assert.deepEqual(result.messages.map((item) => item.url), [
     'https://cdn.example/video-1.mp4', 'https://cdn.example/video-2.mp4',
   ]);
+  assert.equal(result.messages[0].officialUrl, 'https://media.example/video-1?complete=1');
   assert.deepEqual(result.messages[0].images, [
     'https://cdn.example/cover-1.jpg', 'https://cdn.example/cover-2.jpg',
   ]);
   assert.equal(result.messages[1].images.length, 0);
   assert.equal(calls, 2);
+});
+
+test('官方完整媒体 URL 端点等待文件并支持 HEAD 与单 Range', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'qq-official-media-'));
+  const filePath = path.join(directory, 'video.mp4');
+  await writeFile(filePath, Buffer.from('0123456789'));
+  const optionsSeen = [];
+  const server = createQqApiServer({
+    apiToken: 'test-token',
+    service: {},
+    mediaResolver: {
+      async getMediaFile(id, options) {
+        assert.equal(id, 'media-id');
+        optionsSeen.push(options);
+        return { filePath, size: 10, mediaType: 'video/mp4' };
+      },
+    },
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    const head = await fetch(`${baseUrl}/v1/qq/media/media-id?complete=1`, { method: 'HEAD' });
+    assert.equal(head.status, 200);
+    assert.equal(head.headers.get('content-length'), '10');
+    const ranged = await fetch(`${baseUrl}/v1/qq/media/media-id?complete=1`, {
+      headers: { Range: 'bytes=2-5' },
+    });
+    assert.equal(ranged.status, 206);
+    assert.equal(ranged.headers.get('content-range'), 'bytes 2-5/10');
+    assert.equal(await ranged.text(), '2345');
+    assert.deepEqual(optionsSeen, [{ requireComplete: true }, { requireComplete: true }]);
+  } finally {
+    server.close();
+    await once(server, 'close');
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {

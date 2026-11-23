@@ -16,6 +16,9 @@ export function nativeEnvironment(root, saved, overrides = {}, inherited = {}) {
     LONGTU_QQ_API_TOKEN: saved.QQ_API_TOKEN || '',
     LONGTU_QQ_INTERNAL_SEND_HOST: '127.0.0.1',
     QQ_MEDIA_PUBLIC_BASE_URL: 'http://127.0.0.1:8787',
+    // This must be a separately configured public HTTPS origin; unlike the
+    // internal media origin it is intentionally not invented by the launcher.
+    QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL: saved.QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL || '',
     DOUYIN_PROVIDER_URL: 'http://127.0.0.1:9001/resolve',
     BILIBILI_PROVIDER_URL: 'http://127.0.0.1:9001',
     XHS_PROVIDER_URL: 'http://127.0.0.1:9001/xhs/resolve',

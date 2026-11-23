@@ -699,6 +699,8 @@ B 站 provider 登录：启动后通过服务器的 VNC 页面打开 `/bilibili-
 
 B 站、抖音常用 Node 临时媒体地址代理；小红书常用探测大小后的 provider 直链，交给 NapCat 拉取。Node 代理可以后台预下载，文件就绪时提供本地文件，否则流式转发，**不要求每次先完整下载再返回**。视频不经过 JSON/Base64 接口。`QQ_MEDIA_USAGE_DATABASE_FILE` 记录平台、解析成功/失败、耗时和相关字节数，与 LLM Token 日报分开，也不代表 QQ 最终送达。逐层解释见[QQ 架构指南](node-service-architecture-and-learning-guide.md#5-分享解析卡片和真正的视频发送)。
 
+官方 QQ 的完整文件 URL 方案由 `official_video_url_upload_enabled=true` 单独启用；同时必须设置 `QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL=https://...`。该地址只生成带随机媒体 ID 的 `?complete=1` URL，Node 会先完成本地文件下载再响应 QQ 的 URL 请求，官方 Bridge 调用 `/files` 登记 `file_info` 后发送富媒体消息。开关关闭时官方继续使用旧逻辑，开关打开但地址不是 HTTPS 或完整文件失败时直接报错，不回退到分片上传。公网域名、DNS、443 和证书未配置前保持关闭。
+
 前置条件：
 
 - NapCat/OneBot v11 必须保留 `json/xml` 原始段；若适配器已把卡片丢弃，Node 无法从 `appid/path` 推导视频地址。
@@ -718,6 +720,7 @@ QQ_MEDIA_CACHE_DIRECTORY=/tmp/longtu-media-cache
 QQ_MEDIA_CACHE_MAX_MIB=512
 QQ_MEDIA_MAX_CONCURRENT=2
 QQ_MEDIA_PUBLIC_BASE_URL=http://qq-bot:8787
+QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL=
 QQ_MEDIA_ACK_EMOJI_ID=128524
 QQ_MEDIA_EXCLUDED_GROUPS=
 QQ_MEDIA_GROUP_ALLOWED_PROVIDERS=

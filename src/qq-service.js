@@ -6093,6 +6093,7 @@ export class QqBotService {
           return [{
             type: 'video',
             url: multiResolved.url,
+            ...(multiResolved.officialUrl ? { officialUrl: multiResolved.officialUrl } : {}),
             mediaCacheKey: createHash('sha256').update(multiCandidate.provider === 'bilibili' && multiResolved.cid
               ? `bilibili:${multiResolved.cid}:${multiResolved.quality || 0}`
               : `${multiCandidate.provider}:${multiResolved.url}`).digest('hex'),
@@ -6179,6 +6180,9 @@ export class QqBotService {
             return {
               type: 'video',
               url: mediaUrl,
+              ...(item.officialUrl || resolved.officialUrl
+                ? { officialUrl: item.officialUrl || resolved.officialUrl }
+                : {}),
               mediaCacheKey,
               title: item.title || resolved.title || '',
               coverUrl: item.coverUrl || item.cover || resolved.coverUrl || '',

@@ -80,6 +80,12 @@
     "default": "",
     "hint": "英文逗号分隔，留空开放所有已添加机器人的群（群 @ 回复，以及群主授权全量消息后的直接分享）。此处不是普通 QQ 群号。私聊不受此列表限制。"
   },
+  "official_video_url_upload_enabled": {
+    "description": "官方 QQ 视频使用公网 HTTPS URL 转存",
+    "type": "bool",
+    "default": false,
+    "hint": "开启前必须配置 QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL，并确保该 HTTPS 地址能被 QQ 官方服务器访问；关闭时保留原有本地分片上传。"
+  },
   "transport_mode": {
     "description": "QQ 接入实现",
     "type": "string",

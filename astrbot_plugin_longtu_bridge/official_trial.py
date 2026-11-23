@@ -113,7 +113,7 @@ def quote_context(components, raw):
             'author_id': author_id, 'author_name': author_name}
 
 
-def output_chains(response, max_messages=5, truncation_notice=True):
+def output_chains(response, max_messages=5, truncation_notice=True, *, official_video_url=False):
     """Keep backend text bubbles separate, merging overflow within reply budget."""
     rows = response.get('messages') or []
     texts = [str(row['text']) for row in rows if row.get('type') == 'text' and row.get('text')]
@@ -128,7 +128,10 @@ def output_chains(response, max_messages=5, truncation_notice=True):
             media.extend(Comp.Image(file=url) for url in row.get('images', [])
                          if isinstance(url, str) and url.startswith(('https://', 'http://')))
         elif kind == 'video':
-            url = row.get('url')
+            # The Node resolver may expose a separate HTTPS origin whose
+            # endpoint waits for the complete local file. Keep the normal URL
+            # as fallback so the feature remains fully backward compatible.
+            url = (row.get('officialUrl') if official_video_url else None) or row.get('url')
             if url and str(url).startswith(('https://', 'http://')):
                 media.append(Comp.Video(file=url))
     reserve = 1 if texts else 0
@@ -148,13 +151,71 @@ def output_chains(response, max_messages=5, truncation_notice=True):
     return chains
 
 
+def _result_value(result, name, default=None):
+    if isinstance(result, dict):
+        return result.get(name, default)
+    return getattr(result, name, default)
+
+
+async def send_official_video_url(bridge, event, url, *, reply_id=''):
+    """Transfer a completed public MP4 through QQ's URL media API.
+
+    This intentionally never falls back to ``event.send(Video(local_path))``:
+    when enabled, a URL failure must be visible rather than silently starting
+    the old multi-part upload path the user asked to avoid.
+    """
+    value = str(url or '').strip()
+    if not value.startswith('https://'):
+        raise ValueError('官方视频 URL 发送已启用，但媒体地址不是公网 HTTPS URL')
+    api = getattr(getattr(event, 'bot', None), 'api', None)
+    if api is None:
+        raise RuntimeError('官方 QQ API 不可用')
+    target_group = '' if event.is_private_chat() else str(event.get_group_id() or '')
+    target_user = str(event.get_sender_id() or '') if event.is_private_chat() else ''
+    if event.is_private_chat():
+        result = await asyncio.wait_for(api.post_c2c_file(
+            openid=target_user, file_type=2, url=value, srv_send_msg=False,
+        ), 60)
+    else:
+        result = await asyncio.wait_for(api.post_group_file(
+            group_openid=target_group, file_type=2, url=value, srv_send_msg=False,
+        ), 60)
+    file_uuid = str(_result_value(result, 'file_uuid', '') or '')
+    file_info = _result_value(result, 'file_info', '')
+    if not file_info:
+        raise RuntimeError('官方 URL 转存未返回 file_info')
+    media = {
+        'file_uuid': file_uuid,
+        'file_info': file_info,
+        'ttl': _result_value(result, 'ttl', 0) or 0,
+    }
+    payload = {'msg_type': 7, 'media': media, 'msg_seq': 1}
+    if reply_id:
+        payload['msg_id'] = str(reply_id)
+    if event.is_private_chat():
+        payload['openid'] = target_user
+        sent = await asyncio.wait_for(api.post_c2c_message(**payload), 60)
+    else:
+        payload['group_openid'] = target_group
+        sent = await asyncio.wait_for(api.post_group_message(**payload), 60)
+    receipt = str(_result_value(sent, 'id', '') or '')
+    if not receipt:
+        raise RuntimeError('官方视频 URL 消息未返回消息 ID；不自动重试')
+    logger.info(f'官方 QQ 视频 URL 发送完成：bytes-transfer=server-side receipt={receipt}')
+    return receipt
+
+
 async def send_chain(bridge, event, chain):
-    """Upload backend video locally: Tencent cannot fetch loopback media URLs."""
+    """Send official media, using complete-file URL transfer when enabled."""
     import aiohttp
     video = next((c for c in chain.chain if isinstance(c, Comp.Video)), None)
     if video is None:
         await event.send(chain)
         logger.info('官方 QQ 发送完成：kind=' + ('image' if any(isinstance(c, Comp.Image) for c in chain.chain) else 'text'))
+        return
+    if bridge.config.get('official_video_url_upload_enabled') is True:
+        await send_official_video_url(bridge, event, video.file,
+                                      reply_id=str(getattr(event.message_obj, 'message_id', '') or ''))
         return
     maximum = 200 * 1024 * 1024
     with tempfile.TemporaryDirectory(prefix='longtu-official-video-') as directory:
@@ -532,7 +593,12 @@ async def handle_official_message(bridge, event):
         # Tencent permits 4 C2C / 5 group passive replies. Keep a slot for
         # an uncertain/partial upload failure. Successful sends stay silent.
         budget = (4 if private else 5) - (1 if media_receipt else 0)
-        chains = output_chains(response, max_messages=budget, truncation_notice=not media_receipt)
+        chains = output_chains(
+            response,
+            max_messages=budget,
+            truncation_notice=not media_receipt,
+            official_video_url=bridge.config.get('official_video_url_upload_enabled') is True,
+        )
         stickers = {'base64://' + row['base64']: row['base64']
                     for row in response.get('messages', [])
                     if row.get('type') == 'image' and row.get('sub_type') == 1 and row.get('base64')}
