@@ -5,7 +5,7 @@ import re
 from urllib.parse import urlsplit, urlunsplit
 
 HEADER = '[群聊的聊天记录]'
-NODE = re.compile(r'^=== 消息 \d+ ===\s*$')
+NODE = re.compile(r'^(?:=== 消息 \d+ ===|--- 第\d+条 ---)\s*$')
 IMAGE = re.compile(r'^\[附件\d+\]\s+类型:图片(?:\s|$)')
 URL = re.compile(r'\s+URL:(https?://\S+)')
 HOSTS = {'multimedia.nt.qq.com.cn', 'gchat.qpic.cn', 'c2cpicdw.qpic.cn', 'qq.ugcimg.cn'}
@@ -31,7 +31,17 @@ def parse_record(text):
     before, marker, body = text.partition(HEADER)
     if not marker or len(text) > 256 * 1024:
         return None
-    lines = body.strip().splitlines()
+    # QQ quotes wrap a record in "[消息内容] [群聊的聊天记录]"
+    # and format its associated nodes as "--- 第N条 ---".
+    # Keep the protocol wrapper with the record, never as the user's request.
+    prefix = before.splitlines()
+    wrapper_start = next((i for i, line in enumerate(prefix)
+                          if NODE.fullmatch(line.strip())), None)
+    wrapper = []
+    if wrapper_start is not None and before.rstrip().endswith('[消息内容]'):
+        wrapper = prefix[wrapper_start:-1]
+        before = '\n'.join(prefix[:wrapper_start])
+    lines = wrapper + body.strip().splitlines()
     if not any(NODE.fullmatch(line.strip()) for line in lines):
         return None
     output, attachments = [HEADER], []

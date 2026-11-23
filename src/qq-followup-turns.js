@@ -12,6 +12,17 @@ export class QqFollowupTurns {
     const key = JSON.stringify([payload.botUserId, payload.groupId, payload.userId]);
     for (const [id, turn] of this.turns) if (this.now() - turn.updatedAt > (turn.base ? 120_000 : this.windowMs)) this.turns.delete(id);
     let turn = this.turns.get(key);
+    // A supplied record is a separate evidence bundle: its image indices refer
+    // to exact ordered occurrences, including duplicates. Ordinary follow-up
+    // merging deduplicates/caps images and would corrupt that correspondence.
+    if (payload.forwardedText || payload.quotedForwardedText
+      || payload.forwardImageBase64s?.length || payload.quotedForwardImageBase64s?.length) {
+      if (turn) {
+        turn.revision++;
+        this.turns.delete(key);
+      }
+      return null;
+    }
     if (command || payload.mentions.some(p => p.userId !== payload.botUserId)
       || (payload.quotedAuthor && payload.quotedAuthor.userId !== payload.botUserId)) {
       return null;

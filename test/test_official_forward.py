@@ -10,8 +10,26 @@ BODY = ('[群聊的聊天记录]\n=== 消息 1 ===\n[发送者] 甲\n'
         '=== 消息 2 ===\n[发送者] 乙\n[消息内容] 第二张是结果\n'
         '[附件1] 类型:图片 文件名:b.png URL:' + URL + '2')
 PNG = b'\x89PNG\r\n\x1a\n' + b'pixels'
+QUOTED_BODY = ('=== 消息 1 ===\n[消息内容] [群聊的聊天记录]\n'
+               '[消息类型] 引用消息\n[关联消息]\n--- 第1条 ---\n'
+               '    [发送者] 甲\n    [附件1] 类型:图片 文件名:a.png URL:' + URL + '\n'
+               '--- 第2条 ---\n    [发送者] 乙\n'
+               '    [附件1] 类型:图片 文件名:b.png URL:' + URL + '2')
 
 class RecordTests(unittest.IsolatedAsyncioTestCase):
+    async def test_quoted_associated_records_download_images_in_order(self):
+        record = parse_record(QUOTED_BODY)
+        self.assertIsNotNone(record)
+        self.assertEqual(record['text'], '')
+        async def fetch(session, url):
+            return PNG + url[-1:].encode()
+        text, images = await read_record(record, None, downloader=fetch)
+        self.assertEqual(len(images), 2)
+        self.assertLess(text.index('[图片#1]'), text.index('[发送者] 乙'))
+        self.assertGreater(text.index('[图片#2]'), text.index('[发送者] 乙'))
+        self.assertIn('=== 消息 1 ===', text)
+        self.assertNotIn('https://', text)
+
     async def test_preserves_node_order_and_image_indices_without_urls(self):
         record = parse_record('请分析\n' + BODY)
         self.assertEqual(record['text'], '请分析')

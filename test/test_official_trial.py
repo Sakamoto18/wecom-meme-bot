@@ -224,6 +224,29 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('[图片#1]', payload['forwarded_text'])
                 self.assertEqual(payload['quoted_forward_image_base64s'], [])
 
+    async def test_quoted_associated_record_uses_real_reader_and_keeps_current_request(self):
+        from test.test_official_forward import QUOTED_BODY, PNG
+        from astrbot_plugin_longtu_bridge.official_forward import read_record
+        bridge, event = self.fixture(private=False)
+        event.get_messages = lambda: [Comp.Reply(id='record', chain=[Comp.Plain(QUOTED_BODY)]),
+                                      Comp.Plain('你现在能看到图了吗'), Comp.At(qq='bot')]
+        # The real parser, download loop and bridge payload must all run.
+        async def download(session, url):
+            return PNG
+        async def read(record, session):
+            return await read_record(record, session, downloader=download)
+        with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', side_effect=read):
+            await handle_official_message(bridge, event)
+        payload = bridge._request_backend.call_args.args[0]
+        self.assertEqual(len(payload['quoted_forward_image_base64s']), 2)
+        self.assertEqual(payload['text'], '你现在能看到图了吗')
+        self.assertEqual(payload['image_base64s'], [])
+        self.assertEqual(payload['forward_image_base64s'], [])
+        self.assertEqual(payload['quoted_text'], '')
+        self.assertIn('[图片#2]', payload['quoted_forwarded_text'])
+        self.assertNotIn('https://', payload['quoted_forwarded_text'])
+        self.assertFalse(payload['media_share'])
+
     async def test_media_receipts_are_silent_on_success_and_explicit_on_failure(self):
         for mode in ('success', 'unavailable', 'timeout', 'send-failed'):
             bridge, event = self.fixture()
