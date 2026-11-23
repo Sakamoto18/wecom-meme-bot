@@ -483,6 +483,12 @@ async def handle_official_message(bridge, event):
         if callable(update):
             update(event, response)
         logger.info(f'官方后端结果：mode={response.get("mode")} types={[row.get("type") for row in response.get("messages", [])]}')
+        if response.get('mode') == 'merchant-current':
+            # The Node planner only labels an explicit current-store question;
+            # reuse the same live snapshot/image path as /远行商人 so natural
+            # language and the command cannot drift into different data.
+            await handle_merchant_command(bridge, event, '/远行商人', official=True)
+            return
         if media_receipt and response.get('mode') in ('media-unavailable', 'media-disabled', 'media-excluded'):
             notices = {'media-unavailable': '抓取失败：暂时无法获取这个分享，请检查链接或稍后重试。',
                        'media-disabled': '未抓取：媒体解析服务当前未启用。',

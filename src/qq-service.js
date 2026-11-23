@@ -3995,9 +3995,25 @@ export class QqBotService {
           + ` answer=${turnPlan?.answerRequired === false ? 'no' : 'yes'}`
           + ` first=${turnPlan?.firstBeat || 'none'}`
           + ` attack=${turnPlan?.attack?.decision || 'none'}/${turnPlan?.attack?.target || 'none'}`
+          + ` merchant=${turnPlan?.merchantCurrentRequest ? 'current' : 'off'}`
           + ` search=${turnPlan?.search?.factNeeded ? `fact(${turnPlan.search.factQueries?.length ?? 0})` : 'off'}`
           + `/${turnPlan?.search?.cultureNeeded ? `culture(${turnPlan.search.cultureQueries?.length ?? 0})` : 'off'}`,
         );
+        // Merchant inventory is a live image-backed command. Once the planner
+        // has identified an explicit current-store request, stop before the
+        // ordinary reply model and let the channel bridge fetch a fresh round.
+        // Passive group chatter never reaches this branch, and private chats
+        // are always direct; a group must explicitly address this bot.
+        if (turnPlan?.merchantCurrentRequest === true
+          && (message.chattype === 'single' || options.directBotMention === true)) {
+          return {
+            mode: 'merchant-current',
+            merchant_current_request: true,
+            messages: [],
+            active_reply: true,
+            active_reply_priority: 'must',
+          };
+        }
       }
       const explicitImageSearch = hasExplicitImageSearchIntent(imageSearchQuestion);
       const imageInformationPrompt = hasImageContext

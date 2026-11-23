@@ -1352,6 +1352,11 @@ class AdapterBridge(LongtuQqBridge):
                 yield event.plain_result(str(error_message))
                 return
 
+            if response.get("mode") == "merchant-current":
+                from .merchant_command import handle_merchant_command
+                await handle_merchant_command(self, event, "/远行商人")
+                return
+
             # 普通群消息原本以 observe_only 进入 Node 服务。Node 现在可能通过
             # “读空气”判定把它升级为主动回复；只有确实没有返回消息时才保持静默。
             if observe_only and not response["messages"]:

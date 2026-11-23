@@ -40,6 +40,20 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event.send.call_args.args[0].chain[0].qq, 'user-openid')
         self.assertIn('联网学梗报告', event.send.call_args.args[0].chain[-1].text)
 
+    async def test_planned_merchant_current_request_reuses_live_command_path(self):
+        bridge, event = self.fixture(private=False)
+        bridge._request_backend.return_value = {
+            'mode': 'merchant-current',
+            'merchant_current_request': True,
+            'messages': [],
+        }
+        with patch('astrbot_plugin_longtu_bridge.merchant_command.handle_merchant_command',
+                   AsyncMock(return_value=True)) as merchant:
+            await handle_official_message(bridge, event)
+        merchant.assert_awaited_once_with(bridge, event, '/远行商人', official=True)
+        bridge._request_backend.assert_awaited_once()
+        event.send.assert_not_awaited()
+
     async def test_merchant_command_raw_mention_and_unmentioned_group_dispatch(self):
         for mentioned in (False, True):
             bridge, event = self.fixture(private=False)

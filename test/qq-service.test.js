@@ -4851,6 +4851,35 @@ test('普通模型轮只调用一次回合规划器，并把战术卡交给回�
   assert.ok(calls.some((options) => /PHP2Shell 未认证 RCE/.test(options.additionalSystemPrompt)));
 });
 
+test('当前远行商人问题由规划器转成实时商店动作，不生成普通模型回复', async () => {
+  let modelCalls = 0;
+  const { service } = createService({
+    replyTurnPlanner: {
+      enabled: true,
+      async plan() {
+        return { merchantCurrentRequest: true };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        modelCalls += 1;
+        return '不应走普通回复。';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'merchant-current-private',
+    message_type: 'private',
+    user_id: 'merchant-user',
+    text: '帮我看一下远行商人现在卖什么，还有多久刷新',
+  });
+  assert.equal(result.mode, 'merchant-current');
+  assert.equal(result.merchant_current_request, true);
+  assert.deepEqual(result.messages, []);
+  assert.equal(modelCalls, 0);
+});
+
 test('纯角色图跳过评价时不调用回合规划器', async () => {
   const png = (await createPng()).toString('base64');
   let plannerCalls = 0;

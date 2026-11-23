@@ -57,6 +57,16 @@ test('解析合法战术卡并保留具体检索词', () => {
   assert.match(buildTurnPlanPrompt(plan), /首句必须把具体现实主体\/规则和接梗判断放在同一句/);
 });
 
+test('只把规划器明确标记的当前商店查询转成结构化动作', () => {
+  const current = normalizeTurnPlan({
+    merchant_current_request: true,
+    current_task: '查看远行商人当前库存和剩余刷新时间',
+  });
+  assert.equal(current.merchantCurrentRequest, true);
+  assert.equal(normalizeTurnPlan({ merchant_current_request: false }).merchantCurrentRequest, false);
+  assert.equal(normalizeTurnPlan({ merchant_current_request: '历史消息' }).merchantCurrentRequest, false);
+});
+
 test('战术卡保留群聊说话动作并在非法值时回落', () => {
   const plan = normalizeTurnPlan({
     mode: 'explanation',
