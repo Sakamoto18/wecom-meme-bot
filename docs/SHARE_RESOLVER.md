@@ -16,6 +16,6 @@ QQ Bridge 已经从文本、JSON/XML 卡片和引用消息中提取候选 URL。
 
 只有标题和封面的 B 站小程序卡片，会明确提示用户复制链接，不再进入普通网页问答。日志 `官方分享卡片诊断` 记录字段路径/类型、链接域名、识别数量和遍历截断状态，不记录卡片原文或身份字段。该日志用于区分传输字段缺失和提取遗漏。
 
-2026-11-22 18:22:01 的历史消息确认收到了小程序卡片，但仅存展示文本，没有完整原始事件。测试中的该文本回放验证了缺少视频地址时的处理，不能证明当时 QQ 下发的所有字段均不含视频 ID；完整结论需要新事件的诊断日志。
+2026-11-22 18:22:01 的历史消息确认收到了小程序卡片，但仅存展示文本，没有完整原始事件。测试中的该文本回放验证了缺少视频地址时的处理，不能证明当时 QQ 下发的所有字段均不含视频 ID；2026-11-23 10:32:11 用户重新分享同一卡片，现场诊断确认 `message_type=3`，`ark_data.fields` 除图标和封面外只有 `source`、`title`，没有视频 URL、`bvid`、`aid` 或跳转路径；`video_count=0`、`truncated=false`。因此本次官方事件缺少视频定位信息，缺链接提示分支已触发，不能宣称这张卡片已成功抓取视频。
 
 验证：`python -m unittest test.test_official_media test.test_official_trial test.test_gallery_reaction`（后两项需真实 AstrBot 依赖，外部发送均为 mock）；`node --test test/media-link-extractor.test.js test/media-resolver.test.js`。线上有独立更新的 `official_groups` 导入，发布时仅应用解析改动，保留该导入。

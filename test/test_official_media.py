@@ -18,7 +18,12 @@ def extract(data=None, content=''):
 
 class OfficialMediaTests(unittest.TestCase):
     def test_observed_1822_envelope_has_no_video_and_drops_assets(self):
-        result = extract(content=ENVELOPE)
+        # 2026-11-23 10:32:11 live re-share: message_type=3, ark fields
+        # contain display metadata only. Identity and opaque assets are omitted.
+        result = extract({'message_type': 3, 'ark_data': {'fields': {
+            'source': '哔哩哔哩', 'title': '这严苛的训练几乎要了蛋的命!',
+            'source_logo': 'https://open.gtimg.cn/app_icon.png',
+            'preview': 'https://qq.ugcimg.cn/v1/example'}}, 'content': ENVELOPE})
         self.assertTrue(result['bilibili_card'])
         self.assertEqual(result['video_urls'], [])
         self.assertEqual(result['segments'], [])
