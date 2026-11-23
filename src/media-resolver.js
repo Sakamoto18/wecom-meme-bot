@@ -669,6 +669,11 @@ export class MediaResolver {
         item.size = downloaded.outputBytes;
         item.remoteUrl = '';
         item.backupUrls = [];
+        // The public URL is consumed only after the complete-file prefetch.
+        // Start a fresh TTL window then so a slow 100–200 MB download cannot
+        // expire while it is still being prepared for QQ Official.
+        item.expiresAt = Math.max(item.expiresAt, Date.now() + this.cacheTtlMs);
+        item.prefetchError = null;
         this.logger.info(`视频后台预下载完成：bytes=${item.size}`);
         return item;
       })

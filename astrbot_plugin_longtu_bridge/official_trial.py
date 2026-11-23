@@ -157,6 +157,68 @@ def _result_value(result, name, default=None):
     return getattr(result, name, default)
 
 
+def _internal_media_ready_url(bridge, public_url):
+    """Map the public media URL to the Node service reachable by AstrBot.
+
+    The readiness probe must not depend on the public DNS/HTTPS round trip:
+    AstrBot and Node already share an internal URL in ``api_url``. QQ still
+    receives the public URL after this local probe succeeds.
+    """
+    match = re.search(r'/v1/qq/media/([A-Za-z0-9_-]+)(?:\?|$)', str(public_url or ''))
+    if not match:
+        return ''
+    api_url_getter = getattr(bridge, '_api_url', None)
+    if not callable(api_url_getter):
+        return ''
+    try:
+        api_url = str(api_url_getter() or '').rstrip('/')
+    except Exception:
+        return ''
+    suffix = '/v1/qq/message'
+    if not api_url.endswith(suffix):
+        return ''
+    base = api_url[:-len(suffix)].rstrip('/')
+    return f'{base}/v1/qq/media/{match.group(1)}?complete=1'
+
+
+async def _wait_for_official_media_ready(bridge, public_url):
+    """Wait for Node's complete local file before QQ fetches the public URL."""
+    ready_url = _internal_media_ready_url(bridge, public_url)
+    if not ready_url:
+        return
+    import aiohttp
+    configured = (getattr(bridge, 'config', None) or {}).get(
+        'official_video_ready_timeout_seconds', 150,
+    )
+    try:
+        timeout_seconds = max(15, min(180, int(configured)))
+    except (TypeError, ValueError):
+        timeout_seconds = 150
+    timeout = aiohttp.ClientTimeout(
+        total=timeout_seconds, connect=10, sock_read=timeout_seconds,
+    )
+    last_status = None
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(2):
+            try:
+                async with session.head(ready_url, allow_redirects=False) as response:
+                    last_status = response.status
+                    if response.status == 200:
+                        if int(response.headers.get('Content-Length') or 0) <= 0:
+                            raise RuntimeError('官方视频完整文件预检返回空文件')
+                        return
+                    if response.status == 413:
+                        raise ValueError('官方 QQ 视频超过 200MB 上限')
+            except (asyncio.CancelledError, ValueError):
+                raise
+            except Exception:
+                if attempt == 1:
+                    raise RuntimeError('官方视频完整文件预检失败') from None
+            if attempt == 0:
+                await asyncio.sleep(1)
+    raise RuntimeError(f'官方视频完整文件预检失败：HTTP {last_status or "unknown"}')
+
+
 async def send_official_video_url(bridge, event, url, *, reply_id=''):
     """Transfer a completed public MP4 through QQ's URL media API.
 
@@ -167,19 +229,35 @@ async def send_official_video_url(bridge, event, url, *, reply_id=''):
     value = str(url or '').strip()
     if not value.startswith('https://'):
         raise ValueError('官方视频 URL 发送已启用，但媒体地址不是公网 HTTPS URL')
+    # Do not make QQ's /files endpoint wait for a slow provider download. The
+    # internal HEAD blocks until Node has a verified complete local file.
+    await _wait_for_official_media_ready(bridge, value)
     api = getattr(getattr(event, 'bot', None), 'api', None)
     if api is None:
         raise RuntimeError('官方 QQ API 不可用')
     target_group = '' if event.is_private_chat() else str(event.get_group_id() or '')
     target_user = str(event.get_sender_id() or '') if event.is_private_chat() else ''
     if event.is_private_chat():
-        result = await asyncio.wait_for(api.post_c2c_file(
+        register_file = lambda: api.post_c2c_file(
             openid=target_user, file_type=2, url=value, srv_send_msg=False,
-        ), 60)
+        )
     else:
-        result = await asyncio.wait_for(api.post_group_file(
+        register_file = lambda: api.post_group_file(
             group_openid=target_group, file_type=2, url=value, srv_send_msg=False,
-        ), 60)
+        )
+    result = None
+    for attempt in range(3):
+        try:
+            result = await asyncio.wait_for(register_file(), 60)
+            break
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if attempt == 2:
+                raise
+            # Registration is retried before any message is sent, so a
+            # transient /files failure cannot create duplicate chat messages.
+            await asyncio.sleep(1.5 * (attempt + 1))
     file_uuid = str(_result_value(result, 'file_uuid', '') or '')
     file_info = _result_value(result, 'file_info', '')
     if not file_info:

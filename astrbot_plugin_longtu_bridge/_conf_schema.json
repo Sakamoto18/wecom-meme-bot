@@ -86,6 +86,12 @@
     "default": false,
     "hint": "开启前必须配置 QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL，并确保该 HTTPS 地址能被 QQ 官方服务器访问；关闭时保留原有本地分片上传。"
   },
+  "official_video_ready_timeout_seconds": {
+    "description": "官方 QQ 视频完整文件预检超时",
+    "type": "int",
+    "default": 150,
+    "hint": "发送前先由 AstrBot 通过内部 Node 地址确认完整文件已准备好，避免让 QQ 官方服务器等待下载；范围 15-180 秒。"
+  },
   "transport_mode": {
     "description": "QQ 接入实现",
     "type": "string",

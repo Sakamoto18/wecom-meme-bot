@@ -55,7 +55,7 @@ flowchart LR
 
 ### 3. 官方发送
 
-官方 Bridge 直接调用对应群聊或 C2C 的 `/files`：`file_type=2`、`url=<完整文件地址>`、`srv_send_msg=false`，校验取得 `file_info` 后再发送 `msg_type=7` 消息。当前代码由 `official_video_url_upload_enabled` 控制；URL 失败不会回退到本地分片路径。
+官方 Bridge 先通过内部 Node 地址对同一媒体 ID 做完整文件 `HEAD` 预检，确认本地文件已准备好后，再调用对应群聊或 C2C 的 `/files`：`file_type=2`、`url=<完整文件地址>`、`srv_send_msg=false`，校验取得 `file_info` 后再发送 `msg_type=7` 消息。`/files` 登记阶段允许有限重试，消息发送不盲目重试以避免重复消息。当前代码由 `official_video_url_upload_enabled` 控制；URL 失败不会回退到本地分片路径。
 
 不再把视频先下载到 AstrBot 临时目录，也不将本地 Video 交给自动选择分片的上传函数。其余图片、商人 Markdown 艾特和图集发送不改。
 
