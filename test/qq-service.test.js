@@ -29,7 +29,7 @@ import {
   splitReplyText,
 } from '../src/qq-service.js';
 import { ActiveReplyDecider } from '../src/active-reply.js';
-import { ReplyTurnPlanner } from '../src/reply-turn-planner.js';
+import { ReplyTurnPlanner, normalizeTurnPlan } from '../src/reply-turn-planner.js';
 
 function createMeme(filename = 'longtu.png') {
   return {
@@ -4918,6 +4918,34 @@ test('当前远行商人问题由规划器转成实时商店动作，不生成�
   assert.equal(result.merchant_current_request, true);
   assert.deepEqual(result.messages, []);
   assert.equal(modelCalls, 0);
+});
+
+test('官方群当前商店查询返回商人动作，旁观和普通游戏问题不触发', async () => {
+  let planned = true;
+  let plannerCalls = 0;
+  const { service } = createService({
+    replyTurnPlanner: { enabled: true, async plan() {
+      plannerCalls += 1;
+      return normalizeTurnPlan({ merchant_current_request: planned });
+    } },
+  });
+  const base = { message_type: 'group', group_id: 'qqofficial:app:group:merchant',
+    user_id: 'member', bot_user_id: 'qqofficial:app:user:bot' };
+  const query = { ...base, message_id: 'merchant-addressed',
+    mentions: [{ user_id: base.bot_user_id }], text: '远行商人现在在卖什么' };
+  const current = await service.handleMessage(query);
+  assert.equal(current.mode, 'merchant-current');
+  assert.deepEqual(current.messages, []);
+  assert.equal(plannerCalls, 1);
+  const observed = await service.handleMessage({ ...base, message_id: 'merchant-observed',
+    text: query.text, observe_only: true });
+  assert.notEqual(observed.mode, 'merchant-current');
+  assert.deepEqual(observed.messages, []);
+  assert.equal(plannerCalls, 1);
+  planned = false;
+  const guide = await service.handleMessage({ ...query, message_id: 'merchant-guide',
+    text: '远行商人的刷新规则是什么' });
+  assert.notEqual(guide.mode, 'merchant-current');
 });
 
 test('纯角色图跳过评价时不调用回合规划器', async () => {

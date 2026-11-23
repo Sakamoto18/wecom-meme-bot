@@ -42,15 +42,18 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_planned_merchant_current_request_reuses_live_command_path(self):
         bridge, event = self.fixture(private=False)
+        event.get_messages = lambda: [Comp.At(qq='bot'), Comp.Plain('远行商人现在在卖什么')]
         bridge._request_backend.return_value = {
             'mode': 'merchant-current',
             'merchant_current_request': True,
             'messages': [],
         }
         with patch('astrbot_plugin_longtu_bridge.merchant_command.handle_merchant_command',
-                   AsyncMock(return_value=True)) as merchant:
+                   AsyncMock(side_effect=lambda bridge, event, text, **kwargs: text == '/远行商人')) as merchant:
             await handle_official_message(bridge, event)
-        merchant.assert_awaited_once_with(bridge, event, '/远行商人', official=True)
+        self.assertEqual([call.args[2] for call in merchant.await_args_list],
+                         ['远行商人现在在卖什么', '/远行商人'])
+        merchant.assert_awaited_with(bridge, event, '/远行商人', official=True)
         bridge._request_backend.assert_awaited_once()
         event.send.assert_not_awaited()
 
