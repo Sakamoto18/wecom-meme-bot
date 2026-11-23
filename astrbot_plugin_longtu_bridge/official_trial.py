@@ -339,6 +339,15 @@ async def handle_official_message(bridge, event):
             logger.info(f'官方卡片使用网关原始消息：same_body={same_body}')
         rich = share['segments']
         quote = quote_context(components, raw)
+        from .official_forward import parse_record, read_record
+        current_record = parse_record(text)
+        quote_record = parse_record(quote['text'])
+        if current_record:
+            text = current_record['text']
+        if current_record or quote_record:
+            # Attachment URLs belong to supplied chat evidence, not web queries
+            # or requests to download a platform video from inside a record.
+            rich = []
         # Full group messages feed the existing backend's passive decision gate.
         # A shared URL is a direct share; other chatter is observation only.
         # Never feed this bot's own output or another bot back into the loop.
@@ -349,7 +358,7 @@ async def handle_official_message(bridge, event):
         if await handle_merchant_command(bridge, event, text, official=True):
             return
         has_link = bool(re.search(r'https?://', text, re.IGNORECASE)
-                        or MEDIA_ACK_PATTERN.search(str(rich)) or share['search_card'])
+                        or MEDIA_ACK_PATTERN.search(str(rich)) or share['search_card'] or current_record)
         if share['card_present']:
             logger.info('官方分享卡片诊断：' + json.dumps(share['diagnostic'], ensure_ascii=False))
         if share['bilibili_card'] and not share['video_urls'] and not share['search_card'] and not quote['present']:
@@ -391,10 +400,17 @@ async def handle_official_message(bridge, event):
         images = await bridge._image_base64s(components, limit=24 if importing else 8)
         quote_chain = quote['chain']
         quote_images = await bridge._image_base64s(quote_chain, limit=24 if importing else 4)
+        forwarded_text, forward_images = await read_record(current_record, getattr(bridge, 'session', None))
+        quoted_forwarded_text, quoted_forward_images = await read_record(quote_record, getattr(bridge, 'session', None))
+        if current_record or quote_record:
+            logger.info(f'官方合并记录读图：current={len(forward_images)} quoted={len(quoted_forward_images)} '
+                        f'attachments={len((current_record or {}).get("attachments", [])) + len((quote_record or {}).get("attachments", []))}')
         quoted_record = '[群聊的聊天记录]' in quote['text'] or '=== 消息 ' in quote['text']
-        pure_mention = bool(mentioned and not text and not images and not quote['present'])
+        pure_mention = bool(mentioned and not text and not images and not quote['present'] and not current_record)
         current_text = text
-        if not current_text and quote['present']:
+        if not current_text and current_record:
+            current_text = '请阅读这份合并聊天记录，结合其中的文字和图片回应。'
+        elif not current_text and quote['present']:
             current_text = '请回应我引用的这条消息。' if quote['text'] or quote_images else '我引用了一条消息，但本次没有附带可读正文。'
         elif pure_mention:
             current_text = '叫我有事？'
@@ -410,17 +426,20 @@ async def handle_official_message(bridge, event):
             'pure_bot_mention': pure_mention,
             'mentions': [{'user_id': identity(appid, 'user', c.qq), 'name': getattr(c, 'name', '')}
                          for c in components if isinstance(c, Comp.At)],
-            'has_image': bool(images or quote_images), 'image_base64s': images,
+            'has_image': bool(images or quote_images or forward_images or quoted_forward_images), 'image_base64s': images,
             'quoted_image_base64s': quote_images,
+            'forwarded_text': forwarded_text,
+            'forward_image_base64s': forward_images,
+            'quoted_forward_image_base64s': quoted_forward_images,
             'quoted_text': '' if quoted_record else quote['text'],
-            'quoted_forwarded_text': quote['text'] if quoted_record else '',
+            'quoted_forwarded_text': quoted_forwarded_text or (quote['text'] if quoted_record else ''),
             'quoted_message_id': identity(appid, 'message', quote['id']),
             'quoted_user_id': (str(user_bindings(bridge.config).get(quote['author_id']) or '')
                                or identity(appid, 'user', quote['author_id'])),
             'quoted_sender_name': quote['author_name'],
             'rich_segments': rich,
             'bilibili_card': share['search_card'] if not share['video_urls'] and not quote['present'] else None,
-            'media_share': True,
+            'media_share': not (current_record or quote_record),
             'observe_only': observe_only,
         }
         if text.startswith('/crazy-thursday'):
@@ -435,7 +454,7 @@ async def handle_official_message(bridge, event):
             elif command == '/crazy-thursday-list': payload['crazy_thursday_list'] = True
             elif command == '/crazy-thursday-del': payload['crazy_thursday_delete'] = argument
         logger.info(f'官方 QQ 试用收到消息：appid={appid} private={private} group={event.get_group_id()} '
-                    f'images={len(images)} observe={observe_only} link={has_link} '
+                    f'images={len(images)} forward_images={len(forward_images) + len(quoted_forward_images)} observe={observe_only} link={has_link} '
                     f'quote={quote["present"]} quote_chars={len(quote["text"])}')
         media_receipt = bool(not text.startswith('/') and (payload.get('bilibili_card') or MEDIA_ACK_PATTERN.search(text + ' ' + str(rich))))
         from .web_learning_progress import request_learning_backend

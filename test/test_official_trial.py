@@ -195,6 +195,35 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['quoted_text'], '')
         self.assertFalse(payload['pure_bot_mention'])
 
+    async def test_merged_record_images_reach_forward_channel_without_web_urls(self):
+        from test.test_official_forward import BODY
+        for quoted, mentioned in ((False, False), (False, True), (True, True)):
+            bridge, event = self.fixture(private=False)
+            event.message_obj.raw_message.content = '' if quoted else BODY
+            event.get_messages = lambda: ([Comp.Reply(id='record', chain=[Comp.Plain(BODY)]),
+                                           Comp.Plain('看看这些图片'), Comp.At(qq='bot')]
+                                          if quoted else [Comp.Plain(BODY)] + ([Comp.At(qq='bot')] if mentioned else []))
+            async def read(record, session):
+                return ('[群聊的聊天记录]\n甲：[图片#1]', ['aW1hZ2U=']) if record else ('', [])
+            with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', side_effect=read):
+                await handle_official_message(bridge, event)
+            payload = bridge._request_backend.call_args.args[0]
+            self.assertTrue(payload['has_image'])
+            self.assertFalse(payload['media_share'])
+            self.assertFalse(payload['observe_only'])
+            self.assertFalse(payload['pure_bot_mention'])
+            self.assertEqual(payload['rich_segments'], [])
+            self.assertNotIn('https://', payload['text'])
+            key = 'quoted_forward_image_base64s' if quoted else 'forward_image_base64s'
+            self.assertEqual(payload[key], ['aW1hZ2U='])
+            self.assertEqual(payload['image_base64s'], [])
+            if quoted:
+                self.assertIn('[图片#1]', payload['quoted_forwarded_text'])
+                self.assertEqual(payload['forward_image_base64s'], [])
+            else:
+                self.assertIn('[图片#1]', payload['forwarded_text'])
+                self.assertEqual(payload['quoted_forward_image_base64s'], [])
+
     async def test_media_receipts_are_silent_on_success_and_explicit_on_failure(self):
         for mode in ('success', 'unavailable', 'timeout', 'send-failed'):
             bridge, event = self.fixture()
