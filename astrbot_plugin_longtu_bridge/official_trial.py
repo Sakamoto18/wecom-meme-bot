@@ -12,10 +12,30 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 import time
+import traceback
 
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
+
+
+def error_diagnostics(error):
+    """Keep error chains/locations without logging tokens, URLs or message bodies."""
+    result, seen = [], set()
+    while error is not None and id(error) not in seen and len(result) < 6:
+        seen.add(id(error))
+        row = {'type': type(error).__name__, 'frames': [
+            {'file': frame.filename.replace('\\', '/').rsplit('/', 1)[-1],
+             'line': frame.lineno, 'function': frame.name}
+            for frame in traceback.extract_tb(error.__traceback__)[-12:]
+        ]}
+        for name in ('errno', 'winerror', 'code', 'status'):
+            value = getattr(error, name, None)
+            if isinstance(value, int) or isinstance(value, str) and re.fullmatch(r'[0-9]{1,12}', value):
+                row[name] = value
+        result.append(row)
+        error = error.__cause__ or error.__context__
+    return result
 
 
 def identity(appid, kind, value):
@@ -534,7 +554,9 @@ async def handle_official_message(bridge, event):
         logger.info(f'官方 QQ 试用回复完成：appid={appid}')
     except Exception as error:
         # Unknown sends must not be blindly retried by this bridge.
-        logger.warning(f'官方 QQ 试用失败：{type(error).__name__} code={getattr(error, "code", "")}')
+        logger.warning('官方 QQ 试用失败：' + json.dumps({
+            'stage': media_stage, 'errors': error_diagnostics(error),
+        }, ensure_ascii=False))
         if observe_only:
             return
         if media_receipt:

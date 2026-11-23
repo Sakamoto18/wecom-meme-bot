@@ -10,6 +10,22 @@ from astrbot_plugin_longtu_bridge.main import LongtuQqBridge
 
 
 class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
+    def test_failure_diagnostics_keep_root_cause_without_sensitive_error_text(self):
+        from astrbot_plugin_longtu_bridge.official_trial import error_diagnostics
+        try:
+            try:
+                raise TimeoutError('https://private.example/?token=secret')
+            except TimeoutError as cause:
+                raise PermissionError(13, 'locked secret file', 'private-path') from cause
+        except PermissionError as error:
+            rows = error_diagnostics(error)
+        self.assertEqual([row['type'] for row in rows], ['PermissionError', 'TimeoutError'])
+        self.assertEqual(rows[0]['errno'], 13)
+        self.assertTrue(rows[0]['frames'])
+        self.assertTrue(rows[1]['frames'])
+        self.assertNotIn('secret', str(rows))
+        self.assertNotIn('private', str(rows))
+
     async def test_group_member_web_learning_command_reaches_backend_and_report_returns(self):
         bridge, event = self.fixture(private=False)
         event.get_messages = lambda: [Comp.At(qq='bot'), Comp.Plain('/learn-meme 肥嘟嘟')]
