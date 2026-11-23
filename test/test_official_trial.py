@@ -331,6 +331,31 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         chains=output_chains({'messages':[{'type':'video','url':'http://127.0.0.1:8787/media/test'}]})
         self.assertIsInstance(chains[0].chain[0], Comp.Video)
 
+    async def test_bili_preview_only_card_does_not_reach_web_backend(self):
+        from test.test_official_media import ENVELOPE
+        bridge, event = self.fixture(private=False)
+        event.message_obj.raw_message.content = ENVELOPE
+        event.message_obj.raw_message.raw_data = {'content': ENVELOPE}
+        event.get_messages = lambda: [Comp.Plain(ENVELOPE)]
+        await handle_official_message(bridge, event)
+        await handle_official_message(bridge, event)
+        bridge._request_backend.assert_not_awaited()
+        event.send.assert_awaited_once()
+        self.assertIn('复制链接', event.send.call_args.args[0].chain[0].text)
+
+    async def test_structured_bili_id_goes_to_same_media_backend(self):
+        from test.test_official_media import ENVELOPE, BVID, VIDEO
+        bridge, event = self.fixture(private=False)
+        event.message_obj.raw_message.content = ENVELOPE
+        event.message_obj.raw_message.raw_data = {'content': ENVELOPE,
+            'msg_elements': [{'ark_data': {'source': '哔哩哔哩', 'bvid': BVID}}]}
+        event.get_messages = lambda: [Comp.Plain(ENVELOPE)]
+        await handle_official_message(bridge, event)
+        payload = bridge._request_backend.call_args.args[0]
+        self.assertEqual(payload['rich_segments'][0]['data']['url'], VIDEO)
+        self.assertTrue(payload['media_share'])
+        self.assertFalse(payload['observe_only'])
+
     async def test_learning_mirror_preserves_legacy_receipt_and_routes_official_ids(self):
         bridge, event = self.fixture()
         bridge.config.update(official_trial_user_bindings={'user-openid':'1079175957'},official_trial_push_enabled=True)

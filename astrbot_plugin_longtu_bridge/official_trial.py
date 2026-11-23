@@ -63,33 +63,8 @@ async def official_group_names(bridge, group_ids):
 
 
 def media_segments(raw):
-    """Preserve URLs buried in official ark/msg_elements without identity data."""
-    data = getattr(raw, 'raw_data', {})
-    urls = []
-    def walk(value, depth=0):
-        if depth > 12 or len(urls) >= 24:
-            return
-        if isinstance(value, str):
-            if len(value) > 256 * 1024:
-                return
-            if value.lstrip().startswith(('{', '[')):
-                try:
-                    walk(json.loads(value), depth + 1)
-                    return
-                except ValueError:
-                    pass
-            for url in re.findall(r'https?://[^\s<>"\x27]+', value.replace('\\/', '/')):
-                if url not in urls:
-                    urls.append(url[:4096])
-        elif isinstance(value, dict):
-            for key, item in value.items():
-                if key not in ('author', 'mentions', 'avatar'):
-                    walk(item, depth + 1)
-        elif isinstance(value, list):
-            for item in value[:32]:
-                walk(item, depth + 1)
-    walk(data)
-    return [{'type': 'json', 'data': {'url': url}} for url in urls[:24]]
+    from .official_media import extract_official_media
+    return extract_official_media(raw)['segments']
 
 
 def quote_context(components, raw):
@@ -355,7 +330,9 @@ async def handle_official_message(bridge, event):
             text = raw_text
         bound_user = str(user_bindings(bridge.config).get(str(event.get_sender_id())) or '')
         from .main import ALLOWED_BRIDGE_SLASH_COMMANDS, REPORT_TIMEZONE, nearby_holiday_context, MEDIA_ACK_PATTERN
-        rich = media_segments(raw)
+        from .official_media import extract_official_media
+        share = extract_official_media(raw)
+        rich = share['segments']
         quote = quote_context(components, raw)
         # Full group messages feed the existing backend's passive decision gate.
         # A shared URL is a direct share; other chatter is observation only.
@@ -368,6 +345,14 @@ async def handle_official_message(bridge, event):
             return
         has_link = bool(re.search(r'https?://', text, re.IGNORECASE)
                         or MEDIA_ACK_PATTERN.search(str(rich)))
+        if share['card_present']:
+            logger.info('官方分享卡片诊断：' + json.dumps(share['diagnostic'], ensure_ascii=False))
+        if share['bilibili_card'] and not share['video_urls'] and not quote['present']:
+            notice = MessageChain([Comp.Plain(
+                '这张 B 站小程序卡片没能提取到视频地址。请在 B 站选择“复制链接”，把链接发到这里，我再解析。')])
+            notice.use_markdown_ = False
+            await event.send(notice)
+            return
         quoted_bot = bool(quote['author_id'] and quote['author_id'] == str(event.get_self_id()))
         observe_only = bool(not private and not mentioned and not quoted_bot and not has_link)
         if observe_only and text.startswith('/'):
