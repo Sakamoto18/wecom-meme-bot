@@ -133,6 +133,26 @@ class ScheduledTests(fixtures.DeliveryTests):
         o.prepare_mention_image.assert_not_called()
         self.client.api.post_group_message.assert_not_awaited()
 
+    async def test_group_switch_preserves_round_and_recovers_native_mentions(self):
+        self.monitor.bridge.config['official_group_enabled'] = False
+        self.assertEqual(await self.monitor.tick(NOW), 'napcat=sent official=official-group-disabled')
+        o.proactive_allowed.assert_not_awaited()
+        o.prepare_mention_image.assert_not_called()
+        self.client.api.post_group_message.assert_not_awaited()
+        self.assertEqual(self.monitor.state.db.execute(
+            "select count(*) from delivery where key like 'official:%'").fetchone()[0], 0)
+
+        self.monitor.bridge.config['official_group_enabled'] = True
+        self.assertEqual(await self.monitor.tick(NOW + 30), 'napcat=already-sent official=sent')
+        o.proactive_allowed.assert_awaited_once_with(self.client, GROUP)
+        self.client.api.post_group_message.assert_awaited_once()
+        payload = self.client.api.post_group_message.call_args.kwargs
+        self.assertEqual(payload['msg_type'], 2)
+        for oid in OPENIDS:
+            self.assertIn(f'<qqbot-at-user id="{oid}" />', payload['markdown']['content'])
+        self.assertEqual(await self.monitor.tick(NOW + 60), 'napcat=already-sent official=already-sent')
+        self.client.api.post_group_message.assert_awaited_once()
+
     async def test_disabled_permission_waits_without_claim_then_recovers_same_round(self):
         from astrbot_plugin_longtu_bridge import merchant_alert as m
         o.proactive_allowed.return_value = False
