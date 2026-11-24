@@ -413,6 +413,9 @@ class MerchantMonitor:
         return 'sent' if receipt else 'uncertain'
 
     async def _tick_official(self, now=None):
+        from .official_policy import group_enabled
+        if not group_enabled(self.bridge.config):
+            return 'official-group-disabled'
         from .merchant_official import scheduled_target, official_platform, prepare_image, send_image
         now = now or time.time()
         window = round_window(now)

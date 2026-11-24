@@ -7,6 +7,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -17,6 +18,20 @@ import traceback
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
+from .official_policy import event_enabled, group_enabled
+from .official_video import OfficialVideoCache, OfficialVideoPreparationError
+
+
+MAX_OFFICIAL_MEDIA_BYTES = 200_000_000
+
+
+class OfficialMediaTooLarge(OfficialVideoPreparationError):
+    """A definite rejection before a video/file message is sent."""
+
+    def __init__(self, size=0):
+        self.size = size
+        detail = f'（{size / 1_000_000:.1f}MB）' if size else ''
+        super().__init__(f'视频{detail}未发送：超过 QQ 官方 200MB 上限，改成文件也受此限制。')
 
 
 def error_diagnostics(error):
@@ -206,9 +221,12 @@ async def _wait_for_official_media_ready(bridge, public_url):
                     if response.status == 200:
                         if int(response.headers.get('Content-Length') or 0) <= 0:
                             raise RuntimeError('官方视频完整文件预检返回空文件')
-                        return
+                        size = int(response.headers.get('Content-Length') or 0)
+                        if size > MAX_OFFICIAL_MEDIA_BYTES:
+                            raise OfficialMediaTooLarge(size)
+                        return size
                     if response.status == 413:
-                        raise ValueError('官方 QQ 视频超过 200MB 上限')
+                        raise OfficialMediaTooLarge()
             except (asyncio.CancelledError, ValueError):
                 raise
             except Exception:
@@ -226,12 +244,15 @@ async def send_official_video_url(bridge, event, url, *, reply_id=''):
     when enabled, a URL failure must be visible rather than silently starting
     the old multi-part upload path the user asked to avoid.
     """
+    if not event_enabled(bridge.config, event):
+        return
     value = str(url or '').strip()
     if not value.startswith('https://'):
         raise ValueError('官方视频 URL 发送已启用，但媒体地址不是公网 HTTPS URL')
     # Do not make QQ's /files endpoint wait for a slow provider download. The
     # internal HEAD blocks until Node has a verified complete local file.
-    await _wait_for_official_media_ready(bridge, value)
+    size = await _wait_for_official_media_ready(bridge, value)
+    file_type = 4 if size and size > 30_000_000 else 2
     api = getattr(getattr(event, 'bot', None), 'api', None)
     if api is None:
         raise RuntimeError('官方 QQ API 不可用')
@@ -239,11 +260,11 @@ async def send_official_video_url(bridge, event, url, *, reply_id=''):
     target_user = str(event.get_sender_id() or '') if event.is_private_chat() else ''
     if event.is_private_chat():
         register_file = lambda: api.post_c2c_file(
-            openid=target_user, file_type=2, url=value, srv_send_msg=False,
+            openid=target_user, file_type=file_type, url=value, srv_send_msg=False,
         )
     else:
         register_file = lambda: api.post_group_file(
-            group_openid=target_group, file_type=2, url=value, srv_send_msg=False,
+            group_openid=target_group, file_type=file_type, url=value, srv_send_msg=False,
         )
     result = None
     for attempt in range(3):
@@ -270,6 +291,8 @@ async def send_official_video_url(bridge, event, url, *, reply_id=''):
     payload = {'msg_type': 7, 'media': media, 'msg_seq': 1}
     if reply_id:
         payload['msg_id'] = str(reply_id)
+    if not event_enabled(bridge.config, event):
+        return
     if event.is_private_chat():
         payload['openid'] = target_user
         sent = await asyncio.wait_for(api.post_c2c_message(**payload), 60)
@@ -286,6 +309,8 @@ async def send_official_video_url(bridge, event, url, *, reply_id=''):
 async def send_chain(bridge, event, chain):
     """Send official media, using complete-file URL transfer when enabled."""
     import aiohttp
+    if not event_enabled(bridge.config, event):
+        return
     video = next((c for c in chain.chain if isinstance(c, Comp.Video)), None)
     if video is None:
         await event.send(chain)
@@ -295,22 +320,46 @@ async def send_chain(bridge, event, chain):
         await send_official_video_url(bridge, event, video.file,
                                       reply_id=str(getattr(event.message_obj, 'message_id', '') or ''))
         return
-    maximum = 200 * 1024 * 1024
+    if bridge.config.get('official_video_compress_oversize_enabled') is True:
+        cache = getattr(bridge, '_official_video_cache', None)
+        if cache is None:
+            bridge._official_video_cache = cache = OfficialVideoCache()
+        timeout = max(60, min(1800, int(bridge.config.get('official_video_compress_timeout_seconds', 900))))
+        async with cache.prepare(str(video.file),
+                                 ffmpeg=os.environ.get('QQ_MEDIA_FFMPEG_COMMAND') or 'ffmpeg',
+                                 timeout=timeout) as prepared:
+            if not event_enabled(bridge.config, event):
+                return
+            # A large MP4 is sent as one downloadable file; its duration is
+            # unchanged. This does not change AstrBot's upload transport.
+            component = (Comp.File(name='video.mp4', file=str(prepared.path))
+                         if prepared.size > 30_000_000 or prepared.original_size > MAX_OFFICIAL_MEDIA_BYTES
+                         else Comp.Video(file=str(prepared.path)))
+            prepared_chain = MessageChain([component if item is video else item for item in chain.chain])
+            prepared_chain.use_markdown_ = False
+            await event.send(prepared_chain)
+            logger.info(f'官方 QQ 完整视频发送完成：bytes={prepared.size} original_bytes={prepared.original_size} '
+                        f'compressed={prepared.original_size > MAX_OFFICIAL_MEDIA_BYTES}')
+        return
+    maximum = MAX_OFFICIAL_MEDIA_BYTES
     with tempfile.TemporaryDirectory(prefix='longtu-official-video-') as directory:
         path = Path(directory) / 'video.mp4'
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=480)) as session:
             async with session.get(str(video.file)) as response:
                 response.raise_for_status()
-                if int(response.headers.get('Content-Length') or 0) > maximum:
-                    raise ValueError('视频超过官方 200MB 上限')
+                expected_size = int(response.headers.get('Content-Length') or 0)
+                if expected_size > maximum:
+                    raise OfficialMediaTooLarge(expected_size)
                 total = 0
                 with path.open('wb') as output:
                     async for chunk in response.content.iter_chunked(1024 * 1024):
                         total += len(chunk)
                         if total > maximum:
-                            raise ValueError('视频超过官方 200MB 上限')
+                            raise OfficialMediaTooLarge(total)
                         output.write(chunk)
         video.file = str(path)
+        if not event_enabled(bridge.config, event):
+            return
         await event.send(chain)
         logger.info(f'官方 QQ 视频发送完成：bytes={total}')
 
@@ -332,6 +381,8 @@ async def report_chains(bridge, report_date, *, end_at=None, requested_by=''):
 
 
 async def proactive(bridge, target, chains, *, group=False):
+    if group and not group_enabled(bridge.config):
+        return False
     platform = next((p for p in bridge.context.platform_manager.platform_insts
                      if p.meta().name == 'qq_official' and str(getattr(p, 'appid', ''))
                      == str(bridge.config.get('official_trial_appid'))), None)
@@ -339,6 +390,8 @@ async def proactive(bridge, target, chains, *, group=False):
         return False
     platform.remember_session_scene(target, 'group' if group else 'friend')
     for chain in chains:
+        if group and not group_enabled(bridge.config):
+            return False
         chain.use_markdown_ = False
         ok = await bridge.context.send_message(
             f'{platform.meta().id}:{"GroupMessage" if group else "FriendMessage"}:{target}', chain)
@@ -359,6 +412,9 @@ async def mirror_daily_report(bridge, report_date):
 
 
 async def mirror_crazy_thursday(bridge, target_date):
+    if not group_enabled(bridge.config):
+        logger.info(f'官方疯狂星期四跳过：date={target_date} reason=group-disabled')
+        return 0
     if not enabled(bridge.config) or not bridge.config.get('official_trial_push_enabled', False):
         logger.info(f'官方疯狂星期四跳过：date={target_date} reason=disabled')
         return 0
@@ -415,6 +471,8 @@ async def mirror_learning(bridge, payload, *, delivery_id=""):
     group = payload.get('chatType') == 'group'
     target = str(payload.get('groupId') if group else payload.get('userId') or '')
     own = target.startswith(prefix)
+    if group and not group_enabled(bridge.config):
+        return False if own else None
     targets = [target.split(':', 3)[-1]] if own else []
     if not own and not group and bridge.config.get('official_trial_push_enabled', False):
         targets = [key for key, qq in user_bindings(bridge.config).items() if str(qq) == target]
@@ -454,6 +512,9 @@ async def handle_official_message(bridge, event):
         platform = getattr(getattr(event, 'bot', None), 'platform', None)
         appid = str(getattr(platform, 'appid', '') or '')
         if not configured_app or appid != configured_app:
+            return
+        if not event_enabled(bridge.config, event):
+            event.call_llm = False
             return
         raw = getattr(event.message_obj, 'raw_message', None)
         # Trial only handles QQ groups and C2C, not guild/channel identities.
@@ -715,7 +776,9 @@ async def handle_official_message(bridge, event):
         if observe_only:
             return
         if media_receipt:
-            if media_stage == 'send':
+            if isinstance(error, OfficialVideoPreparationError):
+                status = str(error)
+            elif media_stage == 'send':
                 status = '解析已完成，但内容未全部确认发送；可能已有部分到达，请勿连续重复提交。'
             elif isinstance(error, asyncio.TimeoutError):
                 status = '抓取等待超时，暂未拿到结果，请稍后重试。'

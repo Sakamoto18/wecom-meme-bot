@@ -127,3 +127,17 @@ AppID `1903660238`，AstrBot 平台 ID `longtu-official-trial`，WebSocket 接�
 独立测试会话完成真实模型回放：HTTP 200、`mode=model`，耗时约 65 秒；日志 `received=16 analyzed=16 failed=0`，`search=0`，返回两段文字回复。未调用 QQ 发送接口，未绕开或调整原群用量限制；三份商人 Markdown @ 运行文件与此前备份哈希一致。
 
 后续引用格式修复验证：真实 AstrBot 环境 68 项 Python 回归通过，Node 连续发言/记录隔离 3 项、多图和引用资料 4 项通过。15:14 失败消息的原始引用文字经实际桥接入口下载 16/16 张图片（约 0.75 秒，无缺图、无签名地址泄漏），在真实群身份下后端回放 HTTP 200、`mode=model`，耗时约 111 秒，日志 `received=16 analyzed=16 failed=0`；最终回复能描述截图内容。QQ 发送使用模拟对象，此验证未向群发送测试消息。两处修复已分别部署，Backend/AstrBot 健康，Provider 未重启，三份商人 Markdown @ 文件哈希保持不变。小时次数限制解除详情见 `QQ_DEPLOYMENT.md`，每日 Token 限额仍保留。
+
+## 官方群聊总开关与超大视频（2026-11-24）
+
+AstrBot → 插件 → Longtu QQ Bridge → 配置中的「官方 Bot 群聊总开关」对应 `official_group_enabled`，默认开启。关闭、保存并重载插件后，官方渠道群消息在调用后端前即终止事件，不触发普通对话、视频解析、商人命令或其他回复处理器；官方远行商人、疯狂星期四、学习结果的群主动发送也会停止。官方私聊、NapCat 和已有群身份映射保留。切回 NapCat 时先关此项，再登录 NapCat；切回官方渠道时再打开。
+
+11 月 24 日 14:32 截图对应的失败，在生产 `official_trial.py:142` 的 Content-Length 检查处触发：原文件大于旧的 200MiB 检查值，尚未进入 QQ 上传。原来的通用「可能已有部分到达」不能说明此类确定超限，现改为明确的文件准备失败提示。[QQ 官方富媒体限制](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/rich-media.html)中，视频和普通文件硬限制均为 200MB，换成文件类型不能绕过。
+
+用户已授权接受画质降低。`official_video_compress_oversize_enabled=true` 在当前本地发送路径完整下载视频（最多 500MiB），原文件超过 200,000,000 字节时对副本执行 H.264/AAC 两遍压缩，按约 190MB 预算计算码率，保留完整时长和主音轨。压缩后检查文件大小、时长及音轨，失败时不提交残缺输出；不使用时长截断或文件分段。超限压缩副本、以及仍超过 30MB 的视频，以一条 MP4 文件消息提交。压缩超时默认 900 秒，可通过 `official_video_compress_timeout_seconds` 配置为 60–1800 秒。
+
+同一媒体 URL 的完整副本缓存 30 分钟，跨群共用下载和压缩，最多同时压缩一个视频；正在上传的文件不会被缓存清理。缓存位于 AstrBot 工作目录的 `data/plugin_data/longtu_official_video`，清理预算为 2GiB（活动文件除外）。原视频、Provider 和 NapCat 输出不变。
+
+**压缩与上传协议是两件事。** 当前本地路径仍由 AstrBot 决定底层上传方式，超过其阈值仍可能使用分片；本次压缩并不代表「取消分片」已上线。可选的公网 URL 路径仍默认关闭、未完成公网验收；已准备好的 30–200MB 文件在 URL 模式使用 `file_type=4`。本地压缩缓存尚未接到公网 URL 出口，不要同时开启两个开关并假定 URL 模式已能发送超限原片。
+
+本次已部署到 Windows 生产的项目副本和 AstrBot 插件副本，开启自动压缩，群聊总开关保持开启。备份在 `C:\migration-backup\official-policy-before-20261124-144937`。保留线上尚未入 main 的商人 Markdown 艾特实现，仅对商人调度补充开关判断；`merchant_official.py` 和 `official_compact_image.py` 的部署前后 SHA-256 相同。相关 AstrBot 回归通过；服务器真实 FFmpeg 测试将 249,429,078 字节、带音频的 6 秒完整视频压到 10,945,893 字节，时长仍为 6 秒、音频保留，第二次命中缓存且原文件未被替换。Windows 缓存清理遇到暂时文件占用时会延后清理，不把清理失败误报成消息发送失败。以上为准备和模拟发送验证，未向 QQ 实发测试文件，仍需新分享事件验证客户端收取。
