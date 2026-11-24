@@ -333,6 +333,82 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('https://', payload['quoted_forwarded_text'])
         self.assertFalse(payload['media_share'])
 
+    async def test_named_record_with_video_never_becomes_a_new_share_or_passive_input(self):
+        # Redacted shape from the 2026-11-24 15:11 incident: QQ supplies a
+        # sender-owned record title, with video URLs in its attachment lines.
+        record = ('[烤全鸡的聊天记录]\n=== 消息 1 ===\n[发送者] 烤全鸡\n'
+                  '[附件1] 类型:视频 文件名:video.mp4 URL:https://example.invalid/video.mp4\n'
+                  '=== 消息 2 ===\n[消息内容] 我先退出了\n[发送者] 烤全鸡')
+        for mentioned in (False, True):
+            for prefix in ('', '看看这个\n'):
+                for raw_only in (False, True):
+                    with self.subTest(mentioned=mentioned, prefix=prefix, raw_only=raw_only):
+                        bridge, event = self.fixture(private=False)
+                        event.message_obj.raw_message.content = prefix + record
+                        event.get_messages = lambda: [Comp.Plain('卡片' if raw_only else prefix + record)] + (
+                            [Comp.At(qq='bot')] if mentioned else [])
+                        with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', AsyncMock()) as read, \
+                             patch('astrbot_plugin_longtu_bridge.official_media.extract_official_media') as extract:
+                            await handle_official_message(bridge, event)
+                        extract.assert_not_called()
+                        read.assert_not_awaited()
+                        bridge._image_base64s.assert_not_awaited()
+                        bridge._request_backend.assert_not_awaited()
+                        event.send.assert_not_awaited()
+                        event.stop_event.assert_called_once()
+                        self.assertFalse(event.call_llm)
+
+    async def test_quoted_record_requires_at_this_bot_even_when_link_or_bot_quote_wakes(self):
+        from test.test_official_forward import BODY
+        record = BODY.replace('[群聊的聊天记录]', '[烤全鸡的聊天记录]')
+        for at in (None, 'someone-else'):
+            for prompt in ('看看这个', '看看 https://b23.tv/new-link'):
+                bridge, event = self.fixture(private=False)
+                event.get_messages = lambda: [Comp.Reply(id='record', chain=[Comp.Plain(record)]),
+                    Comp.Plain(prompt)] + ([Comp.At(qq=at)] if at else [])
+                event.message_obj.raw_message.message_type = 103
+                event.message_obj.raw_message.raw_data = {'msg_elements': [
+                    {'content': record, 'author': {'member_openid': 'bot'}}]}
+                with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', AsyncMock()) as read, \
+                     patch('astrbot_plugin_longtu_bridge.official_media.extract_official_media') as extract:
+                    await handle_official_message(bridge, event)
+                read.assert_not_awaited()
+                extract.assert_not_called()
+                bridge._request_backend.assert_not_awaited()
+                event.send.assert_not_awaited()
+
+    async def test_named_record_explicit_quote_and_at_reaches_only_quoted_evidence(self):
+        from test.test_official_forward import BODY, PNG
+        from astrbot_plugin_longtu_bridge.official_forward import read_record
+        bridge, event = self.fixture(private=False)
+        record = BODY.replace('[群聊的聊天记录]', '[烤全鸡的聊天记录]')
+        event.get_messages = lambda: [Comp.Reply(id='record', chain=[Comp.Plain(record)]),
+                                     Comp.At(qq='bot'), Comp.Plain('总结一下')]
+        async def read(record, session):
+            return await read_record(record, session, downloader=AsyncMock(return_value=PNG))
+        with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', side_effect=read):
+            await handle_official_message(bridge, event)
+        payload = bridge._request_backend.await_args.args[0]
+        self.assertEqual(payload['text'], '总结一下')
+        self.assertEqual(len(payload['quoted_forward_image_base64s']), 2)
+        self.assertIn('[烤全鸡的聊天记录]', payload['quoted_forwarded_text'])
+        self.assertEqual(payload['quoted_text'], '')
+        self.assertEqual(payload['rich_segments'], [])
+        self.assertFalse(payload['media_share'])
+
+    async def test_record_header_without_nodes_cannot_fall_through_as_ordinary_text(self):
+        for quoted in (False, True):
+            bridge, event = self.fixture(private=False)
+            record = '[烤全鸡的聊天记录]'
+            component = Comp.Reply(id='record', chain=[Comp.Plain(record)]) if quoted else Comp.Plain(record)
+            event.get_messages = lambda: [component, Comp.At(qq='bot')]
+            await handle_official_message(bridge, event)
+            bridge._request_backend.assert_not_awaited()
+            if quoted:
+                self.assertIn('没有附带可读取', event.send.await_args.args[0].chain[0].text)
+            else:
+                event.send.assert_not_awaited()
+
     async def test_media_receipts_are_silent_on_success_and_explicit_on_failure(self):
         for mode in ('success', 'unavailable', 'timeout', 'send-failed'):
             bridge, event = self.fixture()

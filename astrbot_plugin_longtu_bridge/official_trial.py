@@ -548,6 +548,25 @@ async def handle_official_message(bridge, event):
         raw_text = re.sub(r'^(?:<@!?[A-Za-z0-9_-]+>\s*)+', '', raw_text).strip()
         if raw_text.startswith('/'):
             text = raw_text
+        quote = quote_context(components, raw)
+        from .official_forward import has_record_header, parse_record, read_record
+        current_record_present = has_record_header(text) or has_record_header(raw_text)
+        quoted_record = has_record_header(quote['text'])
+        # Record attachments/links must never wake the bot or reach the passive
+        # backend gate. In groups, require BOTH an explicit quote and @this bot.
+        record_authorized = bool(quote['present'] and quoted_record and (private or mentioned))
+        if (current_record_present or quoted_record) and not record_authorized:
+            event.call_llm = False
+            logger.info('官方合并记录已忽略：需要明确引用并 @机器人')
+            return
+        current_record = parse_record(text) if current_record_present else None
+        quote_record = parse_record(quote['text']) if record_authorized else None
+        if record_authorized and quote_record is None:
+            await event.send(MessageChain([Comp.Plain('这条引用没有附带可读取的聊天记录正文。')]))
+            return
+        if current_record_present:
+            # A separate current record is never part of the quoted evidence.
+            text = current_record['text'] if current_record else ''
         bound_user = str(user_bindings(bridge.config).get(str(event.get_sender_id())) or '')
         from .main import ALLOWED_BRIDGE_SLASH_COMMANDS, REPORT_TIMEZONE, nearby_holiday_context, MEDIA_ACK_PATTERN
         from .official_media import extract_official_media
@@ -558,16 +577,6 @@ async def handle_official_message(bridge, event):
             same_body = packet.get('d') == getattr(raw, 'raw_data', None)
             logger.info(f'官方卡片使用网关原始消息：same_body={same_body}')
         rich = share['segments']
-        quote = quote_context(components, raw)
-        from .official_forward import parse_record, read_record
-        current_record = parse_record(text)
-        quote_record = parse_record(quote['text'])
-        if current_record:
-            text = current_record['text']
-            # A supplied record is evidence only when explicitly quoted.
-            # Never invent a request to read a directly posted record.
-            if not text and not quote_record:
-                return
         if current_record or quote_record:
             # Attachment URLs belong to supplied chat evidence, not web queries
             # or requests to download a platform video from inside a record.
@@ -626,13 +635,12 @@ async def handle_official_message(bridge, event):
         quote_images = await bridge._image_base64s(quote_chain, limit=24 if importing else 4)
         forwarded_text, forward_images = '', []
         quoted_forwarded_text, quoted_forward_images = '', []
-        if quote['present'] and not observe_only:
+        if record_authorized:
             quoted_forwarded_text, quoted_forward_images = await read_record(
                 quote_record, getattr(bridge, 'session', None))
         if current_record or quote_record:
             logger.info(f'官方合并记录读图：current={len(forward_images)} quoted={len(quoted_forward_images)} '
                         f'attachments={len((current_record or {}).get("attachments", [])) + len((quote_record or {}).get("attachments", []))}')
-        quoted_record = '[群聊的聊天记录]' in quote['text'] or '=== 消息 ' in quote['text']
         pure_mention = bool(mentioned and not text and not images and not quote['present'] and not current_record)
         current_text = text
         if not current_text and quote['present']:
@@ -657,7 +665,7 @@ async def handle_official_message(bridge, event):
             'forward_image_base64s': forward_images,
             'quoted_forward_image_base64s': quoted_forward_images,
             'quoted_text': '' if quoted_record else quote['text'],
-            'quoted_forwarded_text': quoted_forwarded_text or (quote['text'] if quoted_record and not observe_only else ''),
+            'quoted_forwarded_text': quoted_forwarded_text,
             'quoted_message_id': identity(appid, 'message', quote['id']),
             'quoted_user_id': (str(user_bindings(bridge.config).get(quote['author_id']) or '')
                                or identity(appid, 'user', quote['author_id'])),

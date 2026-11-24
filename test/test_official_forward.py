@@ -2,7 +2,7 @@ import asyncio
 import importlib.util
 import unittest
 from types import SimpleNamespace
-from astrbot_plugin_longtu_bridge.official_forward import parse_record, read_record, image_url, download_image
+from astrbot_plugin_longtu_bridge.official_forward import parse_record, read_record, image_url, download_image, has_record_header
 
 URL = 'https://multimedia.nt.qq.com.cn/download?fileid=test&rkey=private'
 BODY = ('[群聊的聊天记录]\n=== 消息 1 ===\n[发送者] 甲\n'
@@ -17,6 +17,19 @@ QUOTED_BODY = ('=== 消息 1 ===\n[消息内容] [群聊的聊天记录]\n'
                '    [附件1] 类型:图片 文件名:b.png URL:' + URL + '2')
 
 class RecordTests(unittest.IsolatedAsyncioTestCase):
+    def test_sender_owned_header_is_protocol_not_a_generic_title_only(self):
+        body = BODY.replace('[群聊的聊天记录]', '[烤全鸡的聊天记录]')
+        record = parse_record('看看这条\n' + body)
+        self.assertTrue(has_record_header(body))
+        self.assertEqual(record['text'], '看看这条')
+        self.assertEqual(record['lines'][0], '[烤全鸡的聊天记录]')
+        self.assertEqual(len(record['attachments']), 2)
+        wrapped = QUOTED_BODY.replace('[群聊的聊天记录]', '[烤全鸡的聊天记录]')
+        self.assertEqual(parse_record(wrapped)['text'], '')
+        self.assertFalse(has_record_header('帮我看烤全鸡的聊天记录'))
+        self.assertTrue(has_record_header('[烤全鸡的聊天记录]'))
+        self.assertIsNone(parse_record('[烤全鸡的聊天记录]'))
+
     async def test_quoted_associated_records_download_images_in_order(self):
         record = parse_record(QUOTED_BODY)
         self.assertIsNotNone(record)

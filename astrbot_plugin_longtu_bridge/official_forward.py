@@ -5,6 +5,9 @@ import re
 from urllib.parse import urlsplit, urlunsplit
 
 HEADER = '[群聊的聊天记录]'
+# QQ uses both the generic header and a sender-owned title, for example
+# "[烤全鸡的聊天记录]". These are protocol delimiters, not intent keywords.
+RECORD_HEADER = re.compile(r'(?P<header>\[[^\[\]\r\n]{1,200}的聊天记录\])(?=[ \t]*(?:\r?\n|$))')
 NODE = re.compile(r'^(?:=== 消息 \d+ ===|--- 第\d+条 ---)\s*$')
 IMAGE = re.compile(r'^\[附件\d+\]\s+类型:图片(?:\s|$)')
 URL = re.compile(r'\s+URL:(https?://\S+)')
@@ -12,6 +15,11 @@ HOSTS = {'multimedia.nt.qq.com.cn', 'gchat.qpic.cn', 'c2cpicdw.qpic.cn', 'qq.ugc
 MAX_IMAGES = 24
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_BYTES = 30 * 1024 * 1024
+
+
+def has_record_header(text):
+    """Detect the envelope before any link extraction or attachment reads."""
+    return RECORD_HEADER.search(str(text or '')[:256 * 1024]) is not None
 
 
 def image_url(value):
@@ -28,9 +36,10 @@ def image_url(value):
 def parse_record(text):
     """Recognize the observed protocol envelope, not natural-language intent."""
     text = str(text or '')
-    before, marker, body = text.partition(HEADER)
+    marker = RECORD_HEADER.search(text)
     if not marker or len(text) > 256 * 1024:
         return None
+    before, body = text[:marker.start()], text[marker.end():]
     # QQ quotes wrap a record in "[消息内容] [群聊的聊天记录]"
     # and format its associated nodes as "--- 第N条 ---".
     # Keep the protocol wrapper with the record, never as the user's request.
@@ -44,7 +53,7 @@ def parse_record(text):
     lines = wrapper + body.strip().splitlines()
     if not any(NODE.fullmatch(line.strip()) for line in lines):
         return None
-    output, attachments = [HEADER], []
+    output, attachments = [marker['header']], []
     nodes = characters = 0
     for line in lines:
         line = line.strip()
