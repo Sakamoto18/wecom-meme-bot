@@ -5,11 +5,27 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 import astrbot.api.message_components as Comp
-from astrbot_plugin_longtu_bridge.official_trial import handle_official_message, identity, output_chains, media_segments, mirror_learning, official_group_names
+from astrbot_plugin_longtu_bridge.official_trial import handle_official_message, identity, output_chains, media_segments, mirror_learning, official_group_names, send_official_video_url
 from astrbot_plugin_longtu_bridge.main import LongtuQqBridge
 
 
 class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
+    def test_failure_diagnostics_keep_root_cause_without_sensitive_error_text(self):
+        from astrbot_plugin_longtu_bridge.official_trial import error_diagnostics
+        try:
+            try:
+                raise TimeoutError('https://private.example/?token=secret')
+            except TimeoutError as cause:
+                raise PermissionError(13, 'locked secret file', 'private-path') from cause
+        except PermissionError as error:
+            rows = error_diagnostics(error)
+        self.assertEqual([row['type'] for row in rows], ['PermissionError', 'TimeoutError'])
+        self.assertEqual(rows[0]['errno'], 13)
+        self.assertTrue(rows[0]['frames'])
+        self.assertTrue(rows[1]['frames'])
+        self.assertNotIn('secret', str(rows))
+        self.assertNotIn('private', str(rows))
+
     async def test_group_member_web_learning_command_reaches_backend_and_report_returns(self):
         bridge, event = self.fixture(private=False)
         event.get_messages = lambda: [Comp.At(qq='bot'), Comp.Plain('/learn-meme 肥嘟嘟')]
@@ -23,6 +39,39 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('翻翻资料', event.send.call_args_list[0].args[0].chain[0].text)
         self.assertEqual(event.send.call_args.args[0].chain[0].qq, 'user-openid')
         self.assertIn('联网学梗报告', event.send.call_args.args[0].chain[-1].text)
+
+    async def test_planned_merchant_current_request_reuses_live_command_path(self):
+        bridge, event = self.fixture(private=False)
+        event.get_messages = lambda: [Comp.At(qq='bot'), Comp.Plain('远行商人现在在卖什么')]
+        bridge._request_backend.return_value = {
+            'mode': 'merchant-current',
+            'merchant_current_request': True,
+            'messages': [],
+        }
+        with patch('astrbot_plugin_longtu_bridge.merchant_command.handle_merchant_command',
+                   AsyncMock(side_effect=lambda bridge, event, text, **kwargs: text == '/远行商人')) as merchant:
+            await handle_official_message(bridge, event)
+        self.assertEqual([call.args[2] for call in merchant.await_args_list],
+                         ['远行商人现在在卖什么', '/远行商人'])
+        merchant.assert_awaited_with(bridge, event, '/远行商人', official=True)
+        bridge._request_backend.assert_awaited_once()
+        event.send.assert_not_awaited()
+
+    async def test_official_video_url_upload_registers_then_sends_media_without_local_chain(self):
+        bridge, event = self.fixture(private=False)
+        files = AsyncMock(return_value={'file_uuid': 'file-1', 'file_info': 'signed-info', 'ttl': 600})
+        messages = AsyncMock(return_value={'id': 'sent-1'})
+        event.bot.api = SimpleNamespace(post_group_file=files, post_group_message=messages)
+        receipt = await send_official_video_url(
+            bridge, event, 'https://media.example.com/v1/qq/media/opaque?complete=1', reply_id='source-1')
+        self.assertEqual(receipt, 'sent-1')
+        files.assert_awaited_once_with(
+            group_openid='group-openid', file_type=2,
+            url='https://media.example.com/v1/qq/media/opaque?complete=1', srv_send_msg=False)
+        payload = messages.await_args.kwargs
+        self.assertEqual(payload['msg_type'], 7)
+        self.assertEqual(payload['msg_id'], 'source-1')
+        self.assertEqual(payload['media']['file_info'], 'signed-info')
 
     async def test_merchant_command_raw_mention_and_unmentioned_group_dispatch(self):
         for mentioned in (False, True):
@@ -155,6 +204,32 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['quoted_text'], '引用内容')
         self.assertFalse(payload['pure_bot_mention'])
 
+    async def test_quoted_share_is_context_and_only_current_link_can_trigger_media(self):
+        old = 'https://v.douyin.com/old/'
+        for current, target in [('', 'other-member'), ('这是什么意思', 'bot'),
+                                ('https://v.douyin.com/new/', 'bot'), (old, 'bot')]:
+            bridge, event = self.fixture(private=False)
+            raw = event.message_obj.raw_message
+            raw.raw_data = {'message_type': 103, 'content': current,
+                            'parallel_message': {'msg_nodes': [{'content': old}]}}
+            event.get_messages = lambda: [Comp.Reply(id='old', chain=[Comp.Plain(old)]),
+                                          Comp.Plain(current), Comp.At(qq=target)]
+            bridge._request_backend.return_value = {'mode': 'observed', 'messages': []}
+            await handle_official_message(bridge, event)
+            payload = bridge._request_backend.call_args.args[0]
+            self.assertEqual(payload['quoted_text'], old)
+            current_share = current.startswith('https://')
+            self.assertEqual(payload['media_share'], current_share)
+            self.assertEqual(payload['observe_only'], target != 'bot' and not current_share)
+            self.assertEqual(payload['rich_segments'],
+                [{'type': 'json', 'data': {'url': current}}] if current_share else [])
+            if current_share:
+                # Empty mocked media results retain the normal failure receipt.
+                event.send.assert_awaited_once()
+                self.assertIn('抓取失败', event.send.call_args.args[0].chain[0].text)
+            else:
+                event.send.assert_not_awaited()
+
     async def test_quote_with_only_mention_never_becomes_pure_mention(self):
         for source in ('chain', 'fallback', 'raw', 'missing'):
             with self.subTest(source=source):
@@ -194,6 +269,145 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['quoted_forwarded_text'], record)
         self.assertEqual(payload['quoted_text'], '')
         self.assertFalse(payload['pure_bot_mention'])
+
+    async def test_merged_record_images_reach_forward_channel_without_web_urls(self):
+        from test.test_official_forward import BODY
+        for quoted, mentioned in ((True, True),):
+            bridge, event = self.fixture(private=False)
+            event.message_obj.raw_message.content = '' if quoted else BODY
+            event.get_messages = lambda: ([Comp.Reply(id='record', chain=[Comp.Plain(BODY)]),
+                                           Comp.Plain('看看这些图片'), Comp.At(qq='bot')]
+                                          if quoted else [Comp.Plain(BODY)] + ([Comp.At(qq='bot')] if mentioned else []))
+            async def read(record, session):
+                return ('[群聊的聊天记录]\n甲：[图片#1]', ['aW1hZ2U=']) if record else ('', [])
+            with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', side_effect=read):
+                await handle_official_message(bridge, event)
+            payload = bridge._request_backend.call_args.args[0]
+            self.assertTrue(payload['has_image'])
+            self.assertFalse(payload['media_share'])
+            self.assertFalse(payload['observe_only'])
+            self.assertFalse(payload['pure_bot_mention'])
+            self.assertEqual(payload['rich_segments'], [])
+            self.assertNotIn('https://', payload['text'])
+            key = 'quoted_forward_image_base64s' if quoted else 'forward_image_base64s'
+            self.assertEqual(payload[key], ['aW1hZ2U='])
+            self.assertEqual(payload['image_base64s'], [])
+            if quoted:
+                self.assertIn('[图片#1]', payload['quoted_forwarded_text'])
+                self.assertEqual(payload['forward_image_base64s'], [])
+            else:
+                self.assertIn('[图片#1]', payload['forwarded_text'])
+                self.assertEqual(payload['quoted_forward_image_base64s'], [])
+
+    async def test_unquoted_record_never_downloads_or_invites_backend_to_read(self):
+        from test.test_official_forward import BODY
+        for mentioned in (False, True):
+            bridge, event = self.fixture(private=False)
+            event.message_obj.raw_message.content = BODY
+            event.get_messages = lambda: [Comp.Plain(BODY)] + ([Comp.At(qq='bot')] if mentioned else [])
+            with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', new_callable=AsyncMock) as read:
+                await handle_official_message(bridge, event)
+            read.assert_not_awaited()
+            bridge._request_backend.assert_not_awaited()
+
+    async def test_quoted_associated_record_uses_real_reader_and_keeps_current_request(self):
+        from test.test_official_forward import QUOTED_BODY, PNG
+        from astrbot_plugin_longtu_bridge.official_forward import read_record
+        bridge, event = self.fixture(private=False)
+        event.get_messages = lambda: [Comp.Reply(id='record', chain=[Comp.Plain(QUOTED_BODY)]),
+                                      Comp.Plain('你现在能看到图了吗'), Comp.At(qq='bot')]
+        # The real parser, download loop and bridge payload must all run.
+        async def download(session, url):
+            return PNG
+        async def read(record, session):
+            return await read_record(record, session, downloader=download)
+        with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', side_effect=read):
+            await handle_official_message(bridge, event)
+        payload = bridge._request_backend.call_args.args[0]
+        self.assertEqual(len(payload['quoted_forward_image_base64s']), 2)
+        self.assertEqual(payload['text'], '你现在能看到图了吗')
+        self.assertEqual(payload['image_base64s'], [])
+        self.assertEqual(payload['forward_image_base64s'], [])
+        self.assertEqual(payload['quoted_text'], '')
+        self.assertIn('[图片#2]', payload['quoted_forwarded_text'])
+        self.assertNotIn('https://', payload['quoted_forwarded_text'])
+        self.assertFalse(payload['media_share'])
+
+    async def test_named_record_with_video_never_becomes_a_new_share_or_passive_input(self):
+        # Redacted shape from the 2026-11-24 15:11 incident: QQ supplies a
+        # sender-owned record title, with video URLs in its attachment lines.
+        record = ('[烤全鸡的聊天记录]\n=== 消息 1 ===\n[发送者] 烤全鸡\n'
+                  '[附件1] 类型:视频 文件名:video.mp4 URL:https://example.invalid/video.mp4\n'
+                  '=== 消息 2 ===\n[消息内容] 我先退出了\n[发送者] 烤全鸡')
+        for mentioned in (False, True):
+            for prefix in ('', '看看这个\n'):
+                for raw_only in (False, True):
+                    with self.subTest(mentioned=mentioned, prefix=prefix, raw_only=raw_only):
+                        bridge, event = self.fixture(private=False)
+                        event.message_obj.raw_message.content = prefix + record
+                        event.get_messages = lambda: [Comp.Plain('卡片' if raw_only else prefix + record)] + (
+                            [Comp.At(qq='bot')] if mentioned else [])
+                        with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', AsyncMock()) as read, \
+                             patch('astrbot_plugin_longtu_bridge.official_media.extract_official_media') as extract:
+                            await handle_official_message(bridge, event)
+                        extract.assert_not_called()
+                        read.assert_not_awaited()
+                        bridge._image_base64s.assert_not_awaited()
+                        bridge._request_backend.assert_not_awaited()
+                        event.send.assert_not_awaited()
+                        event.stop_event.assert_called_once()
+                        self.assertFalse(event.call_llm)
+
+    async def test_quoted_record_requires_at_this_bot_even_when_link_or_bot_quote_wakes(self):
+        from test.test_official_forward import BODY
+        record = BODY.replace('[群聊的聊天记录]', '[烤全鸡的聊天记录]')
+        for at in (None, 'someone-else'):
+            for prompt in ('看看这个', '看看 https://b23.tv/new-link'):
+                bridge, event = self.fixture(private=False)
+                event.get_messages = lambda: [Comp.Reply(id='record', chain=[Comp.Plain(record)]),
+                    Comp.Plain(prompt)] + ([Comp.At(qq=at)] if at else [])
+                event.message_obj.raw_message.message_type = 103
+                event.message_obj.raw_message.raw_data = {'msg_elements': [
+                    {'content': record, 'author': {'member_openid': 'bot'}}]}
+                with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', AsyncMock()) as read, \
+                     patch('astrbot_plugin_longtu_bridge.official_media.extract_official_media') as extract:
+                    await handle_official_message(bridge, event)
+                read.assert_not_awaited()
+                extract.assert_not_called()
+                bridge._request_backend.assert_not_awaited()
+                event.send.assert_not_awaited()
+
+    async def test_named_record_explicit_quote_and_at_reaches_only_quoted_evidence(self):
+        from test.test_official_forward import BODY, PNG
+        from astrbot_plugin_longtu_bridge.official_forward import read_record
+        bridge, event = self.fixture(private=False)
+        record = BODY.replace('[群聊的聊天记录]', '[烤全鸡的聊天记录]')
+        event.get_messages = lambda: [Comp.Reply(id='record', chain=[Comp.Plain(record)]),
+                                     Comp.At(qq='bot'), Comp.Plain('总结一下')]
+        async def read(record, session):
+            return await read_record(record, session, downloader=AsyncMock(return_value=PNG))
+        with patch('astrbot_plugin_longtu_bridge.official_forward.read_record', side_effect=read):
+            await handle_official_message(bridge, event)
+        payload = bridge._request_backend.await_args.args[0]
+        self.assertEqual(payload['text'], '总结一下')
+        self.assertEqual(len(payload['quoted_forward_image_base64s']), 2)
+        self.assertIn('[烤全鸡的聊天记录]', payload['quoted_forwarded_text'])
+        self.assertEqual(payload['quoted_text'], '')
+        self.assertEqual(payload['rich_segments'], [])
+        self.assertFalse(payload['media_share'])
+
+    async def test_record_header_without_nodes_cannot_fall_through_as_ordinary_text(self):
+        for quoted in (False, True):
+            bridge, event = self.fixture(private=False)
+            record = '[烤全鸡的聊天记录]'
+            component = Comp.Reply(id='record', chain=[Comp.Plain(record)]) if quoted else Comp.Plain(record)
+            event.get_messages = lambda: [component, Comp.At(qq='bot')]
+            await handle_official_message(bridge, event)
+            bridge._request_backend.assert_not_awaited()
+            if quoted:
+                self.assertIn('没有附带可读取', event.send.await_args.args[0].chain[0].text)
+            else:
+                event.send.assert_not_awaited()
 
     async def test_media_receipts_are_silent_on_success_and_explicit_on_failure(self):
         for mode in ('success', 'unavailable', 'timeout', 'send-failed'):
@@ -330,6 +544,45 @@ class OfficialTrialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload['rich_segments'][0]['data']['url'], 'https://b23.tv/test')
         chains=output_chains({'messages':[{'type':'video','url':'http://127.0.0.1:8787/media/test'}]})
         self.assertIsInstance(chains[0].chain[0], Comp.Video)
+
+    async def test_bili_preview_only_card_does_not_reach_web_backend(self):
+        from test.test_official_media import ENVELOPE
+        bridge, event = self.fixture(private=False)
+        event.message_obj.raw_message.content = ENVELOPE
+        event.message_obj.raw_message.raw_data = {'content': ENVELOPE}
+        event.get_messages = lambda: [Comp.Plain(ENVELOPE)]
+        await handle_official_message(bridge, event)
+        await handle_official_message(bridge, event)
+        bridge._request_backend.assert_not_awaited()
+        event.send.assert_awaited_once()
+        self.assertIn('复制链接', event.send.call_args.args[0].chain[0].text)
+
+    async def test_preview_and_title_reach_official_only_recovery(self):
+        from test.test_official_media import ENVELOPE
+        bridge, event = self.fixture(private=False)
+        event.message_obj.raw_message.content = ENVELOPE
+        event.message_obj.raw_message.raw_data = {'content': ENVELOPE,
+            'ark_data': {'ark_type': 'miniapp', 'fields': {'source': '哔哩哔哩',
+                'title': '这严苛的训练几乎要了蛋的命!', 'preview': 'https://qq.ugcimg.cn/v1/cover'}}}
+        event.get_messages = lambda: [Comp.Plain(ENVELOPE)]
+        await handle_official_message(bridge, event)
+        payload = bridge._request_backend.call_args.args[0]
+        self.assertEqual(payload['bilibili_card']['preview'], 'https://qq.ugcimg.cn/v1/cover')
+        self.assertTrue(payload['media_share'])
+        self.assertFalse(payload['observe_only'])
+
+    async def test_structured_bili_id_goes_to_same_media_backend(self):
+        from test.test_official_media import ENVELOPE, BVID, VIDEO
+        bridge, event = self.fixture(private=False)
+        event.message_obj.raw_message.content = ENVELOPE
+        event.message_obj.raw_message.raw_data = {'content': ENVELOPE,
+            'msg_elements': [{'ark_data': {'source': '哔哩哔哩', 'bvid': BVID}}]}
+        event.get_messages = lambda: [Comp.Plain(ENVELOPE)]
+        await handle_official_message(bridge, event)
+        payload = bridge._request_backend.call_args.args[0]
+        self.assertEqual(payload['rich_segments'][0]['data']['url'], VIDEO)
+        self.assertTrue(payload['media_share'])
+        self.assertFalse(payload['observe_only'])
 
     async def test_learning_mirror_preserves_legacy_receipt_and_routes_official_ids(self):
         bridge, event = self.fixture()

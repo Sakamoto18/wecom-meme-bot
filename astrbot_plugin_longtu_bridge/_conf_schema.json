@@ -69,6 +69,12 @@
     "default": false,
     "hint": "仅处理指定 AppID 的群 @ 和私聊，复用现有对话与图库。关闭并重载插件即停止官方入口；NapCat 不受影响。"
   },
+  "official_group_enabled": {
+    "description": "官方 Bot 群聊总开关",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭并重载插件后，停止官方渠道所有群聊处理、回复及主动推送（含远行商人、疯狂星期四、学习结果），并终止该群消息事件，避免转交其他回复链路。官方私聊和 NapCat 不受影响。重新登录 NapCat 前可先关闭此项。"
+  },
   "official_trial_appid": {
     "description": "官方试用 AppID",
     "type": "string",
@@ -79,6 +85,30 @@
     "type": "string",
     "default": "",
     "hint": "英文逗号分隔，留空开放所有已添加机器人的群（群 @ 回复，以及群主授权全量消息后的直接分享）。此处不是普通 QQ 群号。私聊不受此列表限制。"
+  },
+  "official_video_compress_oversize_enabled": {
+    "description": "官方 Bot 超大视频自动压缩",
+    "type": "bool",
+    "default": false,
+    "hint": "本地发送路径超过 200MB 时压缩完整视频副本到约 190MB，保留时长和音轨，接受画质降低；超过 30MB 发送文件卡片。压缩副本缓存 30 分钟，NapCat 与 Provider 不变。此项不改变底层上传方式。"
+  },
+  "official_video_compress_timeout_seconds": {
+    "description": "官方 Bot 完整视频压缩超时",
+    "type": "int",
+    "default": 900,
+    "hint": "单个完整视频的两遍压缩与校验总预算，范围 60-1800 秒；同一时间只压缩一个视频。"
+  },
+  "official_video_url_upload_enabled": {
+    "description": "官方 QQ 视频使用公网 HTTPS URL 转存",
+    "type": "bool",
+    "default": false,
+    "hint": "开启前必须配置 QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL，并确保该 HTTPS 地址能被 QQ 官方服务器访问；关闭时保留原有本地分片上传。"
+  },
+  "official_video_ready_timeout_seconds": {
+    "description": "官方 QQ 视频完整文件预检超时",
+    "type": "int",
+    "default": 150,
+    "hint": "发送前先由 AstrBot 通过内部 Node 地址确认完整文件已准备好，避免让 QQ 官方服务器等待下载；范围 15-180 秒。"
   },
   "transport_mode": {
     "description": "QQ 接入实现",

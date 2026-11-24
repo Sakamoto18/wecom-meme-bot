@@ -397,28 +397,84 @@ export function createQqApiServer(options) {
         return;
       }
 
-      const mediaMatch = request.method === 'GET'
+      const mediaMatch = ['GET', 'HEAD'].includes(request.method)
         ? url.pathname.match(/^\/v1\/qq\/media\/([A-Za-z0-9_-]+)$/u)
         : null;
       if (mediaMatch) {
-        const mediaFile = await mediaResolver?.getMediaFile(mediaMatch[1]);
+        const requireComplete = url.searchParams.get('complete') === '1';
+        const mediaFile = await mediaResolver?.getMediaFile(mediaMatch[1], { requireComplete });
         if (!mediaFile) {
-          sendJson(response, 404, { ok: false, error: '视频已过期或不存在' });
+          sendJson(response, requireComplete ? 503 : 404, {
+            ok: false,
+            error: requireComplete ? 'MEDIA_NOT_READY' : 'MEDIA_EXPIRED',
+            message: requireComplete ? '视频尚未完成完整下载，请稍后重试' : '视频已过期或不存在',
+          });
+          return;
+        }
+        if (mediaFile.officialTooLarge) {
+          sendJson(response, 413, {
+            ok: false, error: 'MEDIA_TOO_LARGE', message: '官方 QQ 视频超过 200 MB 上限',
+          });
           return;
         }
         if (mediaFile.remote) {
+          if (request.method === 'HEAD') {
+            response.writeHead(mediaFile.size > 0 ? 200 : 204, {
+              'Content-Type': mediaFile.mediaType || 'video/mp4',
+              ...(mediaFile.size > 0 ? { 'Content-Length': String(mediaFile.size) } : {}),
+              'Cache-Control': 'private, max-age=600',
+              'Accept-Ranges': 'bytes',
+              'X-Content-Type-Options': 'nosniff',
+            });
+            response.end();
+            return;
+          }
           await proxyRemoteMedia(request, response, mediaFile);
           return;
         }
-        response.writeHead(200, {
+        const size = Number(mediaFile.size) || 0;
+        if (size <= 0) {
+          sendJson(response, 503, { ok: false, error: 'MEDIA_EMPTY', message: '视频文件为空' });
+          return;
+        }
+        const range = String(request.headers.range || '').match(/^bytes=(\d*)-(\d*)$/u);
+        let start = 0;
+        let end = Math.max(0, size - 1);
+        let status = 200;
+        if (range && size > 0) {
+          const requestedStart = range[1] ? Number(range[1]) : NaN;
+          const requestedEnd = range[2] ? Number(range[2]) : NaN;
+          if (Number.isFinite(requestedStart)) start = requestedStart;
+          else if (Number.isFinite(requestedEnd)) {
+            start = Math.max(0, size - requestedEnd);
+            end = size - 1;
+          }
+          if (Number.isFinite(requestedStart) && Number.isFinite(requestedEnd)) end = requestedEnd;
+          if (start < 0 || start >= size || end < start) {
+            response.writeHead(416, { 'Content-Range': `bytes */${size}` });
+            response.end();
+            return;
+          }
+          end = Math.min(end, size - 1);
+          status = 206;
+        }
+        const headers = {
           'Content-Type': mediaFile.mediaType || 'video/mp4',
-          'Content-Length': String(mediaFile.size),
+          'Content-Length': String(Math.max(0, end - start + 1)),
           'Cache-Control': 'private, max-age=600',
           'Content-Disposition': 'inline',
           'Accept-Ranges': 'bytes',
           'X-Content-Type-Options': 'nosniff',
-        });
-        createReadStream(mediaFile.filePath).on('error', () => response.destroy()).pipe(response);
+          ...(status === 206 ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
+        };
+        response.writeHead(status, headers);
+        if (request.method === 'HEAD') {
+          response.end();
+          return;
+        }
+        createReadStream(mediaFile.filePath, { start, end })
+          .on('error', () => response.destroy())
+          .pipe(response);
         return;
       }
 
@@ -1098,6 +1154,7 @@ export async function createQqRuntime() {
     cacheDirectory: process.env.QQ_MEDIA_CACHE_DIRECTORY?.trim() || '/tmp/longtu-media-cache',
     maxCacheBytes: (parsePositiveNumber(process.env.QQ_MEDIA_CACHE_MAX_MIB) ?? 512) * 1024 * 1024,
     publicBaseUrl: process.env.QQ_MEDIA_PUBLIC_BASE_URL?.trim() || 'http://qq-bot:8787',
+    officialPublicBaseUrl: process.env.QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL?.trim() || '',
     maxConcurrent: parsePositiveInteger(process.env.QQ_MEDIA_MAX_CONCURRENT) ?? 2,
     startDelayMinMs: parseNonnegativeInteger(process.env.QQ_MEDIA_START_DELAY_MIN_SECONDS, 1) * 1000,
     startDelayMaxMs: parseNonnegativeInteger(process.env.QQ_MEDIA_START_DELAY_MAX_SECONDS, 10) * 1000,

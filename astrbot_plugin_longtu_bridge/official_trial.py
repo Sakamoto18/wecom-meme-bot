@@ -7,16 +7,51 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 import time
+import traceback
 
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
 from .official_groups import official_group_names
+from .official_policy import event_enabled, group_enabled
+from .official_video import OfficialVideoCache, OfficialVideoPreparationError
+
+
+MAX_OFFICIAL_MEDIA_BYTES = 200_000_000
+
+
+class OfficialMediaTooLarge(OfficialVideoPreparationError):
+    """A definite rejection before a video/file message is sent."""
+
+    def __init__(self, size=0):
+        self.size = size
+        detail = f'（{size / 1_000_000:.1f}MB）' if size else ''
+        super().__init__(f'视频{detail}未发送：超过 QQ 官方 200MB 上限，改成文件也受此限制。')
+
+
+def error_diagnostics(error):
+    """Keep error chains/locations without logging tokens, URLs or message bodies."""
+    result, seen = [], set()
+    while error is not None and id(error) not in seen and len(result) < 6:
+        seen.add(id(error))
+        row = {'type': type(error).__name__, 'frames': [
+            {'file': frame.filename.replace('\\', '/').rsplit('/', 1)[-1],
+             'line': frame.lineno, 'function': frame.name}
+            for frame in traceback.extract_tb(error.__traceback__)[-12:]
+        ]}
+        for name in ('errno', 'winerror', 'code', 'status'):
+            value = getattr(error, name, None)
+            if isinstance(value, int) or isinstance(value, str) and re.fullmatch(r'[0-9]{1,12}', value):
+                row[name] = value
+        result.append(row)
+        error = error.__cause__ or error.__context__
+    return result
 
 
 def identity(appid, kind, value):
@@ -39,33 +74,8 @@ def user_bindings(config):
 
 
 def media_segments(raw):
-    """Preserve URLs buried in official ark/msg_elements without identity data."""
-    data = getattr(raw, 'raw_data', {})
-    urls = []
-    def walk(value, depth=0):
-        if depth > 12 or len(urls) >= 24:
-            return
-        if isinstance(value, str):
-            if len(value) > 256 * 1024:
-                return
-            if value.lstrip().startswith(('{', '[')):
-                try:
-                    walk(json.loads(value), depth + 1)
-                    return
-                except ValueError:
-                    pass
-            for url in re.findall(r'https?://[^\s<>"\x27]+', value.replace('\\/', '/')):
-                if url not in urls:
-                    urls.append(url[:4096])
-        elif isinstance(value, dict):
-            for key, item in value.items():
-                if key not in ('author', 'mentions', 'avatar'):
-                    walk(item, depth + 1)
-        elif isinstance(value, list):
-            for item in value[:32]:
-                walk(item, depth + 1)
-    walk(data)
-    return [{'type': 'json', 'data': {'url': url}} for url in urls[:24]]
+    from .official_media import extract_official_media
+    return extract_official_media(raw)['segments']
 
 
 def quote_context(components, raw):
@@ -94,7 +104,7 @@ def quote_context(components, raw):
             'author_id': author_id, 'author_name': author_name}
 
 
-def output_chains(response, max_messages=5, truncation_notice=True):
+def output_chains(response, max_messages=5, truncation_notice=True, *, official_video_url=False):
     """Keep backend text bubbles separate, merging overflow within reply budget."""
     rows = response.get('messages') or []
     texts = [str(row['text']) for row in rows if row.get('type') == 'text' and row.get('text')]
@@ -109,7 +119,10 @@ def output_chains(response, max_messages=5, truncation_notice=True):
             media.extend(Comp.Image(file=url) for url in row.get('images', [])
                          if isinstance(url, str) and url.startswith(('https://', 'http://')))
         elif kind == 'video':
-            url = row.get('url')
+            # The Node resolver may expose a separate HTTPS origin whose
+            # endpoint waits for the complete local file. Keep the normal URL
+            # as fallback so the feature remains fully backward compatible.
+            url = (row.get('officialUrl') if official_video_url else None) or row.get('url')
             if url and str(url).startswith(('https://', 'http://')):
                 media.append(Comp.Video(file=url))
     reserve = 1 if texts else 0
@@ -129,30 +142,200 @@ def output_chains(response, max_messages=5, truncation_notice=True):
     return chains
 
 
-async def send_chain(bridge, event, chain):
-    """Upload backend video locally: Tencent cannot fetch loopback media URLs."""
+def _result_value(result, name, default=None):
+    if isinstance(result, dict):
+        return result.get(name, default)
+    return getattr(result, name, default)
+
+
+def _internal_media_ready_url(bridge, public_url):
+    """Map the public media URL to the Node service reachable by AstrBot.
+
+    The readiness probe must not depend on the public DNS/HTTPS round trip:
+    AstrBot and Node already share an internal URL in ``api_url``. QQ still
+    receives the public URL after this local probe succeeds.
+    """
+    match = re.search(r'/v1/qq/media/([A-Za-z0-9_-]+)(?:\?|$)', str(public_url or ''))
+    if not match:
+        return ''
+    api_url_getter = getattr(bridge, '_api_url', None)
+    if not callable(api_url_getter):
+        return ''
+    try:
+        api_url = str(api_url_getter() or '').rstrip('/')
+    except Exception:
+        return ''
+    suffix = '/v1/qq/message'
+    if not api_url.endswith(suffix):
+        return ''
+    base = api_url[:-len(suffix)].rstrip('/')
+    return f'{base}/v1/qq/media/{match.group(1)}?complete=1'
+
+
+async def _wait_for_official_media_ready(bridge, public_url):
+    """Wait for Node's complete local file before QQ fetches the public URL."""
+    ready_url = _internal_media_ready_url(bridge, public_url)
+    if not ready_url:
+        return
     import aiohttp
+    configured = (getattr(bridge, 'config', None) or {}).get(
+        'official_video_ready_timeout_seconds', 150,
+    )
+    try:
+        timeout_seconds = max(15, min(180, int(configured)))
+    except (TypeError, ValueError):
+        timeout_seconds = 150
+    timeout = aiohttp.ClientTimeout(
+        total=timeout_seconds, connect=10, sock_read=timeout_seconds,
+    )
+    last_status = None
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(2):
+            try:
+                async with session.head(ready_url, allow_redirects=False) as response:
+                    last_status = response.status
+                    if response.status == 200:
+                        if int(response.headers.get('Content-Length') or 0) <= 0:
+                            raise RuntimeError('官方视频完整文件预检返回空文件')
+                        size = int(response.headers.get('Content-Length') or 0)
+                        if size > MAX_OFFICIAL_MEDIA_BYTES:
+                            raise OfficialMediaTooLarge(size)
+                        return size
+                    if response.status == 413:
+                        raise OfficialMediaTooLarge()
+            except (asyncio.CancelledError, ValueError):
+                raise
+            except Exception:
+                if attempt == 1:
+                    raise RuntimeError('官方视频完整文件预检失败') from None
+            if attempt == 0:
+                await asyncio.sleep(1)
+    raise RuntimeError(f'官方视频完整文件预检失败：HTTP {last_status or "unknown"}')
+
+
+async def send_official_video_url(bridge, event, url, *, reply_id=''):
+    """Transfer a completed public MP4 through QQ's URL media API.
+
+    This intentionally never falls back to ``event.send(Video(local_path))``:
+    when enabled, a URL failure must be visible rather than silently starting
+    the old multi-part upload path the user asked to avoid.
+    """
+    if not event_enabled(bridge.config, event):
+        return
+    value = str(url or '').strip()
+    if not value.startswith('https://'):
+        raise ValueError('官方视频 URL 发送已启用，但媒体地址不是公网 HTTPS URL')
+    # Do not make QQ's /files endpoint wait for a slow provider download. The
+    # internal HEAD blocks until Node has a verified complete local file.
+    size = await _wait_for_official_media_ready(bridge, value)
+    file_type = 4 if size and size > 30_000_000 else 2
+    api = getattr(getattr(event, 'bot', None), 'api', None)
+    if api is None:
+        raise RuntimeError('官方 QQ API 不可用')
+    target_group = '' if event.is_private_chat() else str(event.get_group_id() or '')
+    target_user = str(event.get_sender_id() or '') if event.is_private_chat() else ''
+    if event.is_private_chat():
+        register_file = lambda: api.post_c2c_file(
+            openid=target_user, file_type=file_type, url=value, srv_send_msg=False,
+        )
+    else:
+        register_file = lambda: api.post_group_file(
+            group_openid=target_group, file_type=file_type, url=value, srv_send_msg=False,
+        )
+    result = None
+    for attempt in range(3):
+        try:
+            result = await asyncio.wait_for(register_file(), 60)
+            break
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if attempt == 2:
+                raise
+            # Registration is retried before any message is sent, so a
+            # transient /files failure cannot create duplicate chat messages.
+            await asyncio.sleep(1.5 * (attempt + 1))
+    file_uuid = str(_result_value(result, 'file_uuid', '') or '')
+    file_info = _result_value(result, 'file_info', '')
+    if not file_info:
+        raise RuntimeError('官方 URL 转存未返回 file_info')
+    media = {
+        'file_uuid': file_uuid,
+        'file_info': file_info,
+        'ttl': _result_value(result, 'ttl', 0) or 0,
+    }
+    payload = {'msg_type': 7, 'media': media, 'msg_seq': 1}
+    if reply_id:
+        payload['msg_id'] = str(reply_id)
+    if not event_enabled(bridge.config, event):
+        return
+    if event.is_private_chat():
+        payload['openid'] = target_user
+        sent = await asyncio.wait_for(api.post_c2c_message(**payload), 60)
+    else:
+        payload['group_openid'] = target_group
+        sent = await asyncio.wait_for(api.post_group_message(**payload), 60)
+    receipt = str(_result_value(sent, 'id', '') or '')
+    if not receipt:
+        raise RuntimeError('官方视频 URL 消息未返回消息 ID；不自动重试')
+    logger.info(f'官方 QQ 视频 URL 发送完成：bytes-transfer=server-side receipt={receipt}')
+    return receipt
+
+
+async def send_chain(bridge, event, chain):
+    """Send official media, using complete-file URL transfer when enabled."""
+    import aiohttp
+    if not event_enabled(bridge.config, event):
+        return
     video = next((c for c in chain.chain if isinstance(c, Comp.Video)), None)
     if video is None:
         await event.send(chain)
         logger.info('官方 QQ 发送完成：kind=' + ('image' if any(isinstance(c, Comp.Image) for c in chain.chain) else 'text'))
         return
-    maximum = 200 * 1024 * 1024
+    if bridge.config.get('official_video_url_upload_enabled') is True:
+        await send_official_video_url(bridge, event, video.file,
+                                      reply_id=str(getattr(event.message_obj, 'message_id', '') or ''))
+        return
+    if bridge.config.get('official_video_compress_oversize_enabled') is True:
+        cache = getattr(bridge, '_official_video_cache', None)
+        if cache is None:
+            bridge._official_video_cache = cache = OfficialVideoCache()
+        timeout = max(60, min(1800, int(bridge.config.get('official_video_compress_timeout_seconds', 900))))
+        async with cache.prepare(str(video.file),
+                                 ffmpeg=os.environ.get('QQ_MEDIA_FFMPEG_COMMAND') or 'ffmpeg',
+                                 timeout=timeout) as prepared:
+            if not event_enabled(bridge.config, event):
+                return
+            # A large MP4 is sent as one downloadable file; its duration is
+            # unchanged. This does not change AstrBot's upload transport.
+            component = (Comp.File(name='video.mp4', file=str(prepared.path))
+                         if prepared.size > 30_000_000 or prepared.original_size > MAX_OFFICIAL_MEDIA_BYTES
+                         else Comp.Video(file=str(prepared.path)))
+            prepared_chain = MessageChain([component if item is video else item for item in chain.chain])
+            prepared_chain.use_markdown_ = False
+            await event.send(prepared_chain)
+            logger.info(f'官方 QQ 完整视频发送完成：bytes={prepared.size} original_bytes={prepared.original_size} '
+                        f'compressed={prepared.original_size > MAX_OFFICIAL_MEDIA_BYTES}')
+        return
+    maximum = MAX_OFFICIAL_MEDIA_BYTES
     with tempfile.TemporaryDirectory(prefix='longtu-official-video-') as directory:
         path = Path(directory) / 'video.mp4'
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=480)) as session:
             async with session.get(str(video.file)) as response:
                 response.raise_for_status()
-                if int(response.headers.get('Content-Length') or 0) > maximum:
-                    raise ValueError('视频超过官方 200MB 上限')
+                expected_size = int(response.headers.get('Content-Length') or 0)
+                if expected_size > maximum:
+                    raise OfficialMediaTooLarge(expected_size)
                 total = 0
                 with path.open('wb') as output:
                     async for chunk in response.content.iter_chunked(1024 * 1024):
                         total += len(chunk)
                         if total > maximum:
-                            raise ValueError('视频超过官方 200MB 上限')
+                            raise OfficialMediaTooLarge(total)
                         output.write(chunk)
         video.file = str(path)
+        if not event_enabled(bridge.config, event):
+            return
         await event.send(chain)
         logger.info(f'官方 QQ 视频发送完成：bytes={total}')
 
@@ -174,6 +357,8 @@ async def report_chains(bridge, report_date, *, end_at=None, requested_by=''):
 
 
 async def proactive(bridge, target, chains, *, group=False):
+    if group and not group_enabled(bridge.config):
+        return False
     platform = next((p for p in bridge.context.platform_manager.platform_insts
                      if p.meta().name == 'qq_official' and str(getattr(p, 'appid', ''))
                      == str(bridge.config.get('official_trial_appid'))), None)
@@ -181,6 +366,8 @@ async def proactive(bridge, target, chains, *, group=False):
         return False
     platform.remember_session_scene(target, 'group' if group else 'friend')
     for chain in chains:
+        if group and not group_enabled(bridge.config):
+            return False
         chain.use_markdown_ = False
         ok = await bridge.context.send_message(
             f'{platform.meta().id}:{"GroupMessage" if group else "FriendMessage"}:{target}', chain)
@@ -201,6 +388,9 @@ async def mirror_daily_report(bridge, report_date):
 
 
 async def mirror_crazy_thursday(bridge, target_date):
+    if not group_enabled(bridge.config):
+        logger.info(f'官方疯狂星期四跳过：date={target_date} reason=group-disabled')
+        return 0
     if not enabled(bridge.config) or not bridge.config.get('official_trial_push_enabled', False):
         logger.info(f'官方疯狂星期四跳过：date={target_date} reason=disabled')
         return 0
@@ -257,6 +447,8 @@ async def mirror_learning(bridge, payload, *, delivery_id=""):
     group = payload.get('chatType') == 'group'
     target = str(payload.get('groupId') if group else payload.get('userId') or '')
     own = target.startswith(prefix)
+    if group and not group_enabled(bridge.config):
+        return False if own else None
     targets = [target.split(':', 3)[-1]] if own else []
     if not own and not group and bridge.config.get('official_trial_push_enabled', False):
         targets = [key for key, qq in user_bindings(bridge.config).items() if str(qq) == target]
@@ -297,6 +489,9 @@ async def handle_official_message(bridge, event):
         appid = str(getattr(platform, 'appid', '') or '')
         if not configured_app or appid != configured_app:
             return
+        if not event_enabled(bridge.config, event):
+            event.call_llm = False
+            return
         raw = getattr(event.message_obj, 'raw_message', None)
         # Trial only handles QQ groups and C2C, not guild/channel identities.
         if not (getattr(raw, 'group_openid', None) or getattr(raw, 'author', None)
@@ -329,10 +524,39 @@ async def handle_official_message(bridge, event):
         raw_text = re.sub(r'^(?:<@!?[A-Za-z0-9_-]+>\s*)+', '', raw_text).strip()
         if raw_text.startswith('/'):
             text = raw_text
+        quote = quote_context(components, raw)
+        from .official_forward import has_record_header, parse_record, read_record
+        current_record_present = has_record_header(text) or has_record_header(raw_text)
+        quoted_record = has_record_header(quote['text'])
+        # Record attachments/links must never wake the bot or reach the passive
+        # backend gate. In groups, require BOTH an explicit quote and @this bot.
+        record_authorized = bool(quote['present'] and quoted_record and (private or mentioned))
+        if (current_record_present or quoted_record) and not record_authorized:
+            event.call_llm = False
+            logger.info('官方合并记录已忽略：需要明确引用并 @机器人')
+            return
+        current_record = parse_record(text) if current_record_present else None
+        quote_record = parse_record(quote['text']) if record_authorized else None
+        if record_authorized and quote_record is None:
+            await event.send(MessageChain([Comp.Plain('这条引用没有附带可读取的聊天记录正文。')]))
+            return
+        if current_record_present:
+            # A separate current record is never part of the quoted evidence.
+            text = current_record['text'] if current_record else ''
         bound_user = str(user_bindings(bridge.config).get(str(event.get_sender_id())) or '')
         from .main import ALLOWED_BRIDGE_SLASH_COMMANDS, REPORT_TIMEZONE, nearby_holiday_context, MEDIA_ACK_PATTERN
-        rich = media_segments(raw)
-        quote = quote_context(components, raw)
+        from .official_media import extract_official_media
+        from .official_gateway import gateway_event
+        packet = gateway_event(appid, raw)
+        share = extract_official_media(raw, gateway_packet=packet)
+        if packet:
+            same_body = packet.get('d') == getattr(raw, 'raw_data', None)
+            logger.info(f'官方卡片使用网关原始消息：same_body={same_body}')
+        rich = share['segments']
+        if current_record or quote_record:
+            # Attachment URLs belong to supplied chat evidence, not web queries
+            # or requests to download a platform video from inside a record.
+            rich = []
         # Full group messages feed the existing backend's passive decision gate.
         # A shared URL is a direct share; other chatter is observation only.
         # Never feed this bot's own output or another bot back into the loop.
@@ -343,7 +567,15 @@ async def handle_official_message(bridge, event):
         if await handle_merchant_command(bridge, event, text, official=True):
             return
         has_link = bool(re.search(r'https?://', text, re.IGNORECASE)
-                        or MEDIA_ACK_PATTERN.search(str(rich)))
+                        or MEDIA_ACK_PATTERN.search(str(rich)) or share['search_card'])
+        if share['card_present']:
+            logger.info('官方分享卡片诊断：' + json.dumps(share['diagnostic'], ensure_ascii=False))
+        if share['bilibili_card'] and not share['video_urls'] and not share['search_card'] and not quote['present']:
+            notice = MessageChain([Comp.Plain(
+                '这张 B 站小程序卡片没能提取到视频地址。请在 B 站选择“复制链接”，把链接发到这里，我再解析。')])
+            notice.use_markdown_ = False
+            await event.send(notice)
+            return
         quoted_bot = bool(quote['author_id'] and quote['author_id'] == str(event.get_self_id()))
         observe_only = bool(not private and not mentioned and not quoted_bot and not has_link)
         if observe_only and text.startswith('/'):
@@ -377,8 +609,15 @@ async def handle_official_message(bridge, event):
         images = await bridge._image_base64s(components, limit=24 if importing else 8)
         quote_chain = quote['chain']
         quote_images = await bridge._image_base64s(quote_chain, limit=24 if importing else 4)
-        quoted_record = '[群聊的聊天记录]' in quote['text'] or '=== 消息 ' in quote['text']
-        pure_mention = bool(mentioned and not text and not images and not quote['present'])
+        forwarded_text, forward_images = '', []
+        quoted_forwarded_text, quoted_forward_images = '', []
+        if record_authorized:
+            quoted_forwarded_text, quoted_forward_images = await read_record(
+                quote_record, getattr(bridge, 'session', None))
+        if current_record or quote_record:
+            logger.info(f'官方合并记录读图：current={len(forward_images)} quoted={len(quoted_forward_images)} '
+                        f'attachments={len((current_record or {}).get("attachments", [])) + len((quote_record or {}).get("attachments", []))}')
+        pure_mention = bool(mentioned and not text and not images and not quote['present'] and not current_record)
         current_text = text
         if not current_text and quote['present']:
             current_text = '请回应我引用的这条消息。' if quote['text'] or quote_images else '我引用了一条消息，但本次没有附带可读正文。'
@@ -396,16 +635,20 @@ async def handle_official_message(bridge, event):
             'pure_bot_mention': pure_mention,
             'mentions': [{'user_id': identity(appid, 'user', c.qq), 'name': getattr(c, 'name', '')}
                          for c in components if isinstance(c, Comp.At)],
-            'has_image': bool(images or quote_images), 'image_base64s': images,
+            'has_image': bool(images or quote_images or forward_images or quoted_forward_images), 'image_base64s': images,
             'quoted_image_base64s': quote_images,
+            'forwarded_text': forwarded_text,
+            'forward_image_base64s': forward_images,
+            'quoted_forward_image_base64s': quoted_forward_images,
             'quoted_text': '' if quoted_record else quote['text'],
-            'quoted_forwarded_text': quote['text'] if quoted_record else '',
+            'quoted_forwarded_text': quoted_forwarded_text,
             'quoted_message_id': identity(appid, 'message', quote['id']),
             'quoted_user_id': (str(user_bindings(bridge.config).get(quote['author_id']) or '')
                                or identity(appid, 'user', quote['author_id'])),
             'quoted_sender_name': quote['author_name'],
             'rich_segments': rich,
-            'media_share': True,
+            'bilibili_card': share['search_card'] if not share['video_urls'] and not quote['present'] else None,
+            'media_share': not (current_record or quote_record) and (not quote['present'] or has_link),
             'observe_only': observe_only,
         }
         if text.startswith('/crazy-thursday'):
@@ -420,15 +663,21 @@ async def handle_official_message(bridge, event):
             elif command == '/crazy-thursday-list': payload['crazy_thursday_list'] = True
             elif command == '/crazy-thursday-del': payload['crazy_thursday_delete'] = argument
         logger.info(f'官方 QQ 试用收到消息：appid={appid} private={private} group={event.get_group_id()} '
-                    f'images={len(images)} observe={observe_only} link={has_link} '
+                    f'images={len(images)} forward_images={len(forward_images) + len(quoted_forward_images)} observe={observe_only} link={has_link} '
                     f'quote={quote["present"]} quote_chars={len(quote["text"])}')
-        media_receipt = bool(not text.startswith('/') and MEDIA_ACK_PATTERN.search(text + ' ' + str(rich)))
+        media_receipt = bool(not text.startswith('/') and (payload.get('bilibili_card') or MEDIA_ACK_PATTERN.search(text + ' ' + str(rich))))
         from .web_learning_progress import request_learning_backend
         response = await request_learning_backend(bridge, event, payload)
         update = getattr(bridge, '_update_relation_import', None)
         if callable(update):
             update(event, response)
         logger.info(f'官方后端结果：mode={response.get("mode")} types={[row.get("type") for row in response.get("messages", [])]}')
+        if response.get('mode') == 'merchant-current':
+            # The Node planner only labels an explicit current-store question;
+            # reuse the same live snapshot/image path as /远行商人 so natural
+            # language and the command cannot drift into different data.
+            await handle_merchant_command(bridge, event, '/远行商人', official=True)
+            return
         if media_receipt and response.get('mode') in ('media-unavailable', 'media-disabled', 'media-excluded'):
             notices = {'media-unavailable': '抓取失败：暂时无法获取这个分享，请检查链接或稍后重试。',
                        'media-disabled': '未抓取：媒体解析服务当前未启用。',
@@ -472,7 +721,12 @@ async def handle_official_message(bridge, event):
         # Tencent permits 4 C2C / 5 group passive replies. Keep a slot for
         # an uncertain/partial upload failure. Successful sends stay silent.
         budget = (4 if private else 5) - (1 if media_receipt else 0)
-        chains = output_chains(response, max_messages=budget, truncation_notice=not media_receipt)
+        chains = output_chains(
+            response,
+            max_messages=budget,
+            truncation_notice=not media_receipt,
+            official_video_url=bridge.config.get('official_video_url_upload_enabled') is True,
+        )
         stickers = {'base64://' + row['base64']: row['base64']
                     for row in response.get('messages', [])
                     if row.get('type') == 'image' and row.get('sub_type') == 1 and row.get('base64')}
@@ -500,11 +754,15 @@ async def handle_official_message(bridge, event):
         logger.info(f'官方 QQ 试用回复完成：appid={appid}')
     except Exception as error:
         # Unknown sends must not be blindly retried by this bridge.
-        logger.warning(f'官方 QQ 试用失败：{type(error).__name__} code={getattr(error, "code", "")}')
+        logger.warning('官方 QQ 试用失败：' + json.dumps({
+            'stage': media_stage, 'errors': error_diagnostics(error),
+        }, ensure_ascii=False))
         if observe_only:
             return
         if media_receipt:
-            if media_stage == 'send':
+            if isinstance(error, OfficialVideoPreparationError):
+                status = str(error)
+            elif media_stage == 'send':
                 status = '解析已完成，但内容未全部确认发送；可能已有部分到达，请勿连续重复提交。'
             elif isinstance(error, asyncio.TimeoutError):
                 status = '抓取等待超时，暂未拿到结果，请稍后重试。'

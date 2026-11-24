@@ -1,3 +1,4 @@
+import { normalizeBilibiliCard } from './bilibili-card-recovery.js';
 import {
   buildModelInput,
   extractMessageText,
@@ -1702,6 +1703,8 @@ export function normalizeQqPayload(payload, { relationImport = false } = {}) {
       ? payload.rich_segments.slice(0, 8)
       : [],
     mediaShare: payload.media_share === true,
+    bilibiliCard: /^qqofficial:[^:]+:user:/.test(String(payload.bot_user_id || ''))
+      ? normalizeBilibiliCard(payload.bilibili_card) : null,
     crazyThursdayRequest: payload.crazy_thursday_request === true,
     crazyThursdayTest: payload.crazy_thursday_test === true,
     crazyThursdayScheduled: payload.crazy_thursday_scheduled === true,
@@ -3992,9 +3995,25 @@ export class QqBotService {
           + ` answer=${turnPlan?.answerRequired === false ? 'no' : 'yes'}`
           + ` first=${turnPlan?.firstBeat || 'none'}`
           + ` attack=${turnPlan?.attack?.decision || 'none'}/${turnPlan?.attack?.target || 'none'}`
+          + ` merchant=${turnPlan?.merchantCurrentRequest ? 'current' : 'off'}`
           + ` search=${turnPlan?.search?.factNeeded ? `fact(${turnPlan.search.factQueries?.length ?? 0})` : 'off'}`
           + `/${turnPlan?.search?.cultureNeeded ? `culture(${turnPlan.search.cultureQueries?.length ?? 0})` : 'off'}`,
         );
+        // Merchant inventory is a live image-backed command. Once the planner
+        // has identified an explicit current-store request, stop before the
+        // ordinary reply model and let the channel bridge fetch a fresh round.
+        // Passive group chatter never reaches this branch, and private chats
+        // are always direct; a group must explicitly address this bot.
+        if (turnPlan?.merchantCurrentRequest === true
+          && (message.chattype === 'single' || options.directBotMention === true)) {
+          return {
+            mode: 'merchant-current',
+            merchant_current_request: true,
+            messages: [],
+            active_reply: true,
+            active_reply_priority: 'must',
+          };
+        }
       }
       const explicitImageSearch = hasExplicitImageSearchIntent(imageSearchQuestion);
       const imageInformationPrompt = hasImageContext
@@ -5630,7 +5649,7 @@ export class QqBotService {
     const commandText = stripBotMention(payload.text);
     const followup = this.followupTurns.accept(payload, {
       direct: this.isDirectHumanEngagementTrigger(payload), peer: this.isPeerBotMessage(payload),
-      command: commandText.startsWith('/')
+      command: commandText.startsWith('/') || Boolean(payload.bilibiliCard)
         || mediaCandidates({ text: payload.text, richSegments: payload.richSegments })
           .some(candidate => ['bilibili', 'xiaohongshu', 'douyin', 'kuaishou'].includes(candidate.provider))
         || Boolean(parseWebMemeManagement(commandText)
@@ -5990,6 +6009,22 @@ export class QqBotService {
     ) {
       return { mode: 'media-excluded', messages: [] };
     }
+    if (payload.mediaShare && payload.bilibiliCard && !payload.observeOnly
+      && supportedCandidates.length === 0) {
+      if (mediaExcluded || allowedProviders && !allowedProviders.has('bilibili')) {
+        return { mode: 'media-excluded', messages: [] };
+      }
+      if (!this.mediaResolver?.enabled) return { mode: 'media-disabled', messages: [] };
+      try {
+        const recovered = await this.mediaResolver.recoverBilibiliCard(payload.bilibiliCard, this.chatClient);
+        supportedCandidates = [recovered];
+        this.logger.info(`官方 B站卡片补全：bvid=${recovered.bvid} evidence=title-author-cover`);
+      } catch (error) {
+        this.logger.warn(`官方 B站卡片核验失败：${error.message}`);
+        return { mode: 'media-unavailable', messages: [{ type: 'text',
+          text: '这张卡片没有附带视频链接，自动检索后未能确认对应视频。请补发 B 站链接。' }] };
+      }
+    }
     const directLearningCandidates = payload.observeOnly
       ? []
       : mediaCandidates({
@@ -6058,6 +6093,7 @@ export class QqBotService {
           return [{
             type: 'video',
             url: multiResolved.url,
+            ...(multiResolved.officialUrl ? { officialUrl: multiResolved.officialUrl } : {}),
             mediaCacheKey: createHash('sha256').update(multiCandidate.provider === 'bilibili' && multiResolved.cid
               ? `bilibili:${multiResolved.cid}:${multiResolved.quality || 0}`
               : `${multiCandidate.provider}:${multiResolved.url}`).digest('hex'),
@@ -6144,6 +6180,9 @@ export class QqBotService {
             return {
               type: 'video',
               url: mediaUrl,
+              ...(item.officialUrl || resolved.officialUrl
+                ? { officialUrl: item.officialUrl || resolved.officialUrl }
+                : {}),
               mediaCacheKey,
               title: item.title || resolved.title || '',
               coverUrl: item.coverUrl || item.cover || resolved.coverUrl || '',
@@ -6165,7 +6204,8 @@ export class QqBotService {
             };
           });
         if (messages.length === 0) throw new Error('媒体解析未返回可发送的视频地址');
-        return { mode: 'media', messages };
+        return { mode: 'media', messages: candidate.recoveryNotice
+          ? [{ type: 'text', text: candidate.recoveryNotice }, ...messages] : messages };
       } catch (error) {
         const removedAtSource = isRemovedError(error);
         const mediaTooLarge = isMediaTooLargeError(error);

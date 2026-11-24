@@ -78,6 +78,34 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
                                 [[c.toDict() for c in result.chain] for result in yielded]))
             self.assertEqual(results[0], results[1])
 
+    async def test_forward_records_read_only_from_explicit_quote_in_both_modes(self):
+        for mode in ('legacy', 'adapter'):
+            for quoted, waking in ((False, False), (False, True), (True, False), (True, True)):
+                bridge, event, _, _ = self.build({'mode': 'chat', 'messages': []}, mode)
+                current = main.Comp.Forward(id='current-record')
+                nested = main.Comp.Forward(id='quoted-record')
+                components = [current, main.Comp.Plain('看看')]
+                if quoted:
+                    components.append(main.Comp.Reply(id='quote', chain=[nested]))
+                event.get_messages = lambda: components
+                event.message_str = '看看'
+                bridge._raw_text = lambda e: '看看'
+                bridge._text_for_backend = lambda *a, **k: '看看'
+                bridge._should_reply = lambda e: waking
+                bridge._should_observe = lambda e: True
+                bridge._quoted_message_chain = AsyncMock(return_value=[nested])
+                bridge._forwarded_content = AsyncMock(return_value=('内层正文', []))
+                bridge._request_backend = AsyncMock(return_value={'mode': 'observe', 'messages': []})
+                await fixtures.drive(bridge, event)
+                if quoted and waking:
+                    bridge._forwarded_content.assert_awaited_once_with(event, [nested], refresh=True)
+                else:
+                    bridge._forwarded_content.assert_not_awaited()
+                if bridge._request_backend.called:
+                    payload = bridge._request_backend.call_args.args[0]
+                    self.assertEqual(payload['forwarded_text'], '')
+                    self.assertEqual(payload['forward_image_base64s'], [])
+
     async def test_unknown_gallery_never_retries_or_falls_back(self):
         for result in (None, {}):
             bridge, event, _, _ = self.build(fixtures.GALLERY)

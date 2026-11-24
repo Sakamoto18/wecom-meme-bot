@@ -222,7 +222,8 @@ test('B站公开接口携带配置的 Cookie，避免匿名请求被风控返回
 });
 
 test('B站单文件 MP4 注册为流式中转，不等待完整下载', async () => {
-  const resolver = new MediaResolver({ logger: quietLogger, enabled: true, cacheTtlMs: 60_000 });
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true, cacheTtlMs: 60_000,
+    officialPublicBaseUrl: 'https://media.example.com' });
   const result = resolver.registerRemoteMedia({
     mediaUrl: 'https://cdn.example/video.mp4', size: 1234, title: '流式视频',
     backupMediaUrls: ['https://cdn.example/backup.mp4'],
@@ -233,6 +234,7 @@ test('B站单文件 MP4 注册为流式中转，不等待完整下载', async ()
   assert.equal(result.streamed, true);
   assert.equal(result.publishedAt, 1789113600);
   assert.equal(result.downloadBytes, 0);
+  assert.match(result.officialUrl, /^https:\/\/media\.example\.com\/v1\/qq\/media\/.+\?complete=1$/u);
   assert.equal(resource.remote, true);
   assert.equal(resource.remoteUrl, 'https://cdn.example/video.mp4');
   assert.deepEqual(resource.backupUrls, ['https://cdn.example/backup.mp4']);
@@ -364,7 +366,8 @@ test('本地动图媒体注册后保留 image/gif 类型', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'media-gif-'));
   const filePath = path.join(directory, 'example.gif');
   await writeFile(filePath, Buffer.from('GIF89a'));
-  const resolver = new MediaResolver({ logger: quietLogger, enabled: true, cacheTtlMs: 60_000 });
+  const resolver = new MediaResolver({ logger: quietLogger, enabled: true, cacheTtlMs: 60_000,
+    officialPublicBaseUrl: 'https://media.example.com' });
   try {
     const result = resolver.registerMedia({
       filePath, outputBytes: 6, mediaType: 'image/gif',
@@ -372,6 +375,7 @@ test('本地动图媒体注册后保留 image/gif 类型', async () => {
     const resource = await resolver.getMediaFile(result.mediaId);
     assert.equal(resource.mediaType, 'image/gif');
     assert.equal(result.url, `http://qq-bot:8787/v1/qq/media/${result.mediaId}`);
+    assert.equal(result.officialUrl, `https://media.example.com/v1/qq/media/${result.mediaId}?complete=1`);
   } finally {
     resolver.close();
     await rm(directory, { recursive: true, force: true });

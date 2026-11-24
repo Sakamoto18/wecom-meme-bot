@@ -4,7 +4,7 @@ import { WebMemeConfirmation } from '../src/web-meme-confirmation.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Jimp } from 'jimp';
@@ -29,7 +29,7 @@ import {
   splitReplyText,
 } from '../src/qq-service.js';
 import { ActiveReplyDecider } from '../src/active-reply.js';
-import { ReplyTurnPlanner } from '../src/reply-turn-planner.js';
+import { ReplyTurnPlanner, normalizeTurnPlan } from '../src/reply-turn-planner.js';
 
 function createMeme(filename = 'longtu.png') {
   return {
@@ -4562,7 +4562,8 @@ test('视频卡片只透传原作者与正文话题，QQ发送者不覆盖作者
 test('同一抖音分享卡中的多个链接会聚合成多个视频并附带多封面预览', async () => {
   const resolved = new Map([
     ['https://v.douyin.com/one/', {
-      url: 'https://cdn.example/video-1.mp4', coverUrl: 'https://cdn.example/cover-1.jpg', title: '第一条',
+      url: 'https://cdn.example/video-1.mp4', officialUrl: 'https://media.example/video-1?complete=1',
+      coverUrl: 'https://cdn.example/cover-1.jpg', title: '第一条',
     }],
     ['https://v.douyin.com/two/', {
       url: 'https://cdn.example/video-2.mp4', coverUrl: 'https://cdn.example/cover-2.jpg', title: '第二条',
@@ -4583,11 +4584,50 @@ test('同一抖音分享卡中的多个链接会聚合成多个视频并附带�
   assert.deepEqual(result.messages.map((item) => item.url), [
     'https://cdn.example/video-1.mp4', 'https://cdn.example/video-2.mp4',
   ]);
+  assert.equal(result.messages[0].officialUrl, 'https://media.example/video-1?complete=1');
   assert.deepEqual(result.messages[0].images, [
     'https://cdn.example/cover-1.jpg', 'https://cdn.example/cover-2.jpg',
   ]);
   assert.equal(result.messages[1].images.length, 0);
   assert.equal(calls, 2);
+});
+
+test('官方完整媒体 URL 端点等待文件并支持 HEAD 与单 Range', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'qq-official-media-'));
+  const filePath = path.join(directory, 'video.mp4');
+  await writeFile(filePath, Buffer.from('0123456789'));
+  const optionsSeen = [];
+  const server = createQqApiServer({
+    apiToken: 'test-token',
+    service: {},
+    mediaResolver: {
+      async getMediaFile(id, options) {
+        assert.equal(id, 'media-id');
+        optionsSeen.push(options);
+        return { filePath, size: 10, mediaType: 'video/mp4' };
+      },
+    },
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  try {
+    const head = await fetch(`${baseUrl}/v1/qq/media/media-id?complete=1`, { method: 'HEAD' });
+    assert.equal(head.status, 200);
+    assert.equal(head.headers.get('content-length'), '10');
+    const ranged = await fetch(`${baseUrl}/v1/qq/media/media-id?complete=1`, {
+      headers: { Range: 'bytes=2-5' },
+    });
+    assert.equal(ranged.status, 206);
+    assert.equal(ranged.headers.get('content-range'), 'bytes 2-5/10');
+    assert.equal(await ranged.text(), '2345');
+    assert.deepEqual(optionsSeen, [{ requireComplete: true }, { requireComplete: true }]);
+  } finally {
+    server.close();
+    await once(server, 'close');
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('QQ HTTP API 要求 Bearer Token 并提供健康检查', async () => {
@@ -4849,6 +4889,63 @@ test('普通模型轮只调用一次回合规划器，并把战术卡交给回�
   assert.match(plannerInputs[0].content, /PHP 漏洞/);
   assert.ok(calls.some((options) => /mode=explanation/.test(options.additionalSystemPrompt)));
   assert.ok(calls.some((options) => /PHP2Shell 未认证 RCE/.test(options.additionalSystemPrompt)));
+});
+
+test('当前远行商人问题由规划器转成实时商店动作，不生成普通模型回复', async () => {
+  let modelCalls = 0;
+  const { service } = createService({
+    replyTurnPlanner: {
+      enabled: true,
+      async plan() {
+        return { merchantCurrentRequest: true };
+      },
+    },
+    chatClient: {
+      isConfigured: true,
+      async complete() {
+        modelCalls += 1;
+        return '不应走普通回复。';
+      },
+    },
+  });
+  const result = await service.handleMessage({
+    message_id: 'merchant-current-private',
+    message_type: 'private',
+    user_id: 'merchant-user',
+    text: '帮我看一下远行商人现在卖什么，还有多久刷新',
+  });
+  assert.equal(result.mode, 'merchant-current');
+  assert.equal(result.merchant_current_request, true);
+  assert.deepEqual(result.messages, []);
+  assert.equal(modelCalls, 0);
+});
+
+test('官方群当前商店查询返回商人动作，旁观和普通游戏问题不触发', async () => {
+  let planned = true;
+  let plannerCalls = 0;
+  const { service } = createService({
+    replyTurnPlanner: { enabled: true, async plan() {
+      plannerCalls += 1;
+      return normalizeTurnPlan({ merchant_current_request: planned });
+    } },
+  });
+  const base = { message_type: 'group', group_id: 'qqofficial:app:group:merchant',
+    user_id: 'member', bot_user_id: 'qqofficial:app:user:bot' };
+  const query = { ...base, message_id: 'merchant-addressed',
+    mentions: [{ user_id: base.bot_user_id }], text: '远行商人现在在卖什么' };
+  const current = await service.handleMessage(query);
+  assert.equal(current.mode, 'merchant-current');
+  assert.deepEqual(current.messages, []);
+  assert.equal(plannerCalls, 1);
+  const observed = await service.handleMessage({ ...base, message_id: 'merchant-observed',
+    text: query.text, observe_only: true });
+  assert.notEqual(observed.mode, 'merchant-current');
+  assert.deepEqual(observed.messages, []);
+  assert.equal(plannerCalls, 1);
+  planned = false;
+  const guide = await service.handleMessage({ ...query, message_id: 'merchant-guide',
+    text: '远行商人的刷新规则是什么' });
+  assert.notEqual(guide.mode, 'merchant-current');
 });
 
 test('纯角色图跳过评价时不调用回合规划器', async () => {

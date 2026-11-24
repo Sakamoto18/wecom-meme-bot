@@ -1090,7 +1090,10 @@ class AdapterBridge(LongtuQqBridge):
                 self._forward_components(components)
                 or self._forward_components(quoted_chain)
             )
-            rich_segments = self._rich_segments(event, quoted_chain)
+            if self._forward_components(components) and not reply_component and not self._raw_text(event).strip():
+                return
+            rich_segments = [segment for segment in self._rich_segments(event, quoted_chain)
+                             if forward_reference(segment) is None]
             has_rich = bool(rich_segments)
             raw_media_text = self._raw_text(event) or event.message_str or ""
             # 平台白名单要看链接才能判断，分享地址可能只在富段卡片里。
@@ -1188,32 +1191,14 @@ class AdapterBridge(LongtuQqBridge):
                 quoted_text = str(
                     getattr(reply_component, "message_str", "") or "",
                 ).strip()
-            observed_forward_images = []
-            observed_quoted_forward_images = []
-            if should_reply:
-                forwarded_text, forward_image_base64s = await self._forwarded_content(
-                    event,
-                    components,
-                    refresh=True,
-                )
+            # 合并记录只读取本次明确引用的链；不旁观展开、不预下载当前转发。
+            forwarded_text, forward_image_base64s = "", []
+            quoted_forwarded_text, quoted_forward_image_base64s = "", []
+            observed_forward_images, observed_quoted_forward_images = [], []
+            if should_reply and reply_component:
                 quoted_forwarded_text, quoted_forward_image_base64s = await self._forwarded_content(
-                    event,
-                    quoted_chain,
-                    refresh=True,
+                    event, quoted_chain, refresh=True,
                 )
-            else:
-                # 旁观消息仍不把图片上传给 Node，但先提取并缓存合并转发中的
-                # 图片，方便下一条消息明确询问“上面的聊天记录/图片”。
-                forwarded_text, observed_forward_images = await self._forwarded_content(
-                    event,
-                    components,
-                )
-                quoted_forwarded_text, observed_quoted_forward_images = await self._forwarded_content(
-                    event,
-                    quoted_chain,
-                )
-                forward_image_base64s = []
-                quoted_forward_image_base64s = []
             image_base64s = []
             quoted_image_base64s = []
             quoted_image_sub_types = []
@@ -1350,6 +1335,11 @@ class AdapterBridge(LongtuQqBridge):
                     "龙图服务暂时不可用，请稍后再试。",
                 )
                 yield event.plain_result(str(error_message))
+                return
+
+            if response.get("mode") == "merchant-current":
+                from .merchant_command import handle_merchant_command
+                await handle_merchant_command(self, event, "/远行商人")
                 return
 
             # 普通群消息原本以 observe_only 进入 Node 服务。Node 现在可能通过

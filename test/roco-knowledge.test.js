@@ -114,6 +114,7 @@ test('evidence answer receives active persona, validates output, and has no forc
     chatClient: { isConfigured: true, async complete(history, input, options) {
       calls.push(options.usageSource);
       assert.match(input, /3%生命/);
+      if (options.usageSource === 'roco-evidence-coverage') return '{"sufficient":true}';
       if (options.usageSource === 'roco-grounding-review') return '{"supported":true}';
       assert.match(options.additionalSystemPrompt, /角色：短句自然接话/);
       assert.match(options.additionalSystemPrompt, /本群口语参考/);
@@ -124,7 +125,7 @@ test('evidence answer receives active persona, validates output, and has no forc
     } },
   });
   assert.equal(result.mode, 'game-knowledge');
-  assert.deepEqual(calls, ['roco-game-knowledge','roco-grounding-review']);
+  assert.deepEqual(calls, ['roco-evidence-coverage','roco-game-knowledge','roco-grounding-review']);
   assert.doesNotMatch(result.answer, /来源/);
   assert.ok(result.references.length);
 });
@@ -192,4 +193,80 @@ for (const official of [false, true]) test(`${official ? 'official' : 'NapCat'} 
   assert.match(gameCalls[1].input, /技能石/);
   assert.match(gameCalls[1].options.additionalSystemPrompt, /激活的人格/);
   assert.ok(gameCalls[1].history.some(h => String(h.content).includes('氧循环')));
+});
+
+const missingKnowledge = () => ({ metadata:{importedAt:'2026-11-13'}, records:[{名称:'迪莫',来源:'https://wiki.example/dimo',章节:{进化:'可进化为光系首领'}}],route:{question:'迪莫光系首领进化道具前置任务是什么',searchQueries:[]},truncated:false });
+
+test('coverage reads actual wiki bodies and searches non-wiki evidence before answering', async () => {
+  const searches=[];
+  const answer=await answerRocoQuestion({knowledge:missingKnowledge(),query:'迪莫光系首领进化道具前置任务是什么',priorityPersonaContext:'全局角色',
+    webSearch:{async search(q){searches.push(q);return {results:[{url:'https://guide.example/task',description:'测试证据：前置任务为任务甲。',publishedDate:'2026-11-19'}]};}},
+    chatClient:{async complete(_,input,o){
+      const data=JSON.parse(input);
+      if(o.usageSource==='roco-evidence-coverage'){
+        assert.equal(data.evidence.records[0].章节.进化,'可进化为光系首领');
+        return JSON.stringify({sufficient:false,search_queries:['洛克王国世界 迪莫 光系首领 进化道具 前置任务']});
+      }
+      assert.equal(data.evidence.web[0].publishedDate,'2026-11-19');
+      assert.match(data.evidence.web[0].text,/任务甲/);
+      if(o.usageSource==='roco-grounding-review')return '{"supported":true}';
+      assert.equal(o.prioritySystemPrompt,'全局角色');
+      return '先完成任务甲。';
+    }}});
+  assert.equal(searches.length,1);assert.equal(answer.answer,'先完成任务甲。');
+  assert.ok(answer.references.includes('https://guide.example/task'));
+});
+
+test('review can request missing evidence even when a cautious draft is supported', async () => {
+  let drafts=0,searches=0;
+  const answer=await answerRocoQuestion({knowledge:missingKnowledge(),query:'前置任务是什么',
+    webSearch:{async search(){searches++;return {results:[{url:'https://guide.example/task',text:'测试事实：完成任务甲。'}]};}},
+    chatClient:{async complete(_,input,o){
+      if(o.usageSource==='roco-evidence-coverage')return '{"sufficient":true}';
+      if(o.usageSource==='roco-grounding-review')return JSON.stringify({supported:true,needs_search:drafts===1,search_queries:['洛克王国世界 迪莫 进化 前置任务']});
+      drafts++;if(drafts===2)assert.match(input,/测试事实/);
+      return drafts===1?'还没有查到。':'先完成任务甲。';
+    }}});
+  assert.equal(drafts,2);assert.equal(searches,1);assert.equal(answer.answer,'先完成任务甲。');
+});
+
+test('missing wiki snapshot still permits grounded web answer', async () => {
+  const knowledge={...missingKnowledge(),metadata:null,records:[]};
+  let searches=0;
+  const answer=await answerRocoQuestion({knowledge,query:'前置任务',webSearch:{async search(){searches++;return {results:[{url:'https://guide.example/a',text:'测试事实'}]};}},
+    chatClient:{async complete(_,input,o){
+      if(o.usageSource==='roco-evidence-coverage')return '{"sufficient":false,"search_queries":["洛克王国世界 前置任务"]}';
+      if(o.usageSource==='roco-grounding-review')return '{"supported":true}';
+      assert.match(input,/测试事实/);return '有对应攻略说明。';
+    }}});
+  assert.equal(searches,1);assert.equal(answer.answer,'有对应攻略说明。');
+});
+
+test('search failures preserve uncertainty and review cannot publish unsupported claims', async () => {
+  let searches=0;
+  const answer=await answerRocoQuestion({knowledge:missingKnowledge(),query:'前置任务',webSearch:{async search(){searches++;throw Error('offline');}},
+    chatClient:{async complete(_,input,o){
+      if(o.usageSource==='roco-evidence-coverage')return '{"sufficient":false,"search_queries":["洛克王国世界 任务"]}';
+      if(o.usageSource==='roco-grounding-review')return '{"supported":false,"needs_search":true,"search_queries":["洛克王国世界 任务"]}';
+      assert.equal(JSON.parse(input).evidence.searchFailed,true);return '完成999个任务。';
+    }}});
+  assert.equal(searches,1);assert.doesNotMatch(answer.answer,/999/);
+});
+
+test('disabled web search bypasses coverage and search even for empty wiki records', async () => {
+  const calls=[];
+  await answerRocoQuestion({knowledge:missingKnowledge(),query:'前置任务',webSearchEnabled:false,
+    webSearch:{search(){throw Error('disabled');}},chatClient:{async complete(_,__,o){calls.push(o.usageSource);return o.usageSource==='roco-grounding-review'?'{"supported":true}':'条件暂时没查到。';}}});
+  assert.deepEqual(calls,['roco-game-knowledge','roco-grounding-review']);
+});
+
+test('failed expanded draft retains already verified partial answer instead of discarding known facts', async () => {
+  let drafts=0;
+  const answer=await answerRocoQuestion({knowledge:missingKnowledge(),query:'前置任务和原初之章',
+    webSearch:{async search(){return {results:[]};}},chatClient:{async complete(_,__,o){
+      if(o.usageSource==='roco-evidence-coverage')return '{"sufficient":true}';
+      if(o.usageSource==='roco-grounding-review')return JSON.stringify({supported:drafts===1,needs_search:true,search_queries:['洛克王国世界 原初之章'],issues:['不能用未命中证明不存在']});
+      drafts++;return drafts===1?'先完成任务甲，原初之章的条件暂未核实。':'原初之章不存在。';
+    }}});
+  assert.equal(answer.answer,'先完成任务甲，原初之章的条件暂未核实。');
 });

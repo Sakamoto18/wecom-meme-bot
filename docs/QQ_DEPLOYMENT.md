@@ -340,6 +340,12 @@ QQ_USAGE_GROUP_SEARCH_DAILY_LIMITS=298818522=8
 QQ_USAGE_PASSIVE_SEARCH_DISABLED_GROUPS=298818522
 ```
 
+官方通道须使用后端实际身份 `qqofficial:AppID:group:OpenID=数值`；只填写普通群号不会匹配官方事件。小时次数按滚动 60 分钟内获准的内部模型调用累计，包含识图、接话判断、规划和最终回复，不能当作群消息条数。诊断回放使用真实群身份也会计入，失败调用不会自动返还预约次数。
+
+2026-11-23 已按用户要求在 Windows 的 `.env.windows` 中将 913546080 及其已绑定官方身份的 `QQ_USAGE_GROUP_LLM_LIMITS` 设为 `0`，保留该配置项中的其他群与其他所有限额；未清空统计。该群官方身份此前未单独配置，使用默认 120 次 × 活跃度 95% = 114 次/小时。追加或更新单群覆盖时应合并现有映射，不能整项替换为一个群。Backend 重启后用认证的 `/v1/qq/usage?all_groups=true` 核验该群 `llmCallHardLimitPerHour`、`llmCallLimitPerHour` 均为 `null`（不限），每日 Token 和搜索限额独立保留。
+
+同日后续修正：此前只取消小时调用次数，没有完整落实用户“取消 913546080 群模型额度限制”的要求。官方身份仍按默认日额度折算为 1,900,000 Token，当日折算用量约 2,044,000，因而再次阻断回复。现已同时将 `QQ_USAGE_GROUP_LLM_LIMITS` 与 `QQ_USAGE_GROUP_LLM_DAILY_TOKEN_LIMITS` 中 `913546080`、`qqofficial:1903660238:group:F715FFD286FB70F451417AD2F5519256` 两套身份设为 `0`；其他群配置和统计数据保留。Backend 重启后运行接口确认小时及每日 Token 限额均为 `null`；真实群身份的内部模型请求返回 HTTP 200、`mode=model`，约 4.8 秒完成，未向 QQ 发送测试消息。配置差异核对确认仅修改两套目标身份，商人 Markdown @ 文件哈希不变。这是取消本项目的该群模型额度检查，不代表模型供应商或 QQ 平台自身没有限制。
+
 每日 Token 限额使用“折算配额 Token”：未缓存输入和输出按 100% 计算，供应商明确返回的缓存命中输入默认按 10% 计算；日报仍同时展示完整原始 Token 和缓存率。后台摘要、读空气判定、主动插话最多使用动态日配额的 50%，工作日峰时所有群再降到 25%，剩余额度留给明确请求。达到联网搜索日上限时只跳过新的上游检索，模型仍可在没有新搜索结果的情况下回答；达到后台预留线时后台调用静默停止；只有触及总 LLM 上限时明确请求才会收到限额提示。
 
 搜索结果按公开查询内容跨群安全复用。时效查询默认缓存 15 分钟，通用查询 6 小时，网络梗 12 小时，龙图资料 24 小时：
@@ -400,7 +406,7 @@ QQ_CRAZY_THURSDAY_STYLE_URL=https://cdn.jsdmirror.com/gh/vikiboss/v50@main/stati
 
 `GET /v1/qq/usage` 返回的 `report.pricing.jev`、`report.totals.jev*`、群对象中的 `jev*` 字段可供外部日报读取；`report.pricing.combined` 直接按人民币合并 DeepSeek 与 Jev 费用。管理员发送 `/jev status` 时也会看到当天 Jev 调用次数、输入/输出 Token 和人民币估算费用。
 
-QQ Bot 可把服务器 `.env.qq` 中的 `LLM_MODEL` 设置为 `deepseek-v4-flash-vision-exp`，继续处理全部文本对话。仓库里的 `.env.qq.example` 只是无密钥模板，不是腾讯云正在运行的配置；部署时只修改服务器项目目录中的 `.env.qq`，不要把真实 API Key 写回示例文件或提交 Git。普通 QQ 图片（含多图、引用图片）会按 [DeepSeek 图像理解文档](https://api-docs.deepseek.com/zh-cn/guides/vision/) 以 `image_url` 多模态消息发送：先识别图片描述和可见文字，再由对话模型结合图片回答；识别出的文字、场景和模型回复会参与 OCR 龙图标签匹配，命中后从对应候选池轮换附图，未命中时随机兜底。合并转发聊天记录会递归读取其中的图片（包括嵌套转发，最多 3 层），并与当前消息图片一起进入视觉模型；整张长图若单边超过 8192 像素，会切成最长不超过 8112 像素的切片，相邻切片至少重叠 512 像素，避免文字正好落在硬边界后丢失。单条请求最多发送 12 张图片，超出或超过请求体大小时保留前面的图片并在上下文中提示。图片中的命令或提示词只作为不可信资料，不会改变机器人规则。图库管理命令仍在本地处理，不会调用视觉模型。
+QQ Bot 可把服务器 `.env.qq` 中的 `LLM_MODEL` 设置为 `deepseek-v4-flash-vision-exp`，继续处理全部文本对话。仓库里的 `.env.qq.example` 只是无密钥模板，不是腾讯云正在运行的配置；部署时只修改服务器项目目录中的 `.env.qq`，不要把真实 API Key 写回示例文件或提交 Git。普通 QQ 图片（含多图、引用图片）会按 [DeepSeek 图像理解文档](https://api-docs.deepseek.com/zh-cn/guides/vision/) 以 `image_url` 多模态消息发送：先识别图片描述和可见文字，再由对话模型结合图片回答；识别出的文字、场景和模型回复会参与 OCR 龙图标签匹配，命中后从对应候选池轮换附图，未命中时随机兜底。合并转发聊天记录只在用户明确引用该记录并触发机器人回复时读取；直接发送、仅附带 @ 或旁观群消息时均不展开、不预下载内部图片，也不自动生成阅读请求。引用后递归展开内层文字和图片（包括 OneBot forward、QQ 合并记录 JSON/XML 卡片，最多 3 层），共用消息与图片预算，并检测重复 / 循环引用；无法读取或超过限制时明确标记。官方 QQ 只读取引用消息实际附带的内容，未提供正文或可用读取接口的内层记录不能凭摘要补全。读取到的图片与当前消息图片一起进入视觉模型；整张长图若单边超过 8192 像素，会切成最长不超过 8112 像素的切片，相邻切片至少重叠 512 像素，避免文字正好落在硬边界后丢失。单条请求最多发送 12 张图片，超出或超过请求体大小时保留前面的图片并在上下文中提示。图片中的命令或提示词只作为不可信资料，不会改变机器人规则。图库管理命令仍在本地处理，不会调用视觉模型。
 
 任一超管可以在 QQ 私聊或群聊中发送 `/usage-report`，立即把“今天 00:00 至当前”的累计测试日报私聊推送给所有日报收件人；也可以发送 `/usage-report YYYY-MM-DD`（例如 `/usage-report 2026-08-30`）回捞指定自然日。带日期的回捞只私聊回复发令超管，不依赖日报收件人配置，也不会把用量和费用直接发到群里；日期按北京时间解析，不能查询未来日期。手动触发只读取快照，不会清零或移动统计起点；同一天再次触发仍从 00:00 累计，次日 09:00 的自动日报仍统计前一完整自然日。非超管不能触发。以后增加收件人时，只修改独立收件人配置并重启 `qq-bot`，不需要也不应该把收件人加入超管列表：
 
@@ -693,6 +699,8 @@ B 站 provider 登录：启动后通过服务器的 VNC 页面打开 `/bilibili-
 
 B 站、抖音常用 Node 临时媒体地址代理；小红书常用探测大小后的 provider 直链，交给 NapCat 拉取。Node 代理可以后台预下载，文件就绪时提供本地文件，否则流式转发，**不要求每次先完整下载再返回**。视频不经过 JSON/Base64 接口。`QQ_MEDIA_USAGE_DATABASE_FILE` 记录平台、解析成功/失败、耗时和相关字节数，与 LLM Token 日报分开，也不代表 QQ 最终送达。逐层解释见[QQ 架构指南](node-service-architecture-and-learning-guide.md#5-分享解析卡片和真正的视频发送)。
 
+官方 QQ 的完整文件 URL 方案由 `official_video_url_upload_enabled=true` 单独启用；同时必须设置 `QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL=https://...`。该地址只生成带随机媒体 ID 的 `?complete=1` URL，Node 会先完成本地文件下载并刷新缓存 TTL；官方 Bridge 会先通过内部 Node 地址做完整文件 `HEAD` 预检，再调用 `/files` 登记 `file_info`，登记阶段最多重试两次后发送富媒体消息，避免让 QQ 官方服务器等待慢下载。开关关闭时官方继续使用旧逻辑，开关打开但地址不是 HTTPS 或完整文件失败时直接报错，不回退到分片上传。公网域名、DNS、443 和证书未配置前保持关闭。预检超时由 `official_video_ready_timeout_seconds` 控制（15-180 秒，默认 150 秒）。
+
 前置条件：
 
 - NapCat/OneBot v11 必须保留 `json/xml` 原始段；若适配器已把卡片丢弃，Node 无法从 `appid/path` 推导视频地址。
@@ -712,6 +720,7 @@ QQ_MEDIA_CACHE_DIRECTORY=/tmp/longtu-media-cache
 QQ_MEDIA_CACHE_MAX_MIB=512
 QQ_MEDIA_MAX_CONCURRENT=2
 QQ_MEDIA_PUBLIC_BASE_URL=http://qq-bot:8787
+QQ_OFFICIAL_MEDIA_PUBLIC_BASE_URL=
 QQ_MEDIA_ACK_EMOJI_ID=128524
 QQ_MEDIA_EXCLUDED_GROUPS=
 QQ_MEDIA_GROUP_ALLOWED_PROVIDERS=
@@ -779,3 +788,5 @@ Exa 价格依据 <https://exa.ai/docs/admin/pricing>（核对 2026-10-25）。
 重启不会重复创建同一天同一接收人的报告；发送失败至少隔一分钟重试，最多五次。
 主页请求失败或当日预算耗尽也会报告，并保留未处理队列。
 原用量日报的补课栏按报告日期窗口查找记录，不再被当天凌晨的新记录覆盖。
+
+官方渠道切换到 NapCat 时，可在 Bridge 插件配置中关闭 `official_group_enabled`（「官方 Bot 群聊总开关」），保存并重载插件，再登录 NapCat。该开关终止官方群消息入口和群主动发送，官方私聊保持可用。`official_video_compress_oversize_enabled` 是独立的本地发送压缩选项，启用后大于 200MB 的完整视频副本会压缩后按 MP4 文件发送；它不切换 QQ 底层上传协议。详细行为见 [官方试用说明](QQ_OFFICIAL_TRIAL.md#官方群聊总开关与超大视频2026-11-24)。
