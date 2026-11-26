@@ -313,3 +313,36 @@ test('分 P 不存在由 QQ 返回明确提示，不能沉默或降级发送 P1'
   assert.equal(records[0].errorStage, 'part');
   assert.equal(calls.length, 1);
 });
+
+test('bili2233.cn redirects use native Bilibili resolution and preserve P2', async () => {
+  const calls = [];
+  const api = mockApi(calls);
+  const resolved = await resolveBilibiliMedia('https://bili2233.cn/TKwRH0z', {
+    fetchImpl: async (url, options) => {
+      if (new URL(url).hostname === 'bili2233.cn') {
+        assert.equal(options.redirect, 'manual');
+        return new Response('', { status: 302, headers: { location: `${VIDEO}?p=2` } });
+      }
+      return api(url, options);
+    },
+  });
+  assert.equal(resolved.sourceUrl, `${VIDEO}?p=2`);
+  assert.equal(resolved.mediaUrl, 'https://cdn.example/436920316.mp4');
+});
+
+test('499615970 original bili2233 shares enter video handling without a model or mention', async () => {
+  const seen = [];
+  const service = new QqBotService({ logger, mediaResolver: { enabled: true,
+    async resolve(candidate) {
+      seen.push(candidate);
+      return { url: 'https://media.example/video.mp4', title: '测试视频', provider: 'bilibili', kind: 'video', type: 'video/mp4' };
+    },
+  }, chatClient: { isConfigured: true, complete() { throw Error('share must not become chat'); } } });
+  for (const url of ['https://bili2233.cn/TKwRH0z', 'https://bili2233.cn/Yoqyo19']) {
+    const result = await service.handleMessage({ message_type: 'group', group_id: '499615970',
+      user_id: 'tester', message_id: url.split('/').at(-1), text: `【分享-哔哩哔哩】 ${url}`, media_share: true });
+    assert.equal(result.mode, 'media');
+    assert.ok(result.messages.some(m => m.type === 'video'));
+  }
+  assert.deepEqual(seen.map(c => c.provider), ['bilibili', 'bilibili']);
+});

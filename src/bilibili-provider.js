@@ -113,7 +113,8 @@ export function extractBilibiliVideoIdFromToolOutput(value) {
 
 async function followBilibiliRedirect(value, fetchImpl, timeoutMs, headers = HEADERS) {
   const url = new URL(value);
-  if (url.hostname !== 'b23.tv' && !url.hostname.endsWith('.b23.tv')) return value;
+  if (url.hostname !== 'b23.tv' && !url.hostname.endsWith('.b23.tv')
+      && url.hostname !== 'bili2233.cn') return value;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

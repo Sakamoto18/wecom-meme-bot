@@ -102,6 +102,18 @@ class ProviderWhitelistTests(unittest.TestCase):
             instance._providers_in_text(f'{DOUYIN} {BILIBILI}'), {'douyin', 'bilibili'},
         )
 
+    def test_bili2233_shares_are_acknowledged_and_obey_bilibili_group_policy(self):
+        instance = self.bridge()
+        for link in ('https://bili2233.cn/TKwRH0z', 'https://bili2233.cn/Yoqyo19'):
+            self.assertEqual(instance._providers_in_text(link), {'bilibili'})
+            self.assertIsNotNone(ns['MEDIA_ACK_PATTERN'].search(link))
+            with patch.dict(os.environ, {'QQ_MEDIA_GROUP_ALLOWED_PROVIDERS': self.WHITELIST}):
+                self.assertTrue(instance._media_group_enabled(self.event('499615970'), link))
+                self.assertFalse(instance._media_group_enabled(self.event('821259340'), link))
+        for fake in ('https://bili2233.cn.example.org/test', 'https://notbili2233.cn/test'):
+            self.assertEqual(instance._providers_in_text(fake), set())
+            self.assertIsNone(ns['MEDIA_ACK_PATTERN'].search(fake))
+
     def test_malformed_whitelist_falls_back_to_group_switch(self):
         env = {'QQ_MEDIA_GROUP_ALLOWED_PROVIDERS': '821259340:',
                'QQ_MEDIA_EXCLUDED_GROUPS': '821259340'}

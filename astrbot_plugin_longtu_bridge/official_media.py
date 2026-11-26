@@ -22,7 +22,7 @@ def _host(url):
 
 
 def _bili_host(host):
-    return host == 'bilibili.com' or host.endswith('.bilibili.com') or host == 'b23.tv'
+    return host == 'bilibili.com' or host.endswith('.bilibili.com') or host in ('b23.tv', 'bili2233.cn')
 
 
 def _video_url(value, *, bili_context=False):
@@ -34,7 +34,7 @@ def _video_url(value, *, bili_context=False):
     host = _host(value)
     if host == 'live.bilibili.com' or host.endswith('.live.bilibili.com'):
         return ''
-    if host == 'b23.tv' and parsed.path.strip('/'):
+    if host in ('b23.tv', 'bili2233.cn') and parsed.path.strip('/'):
         return value
     if not (_bili_host(host) or parsed.scheme == 'bilibili'
             or bili_context and not parsed.scheme and not parsed.netloc):

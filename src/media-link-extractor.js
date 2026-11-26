@@ -120,7 +120,8 @@ export function classifyMediaUrl(value) {
     .some((domain) => host === domain || host.endsWith(`.${domain}`))) return 'xiaohongshu';
   if (host.includes('douyin.com') || host.includes('iesdouyin.com')) return 'douyin';
   if (host.includes('kuaishou.com') || host.includes('gifshow.com')) return 'kuaishou';
-  if (host.includes('bilibili.com') || host === 'b23.tv') return 'bilibili';
+  if (host === 'bilibili.com' || host.endsWith('.bilibili.com')
+      || host === 'b23.tv' || host === 'bili2233.cn') return 'bilibili';
   if (host.includes('qq.com') || host.includes('weixin.qq.com')) return 'qq';
   return 'unknown';
 }

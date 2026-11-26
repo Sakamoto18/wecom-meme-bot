@@ -59,3 +59,13 @@ QQ Bridge 已经从文本、JSON/XML 卡片和引用消息中提取候选 URL。
 验证：本机 31 项相关 Node 测试通过；Windows 隔离环境通过 30 项。一个既有 yt-dlp 替身测试生成无扩展名 POSIX 可执行脚本，在 Windows 出现 `spawn ... fake-yt-dlp ENOENT`，已在本机通过，在 Windows 定向排除。发布仅替换卡片恢复、QQ 服务及对应测试，保留生产独立改动。
 
 部署后原卡片本机后端回放返回 HTTP 200、`mode=media`，用时 18.1 秒；返回默认 P1 提示及“P1 无脑单通 打法”，作者 `NighTa奈特`、平台时长 151 秒。完整下载 22,403,268 字节，ffprobe 确认 H.264/AAC、实际时长 150.10 秒。此回放没有调用 QQ 发送。商人 Markdown @ 的三份运行文件 SHA-256 与备份逐一一致，AstrBot/Provider 均未重启。
+
+### B 站 bili2233.cn 分享短链（2026-11-26）
+
+群499615970在北京时间18:23:39和18:26:38分享的《复活辣 来点稳稳的烧火花》《小小巨人生气了》分别使用`https://bili2233.cn/TKwRH0z`和`https://bili2233.cn/Yoqyo19`。消息正常到达NapCat，但入口平台识别未包含这个域名，后端按普通聊天`web-knowledge`回复，未执行视频抓取。群不在媒体排除或平台限制名单内。
+
+NapCat分享识别/回应、Node平台分类、官方卡片URL提取和B站短链第一跳解析均增加精确的`bili2233.cn`域名支持，沿用原B站取流、provider登录会话和跨群缓存。不会根据标题猜平台；仿冒后缀域名不识别为B站，引用历史链接仍保持既有隔离。第一跳Location中的分P信息保留。
+
+本地50项Node回归通过，服务器相关20项Python及14项Node通过。扩展测试另有两项尚未部署的官方完整媒体URL断言、一项旧合并记录测试失败，均用原部署代码复现。实际原链接回放解析为`BV1STEv6FEhC`（4,827,158字节）和`BV14iy2zgEDx`（1,828,829字节），两条视频流均返回HTTP206，读取1KiB成功，后端服务返回`mode=media`及一个视频输出。验证不向QQ发送消息，也不自动重放历史分享。
+
+修复已部署至服务器仓库和运行插件，备份`C:/migration-backup/bili2233-before-20261126-183332`；仅重启Backend/AstrBot，provider和NapCat登录进程不重启。健康检查200，NapCat在线，官方Bot仍关闭。

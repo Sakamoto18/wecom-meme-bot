@@ -56,3 +56,15 @@ test('B站直播间不识别为视频媒体', () => {
   assert.deepEqual(extractMediaUrls({ text: `直播间：${liveUrl}` }), []);
   assert.equal(classifyMediaUrl('https://www.bilibili.com/video/BV1Gh411t7WY'), 'bilibili');
 });
+
+test('B站 bili2233.cn 分享短链从文本和小程序卡片进入相同平台解析', () => {
+  for (const url of ['https://bili2233.cn/TKwRH0z', 'https://bili2233.cn/Yoqyo19']) {
+    assert.equal(classifyMediaUrl(url), 'bilibili');
+    assert.deepEqual(extractMediaUrls({ text: `【分享-哔哩哔哩】 ${url}` }), [url]);
+    assert.deepEqual(extractMediaUrls({ richSegments: [{ type: 'json', data: {
+      data: JSON.stringify({ meta: { detail_1: { qqdocurl: url } } }),
+    } }] }), [url]);
+  }
+  for (const url of ['https://bili2233.cn.example.org/test', 'https://notbili2233.cn/test',
+    'https://bilibili.com.example.org/video/BV1STEv6FEhC']) assert.equal(classifyMediaUrl(url), 'unknown');
+});

@@ -93,6 +93,7 @@ NATIVE_QQ_VIDEO_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MEDIA_ACK_PATTERN = re.compile(
+    r"https?://bili2233\.cn(?=[:/?#\s<>\u3000]|$)[^\s<>\u3000]*|"
     r"https?://[^\s<>\u3000]*(?:bilibili\.com|b23\.tv|xhslink\.(?:com|cn)(?![a-z0-9.-])|xiaohongshu\.com|"
     r"douyin\.com|iesdouyin\.com|kuaishou\.com|gifshow\.com|v\.qq\.com)[^\s<>\u3000]*",
     re.IGNORECASE,
@@ -100,7 +101,7 @@ MEDIA_ACK_PATTERN = re.compile(
 # \u6309\u5e73\u53f0\u8bc6\u522b\u5206\u4eab\u94fe\u63a5\uff0c\u4f9b\u6309\u7fa4\u7684\u5e73\u53f0\u767d\u540d\u5355\u4f7f\u7528\u3002\u57df\u540d\u5212\u5206\u4e0e Node \u4fa7
 # classifyMediaUrl \u4fdd\u6301\u4e00\u81f4\uff0c\u4e24\u8fb9\u5224\u65ad\u540c\u4e00\u6761\u94fe\u63a5\u5fc5\u987b\u5f97\u5230\u540c\u4e00\u4e2a\u5e73\u53f0\u3002
 MEDIA_PROVIDER_PATTERNS = {
-    "bilibili": re.compile(r"https?://[^\s<>\u3000]*(?:bilibili\.com|b23\.tv)", re.IGNORECASE),
+    "bilibili": re.compile(r"https?://(?:(?:[a-z0-9-]+\.)*bilibili\.com|b23\.tv|bili2233\.cn)(?=[:/?#\s<>\u3000]|$)", re.IGNORECASE),
     "xiaohongshu": re.compile(r"https?://(?:[a-z0-9-]+\.)*(?:xhslink\.(?:com|cn)|xiaohongshu\.com)(?![a-z0-9.-])", re.IGNORECASE),
     "douyin": re.compile(r"https?://[^\s<>\u3000]*(?:douyin\.com|iesdouyin\.com)", re.IGNORECASE),
     "kuaishou": re.compile(r"https?://[^\s<>\u3000]*(?:kuaishou\.com|gifshow\.com)", re.IGNORECASE),

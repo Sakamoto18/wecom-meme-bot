@@ -96,6 +96,14 @@ class OfficialMediaTests(unittest.TestCase):
                          'https://example.org/article')
         self.assertEqual(extract(content='https://live.bilibili.com/123')['video_urls'], [])
 
+    def test_bili2233_plain_and_card_share_preserve_original_url(self):
+        for url in ('https://bili2233.cn/TKwRH0z', 'https://bili2233.cn/Yoqyo19'):
+            self.assertEqual(extract(content=url)['video_urls'], [url])
+            self.assertEqual(extract({'ark_data': {'meta': {'detail_1': {'qqdocurl': url}}}})['video_urls'], [url])
+            result = extract({'message_type': 103, 'content': '看看', 'parallel_message': {'msg_nodes': [{'content': url}]}})
+            self.assertEqual(result['video_urls'], [])
+        self.assertEqual(extract(content='https://bili2233.cn.example.org/test')['video_urls'], [])
+
     def test_bad_or_oversized_fields_are_bounded(self):
         result = extract({'ark_data': ['{' * (256 * 1024 + 1), {'url': 'http://['}]})
         self.assertTrue(result['diagnostic']['truncated'])
