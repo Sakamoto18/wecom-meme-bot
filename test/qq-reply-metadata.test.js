@@ -24,6 +24,7 @@ for (const group of ['913546080', 'qqofficial:1903660238:group:F715FFD286FB70F45
       memeStore: { async pick() { return null; } },
       groupMemory: { recordOwnReply(row) { ownReplies.push(row.text); } },
       chatClient: { isConfigured: true, async complete(_history, _input, options) {
+        if (options.usageSource === 'roco-evidence-coverage') return '{"domain":"roco","sufficient":false}';
         if (options.usageSource === 'roco-grounding-review') return '{"supported":true}';
         return envelope;
       } },
@@ -51,6 +52,7 @@ test('游戏回答清除内部记录后为空时不发送标签或空消息', as
   const { service } = createService({
     memeStore: { async pick() { return null; } },
     chatClient: { isConfigured: true, async complete(_history, _input, options) {
+      if (options.usageSource === 'roco-evidence-coverage') return '{"domain":"roco","sufficient":false}';
       if (options.usageSource === 'roco-grounding-review') return '{"supported":true}';
       return '【机器人群聊回复记录】\n本轮回复对象：群友\n本轮回复对象QQ号（仅供历史消歧）：1079175957\n机器人回复：';
     } },

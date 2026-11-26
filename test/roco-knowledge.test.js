@@ -114,7 +114,7 @@ test('evidence answer receives active persona, validates output, and has no forc
     chatClient: { isConfigured: true, async complete(history, input, options) {
       calls.push(options.usageSource);
       assert.match(input, /3%生命/);
-      if (options.usageSource === 'roco-evidence-coverage') return '{"sufficient":true}';
+      if (options.usageSource === 'roco-evidence-coverage') return '{"domain":"roco","sufficient":true}';
       if (options.usageSource === 'roco-grounding-review') return '{"supported":true}';
       assert.match(options.additionalSystemPrompt, /角色：短句自然接话/);
       assert.match(options.additionalSystemPrompt, /本群口语参考/);
@@ -135,6 +135,7 @@ test('unsupported draft must be rewritten and checked; failed review does not pu
   const knowledge = await retrieve(store, '喵喵怎么获取', { ids: ['pet:喵喵'] });
   let attempts = 0, reviews = 0;
   const chatClient = { isConfigured: true, async complete(history, input, options) {
+    if (options.usageSource === 'roco-evidence-coverage') return '{"domain":"roco","sufficient":true}';
     if (options.usageSource === 'roco-grounding-review') {
       reviews++;
       return JSON.stringify({ supported: reviews === 2, issues: ['没有地图方向和等级条件证据'] });
@@ -159,6 +160,7 @@ test('search supplements missing evidence; source display is a semantic user req
   const result = await answerRocoQuestion({ knowledge, query: '给我攻略社区链接',
     webSearch: { async search(q) { searchCount++; return { results: [{ title: '社区', url: 'https://example.com/guide', text: '攻略讨论区' }] }; } },
     chatClient: { async complete(_, input, opts) {
+      if (opts.usageSource === 'roco-evidence-coverage') return JSON.stringify({domain:'roco',sufficient:JSON.parse(input).evidence.web.length > 0,search_queries:['洛克王国世界 攻略社区']});
       assert.match(input, /攻略讨论区/);
       if (opts.usageSource === 'roco-grounding-review') return '{"supported":true}';
       assert.match(opts.additionalSystemPrompt, /用户要出处/);
@@ -179,6 +181,7 @@ for (const official of [false, true]) test(`${official ? 'official' : 'NapCat'} 
     chatClient: { isConfigured: true, async complete(history, input, options) {
       calls.push({ history, input, options });
       if (options.usageSource === 'roco-route') return JSON.stringify({ relevant:true,confidence:.95,ids:['pet:喵喵'],include_skills:true });
+      if (options.usageSource === 'roco-evidence-coverage') return '{"domain":"roco","sufficient":true}';
       if (options.usageSource === 'roco-grounding-review') return '{"supported":true}';
       return '喵喵的特性是氧循环，使用草系技能后回复10%生命。';
     } }, logger: { log() {}, warn() {}, error() {} },
@@ -205,7 +208,7 @@ test('coverage reads actual wiki bodies and searches non-wiki evidence before an
       const data=JSON.parse(input);
       if(o.usageSource==='roco-evidence-coverage'){
         assert.equal(data.evidence.records[0].章节.进化,'可进化为光系首领');
-        return JSON.stringify({sufficient:false,search_queries:['洛克王国世界 迪莫 光系首领 进化道具 前置任务']});
+        return JSON.stringify({domain:'roco',sufficient:false,search_queries:['洛克王国世界 迪莫 光系首领 进化道具 前置任务']});
       }
       assert.equal(data.evidence.web[0].publishedDate,'2026-11-19');
       assert.match(data.evidence.web[0].text,/任务甲/);
@@ -222,7 +225,7 @@ test('review can request missing evidence even when a cautious draft is supporte
   const answer=await answerRocoQuestion({knowledge:missingKnowledge(),query:'前置任务是什么',
     webSearch:{async search(){searches++;return {results:[{url:'https://guide.example/task',text:'测试事实：完成任务甲。'}]};}},
     chatClient:{async complete(_,input,o){
-      if(o.usageSource==='roco-evidence-coverage')return '{"sufficient":true}';
+      if(o.usageSource==='roco-evidence-coverage')return JSON.stringify({domain:'roco',sufficient:drafts===0,search_queries:['洛克王国世界 迪莫 进化 前置任务']});
       if(o.usageSource==='roco-grounding-review')return JSON.stringify({supported:true,needs_search:drafts===1,search_queries:['洛克王国世界 迪莫 进化 前置任务']});
       drafts++;if(drafts===2)assert.match(input,/测试事实/);
       return drafts===1?'还没有查到。':'先完成任务甲。';
@@ -235,7 +238,7 @@ test('missing wiki snapshot still permits grounded web answer', async () => {
   let searches=0;
   const answer=await answerRocoQuestion({knowledge,query:'前置任务',webSearch:{async search(){searches++;return {results:[{url:'https://guide.example/a',text:'测试事实'}]};}},
     chatClient:{async complete(_,input,o){
-      if(o.usageSource==='roco-evidence-coverage')return '{"sufficient":false,"search_queries":["洛克王国世界 前置任务"]}';
+      if(o.usageSource==='roco-evidence-coverage')return '{"domain":"roco","sufficient":false,"search_queries":["洛克王国世界 前置任务"]}';
       if(o.usageSource==='roco-grounding-review')return '{"supported":true}';
       assert.match(input,/测试事实/);return '有对应攻略说明。';
     }}});
@@ -246,27 +249,169 @@ test('search failures preserve uncertainty and review cannot publish unsupported
   let searches=0;
   const answer=await answerRocoQuestion({knowledge:missingKnowledge(),query:'前置任务',webSearch:{async search(){searches++;throw Error('offline');}},
     chatClient:{async complete(_,input,o){
-      if(o.usageSource==='roco-evidence-coverage')return '{"sufficient":false,"search_queries":["洛克王国世界 任务"]}';
+      if(o.usageSource==='roco-evidence-coverage')return '{"domain":"roco","sufficient":false,"search_queries":["洛克王国世界 任务"]}';
       if(o.usageSource==='roco-grounding-review')return '{"supported":false,"needs_search":true,"search_queries":["洛克王国世界 任务"]}';
       assert.equal(JSON.parse(input).evidence.searchFailed,true);return '完成999个任务。';
     }}});
   assert.equal(searches,1);assert.doesNotMatch(answer.answer,/999/);
 });
 
-test('disabled web search bypasses coverage and search even for empty wiki records', async () => {
+test('disabled web search still checks the domain but never calls search', async () => {
   const calls=[];
   await answerRocoQuestion({knowledge:missingKnowledge(),query:'前置任务',webSearchEnabled:false,
-    webSearch:{search(){throw Error('disabled');}},chatClient:{async complete(_,__,o){calls.push(o.usageSource);return o.usageSource==='roco-grounding-review'?'{"supported":true}':'条件暂时没查到。';}}});
-  assert.deepEqual(calls,['roco-game-knowledge','roco-grounding-review']);
+    webSearch:{search(){throw Error('disabled');}},chatClient:{async complete(_,__,o){calls.push(o.usageSource);if(o.usageSource==='roco-evidence-coverage')return '{"domain":"roco","sufficient":false}';return o.usageSource==='roco-grounding-review'?'{"supported":true}':'条件暂时没查到。';}}});
+  assert.deepEqual(calls,['roco-evidence-coverage','roco-game-knowledge','roco-grounding-review']);
 });
 
 test('failed expanded draft retains already verified partial answer instead of discarding known facts', async () => {
   let drafts=0;
   const answer=await answerRocoQuestion({knowledge:missingKnowledge(),query:'前置任务和原初之章',
     webSearch:{async search(){return {results:[]};}},chatClient:{async complete(_,__,o){
-      if(o.usageSource==='roco-evidence-coverage')return '{"sufficient":true}';
+      if(o.usageSource==='roco-evidence-coverage')return JSON.stringify({domain:'roco',sufficient:drafts===0,search_queries:['洛克王国世界 原初之章']});
       if(o.usageSource==='roco-grounding-review')return JSON.stringify({supported:drafts===1,needs_search:true,search_queries:['洛克王国世界 原初之章'],issues:['不能用未命中证明不存在']});
       drafts++;return drafts===1?'先完成任务甲，原初之章的条件暂未核实。':'原初之章不存在。';
     }}});
   assert.equal(answer.answer,'先完成任务甲，原初之章的条件暂未核实。');
+  assert.equal(drafts,2);
+});
+
+for (const matched of [false, true]) test(`false game route (${matched ? 'misleading Wiki match' : 'empty Wiki'}) discovers the real topic and retains persona`, async () => {
+  const query = '你知道咕噜电波是什么梗吗';
+  const knowledge = { ...missingKnowledge(), records: matched ? missingKnowledge().records : [],
+    route: { question: '洛克王国世界咕噜电波是什么技能', searchQueries: ['洛克王国世界 咕噜电波'], quote: '朋友说自己在发咕噜电波' } };
+  const searches = [];
+  const result = await generateConversationReply({ content: query, gameKnowledge: knowledge,
+    history: [{ role: 'user', content: '发言人甲：迪莫怎么进化' }],
+    personaContext: '自然短句角色', priorityPersonaContext: '最高人格', protectedIdentityContext: '受保护身份',
+    groupStyleProvider: () => '群聊口吻',
+    webSearch: { async search(q, options) {
+      searches.push(q);
+      assert.equal(options.mode, 'general');
+      assert.equal(options.includeDomains, undefined);
+      assert.equal(options.usageSource, 'roco-topic-discovery');
+      return { results: [{ url: 'https://meme.example/gulu', text: '测试资料：咕噜电波是朋友模仿猫说话的梗。' }] };
+    } },
+    chatClient: { async complete(history, input, o) {
+      const data = JSON.parse(input);
+      if (o.usageSource === 'roco-evidence-coverage') {
+        assert.equal(data.question, query);
+        assert.equal(data.quote, knowledge.route.quote);
+        assert.match(data.history[0].content, /发言人甲/);
+        return JSON.stringify({ domain: data.evidence.web.length ? 'other' : 'unknown',
+          sufficient: data.evidence.web.length > 0, search_queries: ['咕噜电波 含义 出处'] });
+      }
+      assert.equal(data.domain, 'other');
+      assert.equal(data.resolvedQuestion, query);
+      assert.deepEqual(data.evidence.records, []);
+      assert.match(data.evidence.web[0].text, /模仿猫/);
+      if (o.usageSource === 'roco-grounding-review') {
+        assert.doesNotMatch(o.systemPrompt, /本轮是洛克王国世界知识问答/);
+        return '{"supported":true}';
+      }
+      assert.equal(o.usageSource, 'roco-topic-answer');
+      assert.equal(o.prioritySystemPrompt, '最高人格');
+      for (const phrase of ['自然短句角色', '受保护身份', '群聊口吻']) assert.ok(o.additionalSystemPrompt.includes(phrase));
+      assert.doesNotMatch(o.additionalSystemPrompt, /本轮是洛克王国世界知识问答/);
+      return '这是在模仿猫说话，猫语电台开播了。';
+    } },
+  });
+  assert.deepEqual(searches, ['咕噜电波 含义 出处']);
+  assert.equal(result.mode, 'general-knowledge');
+  assert.deepEqual(result.references, ['https://meme.example/gulu']);
+});
+
+test('a game-scoped search with no result can escape to unscoped discovery before answering', async () => {
+  let coverage = 0;
+  const searches = [];
+  const result = await answerRocoQuestion({ knowledge: { ...missingKnowledge(), records: [] }, query: '咕噜电波啥意思',
+    webSearch: { async search(q) {
+      searches.push(q);
+      return { results: searches.length === 1 ? [] : [{ url: 'https://meme.example/gulu', text: '测试资料：模仿猫说话。' }] };
+    } },
+    chatClient: { async complete(_, input, o) {
+      if (o.usageSource === 'roco-evidence-coverage') {
+        coverage++;
+        return JSON.stringify({ domain: coverage === 1 ? 'roco' : 'unknown', sufficient: false,
+          search_queries: [coverage === 1 ? '洛克王国世界 咕噜电波' : '咕噜电波 含义'] });
+      }
+      assert.equal(JSON.parse(input).domain, 'unknown');
+      assert.match(input, /模仿猫说话/);
+      if (o.usageSource === 'roco-grounding-review') return '{"supported":true}';
+      return '是在模仿猫说话。';
+    } },
+  });
+  assert.deepEqual(searches, ['洛克王国世界 咕噜电波', '咕噜电波 含义']);
+  assert.equal(result.mode, 'general-knowledge');
+});
+
+for (const failedPlan of ['timeout', 'invalid', 'missing-domain']) test(`failed domain assessment (${failedPlan}) searches the original phrase without game assumptions`, async () => {
+  const searches = [];
+  const result = await answerRocoQuestion({ knowledge: missingKnowledge(), query: '咕噜电波',
+    webSearch: { async search(q) { searches.push(q); throw Error('offline'); } },
+    chatClient: { async complete(_, input, o) {
+      if (o.usageSource === 'roco-evidence-coverage') {
+        if (failedPlan === 'timeout') throw Error('timeout');
+        return failedPlan === 'invalid' ? 'bad JSON' : '{"sufficient":true,"search_queries":["洛克王国世界 错误假设"]}';
+      }
+      assert.equal(JSON.parse(input).evidence.searchFailed, true);
+      assert.deepEqual(JSON.parse(input).evidence.records, []);
+      if (o.usageSource === 'roco-grounding-review') return '{"supported":true,"needs_search":true}';
+      return '这个说法还没核实清楚，有原句吗？';
+    } },
+  });
+  assert.deepEqual(searches, ['咕噜电波']);
+  assert.equal(result.mode, 'general-knowledge');
+  assert.deepEqual(result.references, []);
+});
+
+test('unknown topic stays neutral when web search is disabled', async () => {
+  const result = await answerRocoQuestion({ knowledge: missingKnowledge(), query: '咕噜电波', webSearchEnabled: false,
+    webSearch: { search() { throw Error('must not search'); } },
+    chatClient: { async complete(_, input, o) {
+      if (o.usageSource === 'roco-evidence-coverage') return '{"domain":"unknown","sufficient":false,"search_queries":["咕噜电波"]}';
+      assert.deepEqual(JSON.parse(input).evidence.records, []);
+      if (o.usageSource === 'roco-grounding-review') return '{"supported":true}';
+      return '这个说法还不确定，有原句吗？';
+    } },
+  });
+  assert.equal(result.mode, 'general-knowledge');
+  assert.deepEqual(result.references, []);
+});
+
+test('neutral discovery and review retries share the three-query budget', async () => {
+  let plans = 0, drafts = 0;
+  const searches = [];
+  await answerRocoQuestion({ knowledge: { ...missingKnowledge(), records: [] }, query: '咕噜电波',
+    webSearch: { async search(q) { searches.push(q); return { results: [] }; } },
+    chatClient: { async complete(_, __, o) {
+      if (o.usageSource === 'roco-evidence-coverage') {
+        plans++;
+        return JSON.stringify({ domain: 'unknown', sufficient: false,
+          search_queries: [`咕噜电波 含义 ${plans}`, `咕噜电波 出处 ${plans}`] });
+      }
+      if (o.usageSource === 'roco-grounding-review') return '{"supported":true,"needs_search":true}';
+      drafts++; return '这个说法还没核实。';
+    } },
+  });
+  assert.equal(searches.length, 3);
+  assert.equal(drafts, 1);
+});
+
+for (const official of [false, true]) test(`${official ? 'official' : 'NapCat'} delivers reclassified replies without remembering the incorrect game entity`, async t => {
+  const store = setup(t);
+  const service = new QqBotService({ rocoKnowledge: store, conversationStore: new ConversationStore(),
+    imageOcrEnabled: false, webSearchEnabled: false, roleplayImmersion: false,
+    chatClient: { isConfigured: true, async complete(_, __, o) {
+      if (o.usageSource === 'roco-route') return '{"relevant":true,"confidence":0.9,"ids":["pet:喵喵"]}';
+      if (o.usageSource === 'roco-evidence-coverage') return '{"domain":"unknown","sufficient":false}';
+      if (o.usageSource === 'roco-grounding-review') return '{"supported":true}';
+      return '这个说法还没核实清楚，有原句吗？';
+    } }, logger: { log() {}, warn() {}, error() {} },
+  });
+  const result = await service.handleMessage({ message_type: 'group',
+    group_id: official ? 'qqofficial:1903660238:group:discovery' : 'discovery-group',
+    user_id: 'user', bot_user_id: 'bot', mentions: [{ user_id: 'bot' }],
+    message_id: 'discovery1', text: '咕噜电波是啥' });
+  assert.ok(result.messages.some(m => m.text?.includes('原句')));
+  assert.equal(store.sessions.size, 0);
 });
