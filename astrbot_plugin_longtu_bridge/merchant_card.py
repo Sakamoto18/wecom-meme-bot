@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from .video_card import card_font, ASSETS
-from .merchant_alert import BJ
+from .merchant_alert import BJ, daily_item
 
 
 def wrap(draw, value, font, width):
@@ -75,7 +75,8 @@ def render_merchant_card(snapshot, selected, icons, now):
         if limit_width > 156:
             price_text += f'    限购 {item["limit"]}'
         price = wrap(dummy, price_text, shop_font(26), 680)
-        details = wrap(dummy, item.get('description', ''), shop_font(23), 680)
+        sale_note = '当天售卖 · 当日24:00结束，不随中间轮次刷新\n' if daily_item(item) else ''
+        details = wrap(dummy, sale_note + item.get('description', ''), shop_font(23), 680)
         row_height = max(166, 88 + len(title) * 40 + len(details) * 31 + (len(price) - 1) * 34)
         rows.append((index, item, title, price, details, row_height))
     height = 282 + sum(row[5] + 16 for row in rows) + 62
@@ -97,7 +98,7 @@ def render_merchant_card(snapshot, selected, icons, now):
     draw.rounded_rectangle((668, 52, 1036, 112), radius=30, fill='#1f1f1f')
     paste_asset(card, 'icon-sl1.png', (686, 67, 27, 30))
     draw.rounded_rectangle((728, 60, 1027, 104), radius=22, fill='#fffaee')
-    draw.text((748, 66), f'距刷新 {remaining // 3600:02d}:{remaining // 60 % 60:02d}:{remaining % 60:02d}', font=shop_font(26), fill='#1f1f1f')
+    draw.text((748, 66), f'本轮剩余 {remaining // 3600:02d}:{remaining // 60 % 60:02d}:{remaining % 60:02d}', font=shop_font(26), fill='#1f1f1f')
     paste_asset(card, 'bx1.png', (32, 190, 1016, 154), crop=(0, 0, 725, 110))
     paste_asset(card, 'tit1.png', (105, 203, 325, 44))
     draw.text((790, 205), '本轮实时库存', font=shop_title_font(26), fill='#ffdc79')

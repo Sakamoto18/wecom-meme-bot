@@ -3,7 +3,7 @@ import asyncio
 import base64
 import time
 
-from .merchant_alert import round_window, fetch_icons, scheduled_delivery_key, scheduled_notification_text
+from .merchant_alert import round_window, fetch_icons, scheduled_delivery_key, scheduled_notification_text, delivery_plan
 from .merchant_card import render_merchant_card
 
 
@@ -58,21 +58,37 @@ async def tick_private(monitor, now=None):
     selected = await monitor.select(snapshot)
     if not selected:
         return 'private=no-subscribed-goods ' + ' '.join(statuses)
+    planned = []
+    for user, _ in pending:
+        key, chosen, daily_keys = delivery_plan(monitor.state, f'private:{user}', snapshot, selected, now,
+            config.get('merchant_expiry_reminder_enabled') is True)
+        row = monitor.state.get(key)
+        if row and row[0] != 'rejected':
+            statuses.append(f'{user}=' + ('already-sent' if row[0] == 'sent' else 'uncertain-held'))
+        elif chosen:
+            planned.append((user, key, chosen, daily_keys))
+        else:
+            statuses.append(f'{user}=no-subscribed-goods')
+    if not planned:
+        return 'private: ' + ' '.join(statuses)
     icons = await fetch_icons(monitor.bridge.session, snapshot['items'])
     created = time.time()
     if created >= snapshot['end']:
         return 'private=expired-before-render'
-    png = await asyncio.to_thread(render_merchant_card, snapshot, selected, icons, created)
-    image_segment = {'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(png).decode()}}
+    images = {}
+    for _, _, chosen, _ in planned:
+        if tuple(chosen) not in images:
+            png = await asyncio.to_thread(render_merchant_card, snapshot, chosen, icons, created)
+            images[tuple(chosen)] = {'type': 'image', 'data': {'file': 'base64://' + base64.b64encode(png).decode()}}
     errors = []
-    for user, key in pending:
+    for user, key, chosen, daily_keys in planned:
         if time.time() >= snapshot['end']:
             statuses.append(f'{user}=expired-before-send')
             continue
-        text = scheduled_notification_text(snapshot, selected, created, key)
-        message = [{'type': 'text', 'data': {'text': text}}, image_segment]
+        text = scheduled_notification_text(snapshot, chosen, created, key)
+        message = [{'type': 'text', 'data': {'text': text}}, images[tuple(chosen)]]
         monitor.state.retry_rejected(key)
-        if not monitor.state.claim(key, text, time.time()):
+        if not monitor.state.claim(key, text, time.time(), daily_keys):
             statuses.append(f'{user}=claimed-by-another-worker')
             continue
         try:

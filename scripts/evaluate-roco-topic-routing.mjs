@@ -45,6 +45,7 @@ const cases = [
   { id: 'false_matched_route', query: '哈基米南北绿豆是什么梗', history, forced: true, matched: true, mode: 'general-knowledge' },
   { id: 'known_game', query: '喵喵的特性是什么', relevant: true, mode: 'game-knowledge' },
   { id: 'explicit_unknown_game', query: '洛克王国世界阿巴阿巴兽在哪里抓', relevant: true, mode: 'game-knowledge' },
+  { id: 'merchant_daily_rule', query: '远行商人棱镜球是不是每四小时就下架？首次上架和到期提醒分别什么时候发？', relevant: true, mode: 'game-knowledge', noSearch: true },
 ];
 const report = { model: client.model, personaVersion: row?.version, cases: [] };
 for (const c of cases.filter(c => !opt('--case', '') || c.id === opt('--case', ''))) {
@@ -72,6 +73,7 @@ for (const c of cases.filter(c => !opt('--case', '') || c.id === opt('--case', '
     history: c.history || [], chatClient: observed, webSearch, personaContext, priorityPersonaContext }) : null;
   const passed = (c.relevant === undefined || Boolean(knowledge) === c.relevant)
     && (!c.mode || answer?.mode === c.mode)
+    && (!c.noSearch || searches.length === 0)
     && (!c.forced || (searches.length > 0 && searches.every(s => !s.query.includes('洛克'))));
   const result = { id: c.id, query: c.query, passed, ids: knowledge?.ids, answer, searches, calls };
   report.cases.push(result);

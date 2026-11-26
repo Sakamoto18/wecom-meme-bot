@@ -8,6 +8,16 @@ const parseJson = value => JSON.parse(String(value).replace(/^\s*```(?:json)?\s*
 const boundedHistory = history => (Array.isArray(history) ? history : []).slice(-8)
   .map(row => ({ role: row.role, content: String(row.content ?? '').slice(0, 1800) }));
 const STONE_SOURCE_CONTEXT = '技能石来源栏目列出课题所属精灵和使用技能的课题条件；承载该栏目的精灵页面是来源文档，不一定是课题所属精灵。页面链接可作为获取条件的直接出处。';
+const MERCHANT_RULES = {
+  source: 'https://www.onebiji.com/hykb_tools/comm/lkwgmerchant/preview.php?id=1&immgj=0',
+  verifiedAt: '2026-11-26',
+  facts: [
+    '远行商人按北京时间08、12、16、20点分四轮，最后一轮在当日24:00结束；00:00—08:00休息。',
+    '棱镜球是当天售卖的商品，若当天上架则覆盖当天四轮，不在12、16、20点随中间轮次下架或重置；当日最后一轮结束后才刷新。不能把商店的本轮倒计时当成棱镜球的下架倒计时，也不能说每轮都能重新购买限购数量。',
+    '棱镜球当天首次发现上架通知一次，之后只在当日最后一轮结束前30分钟（北京时间23:30）提醒。其他按轮次出售的订阅稀有道具仍按自己的轮次做上架和到期提醒，同时上架不互相抑制。',
+    '这些是售卖和提醒规则，不是实时库存；是否当天正在卖、价格及限购必须以当前商店查询为准。',
+  ],
+};
 const skillRecord = skill => ({ ...skill, ...(skill.习得 === '技能石'
   ? { 等级: '', 来源栏目说明: STONE_SOURCE_CONTEXT } : {}) });
 
@@ -162,11 +172,11 @@ export async function answerRocoQuestion({ knowledge, chatClient, query, history
   groupStyleProvider, webSearch, webSearchEnabled = true }) {
   let domain = knowledge.status ? 'roco' : 'unknown';
   const evidence = { snapshot: knowledge.metadata?.importedAt || null, records: knowledge.records,
-    truncated: knowledge.truncated, web: [], searchFailed: false };
+    truncated: knowledge.truncated, web: [], searchFailed: false, merchantRules: MERCHANT_RULES };
   // A selected catalogue entry is still a candidate, not proof of the topic.
   // Discard unrelated Wiki facts and references from the generation contract.
   const answerEvidence = () => domain === 'roco' ? evidence
-    : { ...evidence, snapshot: null, records: [], truncated: false };
+    : { ...evidence, snapshot: null, records: [], truncated: false, merchantRules: undefined };
   const result = answer => ({ mode: domain === 'roco' ? 'game-knowledge' : 'general-knowledge', answer,
     references: [...new Set([...answerEvidence().records.map(r => r.来源), ...evidence.web.map(r => r.url)])] });
   if (knowledge.status) {

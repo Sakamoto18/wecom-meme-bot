@@ -415,3 +415,21 @@ for (const official of [false, true]) test(`${official ? 'official' : 'NapCat'} 
   assert.ok(result.messages.some(m => m.text?.includes('原句')));
   assert.equal(store.sessions.size, 0);
 });
+
+test('merchant sale rules distinguish daily prism balls from round stock without inventing live inventory', async () => {
+  const query = '远行商人棱镜球会每四小时下架一次吗';
+  const result = await answerRocoQuestion({ knowledge: { ...missingKnowledge(), records: [], route: { question: query } }, query,
+    webSearch: { search() { throw Error('verified rules already cover the question'); } },
+    chatClient: { async complete(_, input, o) {
+      const { evidence } = JSON.parse(input);
+      assert.ok(evidence.merchantRules.facts.some(f => f.includes('当天四轮') && f.includes('不在12、16、20点')));
+      assert.ok(evidence.merchantRules.facts.some(f => f.includes('23:30')));
+      assert.ok(evidence.merchantRules.facts.some(f => f.includes('不是实时库存')));
+      if (o.usageSource === 'roco-evidence-coverage') return '{"domain":"roco","sufficient":true}';
+      if (o.usageSource === 'roco-grounding-review') return '{"supported":true}';
+      return '不会，棱镜球是当天售卖，最后一轮结束才刷新；中间轮次刷新不会让它下架。';
+    } },
+  });
+  assert.equal(result.mode, 'game-knowledge');
+  assert.match(result.answer, /最后一轮/);
+});

@@ -4,7 +4,7 @@ import base64
 import time
 from datetime import datetime
 
-from .merchant_alert import BJ, State, fetch_snapshot, fetch_icons, round_window
+from .merchant_alert import BJ, State, fetch_snapshot, fetch_icons, round_window, daily_stock_note
 from .merchant_card import render_merchant_card
 
 
@@ -56,6 +56,8 @@ async def handle_merchant_command(bridge, event, text, *, official=False):
                 end = datetime.fromtimestamp(snapshot['end'], BJ)
                 minutes = max(0, int((snapshot['end'] - created) // 60))
                 text = f'远行商人当前第{snapshot["round"]}轮｜距刷新约{minutes // 60}小时{minutes % 60}分，{end:%H:%M}刷新（北京时间）。\n本轮商品、价格与限购见图。'
+                if daily_stock_note(snapshot):
+                    text += '\n' + daily_stock_note(snapshot)
                 media = None
                 if official:
                     from .merchant_official import prepare_image

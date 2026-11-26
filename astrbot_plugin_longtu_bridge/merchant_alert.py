@@ -111,6 +111,9 @@ def parse_source(html, now):
         classes = card.attrs.get('class', '').split()
         if f'show_{number}' not in classes or expiry <= now or expiry > day_end + 1:
             continue
+        rounds = [n for n in range(1, 5) if f'show_{n}' in classes]
+        if rounds == [1, 2, 3, 4] and abs(expiry - day_end) > 1:
+            raise ValueError('All-day merchant expiry conflicts with round membership')
         prices, icons = card.find('shop_price'), card.find('gitem')
         if not prices or not icons:
             raise ValueError('Missing merchant price/icon')
@@ -126,7 +129,8 @@ def parse_source(html, now):
         items.append(dict(name=name, price=price, limit=limit[0].text().removeprefix('限购'),
                           currency=card.attrs.get('data-currency') or '洛克贝',
                           image=urljoin(SOURCE, image[0].attrs.get('src', '')),
-                          category=args[2], description=args[3], expiresAt=expiry))
+                          category=args[2], description=args[3], expiresAt=expiry,
+                          rounds=rounds))
     if not 1 <= len(items) <= 24:
         raise ValueError('Current merchant round is not published yet')
     if not any(abs(item['expiresAt'] - end) <= 1 for item in items):
@@ -156,7 +160,17 @@ def parse_proxy(data, now):
     for row in rows:
         if not all(row.get(k) for k in ('name', 'image', 'price', 'limit')):
             raise ValueError('Incomplete merchant goods')
-        items.append(dict(row, currency=row.get('currency') or '洛克贝', expiresAt=end))
+        rounds = row.get('rounds', [number])
+        if (not isinstance(rounds, list) or not rounds or number not in rounds
+                or any(type(n) is not int or not 1 <= n <= 4 for n in rounds)):
+            raise ValueError('Invalid merchant item round membership')
+        rounds = sorted(set(rounds))
+        day_start = datetime.fromtimestamp(start, BJ).replace(hour=8).timestamp()
+        expected_end = day_start + max(rounds) * 14400
+        expiry = row.get('expiresAt', expected_end)
+        if type(expiry) not in (int, float) or abs(expiry - expected_end) > 1 or expiry <= now:
+            raise ValueError('Invalid merchant item expiry')
+        items.append(dict(row, currency=row.get('currency') or '洛克贝', expiresAt=expiry, rounds=rounds))
     return dict(items=items, round=number, start=start, end=end, fetchedAt=fetched, source=PROXY)
 
 
@@ -169,18 +183,63 @@ def delivery_key(group, snapshot):
     return f"{group}:{int(snapshot['start'])}"
 
 
-def scheduled_delivery_key(state, base, now, end, enabled=False):
+def scheduled_delivery_key(state, base, now, end, enabled=False, daily_earlier=False):
     """Late first alerts already serve the last-half-hour purpose; never double-send."""
     if enabled and end - 1800 <= now < end:
         initial = state.get(base)
         if initial and initial[0] == 'sent' and initial[3] < end - 1800:
+            return base + ':expiry30'
+        if daily_earlier and (not initial or initial[0] == 'rejected'):
             return base + ':expiry30'
     return base
 
 
 def scheduled_notification_text(snapshot, selected, now, key):
     text = notification_text(snapshot, selected, now)
-    return ('【到期提醒 · 已进入最后30分钟】\n' + text) if key.endswith(':expiry30') else text
+    return ('【到期提醒 · 已进入最后30分钟】\n' + text.replace('稀有道具上架：', '即将结束售卖：', 1)) if key.endswith(':expiry30') else text
+
+
+def daily_item(item):
+    """Sale duration comes from structured source membership, never an LLM guess."""
+    return item.get('rounds') == [1, 2, 3, 4]
+
+
+def daily_stock_note(snapshot):
+    names = '、'.join(item['name'] for item in snapshot['items'] if daily_item(item))
+    return f'{names}为当天售卖，至当日24:00结束，不随中间轮次刷新。' if names else ''
+
+
+def delivery_plan(state, destination, snapshot, selected, now, enabled):
+    """Keep round receipts; daily goods get one introduction and the actual expiry."""
+    start = datetime.fromtimestamp(snapshot['start'], BJ).replace(hour=8).timestamp()
+    legacy_bases = [f'{destination}:{int(start + n * 14400)}' for n in range(4)]
+    daily = {}
+    for i in selected:
+        item = snapshot['items'][i]
+        if daily_item(item):
+            identity = hashlib.sha256(item['name'].strip().encode()).hexdigest()
+            key = f'{destination}:day:{int(start)}:{identity}'
+            daily[i] = (key, state.daily_record(key, legacy_bases, item['name']))
+    due = enabled and snapshot['end'] - 1800 <= now < snapshot['end']
+    def ending(i):
+        expiry = snapshot['items'][i].get('expiresAt', snapshot['end'])
+        return now < expiry <= min(now + 1800, snapshot['end'])
+    earlier = due and any(ending(i) and row and row[0] == 'sent' and row[3] < snapshot['end'] - 1800
+                          for i, (_, row) in daily.items())
+    key = scheduled_delivery_key(state, delivery_key(destination, snapshot), now, snapshot['end'], enabled, earlier)
+    chosen, daily_keys = [], []
+    for i in selected:
+        daily_key, row = daily.get(i, ('', None))
+        known_daily = row and row[0] != 'rejected'
+        if key.endswith(':expiry30'):
+            if not ending(i) or (known_daily and row[0] != 'sent'):
+                continue
+        elif known_daily and not (due and ending(i) and row[0] == 'sent'):
+            continue
+        chosen.append(i)
+        if daily_key and not known_daily:
+            daily_keys.append(daily_key)
+    return key, chosen, daily_keys
 
 
 class State:
@@ -189,6 +248,7 @@ class State:
         self.db = sqlite3.connect(path)
         self.db.execute('CREATE TABLE IF NOT EXISTS selection (key TEXT PRIMARY KEY, selected TEXT NOT NULL)')
         self.db.execute('CREATE TABLE IF NOT EXISTS delivery (key TEXT PRIMARY KEY, state TEXT NOT NULL, text TEXT NOT NULL, receipt TEXT, updated REAL NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS daily_delivery (key TEXT PRIMARY KEY, delivery_key TEXT NOT NULL)')
 
     def cached(self, key):
         row = self.db.execute('SELECT selected FROM selection WHERE key=?', (key,)).fetchone()
@@ -201,9 +261,36 @@ class State:
     def get(self, key):
         return self.db.execute('SELECT state,text,receipt,updated FROM delivery WHERE key=?', (key,)).fetchone()
 
-    def claim(self, key, text, now):
+    def daily_record(self, key, legacy_bases=(), name=''):
+        row = self.db.execute('SELECT delivery_key FROM daily_delivery WHERE key=?', (key,)).fetchone()
+        if row and self.get(row[0]):
+            return self.get(row[0])
+        # Import only our own fixed notification format, not arbitrary chat text.
+        # This preserves today's receipts when upgrading an existing deployment.
+        for base in legacy_bases:
+            for candidate in (base, base + ':expiry30'):
+                old = self.get(candidate)
+                if not old or old[0] == 'rejected':
+                    continue
+                for line in old[1].splitlines():
+                    prefix = '远行商人稀有道具上架：'
+                    if line.startswith(prefix) and name in line[len(prefix):].split('、'):
+                        with self.db:
+                            self.db.execute('INSERT OR IGNORE INTO daily_delivery VALUES (?,?)', (key, candidate))
+                        return old
+        return None
+
+    def claim(self, key, text, now, daily_keys=()):
         with self.db:
-            return self.db.execute("INSERT OR IGNORE INTO delivery VALUES (?,'sending',?,'',?)", (key, text, now)).rowcount == 1
+            # Lock before checking both receipt namespaces, including other workers.
+            self.db.execute('BEGIN IMMEDIATE')
+            if any((row := self.daily_record(daily_key)) and row[0] != 'rejected' for daily_key in daily_keys):
+                return False
+            if not self.db.execute("INSERT OR IGNORE INTO delivery VALUES (?,'sending',?,'',?)", (key, text, now)).rowcount:
+                return False
+            for daily_key in daily_keys:
+                self.db.execute('INSERT OR REPLACE INTO daily_delivery VALUES (?,?)', (daily_key, key))
+            return True
 
     def mark(self, key, state, receipt='', now=None):
         with self.db:
@@ -261,8 +348,14 @@ def notification_text(snapshot, selected, now):
     end = datetime.fromtimestamp(snapshot['end'], BJ)
     mins = max(0, int((snapshot['end'] - now) // 60))
     names = '、'.join(snapshot['items'][i]['name'] for i in selected)
-    return (f"远行商人稀有道具上架：{names}\n"
-            f"距本轮结束约 {mins // 60}小时{mins % 60}分，{end:%H:%M} 刷新（北京时间）。\n"
+    timing = []
+    if any(not daily_item(snapshot['items'][i]) for i in selected):
+        timing.append(f"本轮道具距结束约 {mins // 60}小时{mins % 60}分，{end:%H:%M} 轮次结束（北京时间）。")
+    daily = [snapshot['items'][i] for i in selected if daily_item(snapshot['items'][i])]
+    if daily:
+        remaining = max(0, int((min(item['expiresAt'] for item in daily) - now) // 60))
+        timing.append(f"{'、'.join(item['name'] for item in daily)}为当天售卖，距当日24:00结束约 {remaining // 60}小时{remaining % 60}分，不随中间轮次刷新。")
+    return (f"远行商人稀有道具上架：{names}\n" + '\n'.join(timing) + '\n'
             f"当轮在售详情见图｜{datetime.fromtimestamp(snapshot['start'], BJ):%m-%d} 第{snapshot['round']}轮")
 
 
@@ -365,21 +458,18 @@ class MerchantMonitor:
         bot = getattr(platform, 'bot', None)
         if not bot:
             raise RuntimeError('NapCat unavailable')
-        row = self.state.get(key)
-        if row:
-            if row[0] == 'sent':
-                return 'already-sent'
-            if row[0] in ('sending', 'uncertain'):
-                if now - row[3] < 30:
-                    return 'pending-receipt'
-                if await reconcile(bot, self.state, key, self.group, row[1]):
-                    return 'receipt-recovered'
-                self.state.mark(key, 'uncertain', now=now)
-                LOG.warning(f'Merchant delivery uncertain; held to avoid duplicate @: {key}')
-                return 'uncertain'
-            self.state.retry_rejected(key)
+        status = await self._napcat_receipt(bot, key, now)
+        if status:
+            return status
         snapshot = await self.current_snapshot(now)
         selected = await self.select(snapshot)
+        planned_key, selected, daily_keys = delivery_plan(self.state, self.group, snapshot, selected, now,
+            getattr(self.bridge, 'config', {}).get('merchant_expiry_reminder_enabled') is True)
+        if planned_key != key:
+            status = await self._napcat_receipt(bot, planned_key, now)
+            if status:
+                return status
+        key = planned_key
         if not selected:
             return 'no-subscribed-goods'
         icons = await fetch_icons(self.bridge.session, snapshot['items'])
@@ -391,7 +481,7 @@ class MerchantMonitor:
         if time.time() >= snapshot['end']:
             return 'expired-before-send'
         text = scheduled_notification_text(snapshot, selected, created, key)
-        if not self.state.claim(key, text, created):
+        if not self.state.claim(key, text, created, daily_keys):
             return 'claimed-by-another-worker'
         message = [{'type': 'at', 'data': {'qq': user}} for user in self.mentions]
         message += [{'type': 'text', 'data': {'text': '\n' + text}},
@@ -411,6 +501,22 @@ class MerchantMonitor:
         self.state.mark(key, 'sent' if receipt else 'uncertain', str(receipt or ''))
         LOG.info(f'Merchant alert delivery: key={key} receipt={receipt or "unconfirmed"}')
         return 'sent' if receipt else 'uncertain'
+
+    async def _napcat_receipt(self, bot, key, now):
+        row = self.state.get(key)
+        if row:
+            if row[0] == 'sent':
+                return 'already-sent'
+            if row[0] in ('sending', 'uncertain'):
+                if now - row[3] < 30:
+                    return 'pending-receipt'
+                if await reconcile(bot, self.state, key, self.group, row[1]):
+                    return 'receipt-recovered'
+                self.state.mark(key, 'uncertain', now=now)
+                LOG.warning(f'Merchant delivery uncertain; held to avoid duplicate @: {key}')
+                return 'uncertain'
+            self.state.retry_rejected(key)
+        return None
 
     async def _tick_official(self, now=None):
         from .official_policy import group_enabled
@@ -439,6 +545,11 @@ class MerchantMonitor:
             return 'waiting-group-proactive-permission'
         snapshot = await self.current_snapshot(now)
         selected = await self.select(snapshot)
+        key, selected, daily_keys = delivery_plan(self.state, f'official:{platform.appid}:{group}', snapshot,
+            selected, now, self.bridge.config.get('merchant_expiry_reminder_enabled') is True)
+        row = self.state.get(key)
+        if row:
+            return 'already-sent' if row[0] == 'sent' else 'uncertain-held'
         if not selected:
             return 'no-subscribed-goods'
         icons = await fetch_icons(self.bridge.session, snapshot['items'])
@@ -450,7 +561,7 @@ class MerchantMonitor:
             if time.time() >= snapshot['end']:
                 return 'expired-before-send'
             text = scheduled_notification_text(snapshot, selected, created, key)
-            if not self.state.claim(key, text, time.time()):
+            if not self.state.claim(key, text, time.time(), daily_keys):
                 return 'claimed-by-another-worker'
             try:
                 receipt = await send_image(platform.client, group, media, text, members)
