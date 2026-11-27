@@ -2,6 +2,7 @@
 import json
 import re
 from urllib.parse import unquote, urlsplit, parse_qs
+from html.parser import HTMLParser
 
 
 PAGE_DATA_SCRIPT = r'''() => ({
@@ -14,7 +15,7 @@ PAGE_DATA_SCRIPT = r'''() => ({
 
 def work_id(url):
     parsed = urlsplit(str(url or ''))
-    match = re.search(r'/(?:video|note)/(\d+)(?:/|$)', parsed.path)
+    match = re.search(r'/(?:video|note|slides)/(\d+)(?:/|$)', parsed.path)
     if match:
         return match.group(1)
     value = parse_qs(parsed.query).get('modal_id', [''])[0]
@@ -38,6 +39,46 @@ def page_payloads(snapshot):
                         except (ValueError, IndexError):
                             pass  # RSC references/non-JSON rows do not describe a work.
         except (ValueError, TypeError):
+            continue
+
+
+class _PublicScripts(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.active = False
+        self.parts = []
+        self.scripts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'script':
+            self.active = True
+            self.parts = []
+
+    def handle_data(self, data):
+        if self.active:
+            self.parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == 'script' and self.active:
+            self.scripts.append(''.join(self.parts))
+            self.active = False
+
+
+def public_page_payloads(html_text):
+    """Read mobile share-page JSON without executing or rendering its scripts."""
+    if not isinstance(html_text, str) or len(html_text) > 3_000_000:
+        return
+    parser = _PublicScripts()
+    parser.feed(html_text)
+    for script in parser.scripts:
+        match = re.match(r'\s*window\._ROUTER_DATA\s*=\s*', script)
+        if not match:
+            continue
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(script[match.end():])
+            if isinstance(payload, dict):
+                yield payload
+        except (ValueError, RecursionError):
             continue
 
 

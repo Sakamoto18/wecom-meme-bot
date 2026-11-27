@@ -18,7 +18,7 @@ from bilibili_watch import watch_page, watch_url, WatchBusyError
 from profile_guard import acquire_profile
 from runtime_config import browser_options, data_path, douyin_profile_path
 from xhs_content import clean_author_name, is_note_url, normalize_note, parse_public_note
-from work_metadata import PAGE_DATA_SCRIPT, work_id, page_payloads, find_work, normalize_work
+from work_metadata import PAGE_DATA_SCRIPT, work_id, page_payloads, public_page_payloads, find_work, normalize_work
 
 logger = logging.getLogger('uvicorn.error')
 context = None
@@ -707,6 +707,47 @@ def removed_marker(text):
     return next((marker for marker in REMOVED_MARKERS if marker in body), '')
 
 
+async def read_public_page(ctx, url):
+    """Try the public mobile share data before spending CPU on a full page."""
+    source = urlsplit(url)
+    host = (source.hostname or '').lower().rstrip('.')
+    if source.scheme not in {'http', 'https'} or not any(
+        host == domain or host.endswith('.' + domain)
+        for domain in ('douyin.com', 'iesdouyin.com')
+    ):
+        return None
+    target_id = work_id(url)
+    if target_id:
+        kind = 'slides' if '/note/' in source.path or '/slides/' in source.path else 'video'
+        url = f'https://www.iesdouyin.com/share/{kind}/{target_id}/'
+    response = None
+    try:
+        async with asyncio.timeout(5):
+            response = await ctx.request.get(url, timeout=4000, max_redirects=5, headers={
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) '
+                              'AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1',
+            })
+            if not response.ok:
+                return None
+            target_id = target_id or work_id(response.url)
+            if not target_id:
+                return None
+            for payload in public_page_payloads(await response.text()):
+                detail = find_work(payload, target_id)
+                data = normalize_work(detail, target_id) if detail else None
+                if data:
+                    return {'status': 'success', 'data': data}
+    except (TimeoutError, PlaywrightError, ValueError, TypeError, KeyError):
+        # No login gate and no guessed media URL. The existing browser path can
+        # still use its persistent login if the public page is unavailable.
+        logger.info('Douyin public page unavailable; using browser metadata')
+    finally:
+        if response is not None:
+            with suppress(Exception):
+                await asyncio.wait_for(response.dispose(), 1)
+    return None
+
+
 async def read_page(page, url, payloads, state):
     state['stage'] = 'navigation'
     target_id = work_id(url)
@@ -722,43 +763,58 @@ async def read_page(page, url, payloads, state):
     # response-capture task, especially on www-hj.douyin.com.
     deadline = time.monotonic() + globals().get('DOUYIN_METADATA_WAIT_SECONDS', 8)
     capture_event = state.get('capture_event')
-    capture_tasks = state.get('capture_tasks') or set()
-
-    async def drain_capture_tasks():
-        for task in list(capture_tasks):
-            with suppress(Exception):
-                remaining = max(0.01, deadline - time.monotonic())
-                await asyncio.wait_for(task, min(0.25, remaining))
-
-    while time.monotonic() < deadline:
-        await drain_capture_tasks()
-        target_id = target_id or work_id(page.url)
-        try:
-            snapshot = await page.evaluate(PAGE_DATA_SCRIPT)
-        except PlaywrightError as error:
-            # Anti-bot/short-link redirects can replace the document during evaluation.
-            if 'Execution context was destroyed' not in str(error) and 'Cannot find context' not in str(error):
-                raise
-            await page.wait_for_timeout(250)
-            continue
-        # Each request owns its payload list. Ignore recommendation/previous-work IDs.
-        for payload in [*payloads, *page_payloads(snapshot)]:
-            detail = find_work(payload, target_id)
-            if detail:
-                data = normalize_work(detail, target_id)
-                if data:
-                    logger.info('Douyin work verified id=%s kind=%s', target_id, data['media_type'])
-                    return {'status': 'success', 'data': data}
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        if capture_event is not None:
-            capture_event.clear()
-            with suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(capture_event.wait(), min(0.5, remaining))
-        else:
-            await page.wait_for_timeout(min(250, int(remaining * 1000)))
-    marker = removed_marker(await page.evaluate('() => document.body?.innerText || ""'))
+    snapshot_task = None
+    snapshot = {}
+    state['target_id'] = target_id
+    try:
+        while time.monotonic() < deadline:
+            target_id = target_id or work_id(page.url)
+            state['target_id'] = target_id
+            # A response body may take seconds to arrive. Never wait_for() its
+            # capture task with a polling timeout: that cancels the download.
+            # Consume captured details before asking a busy renderer for DOM data.
+            for payload in [*payloads, *page_payloads(snapshot)]:
+                detail = find_work(payload, target_id)
+                if detail:
+                    data = normalize_work(detail, target_id)
+                    if data:
+                        logger.info('Douyin work verified id=%s kind=%s', target_id, data['media_type'])
+                        return {'status': 'success', 'data': data}
+            snapshot = {}
+            if snapshot_task is not None and snapshot_task.done():
+                try:
+                    snapshot = snapshot_task.result()
+                except PlaywrightError as error:
+                    # A short-link redirect can replace the document mid-read.
+                    if ('Execution context was destroyed' not in str(error)
+                            and 'Cannot find context' not in str(error)):
+                        raise
+                finally:
+                    snapshot_task = None
+                if snapshot:
+                    continue
+            if snapshot_task is None:
+                snapshot_task = asyncio.create_task(page.evaluate(PAGE_DATA_SCRIPT))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            # Do not let an unresponsive renderer hide an already captured API
+            # response. Keep one DOM read in flight and check both every 250ms.
+            if capture_event is not None:
+                capture_event.clear()
+                with suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(capture_event.wait(), min(0.25, remaining))
+            else:
+                await asyncio.sleep(min(0.25, remaining))
+    finally:
+        if snapshot_task is not None:
+            snapshot_task.cancel()
+            await asyncio.gather(snapshot_task, return_exceptions=True)
+    marker = ''
+    with suppress(TimeoutError, PlaywrightError):
+        marker = removed_marker(await asyncio.wait_for(
+            page.evaluate('() => document.body?.innerText || ""'), 1,
+        ))
     if marker:
         raise ValueError(f'{REMOVED_REASON_PREFIX}: 抖音提示「{marker}」')
     raise ValueError('work_metadata_unavailable: 未取得当前作品的完整类型和资源，请稍后重试')
@@ -779,51 +835,64 @@ async def resolve(req: Req):
         async with asyncio.timeout(RESOLVE_TIMEOUT):
             state['stage'] = 'browser'
             ctx = await get_context()
-            page = await ctx.new_page()
-            payloads = []
-            capture_tasks = set()
-            capture_event = asyncio.Event()
+            state['stage'] = 'public_page'
+            result = await read_public_page(ctx, req.url)
+            state['method'] = 'public_html' if result else 'browser'
+            if result is None:
+                page = await ctx.new_page()
+                # Metadata contains the original asset URLs. Downloading/displaying
+                # those assets here only competes with QQ downloads and hydration.
+                async def metadata_resources(route):
+                    if route.request.resource_type in {'image', 'media', 'font'}:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+                await page.route('**/*', metadata_resources)
+                payloads = []
+                capture_tasks = set()
+                capture_event = asyncio.Event()
 
-            async def capture_detail(response):
-                parsed = urlsplit(response.url)
-                host = (parsed.hostname or '').lower().rstrip('.')
-                if not (host == 'douyin.com' or host.endswith('.douyin.com')):
-                    return
-                if parsed.path.rstrip('/') != globals().get(
-                    'DOUYIN_DETAIL_PATH', '/aweme/v1/web/aweme/detail',
-                ):
-                    return
-                if response.status != 200:
-                    return
-                with suppress(Exception):
-                    payload = await response.json()
-                    if len(payloads) < 20:
-                        payloads.append(payload)
-                        capture_event.set()
+                async def capture_detail(response):
+                    parsed = urlsplit(response.url)
+                    host = (parsed.hostname or '').lower().rstrip('.')
+                    if not (host == 'douyin.com' or host.endswith('.douyin.com')):
+                        return
+                    if parsed.path.rstrip('/') != globals().get(
+                        'DOUYIN_DETAIL_PATH', '/aweme/v1/web/aweme/detail',
+                    ):
+                        return
+                    if response.status != 200:
+                        return
+                    with suppress(Exception):
+                        payload = await response.json()
+                        if len(payloads) < 20:
+                            payloads.append(payload)
+                            capture_event.set()
 
-            def capture(response):
-                task = asyncio.create_task(capture_detail(response))
-                capture_tasks.add(task)
-                task.add_done_callback(capture_tasks.discard)
+                def capture(response):
+                    task = asyncio.create_task(capture_detail(response))
+                    capture_tasks.add(task)
+                    task.add_done_callback(capture_tasks.discard)
 
-            state['capture_tasks'] = capture_tasks
-            state['capture_event'] = capture_event
-            page.on('response', capture)
-            try:
-                result = await read_page(page, req.url, payloads, state)
-            finally:
-                page.remove_listener('response', capture)
-                for task in capture_tasks:
-                    task.cancel()
-                await asyncio.gather(*capture_tasks, return_exceptions=True)
-        logger.info('Douyin resolve ok source=%s duration_ms=%d kind=%s cover=%s images=%d',
+                state['payloads'] = payloads
+                state['capture_event'] = capture_event
+                page.on('response', capture)
+                try:
+                    result = await read_page(page, req.url, payloads, state)
+                finally:
+                    page.remove_listener('response', capture)
+                    for task in capture_tasks:
+                        task.cancel()
+                    await asyncio.gather(*capture_tasks, return_exceptions=True)
+        logger.info('Douyin resolve ok source=%s duration_ms=%d kind=%s cover=%s images=%d method=%s',
                     label, (time.monotonic()-started)*1000,
                     result['data'].get('media_type', ''), bool(result['data']['cover']),
-                    len(result['data'].get('images') or []))
+                    len(result['data'].get('images') or []), state['method'])
         return result
     except TimeoutError:
-        logger.warning('Douyin resolve timeout source=%s stage=%s duration_ms=%d',
-                       label, state['stage'], (time.monotonic()-started)*1000)
+        logger.warning('Douyin resolve timeout source=%s stage=%s duration_ms=%d id=%s details=%d',
+                       label, state['stage'], (time.monotonic()-started)*1000,
+                       state.get('target_id', ''), len(state.get('payloads', [])))
         return {'status': 'failed', 'msg': f"抖音 Provider 超时 stage={state['stage']}"}
     except Exception as error:
         # 原因要带出去。只回类型名的话，"作品被删了"和"页面没加载完"在上游

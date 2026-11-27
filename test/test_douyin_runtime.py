@@ -3,6 +3,7 @@ import ast
 import asyncio
 import importlib.util
 import logging
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -15,7 +16,7 @@ from urllib.parse import urlsplit
 import time
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/douyin-provider"))
-from work_metadata import PAGE_DATA_SCRIPT, work_id, page_payloads, find_work, normalize_work
+from work_metadata import PAGE_DATA_SCRIPT, work_id, page_payloads, public_page_payloads, find_work, normalize_work
 
 ROOT = Path(__file__).resolve().parents[1] / 'services/douyin-provider'
 spec = importlib.util.spec_from_file_location('profile_guard', ROOT / 'profile_guard.py')
@@ -58,7 +59,7 @@ class ProfileTests(unittest.TestCase):
 def runtime():
     tree = ast.parse((ROOT / 'app.py').read_text())
     nodes = [n for n in tree.body if getattr(n, 'name', '') in (
-        'is_real_video_url', 'read_page', 'resolve', 'xhs_resolve',
+        'is_real_video_url', 'read_public_page', 'read_page', 'resolve', 'xhs_resolve',
     ) or (isinstance(n, ast.Assign) and any(
         isinstance(t, ast.Name) and t.id in ('douyin_resolve_slots', 'xhs_resolve_slots')
         for t in n.targets))]
@@ -68,8 +69,11 @@ def runtime():
               urlsplit=urlsplit, suppress=suppress, Req=object, PlaywrightTimeoutError=TimeoutError, PlaywrightError=RuntimeError,
               QUEUE_TIMEOUT=.05, RESOLVE_TIMEOUT=.02, NAVIGATION_TIMEOUT_MS=10,
               PAGE_DATA_SCRIPT=PAGE_DATA_SCRIPT, work_id=work_id, page_payloads=page_payloads,
+              public_page_payloads=public_page_payloads,
               find_work=find_work, normalize_work=normalize_work, removed_marker=lambda text: '')
     exec(compile(ast.Module(body=nodes, type_ignores=[]), '<provider>', 'exec'), ns)
+    ns['actual_public_page'] = ns['read_public_page']
+    ns['read_public_page'] = AsyncMock(return_value=None)
     return ns
 
 
@@ -93,7 +97,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['data']['source_id'], '200')
         self.assertEqual(result['data']['media_type'], 'video')
         self.assertEqual(result['data']['video_url'], 'https://cdn.example/target.mp4')
-        page.wait_for_timeout.assert_awaited_once()
+        page.wait_for_timeout.assert_not_awaited()
 
     async def test_client_redirect_retries_metadata_read(self):
         ns = runtime()
@@ -132,7 +136,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_closes_page_releases_lock_and_next_request_succeeds(self):
         ns = runtime()
-        page = SimpleNamespace(on=lambda *a: None, remove_listener=lambda *a: None, close=AsyncMock())
+        page = SimpleNamespace(on=lambda *a: None, remove_listener=lambda *a: None, close=AsyncMock(), route=AsyncMock())
         ctx = SimpleNamespace(new_page=AsyncMock(return_value=page))
         ns['get_context'] = AsyncMock(return_value=ctx)
         async def hang(*args):
@@ -146,6 +150,77 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         result = await ns['resolve'](SimpleNamespace(url='https://v.douyin.com/next/'))
         self.assertEqual(result['status'], 'success')
 
+    async def test_public_mobile_metadata_needs_no_renderer(self):
+        ns = runtime()
+        ns['read_public_page'] = ns['actual_public_page']
+        detail = {'aweme_id': '200', 'video': {
+            'play_addr': {'url_list': ['https://cdn.example/target.mp4']}}}
+        body = '<script>window._ROUTER_DATA = ' + json.dumps({
+            'loaderData': {'video_(id)/page': {'videoInfoRes': {'item_list': [detail]}}}
+        }) + ';</script>'
+        response = SimpleNamespace(ok=True, url='https://www.iesdouyin.com/share/video/200/',
+            text=AsyncMock(return_value=body), dispose=AsyncMock())
+        ctx = SimpleNamespace(request=SimpleNamespace(get=AsyncMock(return_value=response)),
+                              new_page=AsyncMock())
+        ns['get_context'] = AsyncMock(return_value=ctx)
+        ns['RESOLVE_TIMEOUT'] = 2
+        result = await ns['resolve'](SimpleNamespace(url='https://v.douyin.com/test/'))
+        self.assertEqual(result['data']['source_id'], '200')
+        ctx.new_page.assert_not_awaited()
+        response.dispose.assert_awaited_once()
+        self.assertEqual(ns['douyin_resolve_slots']._value, 2)
+
+    async def test_public_page_cannot_accept_another_work_or_non_json_script(self):
+        ns = runtime()
+        for body in ('<script>window._ROUTER_DATA = runCode();</script>',
+                     '<script>window._ROUTER_DATA = {"aweme_id":"999",'
+                     '"video":{"play_addr":{"url_list":["https://cdn.example/other.mp4"]}}};</script>'):
+            response = SimpleNamespace(ok=True, url='https://www.iesdouyin.com/share/video/200/',
+                text=AsyncMock(return_value=body), dispose=AsyncMock())
+            ctx = SimpleNamespace(request=SimpleNamespace(get=AsyncMock(return_value=response)))
+            self.assertIsNone(await ns['actual_public_page'](ctx, 'https://www.douyin.com/video/200'))
+            response.dispose.assert_awaited_once()
+
+    async def test_public_page_timeout_keeps_browser_fallback_available(self):
+        ns = runtime()
+        ctx = SimpleNamespace(request=SimpleNamespace(get=AsyncMock(side_effect=TimeoutError())))
+        self.assertIsNone(await ns['actual_public_page'](ctx, 'https://v.douyin.com/test/'))
+        ctx.request.get.assert_awaited_once()
+
+    async def test_slow_detail_body_survives_poll_and_busy_renderer(self):
+        for busy_renderer in (False, True):
+            with self.subTest(busy_renderer=busy_renderer):
+                ns = runtime()
+                ns.update(RESOLVE_TIMEOUT=2, DOUYIN_METADATA_WAIT_SECONDS=1.5)
+                target = {'aweme_id': '200', 'video': {
+                    'play_addr': {'url_list': ['https://cdn.example/target.mp4']}}}
+                listeners = {}
+                async def body():
+                    await asyncio.sleep(.4)  # Longer than the old 250ms poll.
+                    return {'aweme_detail': target}
+                response = SimpleNamespace(status=200,
+                    url='https://www.douyin.com/aweme/v1/web/aweme/detail/',
+                    json=AsyncMock(side_effect=body))
+                async def goto(*args, **kwargs):
+                    listeners['response'](response)
+                    await asyncio.sleep(0)
+                    return SimpleNamespace(url='https://www.douyin.com/video/200')
+                async def evaluate(*args):
+                    if busy_renderer:
+                        await asyncio.Event().wait()
+                    return {}
+                page = SimpleNamespace(url='https://www.douyin.com/video/200',
+                    goto=goto, evaluate=evaluate, close=AsyncMock(), route=AsyncMock(),
+                    on=lambda event, callback: listeners.update({event: callback}),
+                    remove_listener=lambda *args: None)
+                ns['get_context'] = AsyncMock(return_value=SimpleNamespace(
+                    new_page=AsyncMock(return_value=page)))
+                result = await ns['resolve'](SimpleNamespace(url='https://v.douyin.com/test/'))
+                self.assertEqual(result['status'], 'success', result)
+                self.assertEqual(result['data']['source_id'], '200')
+                self.assertEqual(ns['douyin_resolve_slots']._value, 2)
+                page.close.assert_awaited_once()
+
     async def test_queue_timeout_does_not_release_another_request_lock(self):
         ns = runtime()
         await ns['douyin_resolve_slots'].acquire()
@@ -158,7 +233,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exception_closes_page(self):
         ns = runtime()
-        page = SimpleNamespace(on=lambda *a: None, remove_listener=lambda *a: None, close=AsyncMock())
+        page = SimpleNamespace(on=lambda *a: None, remove_listener=lambda *a: None, close=AsyncMock(), route=AsyncMock())
         ns['get_context'] = AsyncMock(return_value=SimpleNamespace(new_page=AsyncMock(return_value=page)))
         ns['read_page'] = AsyncMock(side_effect=RuntimeError('failed'))
         result = await ns['resolve'](SimpleNamespace(url='https://v.douyin.com/test/'))
@@ -175,7 +250,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
                 gates = {str(i): asyncio.Event() for i in range(3)}
                 pages, calls = [], []
                 async def new_page():
-                    page = SimpleNamespace(on=lambda *a: None, remove_listener=lambda *a: None, close=AsyncMock())
+                    page = SimpleNamespace(on=lambda *a: None, remove_listener=lambda *a: None, close=AsyncMock(), route=AsyncMock())
                     pages.append(page)
                     return page
                 async def work(url):

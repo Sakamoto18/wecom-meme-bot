@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'services/douyin-provider'))
-from work_metadata import find_work, normalize_work, page_payloads, work_id
+from work_metadata import find_work, normalize_work, page_payloads, public_page_payloads, work_id
 
 
 class WorkMetadataTests(unittest.TestCase):
@@ -24,6 +24,20 @@ class WorkMetadataTests(unittest.TestCase):
         ]:
             roots = list(page_payloads({'scripts': [script]}))
             self.assertEqual(find_work(roots, '123'), detail)
+
+    def test_mobile_share_json_preserves_mixed_gallery(self):
+        detail = self.gallery()
+        body = '<script>window._ROUTER_DATA = ' + json.dumps({
+            'loaderData': {'slides_(id)/page': {'videoInfoRes': {'item_list': [detail]}}}
+        }) + '; window.otherCode();</script>'
+        found = find_work(list(public_page_payloads(body)), '123')
+        result = normalize_work(found, '123')
+        self.assertEqual(result['media_type'], 'images')
+        self.assertEqual(len(result['images']), 2)
+        self.assertEqual(result['animated_videos'][0]['image_index'], 1)
+        self.assertEqual(work_id('https://www.iesdouyin.com/share/slides/123/'), '123')
+        self.assertEqual(list(public_page_payloads('<script>window._ROUTER_DATA = invalid;</script>')), [])
+        self.assertEqual(list(public_page_payloads('x' * 3_000_001)), [])
 
     def test_wrong_id_and_untyped_parent_are_not_authoritative(self):
         target = self.gallery()
